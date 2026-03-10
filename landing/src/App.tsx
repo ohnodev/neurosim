@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { OnchainProviders } from './components/OnchainProviders';
 import { BrainPlot } from './components/BrainPlot';
-import { ClaimFlySection } from './components/ClaimFlySection';
+import { MyNeuroFlies } from './components/MyNeuroFlies';
 import { ConnectButton } from './components/ConnectButton';
 import { getApiBase } from './lib/constants';
 import './App.css';
@@ -75,6 +75,9 @@ function App() {
             <div className="hero__brain">
               <BrainPlot />
             </div>
+            <div className="hero__neuroflies">
+              <MyNeuroFlies />
+            </div>
             <div className="hero__text">
               <h1 className="hero__title">NeuroSim</h1>
               <p className="hero__tagline">Claim your digital fly. One brain, infinite simulations.</p>
@@ -129,9 +132,6 @@ function App() {
               </div>
             )}
 
-            <div className="card card--claim">
-              <ClaimFlySection />
-            </div>
           </aside>
         </div>
 

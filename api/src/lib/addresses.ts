@@ -12,3 +12,10 @@ export const NEURO_TOKEN_ADDRESS =
 export const CLAIM_RECEIVER_ADDRESS =
   (process.env.CLAIM_RECEIVER_ADDRESS as `0x${string}`) ||
   ('0x0000000000000000000000000000000000000000' as `0x${string}`);
+
+// Receiver for ETH payment (0.0001 ETH for testing)
+export const FLY_ETH_RECEIVER =
+  (process.env.FLY_ETH_RECEIVER as `0x${string}`) ||
+  ('0x53BBEB1a3a6221182F136f5E723A025957001683' as `0x${string}`);
+
+export const FLY_ETH_AMOUNT = 100000000000000n; // 0.0001 ETH in wei

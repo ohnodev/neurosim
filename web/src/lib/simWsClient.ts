@@ -6,7 +6,7 @@ import { getWsUrl } from "./wsUrl";
 
 export interface SimPayload {
   t?: number;
-  fly?: { x: number; y: number; z: number; heading: number; t: number; hunger: number; flyTimeLeft?: number; restTimeLeft?: number };
+  fly?: { x: number; y: number; z: number; heading: number; t: number; hunger: number; health?: number; dead?: boolean; flyTimeLeft?: number; restTimeLeft?: number };
   activity?: Record<string, number>;
   simRunning?: boolean;
   error?: string;

@@ -12,6 +12,10 @@ export interface FlyState {
   heading: number;
   t: number;
   hunger: number;
+  /** 0–100; drains when hunger is 0; 0 = dead */
+  health?: number;
+  /** true when health has drained to 0 */
+  dead?: boolean;
   /** 0–1, flight energy; 0 = must rest */
   flyTimeLeft?: number;
   /** seconds left in rest; 0 = not resting */
@@ -91,6 +95,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
   const WALL_MARGIN = 6;      // start turning away from walls when within this
   const SEEK_RADIUS = ARENA * 1.5; // steer toward food even when beyond source radius
   const HUNGER_DECAY = 0.8;   // per second when not eating
+  const HEALTH_DECAY = 2.5;   // per second when hunger is 0 (fly survives ~40s at zero hunger)
   const FOOD_HUNGER_RESTORE = 50; // hunger restored when consuming one food (then it disappears)
 
   function isAttractorType(type: string): boolean {
@@ -100,7 +105,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
   const GROUND_Z = 0.35;
   const FLIGHT_Z = 1.5;
   const ON_GROUND_THRESH = 0.6; // z below this = on ground, can eat
-  let fly: FlyState = { x: 0, y: 0, z: GROUND_Z, heading: 0, t: 0, hunger: 100 };
+  let fly: FlyState = { x: 0, y: 0, z: GROUND_Z, heading: 0, t: 0, hunger: 100, health: 100 };
   const pendingStimuli: { neurons: string[]; strength: number }[] = [];
   let flyTimeLeftSec = FLY_TIME_MAX;
   let restTimeLeft = 0;
@@ -115,6 +120,20 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
   const ACT_THRESHOLD = 0.08; // only report neurons above this (filters diffuse activity)
 
   function step(dt: number): SimState {
+    if (fly.dead) {
+      const t = fly.t + dt;
+      const actObj: Record<string, number> = {};
+      neuronIds.forEach((id, i) => {
+        const v = activity[i];
+        if (v > ACT_THRESHOLD && Number.isFinite(v)) actObj[id] = Math.min(1, v);
+      });
+      return {
+        t,
+        fly: { ...fly, t },
+        activity: Object.keys(actObj).length ? actObj : undefined,
+      };
+    }
+
     const currentSources = getSources();
     const t = fly.t + dt;
     const r = Math.max(0.1, Math.min(3, dt / REF_STEP)); // scale factor; clamp to avoid extremes
@@ -226,6 +245,35 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
     }
     if (!isEating) hunger = Math.max(0, hunger - HUNGER_DECAY * dt);
 
+    let health = fly.health ?? 100;
+    if (hunger <= 0) {
+      health = Math.max(0, health - HEALTH_DECAY * dt);
+      if (health <= 0) {
+        fly = {
+          ...fly,
+          t,
+          hunger,
+          health: 0,
+          dead: true,
+          flyTimeLeft: Math.max(0, Math.min(1, flyTimeLeftSec / FLY_TIME_MAX)),
+          restTimeLeft: restTimeLeft > 0 ? restTimeLeft : 0,
+          restDuration: REST_TIME,
+          feeding: false,
+        };
+        const actObj: Record<string, number> = {};
+        neuronIds.forEach((id, i) => {
+          const v = activity[i];
+          if (v > ACT_THRESHOLD && Number.isFinite(v)) actObj[id] = Math.min(1, v);
+        });
+        return {
+          t,
+          fly,
+          activity: Object.keys(actObj).length ? actObj : undefined,
+          ...(eatenFoodId && { eatenFoodId }),
+        };
+      }
+    }
+
     // Hungry (low hunger): steer toward food. Full (high hunger): explore. Min 0.25 drive when hungry.
     const hungry = hunger <= 90;
     const full = hunger > 90;
@@ -334,6 +382,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
       heading: Number.isFinite(nHeading) ? nHeading : fly.heading,
       t: Number.isFinite(t) ? t : fly.t,
       hunger: Number.isFinite(hunger) ? hunger : fly.hunger,
+      health: Number.isFinite(health) ? health : (fly.health ?? 100),
       flyTimeLeft: Math.max(0, Math.min(1, flyTimeLeftSec / FLY_TIME_MAX)),
       restTimeLeft: restTimeLeft > 0 ? restTimeLeft : 0,
       restDuration: REST_TIME,
@@ -366,6 +415,8 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
     });
     const flyWithMeta = {
       ...fly,
+      health: fly.health ?? 100,
+      dead: fly.dead ?? false,
       flyTimeLeft: Math.max(0, Math.min(1, flyTimeLeftSec / FLY_TIME_MAX)),
       restTimeLeft: restTimeLeft > 0 ? restTimeLeft : 0,
       restDuration: REST_TIME,

@@ -160,6 +160,19 @@ describe('brain-sim', () => {
     expect(s1.fly.hunger).toBeLessThan(h0);
   });
 
+  it('fly dies when health drains at zero hunger', () => {
+    const { step } = createBrainSim(testConnectome, []);
+    const dt = 1 / 30;
+    let s = step(dt);
+    const maxSteps = 6000; // ~200s at 30Hz; hunger 0 at ~125s, health 0 at +40s
+    for (let i = 0; i < maxSteps && !s.fly.dead; i++) {
+      s = step(dt);
+    }
+    expect(s.fly.dead).toBe(true);
+    expect(s.fly.health).toBe(0);
+    expect(s.fly.hunger).toBeLessThanOrEqual(0);
+  });
+
   it('light source contributes to activity', () => {
     const { step } = createBrainSim(testConnectome, [lightSource]);
     let totalActivity = 0;

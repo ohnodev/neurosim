@@ -63,14 +63,61 @@
   width: 180px;
   max-height: 50vh;
   overflow: auto;
-  background: rgba(10, 10, 18, 0.9);
-  color: #ccc;
+}
+
+.fly-viewer__fly-slot {
+  min-height: 100px;
+  margin-bottom: 8px;
+  border-radius: 6px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.fly-viewer__fly-slot > button:first-child {
+  flex: 1;
+  min-height: 100px;
+}
+
+.fly-viewer__fly-slot-empty {
+  flex: 1;
+  min-height: 100px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #888;
   font-size: 11px;
-  padding: 10px;
-  border-radius: 8px;
-  border: 1px solid rgba(100, 100, 140, 0.3);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
   font-family: monospace;
+  cursor: pointer;
+  text-align: center;
+  transition: background 0.15s, color 0.15s;
+}
+
+.fly-viewer__fly-slot-empty:hover {
+  background: rgba(99, 102, 241, 0.15);
+  color: #a5b4fc;
+  border-color: rgba(99, 102, 241, 0.3);
+}
+
+.fly-viewer__fly-slot-label {
+  font-weight: 600;
+  color: #666;
+}
+
+.fly-viewer__fly-slot-buy {
+  font-size: 10px;
+  padding: 4px 12px;
+  border-radius: 4px;
+  background: rgba(99, 102, 241, 0.25);
+  color: #a5b4fc;
+  border: 1px solid rgba(99, 102, 241, 0.4);
 }
 
 /* Status and Brain side panels - collapsible with thin vertical bar when minimized */

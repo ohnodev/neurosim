@@ -173,7 +173,6 @@ function FlyStatusCard({
         background: selected ? 'rgba(99,102,241,0.2)' : 'rgba(255,255,255,0.04)',
         borderRadius: 6,
         padding: 8,
-        marginBottom: 8,
         cursor: 'pointer',
         color: 'inherit',
         font: 'inherit',
@@ -405,7 +404,7 @@ export default function FlyViewer() {
               const hasFly = myFlies[i] != null;
               const simFly = flies[i] ?? DEFAULT_FLY;
               return (
-                <div key={i} style={{ marginBottom: 8 }}>
+                <div key={i} className="fly-viewer__fly-slot">
                   {hasFly ? (
                     <FlyStatusCard
                       index={i}
@@ -416,11 +415,11 @@ export default function FlyViewer() {
                   ) : (
                     <button
                       type="button"
-                      className="neuroflies__btn"
+                      className="fly-viewer__fly-slot-empty"
                       onClick={() => setBuyFlySlot(i)}
-                      style={{ width: '100%' }}
                     >
-                      Buy Fly
+                      <span className="fly-viewer__fly-slot-label">Fly {i + 1}</span>
+                      <span className="fly-viewer__fly-slot-buy">Buy Fly</span>
                     </button>
                   )}
                 </div>

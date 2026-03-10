@@ -28,6 +28,8 @@ function getHungerColor(hunger: number): string {
 const API_BASE =
   (import.meta.env.VITE_API_URL as string)?.trim() || 'http://localhost:3001';
 
+const FLY_THRESHOLD = 1.1; // z above this = flying (wings flap + HUD mode)
+const REST_DURATION_FALLBACK = 4; // fallback when flyState.restDuration not in payload
 const WING_NAMES = ['Object_4', 'Object_5', 'Object_6']; // fly-white, flywings-dark, glass (wing materials)
 
 function FlyModel({ state }: { state: FlyState }) {
@@ -37,7 +39,7 @@ function FlyModel({ state }: { state: FlyState }) {
 
   const x = state.x ?? 0, y = state.y ?? 0, z = state.z ?? 0;
   const heading = state.heading ?? 0;
-  const isFlying = z > 0.8;
+  const isFlying = z > FLY_THRESHOLD;
 
   const cloned = useMemo(() => {
     const c = scene.clone(true);
@@ -49,10 +51,15 @@ function FlyModel({ state }: { state: FlyState }) {
   }, [scene]);
 
   useFrame(() => {
-    if (!isFlying) return;
-    const flap = Math.sin(performance.now() * 0.02) * 0.4;
-    for (const wing of wingsRef.current) {
-      wing.rotation.x = flap;
+    if (isFlying) {
+      const flap = Math.sin(performance.now() * 0.02) * 0.4;
+      for (const wing of wingsRef.current) {
+        wing.rotation.x = flap;
+      }
+    } else {
+      for (const wing of wingsRef.current) {
+        wing.rotation.x = 0;
+      }
     }
   });
 
@@ -166,8 +173,10 @@ export default function FlyViewer() {
           setError(null);
         } else if (event._event === 'closed') {
           setConnected(false);
+          setSimRunning(false);
         } else if (event._event === 'error') {
           setError(event.error);
+          setSimRunning(false);
         }
         return;
       }
@@ -196,7 +205,7 @@ export default function FlyViewer() {
   const topActivity = Object.entries(activity)
     .sort(([, a], [, b]) => b - a)
     .slice(0, 10);
-  const flyMode = flyState.feeding ? 'feeding' : flyState.z > 1.1 ? 'flying' : flyState.z < 0.6 ? 'resting' : 'idle';
+  const flyMode = flyState.feeding ? 'feeding' : flyState.z > FLY_THRESHOLD ? 'flying' : flyState.z < 0.6 ? 'resting' : 'idle';
 
   return (
     <div style={{ width: '100vw', height: '100vh', position: 'relative' }}>
@@ -243,7 +252,7 @@ export default function FlyViewer() {
               </div>
               <div style={{ height: 8, background: '#333', borderRadius: 2, margin: '0 4px 4px', overflow: 'hidden' }}>
                 {flyState.restTimeLeft != null && flyState.restTimeLeft > 0 ? (
-                  <div style={{ width: `${Math.max(0, 100 - ((flyState.restTimeLeft ?? 0) / (flyState.restDuration ?? 4)) * 100)}%`, height: '100%', background: '#6a6', transition: 'width 0.2s' }} />
+                  <div style={{ width: `${Math.max(0, 100 - ((flyState.restTimeLeft ?? 0) / (flyState.restDuration ?? REST_DURATION_FALLBACK)) * 100)}%`, height: '100%', background: '#6a6', transition: 'width 0.2s' }} />
                 ) : (
                   <div style={{ width: `${((flyState.flyTimeLeft ?? 1) * 100).toFixed(0)}%`, height: '100%', background: '#48a', transition: 'width 0.2s' }} />
                 )}

@@ -4,7 +4,7 @@ import { fileURLToPath } from 'url';
 import * as fs from 'fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-import { createBrainSim } from './brain-sim.js';
+import { createBrainSim, EAT_RADIUS } from './brain-sim.js';
 import { loadConnectome } from './connectome.js';
 
 /** Connectome with roles and cell_types for stimulus routing and motor output. */
@@ -213,7 +213,6 @@ describe('brain-sim', () => {
   });
 
   it('fly eventually reaches food when hungry (long run)', () => {
-    const EAT_RADIUS = 1.5;
     const { step } = createBrainSim(testConnectome, [foodSource]);
     const dt = 1 / 30;
     const maxSteps = 3600; // 2 min

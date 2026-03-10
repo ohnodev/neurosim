@@ -15,6 +15,7 @@ interface FlyState {
   hunger: number;
   flyTimeLeft?: number;  // 0-1, flight energy
   restTimeLeft?: number; // seconds resting
+  restDuration?: number; // max rest duration (for UI progress)
   feeding?: boolean;
 }
 
@@ -34,7 +35,8 @@ function FlyModel({ state }: { state: FlyState }) {
   const group = useRef<THREE.Group>(null);
   const wingsRef = useRef<THREE.Object3D[]>([]);
 
-  const x = state.x ?? 0, y = state.y ?? 0, z = state.z ?? 0, h = state.heading ?? 0;
+  const x = state.x ?? 0, y = state.y ?? 0, z = state.z ?? 0;
+  const heading = state.heading ?? 0;
   const isFlying = z > 0.8;
 
   const cloned = useMemo(() => {
@@ -55,7 +57,7 @@ function FlyModel({ state }: { state: FlyState }) {
   });
 
   return (
-    <group ref={group} position={[x, z, y]} rotation={[0, h, 0]}>
+    <group ref={group} position={[x, z, y]} rotation={[0, heading, 0]}>
       <primitive object={cloned} scale={0.08} rotation={[0, 0, 0]} />
     </group>
   );
@@ -68,7 +70,7 @@ function GrassGround() {
     <primitive
       object={cloned}
       position={[0, 0, 0]}
-      rotation={[-Math.PI / 2, 0, 0]}
+      rotation={[-Math.PI / 2, Math.PI / 2, 0]}
       scale={[0.13, 0.13, 0.13]}
       receiveShadow
     />
@@ -121,7 +123,6 @@ function shortId(id: string): string {
 export default function FlyViewer() {
   const [flyState, setFlyState] = useState<FlyState>({ x: 0, y: 0, z: 0.35, heading: 0, t: 0, hunger: 100 });
   const [sources, setSources] = useState<WorldSource[]>([]);
-  const [, setNeuronIds] = useState<string[]>([]);
   const [neuronLabels, setNeuronLabels] = useState<Record<string, string>>({});
   const [connected, setConnected] = useState(false);
   const [simRunning, setSimRunning] = useState(false);
@@ -146,7 +147,6 @@ export default function FlyViewer() {
       .then((d) => {
         if (!Array.isArray(d.neurons)) throw new Error('Invalid /api/neurons response');
         const list = d.neurons as { root_id: string; role?: string; side?: string; cell_type?: string; x?: number; y?: number; z?: number }[];
-        setNeuronIds(list.map((n) => n.root_id));
         setNeuronsWithPositions(list.map((n) => ({ root_id: n.root_id, side: n.side, x: n.x, y: n.y, z: n.z })));
         const labels: Record<string, string> = {};
         for (const n of list) {
@@ -205,9 +205,9 @@ export default function FlyViewer() {
     <div style={{ width: '100vw', height: '100vh', position: 'relative' }}>
       {/* Canvas layer - must stay behind UI */}
       <div style={{ position: 'absolute', inset: 0, zIndex: 0, isolation: 'isolate' }}>
-        <Canvas camera={{ position: [8, 6, 8], fov: 50 }}>
-          <ambientLight intensity={0.6} />
-          <directionalLight position={[10, 10, 5]} intensity={1} castShadow />
+        <Canvas camera={{ position: [8, 6, 8], fov: 50 }} gl={{ outputColorSpace: THREE.SRGBColorSpace }}>
+          <ambientLight intensity={0.8} />
+          <directionalLight position={[10, 10, 5]} intensity={1.2} castShadow />
           <OrbitControls />
           <Suspense fallback={null}>
             <FlyModel state={flyState} />
@@ -224,7 +224,7 @@ export default function FlyViewer() {
         </Canvas>
       </div>
       {/* UI layer - always on top, always visible */}
-      <div style={{ position: 'fixed', inset: 0, zIndex: 2147483647, pointerEvents: 'none' }}>
+      <div style={{ position: 'fixed', inset: 0, zIndex: 1000, pointerEvents: 'none' }}>
         {error && (
           <div style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', background: '#333', color: '#f88', padding: '8px 16px', borderRadius: 8, pointerEvents: 'auto' }}>
             {error}
@@ -253,7 +253,7 @@ export default function FlyViewer() {
               </div>
               <div style={{ height: 8, background: '#333', borderRadius: 2, margin: '0 4px 4px', overflow: 'hidden' }}>
                 {flyState.restTimeLeft != null && flyState.restTimeLeft > 0 ? (
-                  <div style={{ width: `${Math.max(0, 100 - (flyState.restTimeLeft / 4) * 100)}%`, height: '100%', background: '#6a6', transition: 'width 0.2s' }} />
+                  <div style={{ width: `${Math.max(0, 100 - ((flyState.restTimeLeft ?? 0) / (flyState.restDuration ?? 4)) * 100)}%`, height: '100%', background: '#6a6', transition: 'width 0.2s' }} />
                 ) : (
                   <div style={{ width: `${((flyState.flyTimeLeft ?? 1) * 100).toFixed(0)}%`, height: '100%', background: '#48a', transition: 'width 0.2s' }} />
                 )}

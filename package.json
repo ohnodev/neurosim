@@ -1,0 +1,21 @@
+{
+  "name": "neurosim",
+  "private": true,
+  "scripts": {
+    "process-connectome": "tsx scripts/process-connectome.ts",
+    "download-dataset": "./scripts/download-dataset.sh",
+    "api:dev": "cd api && npm run dev",
+    "web:dev": "cd web && npm run dev",
+    "test": "npm run test:api && npm run test:smoke",
+    "test:api": "cd api && npm run test",
+    "test:smoke": "node scripts/smoke-test.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "csv-parse": "^5.5.2"
+  }
+}

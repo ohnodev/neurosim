@@ -118,15 +118,15 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
 
   if (!address) {
     return (
-      <div className="claim-modal-overlay" onClick={onClose} role="dialog" aria-modal="true">
-        <div className="claim-modal" onClick={(e) => e.stopPropagation()}>
-          <button type="button" className="claim-modal__close" onClick={onClose} aria-label="Close">×</button>
-          <div className="claim-modal__card">
-            <h2 className="claim-modal__title">Connect Wallet</h2>
-            <p className="claim-modal__subtitle">Connect your wallet to buy a NeuroFly.</p>
+      <div className="neurosim-claim-overlay" onClick={onClose} role="dialog" aria-modal="true">
+        <div className="neurosim-claim-modal" onClick={(e) => e.stopPropagation()}>
+          <button type="button" className="neurosim-claim__close" onClick={onClose} aria-label="Close">×</button>
+          <div className="neurosim-claim__card">
+            <h2 className="neurosim-claim__title">Connect Wallet</h2>
+            <p className="neurosim-claim__subtitle">Connect your wallet to buy a NeuroFly.</p>
             <button
               type="button"
-              className="claim-modal__btn claim-modal__btn--primary"
+              className="neurosim-claim__btn neurosim-claim__btn--primary"
               onClick={() => { login(); onClose(); }}
               disabled={!ready}
             >
@@ -139,19 +139,17 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
   }
 
   return (
-    <div className="claim-modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="buy-fly-title">
-      <div className="claim-modal" onClick={(e) => e.stopPropagation()}>
-        <button type="button" className="claim-modal__close" onClick={onClose} aria-label="Close">
-          ×
-        </button>
-        <div className="claim-modal__card">
-          <h2 id="buy-fly-title" className="claim-modal__title">Buy Fly #{slotIndex + 1}</h2>
-          <p className="claim-modal__subtitle">Choose payment method</p>
+    <div className="neurosim-claim-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="buy-fly-title">
+      <div className="neurosim-claim-modal" onClick={(e) => e.stopPropagation()}>
+        <button type="button" className="neurosim-claim__close" onClick={onClose} aria-label="Close">×</button>
+        <div className="neurosim-claim__card">
+          <h2 id="buy-fly-title" className="neurosim-claim__title">Buy Fly #{slotIndex + 1}</h2>
+          <p className="neurosim-claim__subtitle">Choose payment method</p>
           {error && <div className="neuroflies__error">{error}</div>}
-          <div className="claim-modal__actions">
+          <div className="neurosim-claim__actions">
             <button
               type="button"
-              className="claim-modal__btn claim-modal__btn--primary"
+              className="neurosim-claim__btn neurosim-claim__btn--primary"
               onClick={handleBuyEth}
               disabled={!!busy || !config?.flyEthReceiver}
             >
@@ -159,7 +157,7 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
             </button>
             <button
               type="button"
-              className="claim-modal__btn claim-modal__btn--secondary"
+              className="neurosim-claim__btn neurosim-claim__btn--secondary"
               onClick={handleBuyNeuro}
               disabled={!!busy || neuroDisabled}
             >

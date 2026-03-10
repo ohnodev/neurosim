@@ -25,8 +25,8 @@ function getHungerColor(hunger: number): string {
   return '#c44';
 }
 
-const API_BASE =
-  (import.meta.env.VITE_API_URL as string)?.trim() || 'http://localhost:3001';
+const isLocal = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+const API_BASE = isLocal ? 'http://localhost:3999' : 'https://api.neurosim.fun';
 
 const FLY_THRESHOLD = 1.1; // z above this = flying (wings flap + HUD mode)
 const REST_DURATION_FALLBACK = 4; // fallback when flyState.restDuration not in payload

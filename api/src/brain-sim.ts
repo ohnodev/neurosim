@@ -222,7 +222,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
         if (dist < EAT_RADIUS) {
           isEating = true;
           hunger = Math.min(100, hunger + FOOD_HUNGER_RESTORE);
-          health = Math.min(100, (fly.health ?? 100) + FOOD_HEALTH_RESTORE);
+          health = Math.min(100, health + FOOD_HEALTH_RESTORE);
           eatenFoodId = s.id;
           break;
         }

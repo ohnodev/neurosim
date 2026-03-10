@@ -29,24 +29,17 @@ export function ConnectButton() {
     setModalOpen((o) => !o);
   };
 
-  if (!ready) {
-    return (
-      <button className="wallet-btn wallet-btn--loading" disabled aria-label="Loading">
-        <span className="wallet-btn__dot" />
-      </button>
-    );
-  }
-
   return (
     <>
       <button
         ref={buttonRef}
         type="button"
-        className={`wallet-btn ${modalOpen ? 'wallet-btn--active' : ''}`}
+        className={`wallet-btn ${!ready ? 'wallet-btn--loading' : ''} ${modalOpen ? 'wallet-btn--active' : ''}`}
         onClick={handleClick}
-        aria-label={isConnected ? 'Open wallet menu' : 'Connect wallet'}
+        disabled={!ready}
+        aria-label={!ready ? 'Loading' : isConnected ? 'Open wallet menu' : 'Connect wallet'}
         aria-expanded={modalOpen}
-        aria-haspopup="menu"
+        aria-haspopup="dialog"
       >
         <span className="wallet-btn__icon">
           <WalletIcon />

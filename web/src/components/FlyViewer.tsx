@@ -4,6 +4,7 @@ import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import type { WorldSource } from '../../../api/src/world';
 import { subscribeSim, sendStimulate, sendStart, getConnectionState } from '../lib/simWsClient';
+import { BrainOverlay, type NeuronWithPosition } from './BrainOverlay';
 
 interface FlyState {
   x: number;
@@ -85,6 +86,7 @@ export default function FlyViewer() {
   const [activeCount, setActiveCount] = useState(0);
   const [activity, setActivity] = useState<Record<string, number>>({});
   const [lastStimulated, setLastStimulated] = useState<string[]>([]);
+  const [neuronsWithPositions, setNeuronsWithPositions] = useState<NeuronWithPosition[]>([]);
 
   useEffect(() => {
     fetch(API_BASE + '/api/world')
@@ -101,8 +103,9 @@ export default function FlyViewer() {
       .then((r) => r.ok ? r.json() : Promise.reject(new Error(r.statusText)))
       .then((d) => {
         if (!Array.isArray(d.neurons)) throw new Error('Invalid /api/neurons response');
-        const list = d.neurons as { root_id: string; role?: string; cell_type?: string }[];
+        const list = d.neurons as { root_id: string; role?: string; cell_type?: string; x?: number; y?: number; z?: number }[];
         setNeuronIds(list.map((n) => n.root_id));
+        setNeuronsWithPositions(list.map((n) => ({ root_id: n.root_id, x: n.x, y: n.y, z: n.z })));
         const labels: Record<string, string> = {};
         for (const n of list) {
           const label = [n.cell_type, n.role].filter(Boolean).join(' ') || n.root_id;
@@ -165,12 +168,12 @@ export default function FlyViewer() {
   return (
     <div style={{ width: '100vw', height: '100vh', position: 'relative' }}>
       {error && (
-        <div style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', background: '#333', color: '#f88', padding: '8px 16px', borderRadius: 8 }}>
+        <div style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', background: '#333', color: '#f88', padding: '8px 16px', borderRadius: 8, zIndex: 10 }}>
           {error}
         </div>
       )}
       {connected && (
-        <div style={{ position: 'absolute', top: 12, right: 12, display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end' }}>
+        <div style={{ position: 'absolute', top: 12, right: 12, display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end', zIndex: 10, pointerEvents: 'auto' }}>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <button onClick={startSim} style={{ padding: '6px 14px', borderRadius: 8, border: 'none', background: '#2a5', color: '#fff', cursor: 'pointer', fontWeight: 600 }}>
               Start
@@ -189,8 +192,11 @@ export default function FlyViewer() {
           </div>
         </div>
       )}
+      {connected && neuronsWithPositions.length > 0 && (
+        <BrainOverlay neurons={neuronsWithPositions} activity={activity} visible={connected} />
+      )}
       {connected && (
-        <div style={{ position: 'absolute', bottom: 12, left: 12, maxWidth: 320, maxHeight: '40vh', overflow: 'auto', background: 'rgba(0,0,0,0.75)', color: '#ccc', fontSize: 11, padding: 10, borderRadius: 8, fontFamily: 'monospace' }}>
+        <div style={{ position: 'absolute', bottom: 12, left: 12, maxWidth: 320, maxHeight: '40vh', overflow: 'auto', background: 'rgba(0,0,0,0.75)', color: '#ccc', fontSize: 11, padding: 10, borderRadius: 8, fontFamily: 'monospace', zIndex: 10, pointerEvents: 'auto' }}>
           <div style={{ color: '#888', marginBottom: 6 }}>Status</div>
           <div style={{ marginBottom: 4 }}>pos ({(flyState.x ?? 0).toFixed(1)}, {(flyState.y ?? 0).toFixed(1)}, {(flyState.z ?? 0).toFixed(1)})</div>
           <div style={{ marginBottom: 4 }}>heading {((flyState.heading ?? 0) * 180 / Math.PI).toFixed(0)}° | {flyMode}</div>

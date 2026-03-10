@@ -1,6 +1,9 @@
 /**
  * Process FlyWire connectome CSVs from data/raw/ into a subset JSON.
  * Requires: connections.csv, coordinates.csv, classification.csv, consolidated_cell_types.csv
+ *
+ * By default outputs top SUBSET_SIZE neurons by in-degree. Use --all (or SUBSET_SIZE=0)
+ * to include every neuron and all connections; expect large output and longer runtime.
  */
 
 import * as fs from 'fs';
@@ -9,8 +12,11 @@ import { parse } from 'csv-parse/sync';
 
 const DATA_RAW = path.join(process.cwd(), 'data', 'raw');
 const OUTPUT = path.join(process.cwd(), 'data', 'connectome-subset.json');
-const SUBSET_SIZE = 2000; // neurons to include
+const DEFAULT_SUBSET_SIZE = 2000; // neurons to include when not using --all
 const MIN_SYNAPSES = 2;
+
+const useAll = process.argv.includes('--all') || process.env.SUBSET_SIZE === '0';
+const SUBSET_SIZE = useAll ? 0 : (Number(process.env.SUBSET_SIZE) || DEFAULT_SUBSET_SIZE);
 
 type NeuronRole = 'sensory' | 'motor' | 'interneuron';
 type NeuronSide = 'left' | 'right' | 'unknown';
@@ -132,13 +138,21 @@ function main() {
     coordById.set(id, { x, y, z });
   }
 
-  // Pick top-N neurons by connection count for subset
-  const inDegree = new Map<string, number>();
-  for (const c of connections) {
-    inDegree.set(c.post, (inDegree.get(c.post) ?? 0) + (c.weight ?? 1));
+  // Pick neurons: either all (--all / SUBSET_SIZE=0) or top-N by in-degree
+  let subsetIds: Set<string>;
+  let subsetConnections: Connection[];
+  if (useAll) {
+    subsetIds = new Set(allIds);
+    subsetConnections = connections;
+  } else {
+    const inDegree = new Map<string, number>();
+    for (const c of connections) {
+      inDegree.set(c.post, (inDegree.get(c.post) ?? 0) + (c.weight ?? 1));
+    }
+    const sorted = [...allIds].sort((a, b) => (inDegree.get(b) ?? 0) - (inDegree.get(a) ?? 0));
+    subsetIds = new Set(sorted.slice(0, SUBSET_SIZE));
+    subsetConnections = connections.filter((c) => subsetIds.has(c.pre) && subsetIds.has(c.post));
   }
-  const sorted = [...allIds].sort((a, b) => (inDegree.get(b) ?? 0) - (inDegree.get(a) ?? 0));
-  const subsetIds = new Set(sorted.slice(0, SUBSET_SIZE));
 
   const classificationById = new Map<string, { flow: string; super_class: string; side: string; cell_type: string }>();
   const classIdCol = inferIdCol(classificationRaw, ['root_id', 'rootid', 'id']);
@@ -167,7 +181,6 @@ function main() {
     if (pt) consolidatedById.set(id, pt);
   }
 
-  const subsetConnections = connections.filter((c) => subsetIds.has(c.pre) && subsetIds.has(c.post));
   const neurons: Neuron[] = [];
   for (const id of subsetIds) {
     const coord = coordById.get(id);

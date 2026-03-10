@@ -71,6 +71,9 @@ app.get('/api/neurons', (_, res) => {
     root_id: n.root_id,
     role: n.role,
     cell_type: n.cell_type,
+    ...(n.x != null && { x: n.x }),
+    ...(n.y != null && { y: n.y }),
+    ...(n.z != null && { z: n.z }),
   }));
   res.json({ neurons });
 });

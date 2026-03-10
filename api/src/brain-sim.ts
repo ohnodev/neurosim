@@ -97,6 +97,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
   const HUNGER_DECAY = 0.8;   // per second when not eating
   const HEALTH_DECAY = 2.5;   // per second when hunger is 0 (fly survives ~40s at zero hunger)
   const FOOD_HUNGER_RESTORE = 50; // hunger restored when consuming one food (then it disappears)
+  const FOOD_HEALTH_RESTORE = 50; // health restored when consuming one food
 
   function isAttractorType(type: string): boolean {
     return type === 'food' || type === 'light';
@@ -229,6 +230,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
     const onGround = fly.z < ON_GROUND_THRESH;
     const canFlyEat = (restTimeLeft > 0 || onGround || fly.z < 1.1) && fly.z < 1.2;
     let hunger = fly.hunger;
+    let health = fly.health ?? 100;
     let isEating = false;
     let eatenFoodId: string | undefined;
     if (canFlyEat) {
@@ -238,6 +240,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
         if (dist < EAT_RADIUS) {
           isEating = true;
           hunger = Math.min(100, hunger + FOOD_HUNGER_RESTORE);
+          health = Math.min(100, (fly.health ?? 100) + FOOD_HEALTH_RESTORE);
           eatenFoodId = s.id;
           break;
         }
@@ -245,7 +248,6 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
     }
     if (!isEating) hunger = Math.max(0, hunger - HUNGER_DECAY * dt);
 
-    let health = fly.health ?? 100;
     if (hunger <= 0) {
       health = Math.max(0, health - HEALTH_DECAY * dt);
       if (health <= 0) {

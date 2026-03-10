@@ -173,6 +173,56 @@ describe('brain-sim', () => {
     expect(s.fly.hunger).toBeLessThanOrEqual(0);
   });
 
+  it('health decays when hunger is zero', () => {
+    const { step } = createBrainSim(testConnectome, []);
+    const dt = 1 / 30;
+    let s = step(dt);
+    // Run until hunger reaches 0 (~125s)
+    for (let i = 0; i < 4000; i++) {
+      s = step(dt);
+      if (s.fly.hunger <= 0) break;
+    }
+    expect(s.fly.hunger).toBeLessThanOrEqual(0);
+    const healthAtZeroHunger = s.fly.health ?? 100;
+    // Run more steps; health should drain
+    for (let i = 0; i < 300; i++) s = step(dt);
+    expect((s.fly.health ?? 0)).toBeLessThan(healthAtZeroHunger);
+  });
+
+  it('eating food restores both hunger and health', () => {
+    const sources: Array<{ id: string; type: 'food'; x: number; y: number; z: number; radius: number }> = [];
+    const { step } = createBrainSim(testConnectome, () => sources);
+    const dt = 1 / 30;
+    let s = step(dt);
+    // Run with no food until hunger=0 and health has dropped
+    for (let i = 0; i < 4500; i++) {
+      s = step(dt);
+      if (s.fly.dead) break;
+      if (s.fly.hunger <= 0 && (s.fly.health ?? 100) < 90) break;
+    }
+    expect(s.fly.dead).not.toBe(true);
+    expect(s.fly.hunger).toBeLessThanOrEqual(0);
+    const healthBefore = s.fly.health ?? 100;
+    expect(healthBefore).toBeLessThan(100);
+    // Add food at fly position so it can eat
+    sources.push({
+      id: 'f1',
+      type: 'food',
+      x: s.fly.x,
+      y: s.fly.y,
+      z: 0.35,
+      radius: 20,
+    });
+    // Run until fly eats
+    for (let i = 0; i < 200; i++) {
+      s = step(dt);
+      if (s.eatenFoodId) break;
+    }
+    expect(s.eatenFoodId).toBe('f1');
+    expect(s.fly.hunger).toBeGreaterThan(0);
+    expect(s.fly.health).toBeGreaterThan(healthBefore);
+  });
+
   it('light source contributes to activity', () => {
     const { step } = createBrainSim(testConnectome, [lightSource]);
     let totalActivity = 0;

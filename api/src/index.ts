@@ -70,6 +70,7 @@ app.get('/api/neurons', (_, res) => {
   const neurons = connectome.neurons.map((n) => ({
     root_id: n.root_id,
     role: n.role,
+    side: n.side,
     cell_type: n.cell_type,
     ...(n.x != null && { x: n.x }),
     ...(n.y != null && { y: n.y }),

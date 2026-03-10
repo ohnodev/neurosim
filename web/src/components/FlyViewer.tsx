@@ -102,9 +102,9 @@ export default function FlyViewer() {
       .then((r) => r.ok ? r.json() : Promise.reject(new Error(r.statusText)))
       .then((d) => {
         if (!Array.isArray(d.neurons)) throw new Error('Invalid /api/neurons response');
-        const list = d.neurons as { root_id: string; role?: string; cell_type?: string; x?: number; y?: number; z?: number }[];
+        const list = d.neurons as { root_id: string; role?: string; side?: string; cell_type?: string; x?: number; y?: number; z?: number }[];
         setNeuronIds(list.map((n) => n.root_id));
-        setNeuronsWithPositions(list.map((n) => ({ root_id: n.root_id, x: n.x, y: n.y, z: n.z })));
+        setNeuronsWithPositions(list.map((n) => ({ root_id: n.root_id, side: n.side, x: n.x, y: n.y, z: n.z })));
         const labels: Record<string, string> = {};
         for (const n of list) {
           const label = [n.cell_type, n.role].filter(Boolean).join(' ') || n.root_id;
@@ -197,7 +197,7 @@ export default function FlyViewer() {
           </div>
         </div>
         <BrainOverlay neurons={neuronsWithPositions} activity={activity} visible={connected} />
-        <div style={{ position: 'absolute', bottom: 12, left: 12, maxWidth: 320, maxHeight: '40vh', overflow: 'auto', background: 'rgba(0,0,0,0.85)', color: '#ccc', fontSize: 11, padding: 10, borderRadius: 8, fontFamily: 'monospace', pointerEvents: 'auto' }}>
+        <div style={{ position: 'absolute', bottom: 12, left: 12, maxWidth: 420, minWidth: 340, maxHeight: '40vh', overflow: 'auto', background: 'rgba(0,0,0,0.85)', color: '#ccc', fontSize: 11, padding: 10, borderRadius: 8, fontFamily: 'monospace', pointerEvents: 'auto' }}>
           <div style={{ color: '#888', marginBottom: 6 }}>Status</div>
           <div style={{ marginBottom: 4 }}>pos ({(flyState.x ?? 0).toFixed(1)}, {(flyState.y ?? 0).toFixed(1)}, {(flyState.z ?? 0).toFixed(1)})</div>
           <div style={{ marginBottom: 4 }}>heading {((flyState.heading ?? 0) * 180 / Math.PI).toFixed(0)}° | {flyMode}</div>

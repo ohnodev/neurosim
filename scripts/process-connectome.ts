@@ -12,7 +12,7 @@ import { parse } from 'csv-parse/sync';
 
 const DATA_RAW = path.join(process.cwd(), 'data', 'raw');
 const OUTPUT = path.join(process.cwd(), 'data', 'connectome-subset.json');
-const DEFAULT_SUBSET_SIZE = 2000; // neurons to include when not using --all
+const DEFAULT_SUBSET_SIZE = 5000; // neurons to include when not using --all (use --all for full connectome)
 const MIN_SYNAPSES = 2;
 
 const useAll = process.argv.includes('--all') || process.env.SUBSET_SIZE === '0';

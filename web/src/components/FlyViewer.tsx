@@ -111,6 +111,49 @@ function shortId(id: string): string {
 
 const DEFAULT_FLY: FlyState = { x: 0, y: 0, z: 0.35, heading: 0, t: 0, hunger: 100 };
 
+function getFlyMode(fly: FlyState): string {
+  if (fly.dead) return 'dead';
+  if (fly.feeding) return 'feeding';
+  if ((fly.z ?? 0) > FLY_THRESHOLD) return 'flying';
+  if ((fly.z ?? 0) < 0.6) return 'resting';
+  return 'idle';
+}
+
+function FlyStatusCard({ index, fly }: { index: number; fly: FlyState }) {
+  const mode = getFlyMode(fly);
+  const hunger = fly.hunger ?? 100;
+  const health = fly.health ?? 100;
+  const restOrFatigue =
+    fly.restTimeLeft != null && fly.restTimeLeft > 0
+      ? `Rest ${(fly.restTimeLeft / (fly.restDuration ?? REST_DURATION_FALLBACK) * 100).toFixed(0)}%`
+      : `Fatigue ${((fly.flyTimeLeft ?? 1) * 100).toFixed(0)}%`;
+  return (
+    <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 6, padding: 8, marginBottom: 8 }}>
+      <div style={{ fontSize: 10, color: '#aaa', marginBottom: 6, fontWeight: 600 }}>Fly {index + 1}</div>
+      {fly.dead ? (
+        <div style={{ fontSize: 10, color: '#f88' }}>dead</div>
+      ) : (
+        <>
+          <div style={{ marginBottom: 4 }}>
+            <div style={{ fontSize: 9, color: '#888', marginBottom: 2 }}>Hunger</div>
+            <div style={{ height: 6, background: '#222', borderRadius: 2, overflow: 'hidden' }}>
+              <div style={{ width: `${hunger}%`, height: '100%', background: getHungerColor(hunger), transition: 'width 0.2s' }} />
+            </div>
+          </div>
+          <div style={{ marginBottom: 4 }}>
+            <div style={{ fontSize: 9, color: '#888', marginBottom: 2 }}>Health</div>
+            <div style={{ height: 6, background: '#222', borderRadius: 2, overflow: 'hidden' }}>
+              <div style={{ width: `${health}%`, height: '100%', background: health > 50 ? '#5a5' : health > 20 ? '#ca0' : '#c44', transition: 'width 0.2s' }} />
+            </div>
+          </div>
+          <div style={{ fontSize: 9, color: '#8a8' }}>{mode}</div>
+          <div style={{ fontSize: 9, color: '#666', marginTop: 2 }}>{restOrFatigue}</div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function FlyViewer() {
   const [flies, setFlies] = useState<FlyState[]>([]);
   const [sources, setSources] = useState<WorldSource[]>([]);
@@ -196,7 +239,7 @@ export default function FlyViewer() {
     .sort(([, a], [, b]) => b - a)
     .slice(0, 10);
   const focusedFly = flies.find((f) => !f.dead) ?? flies[0] ?? DEFAULT_FLY;
-  const flyMode = focusedFly.dead ? 'dead' : focusedFly.feeding ? 'feeding' : focusedFly.z > FLY_THRESHOLD ? 'flying' : focusedFly.z < 0.6 ? 'resting' : 'idle';
+  const flyMode = getFlyMode(focusedFly);
 
   return (
     <div style={{ width: '100vw', height: '100vh', position: 'relative' }}>
@@ -261,6 +304,33 @@ export default function FlyViewer() {
               </div>
             </div>
           </div>
+        </div>
+        <div
+          style={{
+            position: 'absolute',
+            left: 12,
+            top: 12,
+            width: 180,
+            maxHeight: '50vh',
+            overflow: 'auto',
+            background: 'rgba(10,10,18,0.9)',
+            color: '#ccc',
+            fontSize: 11,
+            padding: 10,
+            borderRadius: 8,
+            border: '1px solid rgba(100,100,140,0.3)',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+            fontFamily: 'monospace',
+            pointerEvents: 'auto',
+          }}
+        >
+          <div style={{ color: '#888', marginBottom: 8, fontSize: 10 }}>Your Flies</div>
+          {flies.length === 0 && (
+            <div style={{ color: '#666', fontSize: 10 }}>—</div>
+          )}
+          {flies.map((fly, i) => (
+            <FlyStatusCard key={i} index={i} fly={fly} />
+          ))}
         </div>
         <BrainOverlay neurons={neuronsWithPositions} activity={activity} visible={connected} />
         <div style={{ position: 'absolute', bottom: 12, left: 12, maxWidth: 420, minWidth: 340, maxHeight: '40vh', overflow: 'auto', background: 'rgba(0,0,0,0.85)', color: '#ccc', fontSize: 11, padding: 10, borderRadius: 8, fontFamily: 'monospace', pointerEvents: 'auto' }}>

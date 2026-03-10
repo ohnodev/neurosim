@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { base } from 'viem/chains';
 import { PRIVY_APP_ID } from '../lib/constants';
 import { PrivyWalletProvider } from '../lib/privyWalletContext';
+import { NotificationProvider } from '../contexts/NotificationContext';
 
 const queryClient = new QueryClient();
 
@@ -27,7 +28,9 @@ export function OnchainProviders({ children }: { children: ReactNode }) {
   return (
     <PrivyProvider appId={PRIVY_APP_ID} config={privyConfig}>
       <QueryClientProvider client={queryClient}>
-        <PrivyWalletProvider>{children}</PrivyWalletProvider>
+        <NotificationProvider>
+          <PrivyWalletProvider>{children}</PrivyWalletProvider>
+        </NotificationProvider>
       </QueryClientProvider>
     </PrivyProvider>
   );

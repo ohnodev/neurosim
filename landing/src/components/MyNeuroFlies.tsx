@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { base } from 'viem/chains';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
+import { useNotification } from '../contexts/NotificationContext';
 import { getApiBase } from '../lib/constants';
 
 const ERC20_ABI = [
@@ -31,63 +33,59 @@ interface ClaimConfig {
   flyEthReceiver: `0x${string}`;
 }
 
+const SUPPORT_MESSAGE = 'Please contact support via our Telegram channel for help.';
+
+async function fetchConfig(): Promise<ClaimConfig | null> {
+  const r = await fetch(`${getApiBase()}/api/claim/config`);
+  if (!r.ok) return null;
+  return r.json();
+}
+
+async function fetchMyFliesAndEligibility(address: string) {
+  const apiBase = getApiBase();
+  const addr = address.toLowerCase();
+  const [fliesRes, eligRes] = await Promise.all([
+    fetch(`${apiBase}/api/claim/my-flies?address=${addr}`).then((r) => r.json()),
+    fetch(`${apiBase}/api/claim/eligibility/${addr}`).then((r) => r.json()),
+  ]);
+  const flies: NeuroFly[] = fliesRes.flies ?? [];
+  const method = (eligRes.method as 'obelisk' | 'pay' | 'full') ?? 'pay';
+  return { flies, method };
+}
+
 export function MyNeuroFlies() {
   const { isConnected, address, walletClient } = usePrivyWallet();
-  const [flies, setFlies] = useState<NeuroFly[]>([]);
-  const [config, setConfig] = useState<ClaimConfig | null>(null);
-  const [eligibility, setEligibility] = useState<{ method: 'obelisk' | 'pay' | 'full'; loading: boolean }>({ method: 'pay', loading: false });
+  const queryClient = useQueryClient();
+  const notification = useNotification();
   const [busy, setBusy] = useState<'obelisk' | 'neuro' | 'eth' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const mountedRef = useRef(true);
+
+  const { data: config } = useQuery({
+    queryKey: ['claim-config'],
+    queryFn: fetchConfig,
+    staleTime: 60_000,
+  });
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['my-flies', address ?? ''],
+    queryFn: () => fetchMyFliesAndEligibility(address!),
+    enabled: !!isConnected && !!address,
+  });
+
+  const flies = data?.flies ?? [];
+  const eligibility = data
+    ? { method: data.method, loading: false }
+    : { method: 'pay' as const, loading: isLoading };
+  const full = eligibility.method === 'full' || flies.length >= 3;
 
   useEffect(() => {
     mountedRef.current = true;
     return () => { mountedRef.current = false; };
   }, []);
 
-  useEffect(() => {
-    fetch(`${getApiBase()}/api/claim/config`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d: ClaimConfig | null) => d && setConfig(d))
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    if (!isConnected || !address) {
-      setFlies([]);
-      setEligibility({ method: 'pay', loading: false });
-      return;
-    }
-    const ctrl = new AbortController();
-    const reqAddr = address.toLowerCase();
-    setEligibility((e) => ({ ...e, loading: true }));
-    Promise.all([
-      fetch(`${getApiBase()}/api/claim/my-flies?address=${reqAddr}`, { signal: ctrl.signal }).then((r) => r.json()),
-      fetch(`${getApiBase()}/api/claim/eligibility/${reqAddr}`, { signal: ctrl.signal }).then((r) => r.json()),
-    ])
-      .then(([fliesRes, eligRes]) => {
-        if (!mountedRef.current || address?.toLowerCase() !== reqAddr) return;
-        setFlies(fliesRes.flies ?? []);
-        setEligibility({
-          method: eligRes.method ?? 'pay',
-          loading: false,
-        });
-      })
-      .catch((err) => {
-        if (err?.name === 'AbortError') return;
-        if (mountedRef.current && address?.toLowerCase() === reqAddr) {
-          setEligibility({ method: 'pay', loading: false });
-        }
-      });
-    return () => ctrl.abort();
-  }, [isConnected, address]);
-
-  const refresh = () => {
-    if (!address) return;
-    fetch(`${getApiBase()}/api/claim/my-flies?address=${address.toLowerCase()}`)
-      .then((r) => r.json())
-      .then((d) => mountedRef.current && setFlies(d.flies ?? []))
-      .catch(() => {});
+  const invalidateMyFlies = () => {
+    if (address) queryClient.invalidateQueries({ queryKey: ['my-flies', address] });
   };
 
   const handleClaimFree = async () => {
@@ -102,7 +100,7 @@ export function MyNeuroFlies() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? 'Claim failed');
-      refresh();
+      invalidateMyFlies();
     } catch (err) {
       if (mountedRef.current) setError(err instanceof Error ? err.message : 'Claim failed');
     } finally {
@@ -121,9 +119,13 @@ export function MyNeuroFlies() {
         value: ETH_AMOUNT,
         chain: base,
       });
+      notification.show('Transaction sent, pending...', 'info');
       const apiBase = getApiBase();
+      const maxAttempts = 5;
+      const baseDelay = 1000;
       const verify = async (attempt = 0): Promise<void> => {
         if (!mountedRef.current) return;
+        notification.update('Verifying payment...', 'info');
         const res = await fetch(`${apiBase}/api/claim/verify-eth`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -131,13 +133,19 @@ export function MyNeuroFlies() {
         });
         const data = await res.json().catch(() => ({}));
         if (res.ok) {
-          refresh();
+          invalidateMyFlies();
+          notification.update('NeuroFly added!', 'success');
+          setTimeout(() => notification.hide(), 2000);
           return;
         }
-        if (data.error === 'Transaction not found' && attempt < 12) {
-          await new Promise((r) => setTimeout(r, 3000));
+        const retryable = data.error === 'Transaction not found' || data.error === 'Verification failed';
+        if (retryable && attempt < maxAttempts) {
+          const delay = Math.min(baseDelay * Math.pow(2, attempt), 8000);
+          await new Promise((r) => setTimeout(r, delay));
           if (mountedRef.current) return verify(attempt + 1);
         }
+        notification.update(SUPPORT_MESSAGE, 'error');
+        setTimeout(() => notification.hide(), 5000);
         throw new Error(data.error ?? 'Verification failed');
       };
       await verify();
@@ -166,9 +174,13 @@ export function MyNeuroFlies() {
         args: [config.claimReceiverAddress, NEURO_AMOUNT],
         chain: base,
       });
+      notification.show('Transaction sent, pending...', 'info');
       const apiBase = getApiBase();
+      const maxAttempts = 5;
+      const baseDelay = 1000;
       const verify = async (attempt = 0): Promise<void> => {
         if (!mountedRef.current) return;
+        notification.update('Verifying payment...', 'info');
         const res = await fetch(`${apiBase}/api/claim/verify-payment`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -176,13 +188,19 @@ export function MyNeuroFlies() {
         });
         const data = await res.json().catch(() => ({}));
         if (res.ok) {
-          refresh();
+          invalidateMyFlies();
+          notification.update('NeuroFly added!', 'success');
+          setTimeout(() => notification.hide(), 2000);
           return;
         }
-        if (data.error === 'Transaction not found' && attempt < 12) {
-          await new Promise((r) => setTimeout(r, 3000));
+        const retryable = data.error === 'Transaction not found' || data.error === 'Verification failed';
+        if (retryable && attempt < maxAttempts) {
+          const delay = Math.min(baseDelay * Math.pow(2, attempt), 8000);
+          await new Promise((r) => setTimeout(r, delay));
           if (mountedRef.current) return verify(attempt + 1);
         }
+        notification.update(SUPPORT_MESSAGE, 'error');
+        setTimeout(() => notification.hide(), 5000);
         throw new Error(data.error ?? 'Verification failed');
       };
       await verify();
@@ -194,7 +212,6 @@ export function MyNeuroFlies() {
   };
 
   const slots = [0, 1, 2];
-  const full = eligibility.method === 'full' || flies.length >= 3;
 
   return (
     <div className="neuroflies">

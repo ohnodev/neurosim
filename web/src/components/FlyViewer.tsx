@@ -15,6 +15,7 @@ interface FlyState {
   hunger: number;
   flyTimeLeft?: number;  // 0-1, flight energy
   restTimeLeft?: number; // seconds resting
+  feeding?: boolean;
 }
 
 function getHungerColor(hunger: number): string {
@@ -45,19 +46,52 @@ function FlyModel({ state }: { state: FlyState }) {
   );
 }
 
+function GrassGround() {
+  const { scene } = useGLTF('/textures/grass_texture_pack/scene.gltf');
+  const cloned = useMemo(() => scene.clone(true), [scene]);
+  return (
+    <primitive
+      object={cloned}
+      position={[0, 0, 0]}
+      rotation={[-Math.PI / 2, 0, 0]}
+      scale={[0.13, 0.13, 0.13]}
+      receiveShadow
+    />
+  );
+}
+
+function FoodModel() {
+  const { scene } = useGLTF('/models/low-poly_apple/scene.gltf');
+  const cloned = useMemo(() => scene.clone(true), [scene]);
+  return (
+    <primitive object={cloned} scale={1.2} rotation={[0, 0, 0]} />
+  );
+}
+
 function WorldSources({ sources }: { sources: WorldSource[] }) {
   return (
     <>
       {sources.map((s) => (
         <group key={s.id} position={[s.x, s.z, s.y]}>
-          <mesh>
-            <sphereGeometry args={[0.8, 24, 24]} />
-            <meshStandardMaterial
-              color={s.type === 'food' ? '#e8a838' : '#88ccff'}
-              emissive={s.type === 'food' ? '#553300' : '#4488ff'}
-              emissiveIntensity={s.type === 'light' ? 0.6 : 0.2}
-            />
-          </mesh>
+          {s.type === 'food' ? (
+            <Suspense fallback={
+              <mesh>
+                <sphereGeometry args={[0.8, 24, 24]} />
+                <meshStandardMaterial color="#e8a838" />
+              </mesh>
+            }>
+              <FoodModel />
+            </Suspense>
+          ) : (
+            <mesh>
+              <sphereGeometry args={[0.8, 24, 24]} />
+              <meshStandardMaterial
+                color="#88ccff"
+                emissive="#4488ff"
+                emissiveIntensity={0.6}
+              />
+            </mesh>
+          )}
         </group>
       ))}
     </>
@@ -164,10 +198,14 @@ export default function FlyViewer() {
             <FlyModel state={flyState} />
           </Suspense>
           <WorldSources sources={sources} />
-          <mesh position={[0, 0, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
-            <planeGeometry args={[50, 50, 32, 32]} />
-            <meshStandardMaterial color="#2d5a27" roughness={0.9} metalness={0.05} />
-          </mesh>
+          <Suspense fallback={
+            <mesh position={[0, 0, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
+              <planeGeometry args={[50, 50, 32, 32]} />
+              <meshStandardMaterial color="#2d5a27" roughness={0.9} metalness={0.05} />
+            </mesh>
+          }>
+            <GrassGround />
+          </Suspense>
         </Canvas>
       </div>
       {/* UI layer - always on top, always visible */}

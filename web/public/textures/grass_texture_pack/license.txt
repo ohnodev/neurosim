@@ -1,0 +1,11 @@
+Model Information:
+* title:	Grass texture pack
+* source:	https://sketchfab.com/3d-models/grass-texture-pack-d6969ca4e9cc499c8246d03bdb276186
+* author:	the soppy prisma models .- (https://sketchfab.com/zaidluigi64)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Grass texture pack" (https://sketchfab.com/3d-models/grass-texture-pack-d6969ca4e9cc499c8246d03bdb276186) by the soppy prisma models .- (https://sketchfab.com/zaidluigi64) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)

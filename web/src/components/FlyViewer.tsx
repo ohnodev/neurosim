@@ -14,6 +14,12 @@ function getHungerColor(hunger: number): string {
   return '#c44';
 }
 
+function getHealthColor(health: number): string {
+  if (health > 50) return '#48a';
+  if (health > 20) return '#c95';
+  return '#c44';
+}
+
 const FLY_THRESHOLD = 1.1; // z above this = flying (wings flap + HUD mode)
 const REST_DURATION_FALLBACK = 4; // fallback when flyState.restDuration not in payload
 const WING_NAMES = ['Object_4', 'Object_5', 'Object_6']; // fly-white, flywings-dark, glass (wing materials)
@@ -171,7 +177,7 @@ function FlyStatusCard({
           <div style={{ marginBottom: 4 }}>
             <div style={{ fontSize: 9, color: '#888', marginBottom: 2 }}>Health</div>
             <div style={{ height: 6, background: '#222', borderRadius: 2, overflow: 'hidden' }}>
-              <div style={{ width: `${health}%`, height: '100%', background: health > 50 ? '#5a5' : health > 20 ? '#ca0' : '#c44', transition: 'width 0.2s' }} />
+              <div style={{ width: `${health}%`, height: '100%', background: getHealthColor(health), transition: 'width 0.2s' }} />
             </div>
           </div>
           <div style={{ marginBottom: 0 }}>
@@ -324,7 +330,7 @@ export default function FlyViewer() {
             <div style={{ width: 120, background: '#222', borderRadius: 4, overflow: 'hidden' }}>
               <div style={{ fontSize: 10, color: '#888', padding: '2px 6px' }}>Health</div>
               <div style={{ height: 8, background: '#333', borderRadius: 2, margin: '0 4px 4px', overflow: 'hidden' }}>
-                <div style={{ width: `${focusedFly.health ?? 100}%`, height: '100%', background: (focusedFly.health ?? 100) > 50 ? '#5a5' : (focusedFly.health ?? 100) > 20 ? '#ca0' : '#c44', transition: 'width 0.2s' }} />
+                <div style={{ width: `${focusedFly.health ?? 100}%`, height: '100%', background: getHealthColor(focusedFly.health ?? 100), transition: 'width 0.2s' }} />
               </div>
             </div>
             <div style={{ width: 120, background: '#222', borderRadius: 4, overflow: 'hidden' }}>

@@ -63,18 +63,14 @@ function FlyModel({ state }: { state: FlyState }) {
   );
 }
 
-function GrassGround() {
-  const { scene } = useGLTF('/textures/grass_texture_pack/scene.gltf');
-  const cloned = useMemo(() => scene.clone(true), [scene]);
-  // Root node already has -90° X baked in; do not add extra rotation or it stands vertical
+const ARENA_SIZE = 48; // matches brain-sim ARENA (24) * 2 for fly world bounds
+
+function GroundPlane() {
   return (
-    <primitive
-      object={cloned}
-      position={[0, 0, 0]}
-      rotation={[0, 0, 0]}
-      scale={[0.13, 0.13, 0.13]}
-      receiveShadow
-    />
+    <mesh position={[0, 0, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
+      <planeGeometry args={[ARENA_SIZE, ARENA_SIZE]} />
+      <meshStandardMaterial color="#2d5a27" roughness={0.9} metalness={0.05} />
+    </mesh>
   );
 }
 
@@ -214,14 +210,7 @@ export default function FlyViewer() {
             <FlyModel state={flyState} />
           </Suspense>
           <WorldSources sources={sources} />
-          <Suspense fallback={
-            <mesh position={[0, 0, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
-              <planeGeometry args={[50, 50, 32, 32]} />
-              <meshStandardMaterial color="#2d5a27" roughness={0.9} metalness={0.05} />
-            </mesh>
-          }>
-            <GrassGround />
-          </Suspense>
+          <GroundPlane />
         </Canvas>
       </div>
       {/* UI layer - always on top, always visible */}

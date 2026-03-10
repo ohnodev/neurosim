@@ -1,8 +1,10 @@
 .app {
-  min-height: 100dvh;
+  height: 100dvh;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   position: relative;
+  overflow: hidden;
 }
 
 .bg {
@@ -76,19 +78,21 @@
   position: relative;
   z-index: 10;
   flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 24px;
+  padding: 16px 24px;
   max-width: 1400px;
   margin: 0 auto;
   width: 100%;
+  overflow: hidden;
 }
 
 @media (min-width: 1200px) {
   .dashboard {
     flex-direction: row;
     gap: 24px;
-    align-items: flex-start;
+    align-items: stretch;
   }
 
   .dashboard__hero {
@@ -99,7 +103,14 @@
   .dashboard__sidebar {
     width: 340px;
     flex-shrink: 0;
+    min-height: 0;
+    overflow-y: auto;
   }
+}
+
+.dashboard__sidebar {
+  min-height: 0;
+  overflow-y: auto;
 }
 
 /* Hero / Brain */
@@ -111,9 +122,9 @@
 
 .hero__brain {
   width: 100%;
-  min-height: 400px;
-  height: 50vh;
-  max-height: 560px;
+  flex: 1;
+  min-height: 200px;
+  max-height: 380px;
   border-radius: 4px;
   overflow: hidden;
   background: rgba(255, 255, 255, 0.03);
@@ -164,12 +175,12 @@
 
 /* Cards */
 .card {
-  padding: 20px;
+  padding: 14px 18px;
   background: rgba(255, 255, 255, 0.04);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border-radius: 4px;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 
 .card:last-child {
@@ -370,7 +381,7 @@
   position: relative;
   z-index: 10;
   flex-shrink: 0;
-  padding: 20px 24px;
+  padding: 12px 24px;
 }
 
 .footer__brand {
@@ -430,8 +441,7 @@
 /* Mobile: single breakpoint at 1200px */
 @media (max-width: 1199px) {
   .hero__brain {
-    min-height: 320px;
-    height: 45vh;
-    max-height: 420px;
+    min-height: 180px;
+    max-height: 300px;
   }
 }

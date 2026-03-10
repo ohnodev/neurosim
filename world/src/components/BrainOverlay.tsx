@@ -155,7 +155,7 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
     const el = plotRef.current;
     if (!el || !embedded) return;
     const resize = () => {
-      if (plotReady.current && el) Plotly.Plots.resize(el);
+      if (plotReady.current && el) Plotly.Plots?.resize(el);
     };
     const ro = new ResizeObserver(resize);
     ro.observe(el);

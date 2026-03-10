@@ -225,7 +225,6 @@ export default function FlyViewer() {
   const [neuronLabels, setNeuronLabels] = useState<Record<string, string>>({});
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeCount, setActiveCount] = useState(0);
   const [activity, setActivity] = useState<Record<string, number>>({});
   const [activities, setActivities] = useState<(Record<string, number> | undefined)[]>([]);
   const [neuronsWithPositions, setNeuronsWithPositions] = useState<NeuronWithPosition[]>([]);
@@ -307,10 +306,6 @@ export default function FlyViewer() {
     return unsub;
   }, []);
 
-  const topActivity = Object.entries(activityForSelected)
-    .sort(([, a], [, b]) => b - a)
-    .slice(0, 10);
-
   const deployedSlotKeys = useMemo(
     () => Object.keys(deployed)
       .map((k) => parseInt(k, 10))
@@ -325,6 +320,9 @@ export default function FlyViewer() {
       ? activities[simIndexForSelected]!
       : activity;
   const activeCount = Object.keys(activityForSelected).length;
+  const topActivity = Object.entries(activityForSelected)
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, 10);
   const focusedFly =
     simIndexForSelected != null && flies[simIndexForSelected]
       ? flies[simIndexForSelected]!

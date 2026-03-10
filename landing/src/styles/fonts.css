@@ -1,0 +1,53 @@
+@font-face {
+  font-family: 'Chakra Petch';
+  src: url('/fonts/ChakraPetch-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: 'Chakra Petch';
+  src: url('/fonts/ChakraPetch-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: 'Chakra Petch';
+  src: url('/fonts/ChakraPetch-SemiBold.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: 'Chakra Petch';
+  src: url('/fonts/ChakraPetch-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: 'Space Mono';
+  src: url('/fonts/SpaceMono-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: 'Space Mono';
+  src: url('/fonts/SpaceMono-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: block;
+}
+
+:root {
+  --font-heading: 'Chakra Petch', system-ui, sans-serif;
+  --font-body: 'Space Mono', 'Courier New', monospace;
+  --font-mono: 'Space Mono', 'Courier New', monospace;
+}

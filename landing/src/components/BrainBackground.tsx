@@ -193,7 +193,7 @@ export function BrainBackground() {
         yaxis: { visible: false, range: [-1.2, 1.2] },
         zaxis: { visible: false, range: [-1.2, 1.2] },
         bgcolor: 'rgba(0,0,0,0)',
-        camera: { eye: { x: 1.2, y: 0.2, z: 0.8 } },
+        camera: { eye: { x: 0.7, y: 0, z: 0.7 } },
         aspectmode: 'cube',
         dragmode: false,
       },
@@ -229,19 +229,19 @@ export function BrainBackground() {
     Plotly.restyle(plotRef.current, { 'marker.color': [color] }, [0]);
   }, [activity]);
 
-  // Slow camera rotation (slower on mobile for performance)
+  // Slow Y-axis rotation (orbit around brain), zoomed in
   useEffect(() => {
     if (!plotRef.current || !plotReady.current) return;
     let t = 0;
-    const speed = isMobile ? 0.0015 : 0.003;
+    const speed = isMobile ? 0.0012 : 0.0022;
+    const r = 0.7; // zoomed in
     const animate = () => {
       t += speed;
-      const r = 1.2;
       Plotly.relayout(plotRef.current!, {
         'scene.camera.eye': {
-          x: r * Math.cos(t),
-          y: r * Math.sin(t) * 0.3,
-          z: 0.8 + Math.sin(t * 0.7) * 0.2,
+          x: r * Math.sin(t),
+          y: 0.15,
+          z: r * Math.cos(t),
         },
       });
       rafRef.current = requestAnimationFrame(animate);
@@ -273,7 +273,7 @@ export function BrainBackground() {
         style={{
           position: 'absolute',
           inset: 0,
-          background: 'radial-gradient(ellipse at center, transparent 0%, rgba(0,0,0,0.6) 100%)',
+          background: 'radial-gradient(ellipse at center, transparent 30%, rgba(0,0,0,0.4) 100%)',
           pointerEvents: 'none',
         }}
       />

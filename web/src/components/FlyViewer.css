@@ -1,0 +1,88 @@
+/* Left flies panel - collapsible, basemarket-style */
+
+.fly-viewer__flies-toggle {
+  position: absolute;
+  left: 8px;
+  top: 12px;
+  z-index: 10;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px solid rgba(100, 100, 140, 0.46);
+  background: rgba(13, 22, 42, 0.9);
+  color: #d5e2fe;
+  padding: 0;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.15s ease;
+  pointer-events: auto;
+}
+
+.fly-viewer__flies-toggle:hover {
+  transform: translateY(-1px);
+}
+
+.fly-viewer__flies-toggle--active {
+  background: rgba(35, 70, 138, 0.88);
+}
+
+.fly-viewer__flies-toggle svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.fly-viewer__flies-overlay {
+  position: absolute;
+  left: 12px;
+  top: 12px;
+  width: min(180px, calc(100% - 24px));
+  max-height: calc(100% - 24px);
+  overflow: hidden;
+  z-index: 8;
+  display: flex;
+  transform: translateX(calc(-100% - 14px));
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+
+.fly-viewer__flies-overlay--open {
+  transform: translateX(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.fly-viewer__flies-panel {
+  width: 180px;
+  max-height: 50vh;
+  overflow: auto;
+  background: rgba(10, 10, 18, 0.9);
+  color: #ccc;
+  font-size: 11px;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(100, 100, 140, 0.3);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  font-family: monospace;
+}
+
+@media (max-width: 768px) {
+  .fly-viewer__flies-overlay {
+    left: 8px;
+    top: 54px;
+    width: min(180px, calc(100% - 16px));
+    max-height: calc(100% - 64px);
+  }
+
+  .fly-viewer__flies-toggle {
+    left: 8px;
+    top: 12px;
+  }
+}

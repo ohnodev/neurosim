@@ -6,6 +6,7 @@ import type { WorldSource } from '../../../api/src/world';
 import { subscribeSim, sendStart, sendStop, getConnectionState, type FlyState } from '../lib/simWsClient';
 import { getApiBase } from '../lib/wsUrl';
 import { BrainOverlay, type NeuronWithPosition } from './BrainOverlay';
+import './FlyViewer.css';
 
 function getHungerColor(hunger: number): string {
   if (hunger > 50) return '#5a5';
@@ -196,6 +197,9 @@ export default function FlyViewer() {
   const [activeCount, setActiveCount] = useState(0);
   const [activity, setActivity] = useState<Record<string, number>>({});
   const [neuronsWithPositions, setNeuronsWithPositions] = useState<NeuronWithPosition[]>([]);
+  const [fliesPanelOpen, setFliesPanelOpen] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches ? false : true
+  );
 
   useEffect(() => {
     const apiBase = getApiBase();
@@ -337,38 +341,37 @@ export default function FlyViewer() {
             </div>
           </div>
         </div>
-        <div
-          style={{
-            position: 'absolute',
-            left: 12,
-            top: 12,
-            width: 180,
-            maxHeight: '50vh',
-            overflow: 'auto',
-            background: 'rgba(10,10,18,0.9)',
-            color: '#ccc',
-            fontSize: 11,
-            padding: 10,
-            borderRadius: 8,
-            border: '1px solid rgba(100,100,140,0.3)',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
-            fontFamily: 'monospace',
-            pointerEvents: 'auto',
-          }}
+        <button
+          type="button"
+          className={`fly-viewer__flies-toggle ${fliesPanelOpen ? 'fly-viewer__flies-toggle--active' : ''}`}
+          onClick={() => setFliesPanelOpen((o) => !o)}
+          aria-label={fliesPanelOpen ? 'Hide flies panel' : 'Show flies panel'}
+          aria-expanded={fliesPanelOpen}
+          title={fliesPanelOpen ? 'Hide flies panel' : 'Show flies panel'}
         >
-          <div style={{ color: '#888', marginBottom: 8, fontSize: 10 }}>Your Flies — click to view</div>
-          {flies.length === 0 && (
-            <div style={{ color: '#666', fontSize: 10 }}>—</div>
-          )}
-          {flies.map((fly, i) => (
-            <FlyStatusCard
-              key={i}
-              index={i}
-              fly={fly}
-              selected={i === selectedFlyIndex}
-              onSelect={() => setSelectedFlyIndex(i)}
-            />
-          ))}
+          <svg viewBox="0 0 24 24" role="img" aria-hidden="true">
+            <path d="M4 18V8h2v10H4zm6 0V4h2v14h-2zm6 0v-6h2v6h-2z" />
+          </svg>
+        </button>
+        <div
+          className={`fly-viewer__flies-overlay ${fliesPanelOpen ? 'fly-viewer__flies-overlay--open' : ''}`}
+          id="flies-panel-overlay"
+        >
+          <div className="fly-viewer__flies-panel">
+            <div style={{ color: '#888', marginBottom: 8, fontSize: 10 }}>Your Flies — click to view</div>
+            {flies.length === 0 && (
+              <div style={{ color: '#666', fontSize: 10 }}>—</div>
+            )}
+            {flies.map((fly, i) => (
+              <FlyStatusCard
+                key={i}
+                index={i}
+                fly={fly}
+                selected={i === selectedFlyIndex}
+                onSelect={() => setSelectedFlyIndex(i)}
+              />
+            ))}
+          </div>
         </div>
         <BrainOverlay neurons={neuronsWithPositions} activity={activity} visible={connected} />
         <div style={{ position: 'absolute', bottom: 12, left: 12, maxWidth: 420, minWidth: 340, maxHeight: '40vh', overflow: 'auto', background: 'rgba(0,0,0,0.85)', color: '#ccc', fontSize: 11, padding: 10, borderRadius: 8, fontFamily: 'monospace', pointerEvents: 'auto' }}>

@@ -119,17 +119,44 @@ function getFlyMode(fly: FlyState): string {
   return 'idle';
 }
 
-function FlyStatusCard({ index, fly }: { index: number; fly: FlyState }) {
-  const mode = getFlyMode(fly);
+function FlyStatusCard({
+  index,
+  fly,
+  selected,
+  onSelect,
+}: {
+  index: number;
+  fly: FlyState;
+  selected: boolean;
+  onSelect: () => void;
+}) {
   const hunger = fly.hunger ?? 100;
   const health = fly.health ?? 100;
-  const restOrFatigue =
+  const fatiguePct =
     fly.restTimeLeft != null && fly.restTimeLeft > 0
-      ? `Rest ${(fly.restTimeLeft / (fly.restDuration ?? REST_DURATION_FALLBACK) * 100).toFixed(0)}%`
-      : `Fatigue ${((fly.flyTimeLeft ?? 1) * 100).toFixed(0)}%`;
+      ? 100 - ((fly.restTimeLeft ?? 0) / (fly.restDuration ?? REST_DURATION_FALLBACK)) * 100
+      : (fly.flyTimeLeft ?? 1) * 100;
   return (
-    <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 6, padding: 8, marginBottom: 8 }}>
-      <div style={{ fontSize: 10, color: '#aaa', marginBottom: 6, fontWeight: 600 }}>Fly {index + 1}</div>
+    <button
+      type="button"
+      onClick={onSelect}
+      style={{
+        width: '100%',
+        textAlign: 'left',
+        border: selected ? '1px solid rgba(99,102,241,0.5)' : '1px solid transparent',
+        outline: 'none',
+        background: selected ? 'rgba(99,102,241,0.2)' : 'rgba(255,255,255,0.04)',
+        borderRadius: 6,
+        padding: 8,
+        marginBottom: 8,
+        cursor: 'pointer',
+        color: 'inherit',
+        font: 'inherit',
+      }}
+    >
+      <div style={{ fontSize: 10, color: selected ? '#aaf' : '#aaa', marginBottom: 6, fontWeight: 600 }}>
+        Fly {index + 1}{selected ? ' (viewing)' : ''}
+      </div>
       {fly.dead ? (
         <div style={{ fontSize: 10, color: '#f88' }}>dead</div>
       ) : (
@@ -146,16 +173,21 @@ function FlyStatusCard({ index, fly }: { index: number; fly: FlyState }) {
               <div style={{ width: `${health}%`, height: '100%', background: health > 50 ? '#5a5' : health > 20 ? '#ca0' : '#c44', transition: 'width 0.2s' }} />
             </div>
           </div>
-          <div style={{ fontSize: 9, color: '#8a8' }}>{mode}</div>
-          <div style={{ fontSize: 9, color: '#666', marginTop: 2 }}>{restOrFatigue}</div>
+          <div style={{ marginBottom: 0 }}>
+            <div style={{ fontSize: 9, color: '#888', marginBottom: 2 }}>Fatigue</div>
+            <div style={{ height: 6, background: '#222', borderRadius: 2, overflow: 'hidden' }}>
+              <div style={{ width: `${fatiguePct}%`, height: '100%', background: '#48a', transition: 'width 0.2s' }} />
+            </div>
+          </div>
         </>
       )}
-    </div>
+    </button>
   );
 }
 
 export default function FlyViewer() {
   const [flies, setFlies] = useState<FlyState[]>([]);
+  const [selectedFlyIndex, setSelectedFlyIndex] = useState(0);
   const [sources, setSources] = useState<WorldSource[]>([]);
   const [neuronLabels, setNeuronLabels] = useState<Record<string, string>>({});
   const [connected, setConnected] = useState(false);
@@ -238,7 +270,7 @@ export default function FlyViewer() {
   const topActivity = Object.entries(activity)
     .sort(([, a], [, b]) => b - a)
     .slice(0, 10);
-  const focusedFly = flies.find((f) => !f.dead) ?? flies[0] ?? DEFAULT_FLY;
+  const focusedFly = flies[selectedFlyIndex] ?? flies[0] ?? DEFAULT_FLY;
   const flyMode = getFlyMode(focusedFly);
 
   return (
@@ -324,18 +356,24 @@ export default function FlyViewer() {
             pointerEvents: 'auto',
           }}
         >
-          <div style={{ color: '#888', marginBottom: 8, fontSize: 10 }}>Your Flies</div>
+          <div style={{ color: '#888', marginBottom: 8, fontSize: 10 }}>Your Flies — click to view</div>
           {flies.length === 0 && (
             <div style={{ color: '#666', fontSize: 10 }}>—</div>
           )}
           {flies.map((fly, i) => (
-            <FlyStatusCard key={i} index={i} fly={fly} />
+            <FlyStatusCard
+              key={i}
+              index={i}
+              fly={fly}
+              selected={i === selectedFlyIndex}
+              onSelect={() => setSelectedFlyIndex(i)}
+            />
           ))}
         </div>
         <BrainOverlay neurons={neuronsWithPositions} activity={activity} visible={connected} />
         <div style={{ position: 'absolute', bottom: 12, left: 12, maxWidth: 420, minWidth: 340, maxHeight: '40vh', overflow: 'auto', background: 'rgba(0,0,0,0.85)', color: '#ccc', fontSize: 11, padding: 10, borderRadius: 8, fontFamily: 'monospace', pointerEvents: 'auto' }}>
           <div style={{ color: '#888', marginBottom: 6 }}>Status</div>
-          <div style={{ marginBottom: 4 }}>flies {flies.length} | focused pos ({(focusedFly.x ?? 0).toFixed(1)}, {(focusedFly.y ?? 0).toFixed(1)}, {(focusedFly.z ?? 0).toFixed(1)})</div>
+          <div style={{ marginBottom: 4 }}>Fly {selectedFlyIndex + 1} (viewing) | pos ({(focusedFly.x ?? 0).toFixed(1)}, {(focusedFly.y ?? 0).toFixed(1)}, {(focusedFly.z ?? 0).toFixed(1)})</div>
           <div style={{ marginBottom: 4 }}>heading {((focusedFly.heading ?? 0) * 180 / Math.PI).toFixed(0)}° | {flyMode}</div>
           <div style={{ marginBottom: 8 }}>t {(focusedFly.t ?? 0).toFixed(1)}s | hunger {Math.round(focusedFly.hunger ?? 0)} | health {Math.round(focusedFly.health ?? 100)}</div>
           <div style={{ color: '#888', marginBottom: 4 }}>Firing neurons ({activeCount})</div>

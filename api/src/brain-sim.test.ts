@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import * as path from 'path';
+import { fileURLToPath } from 'url';
 import * as fs from 'fs';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import { createBrainSim } from './brain-sim.js';
 import { loadConnectome } from './connectome.js';
 
@@ -187,16 +190,26 @@ describe('brain-sim', () => {
   });
 
   it('fly moves with stimulus within 5s', () => {
-    const { step, inject } = createBrainSim(testConnectome, [foodSource]);
-    inject(['s1', 's2'], 0.8);
     const dt = 1 / 30;
-    const s0 = step(dt);
-    for (let i = 0; i < 150; i++) {
-      step(dt);
-    }
-    const s1 = step(dt);
+    const steps = 150;
+
+    const control = createBrainSim(testConnectome, []);
+    const s0_control = control.step(dt);
+    for (let i = 0; i < steps; i++) control.step(dt);
+    const s1_control = control.step(dt);
+    const distMoved_control = Math.hypot(s1_control.fly.x - s0_control.fly.x, s1_control.fly.y - s0_control.fly.y);
+
+    const injected = createBrainSim(testConnectome, []);
+    injected.inject(['s1', 's2'], 0.8);
+    const s0 = injected.step(dt);
+    for (let i = 0; i < steps; i++) injected.step(dt);
+    const s1 = injected.step(dt);
     const distMoved = Math.hypot(s1.fly.x - s0.fly.x, s1.fly.y - s0.fly.y);
-    expect(distMoved).toBeGreaterThan(0.5);
+
+    expect(distMoved_control, 'Control should have baseline movement').toBeGreaterThan(0.5);
+    expect(distMoved, 'Injected run should move').toBeGreaterThan(0.5);
+    expect(distMoved, 'Injection adds activity; injected run should move at least as much as control')
+      .toBeGreaterThanOrEqual(distMoved_control * 0.9);
   });
 
   it('fly eventually reaches food when hungry (long run)', () => {
@@ -300,7 +313,7 @@ describe('brain-sim', () => {
   });
 
   it('neurons are balanced: not all firing at max, activity varies over time', () => {
-    const connectomePath = path.resolve(process.cwd(), '..', 'data', 'connectome-subset.json');
+    const connectomePath = path.resolve(__dirname, '..', '..', 'data', 'connectome-subset.json');
     if (!fs.existsSync(connectomePath)) {
       console.warn('Skipping neuron balance test: connectome-subset.json not found');
       return;

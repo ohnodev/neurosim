@@ -98,9 +98,10 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
   let flyTimeLeft = FLY_TIME_MAX;
   let restTimeLeft = 0;
 
-  const TAU = 0.03;           // propagation strength
-  const DECAY = 0.88;         // per-step decay
-  const PROP_CAP = 0.003;     // max contribution per synapse (limits cascade in dense connectomes)
+  const REF_STEP = 1 / 30;    // reference timestep (API calls at 30Hz)
+  const TAU = 0.03;           // propagation strength (per REF_STEP)
+  const DECAY = 0.88;         // per REF_STEP decay
+  const PROP_CAP = 0.003;     // max contribution per synapse (per REF_STEP)
   const INPUT_RATE = 2;
   const SENSORY_SCALE = 0.18;
   const SENSORY_DUTY = 0.28;  // sensory bursts ~28% of the time
@@ -108,28 +109,32 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
 
   function step(dt: number): SimState {
     const t = fly.t + dt;
+    const r = Math.max(0.1, Math.min(3, dt / REF_STEP)); // scale factor; clamp to avoid extremes
+    const decayFactor = Math.pow(DECAY, r);
     const nextActivity = new Float32Array(activity.length);
 
-    // Decay + propagate
+    // Decay + propagate (dt-scaled for frame-rate independence)
     for (let i = 0; i < activity.length; i++) {
-      nextActivity[i] = activity[i] * DECAY;
+      nextActivity[i] = activity[i] * decayFactor;
     }
 
+    const tauR = TAU * r;
+    const propCapR = PROP_CAP * r;
     for (let i = 0; i < neuronIds.length; i++) {
       const preId = neuronIds[i];
       const list = adj.get(preId) ?? [];
       for (const { post, weight } of list) {
         const j = idToIdx.get(post);
         if (j != null) {
-          const v = Math.min(activity[i] * TAU * Math.min(weight, 10), PROP_CAP);
+          const v = Math.min(activity[i] * tauR * Math.min(weight, 10), propCapR);
           nextActivity[j] += Number.isFinite(v) ? v : 0;
         }
       }
     }
 
-    // Route visual stimuli (food/light) into visual-type neurons. Pulsed so activity can decay between bursts.
+    // Route visual stimuli (food/light) into visual-type neurons. Pulsed; scale by r for dt-independence.
     if (visualTargetIndices.length > 0) {
-      const pulse = Math.sin(t * INPUT_RATE) > 1 - SENSORY_DUTY * 2 ? 1 : 0; // burst ~30% of the time
+      const pulse = Math.sin(t * INPUT_RATE) > 1 - SENSORY_DUTY * 2 ? 1 : 0;
       if (pulse > 0) {
         let foodSignal = 0;
         let lightSignal = 0;
@@ -142,7 +147,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
         }
         const baseNoise = 0.15 * (0.5 + 0.5 * Math.sin(t * INPUT_RATE));
         const rawPerNeuron = (baseNoise + foodSignal * 0.5 + lightSignal) / visualTargetIndices.length;
-        const perNeuron = Math.min(rawPerNeuron * SENSORY_SCALE, 0.5);
+        const perNeuron = Math.min(rawPerNeuron * SENSORY_SCALE * r, 0.5);
         for (const idx of visualTargetIndices) {
           nextActivity[idx] += perNeuron;
         }
@@ -250,13 +255,14 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
       effectiveMotor = 0;
       if (restTimeLeft <= 0) flyTimeLeft = FLY_TIME_MAX;
     } else if (Math.abs(effectiveMotor) > 0.005) {
-      flyTimeLeft -= dt * Math.abs(effectiveMotor);
+      flyTimeLeft = Math.max(0, flyTimeLeft - dt * Math.abs(effectiveMotor));
       if (flyTimeLeft <= 0) {
         restTimeLeft = REST_TIME; // fatigued -> land and rest
       }
     } else {
       flyTimeLeft = Math.min(FLY_TIME_MAX, flyTimeLeft + dt * 0.5); // recover a bit when idle
     }
+    flyTimeLeft = Math.max(0, Math.min(FLY_TIME_MAX, flyTimeLeft));
 
     const MOVE_SPEED = 35; // units/sec at full motor
     const dx = Math.cos(fly.heading) * effectiveMotor * dt * MOVE_SPEED;
@@ -293,6 +299,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
     while (nHeading > Math.PI) nHeading -= 2 * Math.PI;
     while (nHeading < -Math.PI) nHeading += 2 * Math.PI;
     nHeading = Number.isFinite(nHeading) ? nHeading : fly.heading;
+    const flyTimeLeftNorm = Math.max(0, Math.min(1, flyTimeLeft / FLY_TIME_MAX));
     fly = {
       x: Number.isFinite(nx) ? nx : fly.x,
       y: Number.isFinite(ny) ? ny : fly.y,
@@ -300,7 +307,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
       heading: Number.isFinite(nHeading) ? nHeading : fly.heading,
       t: Number.isFinite(t) ? t : fly.t,
       hunger: Number.isFinite(hunger) ? hunger : fly.hunger,
-      flyTimeLeft: flyTimeLeft / FLY_TIME_MAX,
+      flyTimeLeft: flyTimeLeftNorm,
       restTimeLeft: restTimeLeft > 0 ? restTimeLeft : 0,
       feeding: isEating,
     };
@@ -324,9 +331,10 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
       const v = activity[i];
       if (v > ACT_THRESHOLD && Number.isFinite(v)) actObj[id] = Math.min(1, v);
     });
+    const flyTimeLeftNorm = Math.max(0, Math.min(1, flyTimeLeft / FLY_TIME_MAX));
     const flyWithMeta = {
       ...fly,
-      flyTimeLeft: flyTimeLeft / FLY_TIME_MAX,
+      flyTimeLeft: flyTimeLeftNorm,
       restTimeLeft: restTimeLeft > 0 ? restTimeLeft : 0,
       feeding: fly.feeding ?? false,
     };

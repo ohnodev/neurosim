@@ -1,20 +1,8 @@
-import { useEffect, useRef, useState, useMemo } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Plotly from 'plotly.js-dist-min';
 import { getApiBase } from '../lib/constants';
 
-function useIsMobile(): boolean {
-  const [mobile, setMobile] = useState(false);
-  useEffect(() => {
-    const mq = window.matchMedia('(max-width: 768px)');
-    setMobile(mq.matches);
-    const fn = () => setMobile(mq.matches);
-    mq.addEventListener('change', fn);
-    return () => mq.removeEventListener('change', fn);
-  }, []);
-  return mobile;
-}
-
-interface NeuronWithPosition {
+export interface NeuronWithPosition {
   root_id: string;
   side?: string;
   x?: number;
@@ -35,15 +23,14 @@ function hasPosition(
   );
 }
 
-export function BrainBackground() {
-  const isMobile = useIsMobile();
+export function BrainPlot() {
   const plotRef = useRef<HTMLDivElement>(null);
   const plotReady = useRef(false);
   const idsRef = useRef<string[]>([]);
   const sidesRef = useRef<string[]>([]);
+  const interacting = useRef(false);
   const [neurons, setNeurons] = useState<NeuronWithPosition[]>([]);
   const [activity, setActivity] = useState<Record<string, number>>({});
-  const rafRef = useRef<number>(0);
 
   useEffect(() => {
     const fetchNeurons = async () => {
@@ -64,7 +51,7 @@ export function BrainBackground() {
           return;
         }
       } catch {
-        // Fallback to static file
+        /* fallback */
       }
       try {
         const res = await fetch('/neurons.json');
@@ -86,18 +73,17 @@ export function BrainBackground() {
     fetchNeurons();
   }, []);
 
-  // Mock neuron firing - pick random neurons and animate activity
   useEffect(() => {
     const interval = setInterval(() => {
       setActivity((prev) => {
         const next = { ...prev };
         for (const id of Object.keys(next)) {
-          next[id] = Math.max(0, (next[id] ?? 0) - 0.15);
+          next[id] = Math.max(0, (next[id] ?? 0) - 0.12);
           if (next[id] <= 0) delete next[id];
         }
         return next;
       });
-    }, 150);
+    }, 120);
     return () => clearInterval(interval);
   }, []);
 
@@ -105,20 +91,16 @@ export function BrainBackground() {
     if (neurons.length === 0) return;
     const ids = neurons.filter(hasPosition).map((n) => n.root_id);
     if (ids.length === 0) return;
-    const count = isMobile ? 3 : 8;
     const interval = setInterval(() => {
-      for (let i = 0; i < count; i++) {
+      for (let i = 0; i < 6; i++) {
         const id = ids[Math.floor(Math.random() * ids.length)];
-        setActivity((prev) => ({ ...prev, [id]: 0.6 + Math.random() * 0.4 }));
+        setActivity((prev) => ({ ...prev, [id]: 0.5 + Math.random() * 0.5 }));
       }
-    }, isMobile ? 280 : 180);
+    }, 200);
     return () => clearInterval(interval);
-  }, [neurons, isMobile]);
+  }, [neurons]);
 
-  const withPos = useMemo(() => {
-    const list = neurons.filter(hasPosition);
-    return isMobile ? list.slice(0, 180) : list;
-  }, [neurons, isMobile]);
+  const withPos = neurons.filter(hasPosition);
   const n = withPos.length;
 
   useEffect(() => {
@@ -163,10 +145,10 @@ export function BrainBackground() {
         z: zs,
         mode: 'markers',
         marker: {
-          size: isMobile ? 1.8 : 2.5,
+          size: 3,
           color,
           colorscale: [
-            [0, '#444466'],
+            [0, '#888888'],
             [0.3, '#4a7de8'],
             [0.5, '#e8b84a'],
             [0.7, '#e85a4a'],
@@ -177,7 +159,11 @@ export function BrainBackground() {
           showscale: false,
           line: { width: 0 },
         },
-        hoverinfo: 'none',
+        hoverinfo: 'text',
+        text: ids.map((id, i) => {
+          const p = withPos[i];
+          return `ID: ${id.slice(-8)}\n${p.side ?? 'center'} | ${(act[i] * 100).toFixed(0)}%`;
+        }),
       } as Plotly.Data,
     ];
 
@@ -186,37 +172,51 @@ export function BrainBackground() {
       margin: { l: 0, r: 0, t: 0, b: 0 },
       paper_bgcolor: 'rgba(0,0,0,0)',
       plot_bgcolor: 'rgba(0,0,0,0)',
+      font: { color: '#aaa', size: 10 },
       showlegend: false,
-      uirevision: 'brain-bg',
+      uirevision: 'brain-plot',
       scene: {
         xaxis: { visible: false, range: [-1.2, 1.2] },
         yaxis: { visible: false, range: [-1.2, 1.2] },
         zaxis: { visible: false, range: [-1.2, 1.2] },
         bgcolor: 'rgba(0,0,0,0)',
-        camera: { eye: { x: 0.7, y: 0, z: 0.7 } },
+        camera: { eye: { x: 0.2, y: -0.2, z: 0.5 } },
         aspectmode: 'cube',
-        dragmode: false,
+        dragmode: 'orbit',
       },
     };
 
     const el = plotRef.current;
+    const onDown = () => { interacting.current = true; };
+    const onUp = () => { interacting.current = false; };
+    const touchOpts = { passive: false } as AddEventListenerOptions;
+    el.addEventListener('mousedown', onDown);
+    el.addEventListener('touchstart', onDown, touchOpts);
+    window.addEventListener('mouseup', onUp);
+    window.addEventListener('touchend', onUp, touchOpts);
+
     Plotly.newPlot(el, traces, layout, {
       responsive: true,
-      displayModeBar: false,
+      displayModeBar: true,
+      displaylogo: false,
+      modeBarButtonsToRemove: ['lasso2d', 'select2d'],
       staticPlot: false,
     } as Record<string, unknown>).then(() => {
       plotReady.current = true;
     });
 
     return () => {
+      el.removeEventListener('mousedown', onDown);
+      el.removeEventListener('touchstart', onDown, touchOpts);
+      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('touchend', onUp, touchOpts);
       Plotly.purge(el);
       plotReady.current = false;
     };
   }, [n, withPos[0]?.root_id ?? '']);
 
   useEffect(() => {
-    if (!plotRef.current || !plotReady.current || idsRef.current.length === 0)
-      return;
+    if (!plotRef.current || !plotReady.current || idsRef.current.length === 0 || interacting.current) return;
     const sides = sidesRef.current;
     const color = idsRef.current.map((id, i) => {
       const a = activity[id] ?? 0;
@@ -229,54 +229,13 @@ export function BrainBackground() {
     Plotly.restyle(plotRef.current, { 'marker.color': [color] }, [0]);
   }, [activity]);
 
-  // Slow Y-axis rotation (orbit around brain), zoomed in
-  useEffect(() => {
-    if (!plotRef.current || !plotReady.current) return;
-    let t = 0;
-    const speed = isMobile ? 0.0012 : 0.0022;
-    const r = 0.7; // zoomed in
-    const animate = () => {
-      t += speed;
-      Plotly.relayout(plotRef.current!, {
-        'scene.camera.eye': {
-          x: r * Math.sin(t),
-          y: 0.15,
-          z: r * Math.cos(t),
-        },
-      });
-      rafRef.current = requestAnimationFrame(animate);
-    };
-    rafRef.current = requestAnimationFrame(animate);
-    return () => cancelAnimationFrame(rafRef.current);
-  }, [n, isMobile]);
-
   return (
-    <div
-      className="brain-background"
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 0,
-        background: 'linear-gradient(180deg, #0a0a12 0%, #0d0d18 50%, #0a0a12 100%)',
-      }}
-    >
-      <div
-        ref={plotRef}
-        style={{
-          width: '100%',
-          height: '100%',
-          minHeight: 400,
-          pointerEvents: 'none',
-        }}
-      />
-      <div
-        style={{
-          position: 'absolute',
-          inset: 0,
-          background: 'radial-gradient(ellipse at center, transparent 30%, rgba(0,0,0,0.4) 100%)',
-          pointerEvents: 'none',
-        }}
-      />
+    <div className="brain-plot">
+      {n === 0 ? (
+        <div className="brain-plot__empty">Loading connectome…</div>
+      ) : (
+        <div ref={plotRef} className="brain-plot__gl" />
+      )}
     </div>
   );
 }

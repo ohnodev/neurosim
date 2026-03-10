@@ -1,194 +1,264 @@
+/* Layout */
 .app {
-  position: relative;
-  min-height: 100vh;
-  overflow: hidden;
-}
-
-.header {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  padding: 16px 24px;
+  min-height: 100dvh;
   display: flex;
-  justify-content: flex-end;
-  z-index: 100;
+  flex-direction: column;
+  position: relative;
 }
 
+.bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background: linear-gradient(135deg, #0a0a12 0%, #12121a 40%, #0d0d14 100%);
+  background-image:
+    radial-gradient(ellipse 80% 50% at 50% 20%, rgba(99, 102, 241, 0.08) 0%, transparent 50%),
+    radial-gradient(ellipse 60% 40% at 80% 80%, rgba(139, 92, 246, 0.06) 0%, transparent 50%),
+    linear-gradient(135deg, #0a0a12 0%, #12121a 100%);
+}
+
+/* Header */
+.header {
+  position: relative;
+  z-index: 10;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+}
+
+.header__ticker {
+  font-family: var(--font-heading);
+  font-size: 1rem;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+/* Hero */
+.hero {
+  position: relative;
+  z-index: 10;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 24px 20px 32px;
+}
+
+.hero__brain {
+  width: 100%;
+  max-width: 420px;
+  height: 280px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.brain-plot {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+.brain-plot__gl {
+  width: 100%;
+  height: 100%;
+}
+
+.brain-plot__empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.hero__title {
+  font-family: var(--font-heading);
+  font-size: clamp(1.8rem, 5vw, 2.5rem);
+  font-weight: 700;
+  color: #fff;
+  margin: 20px 0 8px;
+  letter-spacing: -0.02em;
+}
+
+.hero__tagline {
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
+  color: rgba(255, 255, 255, 0.65);
+  margin: 0;
+}
+
+/* Main */
 .main {
   position: relative;
   z-index: 10;
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  min-height: 100vh;
-  min-height: 100dvh;
-  padding: 24px;
-  padding-bottom: 48px;
+  flex: 1;
+  max-width: 520px;
+  margin: 0 auto;
+  padding: 0 20px 40px;
+  width: 100%;
 }
 
-.main .claim-section {
-  animation: modalFadeIn 0.8s ease-out 1.8s both;
+.section {
+  margin-bottom: 24px;
 }
 
-@keyframes modalFadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(16px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+.section:last-of-type {
+  margin-bottom: 0;
 }
 
-@supports (padding: env(safe-area-inset-top)) {
-  .main {
-    padding: max(24px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
-  }
-}
-
-@media (max-width: 768px) {
-  .main {
-    padding: 16px;
-    align-items: flex-end;
-    padding-bottom: 24px;
-  }
-  .claim-section {
-    padding: 32px 24px;
-    margin-top: 0;
-  }
-  .claim-title {
-    font-size: 1.9rem;
-  }
-  .claim-tagline {
-    font-size: 0.95rem;
-    margin-bottom: 24px;
-  }
-  .claim-btn {
-    padding: 16px 24px;
-    min-height: 48px;
-    font-size: 1rem;
-  }
-  .header {
-    padding: 12px 16px;
-  }
-  .connect-btn-icon {
-    padding: 12px;
-    min-width: 44px;
-    min-height: 44px;
-  }
-}
-
-/* Connect button - minimal icon */
-.connect-btn {
-  padding: 10px 20px;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.06);
-  color: rgba(255, 255, 255, 0.9);
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.2s, border-color 0.2s, color 0.2s;
-}
-.connect-btn-icon {
-  padding: 10px 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.connect-btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.12);
-  border-color: rgba(255, 255, 255, 0.2);
-  color: #fff;
-}
-.connect-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.connect-btn-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-  animation: pulse 1.2s ease-in-out infinite;
-}
-@keyframes pulse {
-  0%, 100% { opacity: 0.5; }
-  50% { opacity: 1; }
-}
-.connect-wallet-connected {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.connect-address {
-  font-family: var(--font-mono);
-  font-size: 14px;
-  color: #aaa;
-}
-
-/* Claim section - appears after brain is visible, sits at bottom */
-.claim-section {
-  text-align: center;
-  max-width: 480px;
-  padding: 40px 32px;
-  background: rgba(0, 0, 0, 0.35);
-  border-radius: 16px;
-  border: 1px solid rgba(100, 100, 140, 0.15);
-  backdrop-filter: blur(8px);
-}
-.claim-title {
+.section__title {
   font-family: var(--font-heading);
-  font-size: 2.5rem;
-  font-weight: 700;
-  margin: 0 0 8px;
-  color: #fff;
-  letter-spacing: -0.02em;
-}
-.claim-tagline {
-  font-family: var(--font-mono);
   font-size: 1rem;
-  color: rgba(255, 255, 255, 0.7);
-  margin: 0 0 32px;
-  line-height: 1.5;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.9);
+  margin: 0 0 12px;
 }
-.claim-hint {
+
+.section__text {
   font-family: var(--font-mono);
-  color: rgba(255, 255, 255, 0.6);
-  font-size: 0.95rem;
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.7);
+  line-height: 1.6;
   margin: 0;
 }
-.claim-btn {
+
+.section--links {
+  display: flex;
+  gap: 16px;
+}
+
+.link {
   font-family: var(--font-mono);
-  padding: 14px 28px;
-  border-radius: 10px;
-  border: none;
-  font-size: 1rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: transform 0.15s, box-shadow 0.15s;
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.8);
+  text-decoration: none;
 }
-.claim-btn:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 20px rgba(99, 102, 241, 0.4);
-}
-.claim-btn:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
-}
-.claim-btn-primary {
-  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+
+.link:hover {
   color: #fff;
 }
+
+/* Claim section - glass */
+.claim-section {
+  padding: 20px;
+  background: rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-radius: 4px;
+}
+
+.claim-hint {
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.6);
+  margin: 0;
+}
+
+.claim-btn {
+  font-family: var(--font-mono);
+  padding: 10px 20px;
+  border-radius: 4px;
+  border: none;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+.claim-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.claim-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.claim-btn-primary {
+  background: rgba(99, 102, 241, 0.5);
+}
+
+.claim-btn-primary:hover:not(:disabled) {
+  background: rgba(99, 102, 241, 0.65);
+}
+
 .claim-success {
   font-family: var(--font-mono);
-  font-size: 1.1rem;
+  font-size: 0.95rem;
   color: #4ade80;
   font-weight: 600;
 }
+
 .claim-error {
+  font-family: var(--font-mono);
   color: #f87171;
-  font-size: 0.9rem;
-  margin-bottom: 12px;
+  font-size: 0.85rem;
+  margin-bottom: 10px;
+}
+
+/* Connect button */
+.connect-btn {
+  padding: 8px 12px;
+  border-radius: 4px;
+  border: none;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.9);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.connect-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.connect-btn:disabled {
+  opacity: 0.5;
+}
+
+.connect-btn-icon {
+  padding: 8px 10px;
+}
+
+.connect-wallet-connected {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.connect-address {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+/* Footer */
+.footer {
+  position: relative;
+  z-index: 10;
+  flex-shrink: 0;
+  padding: 20px;
+  text-align: center;
+}
+
+.footer__copy {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+@media (max-width: 768px) {
+  .hero__brain {
+    max-width: 100%;
+    height: 240px;
+  }
 }

@@ -14,6 +14,7 @@ declare module 'plotly.js-dist-min' {
     margin?: Record<string, number>;
     paper_bgcolor?: string;
     plot_bgcolor?: string;
+    font?: Record<string, unknown>;
     scene?: Record<string, unknown>;
     showlegend?: boolean;
     uirevision?: string;

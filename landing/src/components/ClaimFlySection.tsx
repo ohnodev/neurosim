@@ -128,10 +128,8 @@ export function ClaimFlySection() {
   };
 
   return (
-    <section className="claim-section">
-      <h1 className="claim-title">NeuroSim</h1>
-      <p className="claim-tagline">Claim your digital fly. One brain, infinite simulations.</p>
-
+    <div className="claim-section">
+      <h2 className="section__title">Claim your fly</h2>
       {!isConnected ? (
         <p className="claim-hint">Connect your wallet to claim your fly.</p>
       ) : eligibility.loading ? (
@@ -171,6 +169,6 @@ export function ClaimFlySection() {
           )}
         </>
       )}
-    </section>
+    </div>
   );
 }

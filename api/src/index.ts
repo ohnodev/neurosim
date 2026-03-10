@@ -33,7 +33,7 @@ function startSim(): void {
   connectionStep = 0;
   simIntervalId = setInterval(() => {
     const state = step(1 / 30);
-    broadcast(state);
+    broadcast({ ...state, simRunning: true });
     connectionStep += 1;
     if (connectionStep % STEP_LOG_INTERVAL === 0) {
       console.log('[sim] t=', state.t.toFixed(1), 'fly=', state.fly.x.toFixed(2), state.fly.y.toFixed(2), 'clients=', wsClients.size);
@@ -89,7 +89,7 @@ wss.on('connection', (ws) => {
   console.log('[ws] client connected, total=', wsClients.size);
 
   const state = getState();
-  ws.send(JSON.stringify(state));
+  ws.send(JSON.stringify({ ...state, simRunning }));
 
   ws.on('message', (raw) => {
     try {

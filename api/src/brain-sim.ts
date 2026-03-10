@@ -94,10 +94,11 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
   let flyTimeLeft = FLY_TIME_MAX;
   let restTimeLeft = 0;
 
-  const TAU = 0.05;
-  const DECAY = 0.9;
+  const TAU = 0.04;           // propagation strength (slightly weaker so activity can decay)
+  const DECAY = 0.85;         // per-step decay; higher = faster return to baseline
   const INPUT_RATE = 2;
-  const SENSORY_SCALE = 0.1;   // 1/10th sensory drive (test: let neurons process more, less saturation)
+  const SENSORY_SCALE = 0.15;
+  const SENSORY_DUTY = 0.3;   // only add sensory input ~30% of the time (pulses)
   const ACT_THRESHOLD = 0.05; // only report neurons above this (avoids "all active" cascade)
 
   function step(dt: number): SimState {
@@ -121,22 +122,25 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
       }
     }
 
-    // Route visual stimuli (food/light) into visual-type neurons (R1-6, T4, T5, L*, Dm*, etc.)
+    // Route visual stimuli (food/light) into visual-type neurons. Pulsed so activity can decay between bursts.
     if (visualTargetIndices.length > 0) {
-      let foodSignal = 0;
-      let lightSignal = 0;
-      for (const s of worldSources) {
-        const dist = Math.hypot(s.x - fly.x, s.y - fly.y);
-        if (dist < 1) continue;
-        const invDist = 1 / (1 + dist * 0.1);
-        if (s.type === 'food') foodSignal += invDist * (1 - fly.hunger / 100);
-        else if (s.type === 'light') lightSignal += invDist * 0.3;
-      }
-      const baseNoise = 0.15 * (0.5 + 0.5 * Math.sin(t * INPUT_RATE));
-      const rawPerNeuron = (baseNoise + foodSignal * 0.5 + lightSignal) / visualTargetIndices.length;
-      const perNeuron = Math.min(rawPerNeuron * SENSORY_SCALE, 0.8);
-      for (const idx of visualTargetIndices) {
-        nextActivity[idx] += perNeuron;
+      const pulse = Math.sin(t * INPUT_RATE) > 1 - SENSORY_DUTY * 2 ? 1 : 0; // burst ~30% of the time
+      if (pulse > 0) {
+        let foodSignal = 0;
+        let lightSignal = 0;
+        for (const s of worldSources) {
+          const dist = Math.hypot(s.x - fly.x, s.y - fly.y);
+          if (dist < 1) continue;
+          const invDist = 1 / (1 + dist * 0.1);
+          if (s.type === 'food') foodSignal += invDist * (1 - fly.hunger / 100);
+          else if (s.type === 'light') lightSignal += invDist * 0.3;
+        }
+        const baseNoise = 0.15 * (0.5 + 0.5 * Math.sin(t * INPUT_RATE));
+        const rawPerNeuron = (baseNoise + foodSignal * 0.5 + lightSignal) / visualTargetIndices.length;
+        const perNeuron = Math.min(rawPerNeuron * SENSORY_SCALE, 0.8);
+        for (const idx of visualTargetIndices) {
+          nextActivity[idx] += perNeuron;
+        }
       }
     }
 
@@ -218,13 +222,14 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
     }
 
     // Fatigue: fly time drains when moving. When flyTimeLeft hits 0 -> land and rest.
-    const moveResponsiveness = hungry ? foodResponsiveness : full ? 0.4 : 0; // explore at 40% when full
-    let effectiveMotor = motor * moveResponsiveness;
+    const moveResponsiveness = hungry ? foodResponsiveness : full ? 0.4 : 0;
+    const BASELINE_EXPLORE = 0.12; // minimum drive when not resting so fly always moves
+    let effectiveMotor = Math.max(motor * moveResponsiveness, restTimeLeft <= 0 ? BASELINE_EXPLORE : 0);
     if (restTimeLeft > 0) {
       restTimeLeft -= dt;
       effectiveMotor = 0;
       if (restTimeLeft <= 0) flyTimeLeft = FLY_TIME_MAX;
-    } else if (Math.abs(effectiveMotor) > 0.02) {
+    } else if (Math.abs(effectiveMotor) > 0.005) {
       flyTimeLeft -= dt * Math.abs(effectiveMotor);
       if (flyTimeLeft <= 0) {
         restTimeLeft = REST_TIME; // fatigued -> land and rest
@@ -233,8 +238,9 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
       flyTimeLeft = Math.min(FLY_TIME_MAX, flyTimeLeft + dt * 0.5); // recover a bit when idle
     }
 
-    const dx = Math.cos(fly.heading) * effectiveMotor * dt * 10;
-    const dy = Math.sin(fly.heading) * effectiveMotor * dt * 10;
+    const MOVE_SPEED = 35; // units/sec at full motor
+    const dx = Math.cos(fly.heading) * effectiveMotor * dt * MOVE_SPEED;
+    const dy = Math.sin(fly.heading) * effectiveMotor * dt * MOVE_SPEED;
     let nx = fly.x + (Number.isFinite(dx) ? dx : 0);
     let ny = fly.y + (Number.isFinite(dy) ? dy : 0);
     nx = Math.max(-ARENA, Math.min(ARENA, nx));
@@ -255,7 +261,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
       }
       if (hungry && nearFood) {
         zDrift = -0.6 * dt; // descend to land and feed
-      } else if (Math.abs(effectiveMotor) > 0.02) {
+      } else if (Math.abs(effectiveMotor) > 0.005) {
         zDrift = 0.4 * dt; // rise when flying (hungry or explore)
       }
     }

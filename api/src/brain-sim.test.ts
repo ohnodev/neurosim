@@ -85,16 +85,16 @@ describe('brain-sim', () => {
     expect(distMoved > 0.02 || headingDiff > 0.01).toBe(true);
   });
 
-  it('fly stays roughly stationary when not hungry (satiated)', () => {
+  it('fly explores (moves) when satiated and not fatigued', () => {
     const { step } = createBrainSim(testConnectome, [foodSource]);
     const s0 = step(0.1);
     expect(s0.fly.hunger).toBeGreaterThan(90);
     const dx = s0.fly.x;
     const dy = s0.fly.y;
-    for (let i = 0; i < 30; i++) step(1 / 30);
+    for (let i = 0; i < 100; i++) step(1 / 30);
     const s1 = step(0.1);
-    expect(Math.abs(s1.fly.x - dx)).toBeLessThan(0.5);
-    expect(Math.abs(s1.fly.y - dy)).toBeLessThan(0.5);
+    const dist = Math.hypot(s1.fly.x - dx, s1.fly.y - dy);
+    expect(dist).toBeGreaterThan(0.5); // explore mode moves the fly
   });
 
   it('fly heading changes when steering toward food', () => {
@@ -169,5 +169,79 @@ describe('brain-sim', () => {
     expect(neuronIds).toContain('s1');
     expect(neuronIds).toContain('ml');
     expect(neuronIds).toContain('mr');
+  });
+
+  it('fly moves from start within 15s when not fatigued (explore or hungry)', () => {
+    const { step } = createBrainSim(testConnectome, [foodSource]);
+    const dt = 1 / 30;
+    const startPos = { x: 0, y: 0 };
+    let s = step(dt);
+    for (let i = 0; i < 450; i++) {
+      s = step(dt);
+    }
+    const distMoved = Math.hypot(s.fly.x - startPos.x, s.fly.y - startPos.y);
+    expect(distMoved, `Fly should move from (0,0); got pos (${s.fly.x.toFixed(2)}, ${s.fly.y.toFixed(2)})`).toBeGreaterThan(0.5);
+  });
+
+  it('fly moves with stimulus within 5s', () => {
+    const { step, inject } = createBrainSim(testConnectome, [foodSource]);
+    inject(['s1', 's2'], 0.8);
+    const dt = 1 / 30;
+    const s0 = step(dt);
+    for (let i = 0; i < 150; i++) {
+      step(dt);
+    }
+    const s1 = step(dt);
+    const distMoved = Math.hypot(s1.fly.x - s0.fly.x, s1.fly.y - s0.fly.y);
+    expect(distMoved).toBeGreaterThan(0.5);
+  });
+
+  it('fly steers toward food when hungry (heading bias)', () => {
+    const { step } = createBrainSim(testConnectome, [foodSource]);
+    const dt = 1 / 30;
+    let s = step(dt);
+    for (let i = 0; i < 500; i++) {
+      s = step(dt);
+      if (s.fly.hunger < 90) break;
+    }
+    expect(s.fly.hunger).toBeLessThan(90);
+    const distWhenFirstHungry = Math.hypot(5 - s.fly.x, 5 - s.fly.y);
+    for (let i = 0; i < 600; i++) s = step(dt);
+    const distLater = Math.hypot(5 - s.fly.x, 5 - s.fly.y);
+    expect(distLater).toBeLessThanOrEqual(distWhenFirstHungry + 2);
+  });
+
+  it('fly enters rest when fatigued', () => {
+    const { step } = createBrainSim(testConnectome, [foodSource]);
+    const dt = 1 / 30;
+    let hadRest = false;
+    for (let i = 0; i < 2500; i++) {
+      const s = step(dt);
+      if (s.fly.restTimeLeft != null && s.fly.restTimeLeft > 0) {
+        hadRest = true;
+        break;
+      }
+    }
+    expect(hadRest).toBe(true);
+  });
+
+  it('fly explores, gets hungry, rests (behavior pipeline)', () => {
+    const { step } = createBrainSim(testConnectome, [foodSource]);
+    const dt = 1 / 30;
+    let s = step(dt);
+    let explored = false;
+    let gotHungry = false;
+    let rested = false;
+
+    for (let i = 0; i < 2500; i++) {
+      s = step(dt);
+      if (Math.hypot(s.fly.x, s.fly.y) > 1) explored = true;
+      if (s.fly.hunger < 90) gotHungry = true;
+      if (s.fly.restTimeLeft != null && s.fly.restTimeLeft > 0) rested = true;
+    }
+
+    expect(explored).toBe(true);
+    expect(gotHungry).toBe(true);
+    expect(rested).toBe(true);
   });
 });

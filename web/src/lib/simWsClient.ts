@@ -8,6 +8,7 @@ export interface SimPayload {
   t?: number;
   fly?: { x: number; y: number; z: number; heading: number; t: number; hunger: number; flyTimeLeft?: number; restTimeLeft?: number };
   activity?: Record<string, number>;
+  simRunning?: boolean;
   error?: string;
 }
 
@@ -126,6 +127,13 @@ export function subscribeSim(listener: Listener): () => void {
 export function sendStart(): void {
   if (ws?.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: "start" }));
+  }
+}
+
+/** Send stop message to stop the sim. No-op if not connected. */
+export function sendStop(): void {
+  if (ws?.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: "stop" }));
   }
 }
 

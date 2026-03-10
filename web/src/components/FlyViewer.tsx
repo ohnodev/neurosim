@@ -3,7 +3,7 @@ import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import type { WorldSource } from '../../../api/src/world';
-import { subscribeSim, sendStart, getConnectionState } from '../lib/simWsClient';
+import { subscribeSim, sendStart, sendStop, getConnectionState } from '../lib/simWsClient';
 import { BrainOverlay, type NeuronWithPosition } from './BrainOverlay';
 
 interface FlyState {
@@ -84,6 +84,7 @@ export default function FlyViewer() {
   const [neuronIds, setNeuronIds] = useState<string[]>([]);
   const [neuronLabels, setNeuronLabels] = useState<Record<string, string>>({});
   const [connected, setConnected] = useState(false);
+  const [simRunning, setSimRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeCount, setActiveCount] = useState(0);
   const [activity, setActivity] = useState<Record<string, number>>({});
@@ -133,7 +134,8 @@ export default function FlyViewer() {
         }
         return;
       }
-      const data = event as { fly?: FlyState; activity?: Record<string, number>; error?: string };
+      const data = event as { fly?: FlyState; activity?: Record<string, number>; simRunning?: boolean; error?: string };
+      if (data.simRunning !== undefined) setSimRunning(data.simRunning);
       if (data.error) setError(data.error);
       else {
         if (data.fly) setFlyState(data.fly);
@@ -148,9 +150,10 @@ export default function FlyViewer() {
     return unsub;
   }, []);
 
-  const startSim = () => {
+  const toggleSim = () => {
     if (getConnectionState() !== 'open') return;
-    sendStart();
+    if (simRunning) sendStop();
+    else sendStart();
   };
 
   const topActivity = Object.entries(activity)
@@ -183,8 +186,8 @@ export default function FlyViewer() {
         )}
         <div style={{ position: 'absolute', top: 12, right: 12, display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end', pointerEvents: 'auto' }}>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <button onClick={startSim} disabled={!connected} style={{ padding: '6px 14px', borderRadius: 8, border: 'none', background: connected ? '#2a5' : '#555', color: '#fff', cursor: connected ? 'pointer' : 'not-allowed', fontWeight: 600 }}>
-              Start
+            <button onClick={toggleSim} disabled={!connected} style={{ padding: '6px 14px', borderRadius: 8, border: 'none', background: connected ? (simRunning ? '#c44' : '#2a5') : '#555', color: '#fff', cursor: connected ? 'pointer' : 'not-allowed', fontWeight: 600 }}>
+              {simRunning ? 'Stop' : 'Start'}
             </button>
             <span style={{ background: connected ? '#0a0' : '#555', color: '#fff', padding: '4px 12px', borderRadius: 8 }}>
               {connected ? 'Connected' : 'Connecting...'}

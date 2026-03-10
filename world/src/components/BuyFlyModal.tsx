@@ -109,8 +109,8 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
     }
   };
 
-  const handleBuyNeuro = async () => {
-    setError('$NEURO payment coming soon. Use ETH for now.');
+  const handleBuyNeuro = () => {
+    notification.show('$NEURO payment coming soon. Use ETH for now.', 'info');
   };
 
   if (!isOpen) return null;

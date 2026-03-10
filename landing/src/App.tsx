@@ -7,6 +7,8 @@ import './App.css';
 
 const LORE_ARTICLE = 'https://theinnermostloop.substack.com/p/the-first-multi-behavior-brain-upload';
 const WORLD_URL = 'https://world.neurosim.fun';
+const X_PLACEHOLDER = 'https://x.com/neurosim';
+const TG_PLACEHOLDER = 'https://t.me/neurosim';
 
 function CopyIcon() {
   return (
@@ -85,6 +87,18 @@ function App() {
               </a>
             </div>
 
+            <div className="card card--socials">
+              <h2 className="card__title">Socials</h2>
+              <div className="socials">
+                <a href={X_PLACEHOLDER} target="_blank" rel="noopener noreferrer" className="card__link">
+                  X
+                </a>
+                <a href={TG_PLACEHOLDER} target="_blank" rel="noopener noreferrer" className="card__link">
+                  Telegram
+                </a>
+              </div>
+            </div>
+
             <div className="card card--ca">
               <h2 className="card__title">Contract</h2>
               <button
@@ -105,7 +119,31 @@ function App() {
         </div>
 
         <footer className="footer">
-          <span className="footer__copy">NeuroSim — $NEURO. Launched on the Cabal.</span>
+          <div className="footer__brand">
+            <a
+              href="https://thecabal.app"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="footer__cabal-link"
+              title="The Cabal"
+            >
+              <img
+                src="/cabal-king-512-opt.jpg"
+                alt="The Cabal"
+                className="footer__cabal-logo"
+              />
+            </a>
+            <div className="footer__text">
+              <span className="footer__copy">NeuroSim — $NEURO. Launched on the Cabal.</span>
+              <span className="footer__obelisk">
+                Powered by{' '}
+                <a href="https://theobelisk.ai" target="_blank" rel="noopener noreferrer">
+                  theobelisk.ai
+                </a>
+                — part of The Obelisk initiative into AI consciousness.
+              </span>
+            </div>
+          </div>
         </footer>
       </div>
     </OnchainProviders>

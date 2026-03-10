@@ -69,13 +69,21 @@ function WorldSources({ sources }: { sources: WorldSource[] }) {
   );
 }
 
+function shortId(id: string): string {
+  if (id.length <= 12) return id;
+  return id.slice(-8);
+}
+
 export default function FlyViewer() {
   const [flyState, setFlyState] = useState<FlyState>({ x: 0, y: 0, z: 2, heading: 0, t: 0, hunger: 100 });
   const [sources, setSources] = useState<WorldSource[]>([]);
   const [neuronIds, setNeuronIds] = useState<string[]>([]);
+  const [neuronLabels, setNeuronLabels] = useState<Record<string, string>>({});
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeCount, setActiveCount] = useState(0);
+  const [activity, setActivity] = useState<Record<string, number>>({});
+  const [lastStimulated, setLastStimulated] = useState<string[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
@@ -86,9 +94,18 @@ export default function FlyViewer() {
         console.error('[FlyViewer] failed to fetch /api/world:', err);
         setSources([]);
       });
-    fetch(API_BASE + '/api/neurons')
+    fetch(API_BASE + '/api/neurons?detail=1')
       .then((r) => r.json())
-      .then((d) => setNeuronIds(d.neurons || []))
+      .then((d) => {
+        const list = d.neurons || [];
+        setNeuronIds(list.map((n: { root_id: string }) => n.root_id));
+        const labels: Record<string, string> = {};
+        for (const n of list) {
+          const label = [n.cell_type, n.role].filter(Boolean).join(' ') || n.root_id;
+          labels[n.root_id] = label.length > 14 ? label.slice(0, 12) + '…' : label;
+        }
+        setNeuronLabels(labels);
+      })
       .catch(() => setNeuronIds([]));
   }, []);
 
@@ -110,7 +127,10 @@ export default function FlyViewer() {
         if (data.error) setError(data.error);
         else {
           if (data.fly) setFlyState(data.fly);
-          if (data.activity) setActiveCount(Object.keys(data.activity).length);
+          if (data.activity) {
+            setActivity(data.activity);
+            setActiveCount(Object.keys(data.activity).length);
+          } else setActivity({});
         }
       } catch {}
     };
@@ -125,8 +145,14 @@ export default function FlyViewer() {
     const ids = neuronIds.length > 0
       ? [neuronIds[Math.floor(Math.random() * neuronIds.length)]]
       : [];
+    setLastStimulated(ids);
     wsRef.current.send(JSON.stringify({ type: 'stimulate', neurons: ids, strength: 0.9 }));
   };
+
+  const topActivity = Object.entries(activity)
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, 10);
+  const flyMode = (flyState.z ?? 2) > 2.5 ? 'flying' : (flyState.z ?? 2) < 2.2 ? 'resting' : 'idle';
 
   return (
     <div style={{ width: '100vw', height: '100vh', position: 'relative' }}>
@@ -150,6 +176,27 @@ export default function FlyViewer() {
               <div style={{ width: `${flyState.hunger ?? 100}%`, height: '100%', background: getHungerColor(flyState.hunger), transition: 'width 0.2s' }} />
             </div>
           </div>
+        </div>
+      )}
+      {connected && (
+        <div style={{ position: 'absolute', bottom: 12, left: 12, maxWidth: 320, maxHeight: '40vh', overflow: 'auto', background: 'rgba(0,0,0,0.75)', color: '#ccc', fontSize: 11, padding: 10, borderRadius: 8, fontFamily: 'monospace' }}>
+          <div style={{ color: '#888', marginBottom: 6 }}>Status</div>
+          <div style={{ marginBottom: 4 }}>pos ({flyState.x?.toFixed(1)}, {flyState.y?.toFixed(1)}, {flyState.z?.toFixed(1)})</div>
+          <div style={{ marginBottom: 4 }}>heading {((flyState.heading ?? 0) * 180 / Math.PI).toFixed(0)}° | {flyMode}</div>
+          <div style={{ marginBottom: 8 }}>t {flyState.t?.toFixed(1)}s | hunger {Math.round(flyState.hunger ?? 100)}</div>
+          <div style={{ color: '#888', marginBottom: 4 }}>Firing neurons ({activeCount})</div>
+          <div style={{ maxHeight: 120, overflow: 'auto' }}>
+            {topActivity.length === 0 && <span style={{ color: '#666' }}>—</span>}
+            {topActivity.map(([id, v]) => (
+              <div key={id} style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }} title={id}>
+                <span>{neuronLabels[id] || shortId(id)}</span>
+                <span style={{ color: '#8cf' }}>{v.toFixed(2)}</span>
+              </div>
+            ))}
+          </div>
+          {lastStimulated.length > 0 && (
+            <div style={{ marginTop: 8, color: '#c96' }}>Last stim: {lastStimulated.map((id) => neuronLabels[id] || shortId(id)).join(', ')}</div>
+          )}
         </div>
       )}
       <Canvas camera={{ position: [8, 6, 8], fov: 50 }}>

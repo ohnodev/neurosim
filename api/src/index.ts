@@ -26,9 +26,19 @@ app.get('/api/connectome', (_, res) => {
 
 app.get('/api/health', (_, res) => res.json({ ok: true }));
 
-app.get('/api/neurons', (_, res) => {
-  const ids = connectome.neurons.map((n) => n.root_id);
-  res.json({ neurons: ids });
+app.get('/api/neurons', (req, res) => {
+  const detail = req.query.detail === '1';
+  if (detail) {
+    const neurons = connectome.neurons.map((n) => ({
+      root_id: n.root_id,
+      role: n.role,
+      cell_type: n.cell_type,
+    }));
+    res.json({ neurons });
+  } else {
+    const ids = connectome.neurons.map((n) => n.root_id);
+    res.json({ neurons: ids });
+  }
 });
 
 app.get('/api/world', (_, res) => res.json(world));

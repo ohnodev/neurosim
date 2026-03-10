@@ -112,7 +112,7 @@ export function BrainOverlay({ neurons, activity, visible = true }: BrainOverlay
         yaxis: { visible: false, range: [-1.2, 1.2] },
         zaxis: { visible: false, range: [-1.2, 1.2] },
         bgcolor: 'rgba(10,10,18,0)',
-        camera: { eye: { x: 1.8, y: -1.8, z: 1.2 } },
+        camera: { eye: { x: 1.2, y: -1.2, z: 0.9 } },
         aspectmode: 'cube',
         dragmode: 'orbit',
       },

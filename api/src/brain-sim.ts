@@ -9,6 +9,10 @@ export interface FlyState {
   heading: number;
   t: number;
   hunger: number;
+  /** 0–1, flight energy; 0 = must rest */
+  flyTimeLeft?: number;
+  /** seconds left in rest; 0 = not resting */
+  restTimeLeft?: number;
 }
 
 export interface SimState {
@@ -81,6 +85,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
     return type === 'food' || type === 'light';
   }
   const FLY_TIME_MAX = 6;      // max seconds of continuous flight before fatigue
+  const REST_TIME = 4;         // seconds to rest when fatigued
   const GROUND_Z = 0.35;
   const FLIGHT_Z = 1.5;
   const ON_GROUND_THRESH = 0.6; // z below this = on ground, can eat
@@ -92,6 +97,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
   const TAU = 0.05;
   const DECAY = 0.9;
   const INPUT_RATE = 2;
+  const SENSORY_SCALE = 0.1;   // 1/10th sensory drive (test: let neurons process more, less saturation)
   const ACT_THRESHOLD = 0.05; // only report neurons above this (avoids "all active" cascade)
 
   function step(dt: number): SimState {
@@ -127,9 +133,10 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
         else if (s.type === 'light') lightSignal += invDist * 0.3;
       }
       const baseNoise = 0.15 * (0.5 + 0.5 * Math.sin(t * INPUT_RATE));
-      const perNeuron = (baseNoise + foodSignal * 0.5 + lightSignal) / visualTargetIndices.length;
+      const rawPerNeuron = (baseNoise + foodSignal * 0.5 + lightSignal) / visualTargetIndices.length;
+      const perNeuron = Math.min(rawPerNeuron * SENSORY_SCALE, 0.8);
       for (const idx of visualTargetIndices) {
-        nextActivity[idx] += Math.min(perNeuron, 0.8);
+        nextActivity[idx] += perNeuron;
       }
     }
 
@@ -142,8 +149,8 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
       }
     }
 
-    // Clamp activity to prevent numerical explosion
-    const ACTIVITY_MAX = 1;
+    // Clamp activity (0.5 = more dynamic range, avoids all-at-1 saturation)
+    const ACTIVITY_MAX = 0.5;
     for (let i = 0; i < nextActivity.length; i++) {
       nextActivity[i] = Math.max(0, Math.min(ACTIVITY_MAX, Number.isFinite(nextActivity[i]) ? nextActivity[i] : 0));
     }
@@ -177,10 +184,10 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
     }
     if (!isEating) hunger = Math.max(0, hunger - HUNGER_DECAY * dt);
 
-    // Hungry (low hunger): steer toward food. Full (high hunger): explore. High hunger = less sensitive to food.
+    // Hungry (low hunger): steer toward food. Full (high hunger): explore. Min 0.25 drive when hungry.
     const hungry = hunger <= 90;
     const full = hunger > 90;
-    const foodResponsiveness = hungry ? (90 - hunger) / 90 : 0; // full = 0 sensitivity to food
+    const foodResponsiveness = hungry ? Math.max(0.25, (90 - hunger) / 90) : 0;
 
     let headingBias = turnFromMotor * dt + 0.1 * Math.sin(t * 0.7) * dt;
     if (hungry && worldSources.length > 0) {
@@ -220,7 +227,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
     } else if (Math.abs(effectiveMotor) > 0.02) {
       flyTimeLeft -= dt * Math.abs(effectiveMotor);
       if (flyTimeLeft <= 0) {
-        restTimeLeft = hunger > 50 ? 2.5 : 4; // fatigued -> land and rest
+        restTimeLeft = REST_TIME; // fatigued -> land and rest
       }
     } else {
       flyTimeLeft = Math.min(FLY_TIME_MAX, flyTimeLeft + dt * 0.5); // recover a bit when idle
@@ -267,6 +274,8 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
       heading: Number.isFinite(nHeading) ? nHeading : fly.heading,
       t: Number.isFinite(t) ? t : fly.t,
       hunger: Number.isFinite(hunger) ? hunger : fly.hunger,
+      flyTimeLeft: flyTimeLeft / FLY_TIME_MAX,
+      restTimeLeft: restTimeLeft > 0 ? restTimeLeft : 0,
     };
 
     const actObj: Record<string, number> = {};
@@ -288,7 +297,12 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
       const v = activity[i];
       if (v > ACT_THRESHOLD && Number.isFinite(v)) actObj[id] = Math.min(1, v);
     });
-    return { t: fly.t, fly, activity: Object.keys(actObj).length ? actObj : undefined };
+    const flyWithMeta = {
+      ...fly,
+      flyTimeLeft: flyTimeLeft / FLY_TIME_MAX,
+      restTimeLeft: restTimeLeft > 0 ? restTimeLeft : 0,
+    };
+    return { t: fly.t, fly: flyWithMeta, activity: Object.keys(actObj).length ? actObj : undefined };
   }
 
   return { step, inject, getState, neuronIds };

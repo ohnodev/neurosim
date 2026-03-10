@@ -13,6 +13,8 @@ interface FlyState {
   heading: number;
   t: number;
   hunger: number;
+  flyTimeLeft?: number;  // 0-1, flight energy
+  restTimeLeft?: number; // seconds resting
 }
 
 function getHungerColor(hunger: number): string {
@@ -189,10 +191,24 @@ export default function FlyViewer() {
             </span>
             {activeCount > 0 && <span style={{ color: '#aaa', fontSize: 12 }}>Active: {activeCount}</span>}
           </div>
-          <div style={{ width: 120, background: '#222', borderRadius: 4, overflow: 'hidden' }}>
-            <div style={{ fontSize: 10, color: '#888', padding: '2px 6px' }}>Hunger</div>
-            <div style={{ height: 8, background: '#333', borderRadius: 2, margin: '0 4px 4px', overflow: 'hidden' }}>
-              <div style={{ width: `${flyState.hunger ?? 100}%`, height: '100%', background: getHungerColor(flyState.hunger ?? 100), transition: 'width 0.2s' }} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div style={{ width: 120, background: '#222', borderRadius: 4, overflow: 'hidden' }}>
+              <div style={{ fontSize: 10, color: '#888', padding: '2px 6px' }}>Hunger</div>
+              <div style={{ height: 8, background: '#333', borderRadius: 2, margin: '0 4px 4px', overflow: 'hidden' }}>
+                <div style={{ width: `${flyState.hunger ?? 100}%`, height: '100%', background: getHungerColor(flyState.hunger ?? 100), transition: 'width 0.2s' }} />
+              </div>
+            </div>
+            <div style={{ width: 120, background: '#222', borderRadius: 4, overflow: 'hidden' }}>
+              <div style={{ fontSize: 10, color: '#888', padding: '2px 6px' }}>
+                {flyState.restTimeLeft != null && flyState.restTimeLeft > 0 ? 'Rest' : 'Fatigue'}
+              </div>
+              <div style={{ height: 8, background: '#333', borderRadius: 2, margin: '0 4px 4px', overflow: 'hidden' }}>
+                {flyState.restTimeLeft != null && flyState.restTimeLeft > 0 ? (
+                  <div style={{ width: `${Math.max(0, 100 - (flyState.restTimeLeft / 4) * 100)}%`, height: '100%', background: '#6a6', transition: 'width 0.2s' }} />
+                ) : (
+                  <div style={{ width: `${((flyState.flyTimeLeft ?? 1) * 100).toFixed(0)}%`, height: '100%', background: '#48a', transition: 'width 0.2s' }} />
+                )}
+              </div>
             </div>
           </div>
         </div>

@@ -158,32 +158,35 @@ export default function FlyViewer() {
 
   return (
     <div style={{ width: '100vw', height: '100vh', position: 'relative' }}>
-      {/* Canvas layer - explicitly behind overlays */}
-      <div style={{ position: 'absolute', inset: 0, zIndex: 0 }}>
+      {/* Canvas layer - must stay behind UI */}
+      <div style={{ position: 'absolute', inset: 0, zIndex: 0, isolation: 'isolate' }}>
         <Canvas camera={{ position: [8, 6, 8], fov: 50 }}>
           <ambientLight intensity={0.6} />
           <directionalLight position={[10, 10, 5]} intensity={1} castShadow />
           <OrbitControls />
           <FlyMesh state={flyState} />
           <WorldSources sources={sources} />
-        <mesh position={[0, 0, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
-          <planeGeometry args={[50, 50, 32, 32]} />
-          <meshStandardMaterial color="#2d5a27" roughness={0.9} metalness={0.05} />
-        </mesh>
+          <mesh position={[0, 0, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
+            <planeGeometry args={[50, 50, 32, 32]} />
+            <meshStandardMaterial color="#2d5a27" roughness={0.9} metalness={0.05} />
+          </mesh>
         </Canvas>
       </div>
-      {error && (
-        <div style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', background: '#333', color: '#f88', padding: '8px 16px', borderRadius: 8, zIndex: 100 }}>
-          {error}
-        </div>
-      )}
-      {connected && (
-        <div style={{ position: 'absolute', top: 12, right: 12, display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end', zIndex: 100, pointerEvents: 'auto' }}>
+      {/* UI layer - always on top, always visible */}
+      <div style={{ position: 'fixed', inset: 0, zIndex: 2147483647, pointerEvents: 'none' }}>
+        {error && (
+          <div style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', background: '#333', color: '#f88', padding: '8px 16px', borderRadius: 8, pointerEvents: 'auto' }}>
+            {error}
+          </div>
+        )}
+        <div style={{ position: 'absolute', top: 12, right: 12, display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end', pointerEvents: 'auto' }}>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <button onClick={startSim} style={{ padding: '6px 14px', borderRadius: 8, border: 'none', background: '#2a5', color: '#fff', cursor: 'pointer', fontWeight: 600 }}>
+            <button onClick={startSim} disabled={!connected} style={{ padding: '6px 14px', borderRadius: 8, border: 'none', background: connected ? '#2a5' : '#555', color: '#fff', cursor: connected ? 'pointer' : 'not-allowed', fontWeight: 600 }}>
               Start
             </button>
-            <span style={{ background: '#0a0', color: '#fff', padding: '4px 12px', borderRadius: 8 }}>Connected</span>
+            <span style={{ background: connected ? '#0a0' : '#555', color: '#fff', padding: '4px 12px', borderRadius: 8 }}>
+              {connected ? 'Connected' : 'Connecting...'}
+            </span>
             {activeCount > 0 && <span style={{ color: '#aaa', fontSize: 12 }}>Active: {activeCount}</span>}
           </div>
           <div style={{ width: 120, background: '#222', borderRadius: 4, overflow: 'hidden' }}>
@@ -193,12 +196,8 @@ export default function FlyViewer() {
             </div>
           </div>
         </div>
-      )}
-      {connected && (
         <BrainOverlay neurons={neuronsWithPositions} activity={activity} visible={connected} />
-      )}
-      {connected && (
-        <div style={{ position: 'absolute', bottom: 12, left: 12, maxWidth: 320, maxHeight: '40vh', overflow: 'auto', background: 'rgba(0,0,0,0.75)', color: '#ccc', fontSize: 11, padding: 10, borderRadius: 8, fontFamily: 'monospace', zIndex: 100, pointerEvents: 'auto' }}>
+        <div style={{ position: 'absolute', bottom: 12, left: 12, maxWidth: 320, maxHeight: '40vh', overflow: 'auto', background: 'rgba(0,0,0,0.85)', color: '#ccc', fontSize: 11, padding: 10, borderRadius: 8, fontFamily: 'monospace', pointerEvents: 'auto' }}>
           <div style={{ color: '#888', marginBottom: 6 }}>Status</div>
           <div style={{ marginBottom: 4 }}>pos ({(flyState.x ?? 0).toFixed(1)}, {(flyState.y ?? 0).toFixed(1)}, {(flyState.z ?? 0).toFixed(1)})</div>
           <div style={{ marginBottom: 4 }}>heading {((flyState.heading ?? 0) * 180 / Math.PI).toFixed(0)}° | {flyMode}</div>
@@ -214,7 +213,7 @@ export default function FlyViewer() {
             ))}
           </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }

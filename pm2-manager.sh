@@ -26,11 +26,11 @@ create_logs_dir() {
     [ -d "$LOGS_DIR" ] || { mkdir -p "$LOGS_DIR"; log_info "Created $LOGS_DIR"; }
 }
 
-clean_service_logs() {
-    log_info "Cleaning logs for $SERVICE..."
-    rm -f "$LOGS_DIR/$SERVICE-out-"*.log "$LOGS_DIR/$SERVICE-error-"*.log 2>/dev/null || true
-    rm -f "$LOGS_DIR/$SERVICE-out.log" "$LOGS_DIR/$SERVICE-error.log" 2>/dev/null || true
-    log_success "Cleaned logs"
+clean_all_logs() {
+    log_info "Cleaning all logs..."
+    find "$LOGS_DIR" -maxdepth 1 -type f -name "*.log" -delete 2>/dev/null || true
+    find "$LOGS_DIR" -maxdepth 1 -type f -name "*.gz" -delete 2>/dev/null || true
+    log_success "Cleaned all logs"
 }
 
 create_ecosystem_config() {
@@ -46,9 +46,10 @@ module.exports = {
     autorestart: true,
     watch: false,
     max_memory_restart: '512M',
-    out_file: '$LOGS_DIR/$SERVICE-out.log',
-    error_file: '$LOGS_DIR/$SERVICE-error.log',
-    combine_logs: false,
+    log_file: '$LOGS_DIR/$SERVICE.log',
+    out_file: '/dev/null',
+    error_file: '/dev/null',
+    merge_logs: true,
     log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
     max_restarts: 10,
     min_uptime: '10s',
@@ -89,8 +90,13 @@ stop_service() {
 
 restart_service() {
     create_logs_dir
-    clean_service_logs
+    log_info "Stopping $SERVICE..."
     service_exists && pm2 delete "$SERVICE" 2>/dev/null || true
+    sleep 1
+    clean_all_logs
+    log_info "Rebuilding $SERVICE..."
+    (cd "$API_DIR" && npm run build) || { log_error "Build failed"; exit 1; }
+    log_info "Starting $SERVICE..."
     pm2 start "$ECOSYSTEM_FILE" --only "$SERVICE"
     log_success "Restarted"
 }
@@ -118,6 +124,6 @@ case "${1:-help}" in
     restart) restart_service ;;
     status) status_service ;;
     logs) logs_service "$2" ;;
-    clean-logs) clean_service_logs ;;
+    clean-logs) clean_all_logs ;;
     *) show_help ;;
 esac

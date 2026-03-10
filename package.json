@@ -6,7 +6,7 @@
     "setup-kaggle": "./scripts/setup-kaggle.sh",
     "download-dataset": "./scripts/download-dataset.sh",
     "api:dev": "cd api && npm run dev",
-    "web:dev": "cd web && npm run dev",
+    "world:dev": "cd world && npm run dev",
     "landing:dev": "cd landing && npm run dev",
     "landing:build": "cd landing && npm run build",
     "test": "npm run test:api && npm run test:smoke && npm run landing:build",

@@ -28,8 +28,8 @@ npm run process-connectome
 # API
 cd api && npm install && npm run dev
 
-# Web (separate terminal)
-cd web && npm install && npm run dev
+# World (separate terminal)
+cd world && npm install && npm run dev
 ```
 
 ## PM2 (production)

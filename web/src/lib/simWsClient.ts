@@ -3,10 +3,13 @@
  * Single global connection with exponential backoff retry, matching basemarket pattern.
  */
 import { getWsUrl } from "./wsUrl";
+import type { FlyState } from "../../../api/src/fly-state";
+
+export type { FlyState };
 
 export interface SimPayload {
   t?: number;
-  fly?: { x: number; y: number; z: number; heading: number; t: number; hunger: number; flyTimeLeft?: number; restTimeLeft?: number };
+  fly?: FlyState;
   activity?: Record<string, number>;
   simRunning?: boolean;
   error?: string;

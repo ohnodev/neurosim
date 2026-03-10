@@ -3,22 +3,9 @@ import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import type { WorldSource } from '../../../api/src/world';
-import { subscribeSim, sendStart, sendStop, getConnectionState } from '../lib/simWsClient';
+import { subscribeSim, sendStart, sendStop, getConnectionState, type FlyState } from '../lib/simWsClient';
 import { getApiBase } from '../lib/wsUrl';
 import { BrainOverlay, type NeuronWithPosition } from './BrainOverlay';
-
-interface FlyState {
-  x: number;
-  y: number;
-  z: number;
-  heading: number;
-  t: number;
-  hunger: number;
-  flyTimeLeft?: number;  // 0-1, flight energy
-  restTimeLeft?: number; // seconds resting
-  restDuration?: number; // max rest duration (for UI progress)
-  feeding?: boolean;
-}
 
 function getHungerColor(hunger: number): string {
   if (hunger > 50) return '#5a5';
@@ -205,7 +192,7 @@ export default function FlyViewer() {
   const topActivity = Object.entries(activity)
     .sort(([, a], [, b]) => b - a)
     .slice(0, 10);
-  const flyMode = flyState.feeding ? 'feeding' : flyState.z > FLY_THRESHOLD ? 'flying' : flyState.z < 0.6 ? 'resting' : 'idle';
+  const flyMode = flyState.dead ? 'dead' : flyState.feeding ? 'feeding' : flyState.z > FLY_THRESHOLD ? 'flying' : flyState.z < 0.6 ? 'resting' : 'idle';
 
   return (
     <div style={{ width: '100vw', height: '100vh', position: 'relative' }}>
@@ -216,7 +203,7 @@ export default function FlyViewer() {
           <directionalLight position={[10, 10, 5]} intensity={1.2} castShadow />
           <OrbitControls />
           <Suspense fallback={null}>
-            <FlyModel state={flyState} />
+            {!flyState.dead && <FlyModel state={flyState} />}
           </Suspense>
           <WorldSources sources={sources} />
           <GroundPlane />
@@ -240,10 +227,21 @@ export default function FlyViewer() {
             {activeCount > 0 && <span style={{ color: '#aaa', fontSize: 12 }}>Active: {activeCount}</span>}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {flyState.dead && (
+              <div style={{ width: 120, padding: '6px 8px', background: '#422', color: '#f88', borderRadius: 4, fontSize: 11, fontWeight: 600 }}>
+                Fly died
+              </div>
+            )}
             <div style={{ width: 120, background: '#222', borderRadius: 4, overflow: 'hidden' }}>
               <div style={{ fontSize: 10, color: '#888', padding: '2px 6px' }}>Hunger</div>
               <div style={{ height: 8, background: '#333', borderRadius: 2, margin: '0 4px 4px', overflow: 'hidden' }}>
                 <div style={{ width: `${flyState.hunger ?? 100}%`, height: '100%', background: getHungerColor(flyState.hunger ?? 100), transition: 'width 0.2s' }} />
+              </div>
+            </div>
+            <div style={{ width: 120, background: '#222', borderRadius: 4, overflow: 'hidden' }}>
+              <div style={{ fontSize: 10, color: '#888', padding: '2px 6px' }}>Health</div>
+              <div style={{ height: 8, background: '#333', borderRadius: 2, margin: '0 4px 4px', overflow: 'hidden' }}>
+                <div style={{ width: `${flyState.health ?? 100}%`, height: '100%', background: (flyState.health ?? 100) > 50 ? '#5a5' : (flyState.health ?? 100) > 20 ? '#ca0' : '#c44', transition: 'width 0.2s' }} />
               </div>
             </div>
             <div style={{ width: 120, background: '#222', borderRadius: 4, overflow: 'hidden' }}>
@@ -265,7 +263,7 @@ export default function FlyViewer() {
           <div style={{ color: '#888', marginBottom: 6 }}>Status</div>
           <div style={{ marginBottom: 4 }}>pos ({(flyState.x ?? 0).toFixed(1)}, {(flyState.y ?? 0).toFixed(1)}, {(flyState.z ?? 0).toFixed(1)})</div>
           <div style={{ marginBottom: 4 }}>heading {((flyState.heading ?? 0) * 180 / Math.PI).toFixed(0)}° | {flyMode}</div>
-          <div style={{ marginBottom: 8 }}>t {(flyState.t ?? 0).toFixed(1)}s | hunger {Math.round(flyState.hunger ?? 0)}</div>
+          <div style={{ marginBottom: 8 }}>t {(flyState.t ?? 0).toFixed(1)}s | hunger {Math.round(flyState.hunger ?? 0)} | health {Math.round(flyState.health ?? 100)}</div>
           <div style={{ color: '#888', marginBottom: 4 }}>Firing neurons ({activeCount})</div>
           <div style={{ maxHeight: 120, overflow: 'auto' }}>
             {topActivity.length === 0 && <span style={{ color: '#666' }}>—</span>}

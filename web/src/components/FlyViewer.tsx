@@ -449,6 +449,7 @@ export default function FlyViewer() {
                 title="Minimize"
               >
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
+                <span>Minimize</span>
               </button>
               <div style={{ width: 320, height: 240, position: 'relative' }}>
                 <BrainOverlay neurons={neuronsWithPositions} activity={activity} visible={connected} embedded />
@@ -470,7 +471,7 @@ export default function FlyViewer() {
         {/* Status panel - collapsible, minimized on mobile by default */}
         <div className={`fly-viewer__side-panel fly-viewer__status-panel ${statusPanelOpen ? 'fly-viewer__side-panel--open' : 'fly-viewer__side-panel--minimized'}`}>
           {statusPanelOpen ? (
-            <>
+            <div className="fly-viewer__status-content">
               <button
                 type="button"
                 className="fly-viewer__panel-minimize"
@@ -479,8 +480,8 @@ export default function FlyViewer() {
                 title="Minimize"
               >
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
+                <span>Minimize</span>
               </button>
-              <div className="fly-viewer__status-content">
                 <div style={{ color: '#888', marginBottom: 6 }}>Status</div>
                 <div style={{ marginBottom: 4 }}>Fly {selectedFlyIndex + 1} (viewing) | pos ({(focusedFly.x ?? 0).toFixed(1)}, {(focusedFly.y ?? 0).toFixed(1)}, {(focusedFly.z ?? 0).toFixed(1)})</div>
                 <div style={{ marginBottom: 4 }}>heading {((focusedFly.heading ?? 0) * 180 / Math.PI).toFixed(0)}° | {flyMode}</div>
@@ -495,8 +496,7 @@ export default function FlyViewer() {
                     </div>
                   ))}
                 </div>
-              </div>
-            </>
+            </div>
           ) : (
             <button
               type="button"

@@ -130,11 +130,13 @@
 }
 
 .fly-viewer__status-panel {
+  position: absolute;
   bottom: 12px;
   left: 12px;
 }
 
 .fly-viewer__brain-panel {
+  position: absolute;
   bottom: 12px;
   right: 12px;
 }
@@ -167,24 +169,46 @@
 
 .fly-viewer__panel-minimize {
   position: absolute;
-  top: 6px;
-  right: 6px;
-  width: 24px;
-  height: 24px;
-  display: flex;
+  top: 8px;
+  right: 8px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 8px;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: none;
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.08);
-  color: rgba(255, 255, 255, 0.8);
+  gap: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.5);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
   cursor: pointer;
-  z-index: 2;
+  z-index: 10;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
 
 .fly-viewer__panel-minimize:hover {
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.35);
   color: #fff;
+}
+
+.fly-viewer__panel-minimize svg {
+  flex-shrink: 0;
+}
+
+/* Status: button top-right inside panel */
+.fly-viewer__status-panel .fly-viewer__panel-minimize {
+  top: 8px;
+  right: 8px;
+}
+
+/* Brain: button above panel */
+.fly-viewer__brain-panel .fly-viewer__panel-minimize {
+  top: -38px;
+  right: 0;
 }
 
 .fly-viewer__panel-expand {
@@ -216,6 +240,7 @@
 }
 
 .fly-viewer__status-panel.fly-viewer__side-panel--open .fly-viewer__status-content {
+  position: relative;
   max-height: 40vh;
   overflow: auto;
   background: rgba(0, 0, 0, 0.85);

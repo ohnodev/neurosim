@@ -9,8 +9,9 @@ const isLocal =
 
 export function getApiBase(): string {
   if (isLocal) return "http://localhost:3001";
-  const override = typeof import.meta !== "undefined" && (import.meta as { env?: { VITE_API_BASE?: string } }).env?.VITE_API_BASE;
-  return override && override.trim() ? override.replace(/\/$/, "") : "https://api.neurosim.fun";
+  const raw = typeof import.meta !== "undefined" && (import.meta as { env?: { VITE_API_BASE?: string } }).env?.VITE_API_BASE;
+  const trimmedOverride = typeof raw === "string" ? raw.trim() : "";
+  return trimmedOverride ? trimmedOverride.replace(/\/$/, "") : "https://api.neurosim.fun";
 }
 
 export function getWsUrl(): string {

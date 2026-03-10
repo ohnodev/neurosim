@@ -363,7 +363,7 @@ describe('brain-sim', () => {
   const STEPS_PER_SEC = 30;
   const MAX_CONSECUTIVE_ON = MAX_ON_SECONDS * STEPS_PER_SEC; // 150 steps
 
-  it.skip('no neuron stays on (>0.45) for >5s', () => {
+  it.skipIf(!fs.existsSync(connectomePath))('no neuron stays on (>0.45) for >5s', () => {
     const connectome = loadConnectome(connectomePath);
     const { step } = createBrainSim(connectome, [
       { id: 'f1', type: 'food', x: 6, y: 6, z: 0.35, radius: 12 },
@@ -425,6 +425,9 @@ describe('brain-sim', () => {
         activityByNeuron.get(id)!.push(v);
       }
     }
+
+    const highActivityCount = [...activityByNeuron.entries()].filter(([, vals]) => Math.max(...vals) >= 0.4).length;
+    expect(highActivityCount, 'At least one tracked sensory neuron should reach high activity (>=0.4)').toBeGreaterThan(0);
 
     const failures: string[] = [];
     for (const [id, vals] of activityByNeuron) {

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { base } from 'viem/chains';
 import { ClaimFlyModal } from './ClaimFlyModal';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
@@ -38,6 +38,12 @@ export function ClaimFlySection() {
   const [error, setError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [modalSeed, setModalSeed] = useState(() => Date.now());
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   useEffect(() => {
     fetch(`${getApiBase()}/api/claim/config`)
@@ -107,6 +113,7 @@ export function ClaimFlySection() {
       setTxState('confirming');
       const apiBase = getApiBase();
       const verifyWithRetry = async (attempt = 0): Promise<void> => {
+        if (!mountedRef.current) return;
         const res = await fetch(`${apiBase}/api/claim/verify-payment`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -115,20 +122,25 @@ export function ClaimFlySection() {
             userAddress: address.toLowerCase(),
           }),
         });
+        if (!mountedRef.current) return;
         const data = await res.json().catch(() => ({}));
         if (res.ok) return;
         if (data.error === 'Transaction not found' && attempt < 12) {
           await new Promise((r) => setTimeout(r, 3000));
-          return verifyWithRetry(attempt + 1);
+          if (mountedRef.current) return verifyWithRetry(attempt + 1);
+          return;
         }
         throw new Error(data.error ?? 'Verification failed');
       };
       await verifyWithRetry();
+      if (!mountedRef.current) return;
       setTxState('done');
       setClaimStatus('success');
     } catch (err) {
+      if (!mountedRef.current) return;
       setError(err instanceof Error ? err.message : 'Transaction failed');
       setTxState('idle');
+      setClaimStatus('error');
     }
   };
 

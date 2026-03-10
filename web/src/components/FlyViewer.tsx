@@ -182,7 +182,6 @@ export default function FlyViewer() {
       const data = event as { fly?: FlyState; activity?: Record<string, number>; simRunning?: boolean; error?: string; sources?: WorldSource[] };
       if (data.simRunning !== undefined) setSimRunning(data.simRunning);
       if (data.error) setError(data.error);
-      else setError(null);
       if (data.sources && Array.isArray(data.sources)) setSources(data.sources);
       if (!data.error) {
         if (data.fly) setFlyState(data.fly);

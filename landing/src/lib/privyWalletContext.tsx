@@ -47,6 +47,10 @@ export function PrivyWalletProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
 
     async function initWalletClient() {
+      if (!address) {
+        setWalletClient(undefined);
+        return;
+      }
       try {
         const wallet = activeWallet as {
           getEthereumProvider?: () => Promise<unknown>;

@@ -26,21 +26,31 @@ let lastError: string | null = null;
 let retryDelayMs = INITIAL_RETRY_MS;
 let retryTimeoutId: ReturnType<typeof setTimeout> | null = null;
 let disposed = false;
+let deferredCleanup = false;
+
+function doTeardown(): void {
+  if (!ws) return;
+  ws.onclose = null;
+  ws.onerror = null;
+  ws.onmessage = null;
+  if (ws.readyState === WebSocket.OPEN) {
+    try {
+      ws.close();
+    } catch {
+      /* ignore */
+    }
+  }
+  ws = null;
+  deferredCleanup = false;
+}
 
 function clearConnection(): void {
-  if (ws) {
-    ws.onclose = null;
-    ws.onerror = null;
-    ws.onmessage = null;
-    if (ws.readyState === WebSocket.OPEN) {
-      try {
-        ws.close();
-      } catch {
-        /* ignore */
-      }
-    }
-    ws = null;
+  if (!ws) return;
+  if (ws.readyState === WebSocket.CONNECTING) {
+    deferredCleanup = true;
+    return;
   }
+  doTeardown();
 }
 
 function scheduleRestart(): void {
@@ -66,6 +76,10 @@ function connect(): void {
   ws = new WebSocket(url);
 
   ws.onopen = () => {
+    if (deferredCleanup) {
+      doTeardown();
+      return;
+    }
     retryDelayMs = INITIAL_RETRY_MS;
     lastError = null;
     for (const fn of listeners) fn({ _event: "open" });
@@ -90,7 +104,8 @@ function connect(): void {
 
   ws.onclose = () => {
     for (const fn of listeners) fn({ _event: "closed" });
-    clearConnection();
+    deferredCleanup = false;
+    doTeardown();
     if (listeners.size > 0 && !disposed) scheduleRestart();
   };
 

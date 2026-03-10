@@ -43,9 +43,14 @@ export function removeFood(id: string): void {
 }
 
 export function getSources(): WorldSource[] {
-  return sources.slice();
+  return sources.map((s) => ({ ...s }));
 }
 
 export function getWorld() {
-  return { sources };
+  return { sources: sources.map((s) => ({ ...s })) };
+}
+
+/** Internal: returns the live mutable sources array. Only for use by createBrainSim and other internal API logic. */
+export function getLiveSourcesForSim(): WorldSource[] {
+  return sources;
 }

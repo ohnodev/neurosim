@@ -80,7 +80,9 @@ function App() {
             </div>
             <div className="hero__text">
               <h1 className="hero__title">NeuroSim</h1>
-              <p className="hero__tagline">Claim your digital fly. One brain, infinite simulations.</p>
+              <p className="hero__tagline">
+                Release NeuroFlies into the simulation to compete for resources and earn tokens. We load real fruit fly neurons and connections, feed them sensory data, and execute actions from the model — navigating your fly in the world.
+              </p>
             </div>
           </section>
 

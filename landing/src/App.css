@@ -101,6 +101,7 @@
   .dashboard {
     flex: 0 1 auto;
     overflow: visible;
+    gap: 24px;
   }
 
   .dashboard__sidebar {

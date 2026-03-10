@@ -1,0 +1,7 @@
+@import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
+
+:root {
+  --font-heading: 'Chakra Petch', system-ui, sans-serif;
+  --font-body: 'Space Mono', 'Courier New', monospace;
+  --font-mono: 'Space Mono', 'Courier New', monospace;
+}

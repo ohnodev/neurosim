@@ -1,2 +1,146 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body, #root { width: 100%; height: 100%; }
+
+:root {
+  font-family: var(--font-body, 'Space Mono', monospace);
+  color: rgba(255, 255, 255, 0.95);
+  background-color: #0a0a0f;
+}
+
+/* Notification toast */
+.notification-toast {
+  position: fixed;
+  bottom: 1.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1.25rem;
+  border-radius: 0.5rem;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+  font-size: 0.9rem;
+  max-width: 90vw;
+}
+.notification-toast--info { background: rgba(99, 102, 241, 0.95); color: #fff; }
+.notification-toast--success { background: rgba(34, 197, 94, 0.95); color: #fff; }
+.notification-toast--error { background: rgba(239, 68, 68, 0.95); color: #fff; }
+.notification-toast--warning { background: rgba(245, 158, 11, 0.95); color: #111; }
+.notification-toast__message { flex: 1; }
+.notification-toast__close { background: none; border: none; color: inherit; font-size: 1.25rem; cursor: pointer; opacity: 0.85; padding: 0; line-height: 1; }
+
+/* Wallet button */
+.wallet-btn {
+  padding: 10px 12px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.9);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  transition: color 0.2s ease;
+}
+.wallet-btn::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: 9px;
+  background: transparent;
+  box-shadow: 0 0 12px rgba(99, 102, 241, 0.35), 0 0 24px rgba(139, 92, 246, 0.2), inset 0 0 12px rgba(99, 102, 241, 0.08);
+  opacity: 0.9;
+  pointer-events: none;
+}
+.wallet-btn:hover:not(:disabled) { color: #fff; }
+.wallet-btn--active::before {
+  box-shadow: 0 0 16px rgba(99, 102, 241, 0.5), 0 0 28px rgba(139, 92, 246, 0.3);
+}
+.wallet-btn__icon { position: relative; z-index: 1; }
+.wallet-btn--loading { opacity: 0.6; cursor: not-allowed; }
+.wallet-btn__dot { width: 8px; height: 8px; border-radius: 50%; background: rgba(255, 255, 255, 0.8); animation: wallet-btn-pulse 1.2s ease-in-out infinite; }
+@keyframes wallet-btn-pulse { 0%, 100% { opacity: 0.5; transform: scale(0.9); } 50% { opacity: 1; transform: scale(1); } }
+
+/* Wallet modal */
+.wallet-modal-backdrop { position: fixed; inset: 0; z-index: 1999; background: transparent; }
+.wallet-modal {
+  position: fixed;
+  z-index: 2000;
+  min-width: 200px;
+  background: linear-gradient(145deg, rgba(18, 18, 28, 0.98) 0%, rgba(12, 12, 20, 0.99) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+  padding: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.wallet-modal-address-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-bottom: 1px solid rgba(255, 255, 255, 0.06); margin-bottom: 4px; }
+.wallet-modal-address { font-family: var(--font-mono); font-size: 0.85rem; color: rgba(255, 255, 255, 0.9); }
+.wallet-modal-chain { font-family: var(--font-mono); font-size: 0.7rem; padding: 2px 6px; border-radius: 4px; }
+.wallet-modal-chain.ok { background: rgba(34, 197, 94, 0.2); color: #4ade80; }
+.wallet-modal-chain.wrong { background: rgba(239, 68, 68, 0.2); color: #f87171; }
+.wallet-modal-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; border: none; background: transparent;
+  color: rgba(255, 255, 255, 0.85); font-family: var(--font-mono); font-size: 0.85rem;
+  cursor: pointer; text-decoration: none; width: 100%; text-align: left;
+}
+.wallet-modal-item:hover:not(:disabled) { background: rgba(255, 255, 255, 0.06); color: #fff; }
+.wallet-modal-item:disabled { opacity: 0.5; cursor: not-allowed; }
+.wallet-modal-connect { font-weight: 600; color: rgba(99, 102, 241, 0.95); }
+.wallet-modal-switch { color: #f87171; }
+.wallet-modal-link { margin-top: 6px; padding-top: 12px; border-top: 1px solid rgba(255, 255, 255, 0.06); }
+
+/* Neuroflies / Your Flies */
+.neuroflies__error { font-family: var(--font-mono); font-size: 0.8rem; color: #f87171; margin-bottom: 10px; }
+.neuroflies__btn {
+  font-family: var(--font-mono); font-size: 0.8rem;
+  padding: 8px 12px; border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(99, 102, 241, 0.2);
+  color: #a5b4fc;
+  cursor: pointer;
+}
+.neuroflies__btn:hover:not(:disabled) { background: rgba(99, 102, 241, 0.3); }
+.neuroflies__btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Claim / Buy modal */
+.claim-modal-overlay {
+  position: fixed; inset: 0; z-index: 2000;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(8px);
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+.claim-modal {
+  position: relative;
+  background: linear-gradient(145deg, rgba(18, 18, 28, 0.98) 0%, rgba(10, 10, 18, 0.99) 100%);
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.5);
+  max-width: 420px; width: 100%; max-height: 90vh; overflow-y: auto;
+}
+.claim-modal__close {
+  position: absolute; top: 12px; right: 12px;
+  width: 32px; height: 32px;
+  border: none; background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.7); font-size: 1.5rem; cursor: pointer;
+  border-radius: 6px; z-index: 2;
+}
+.claim-modal__close:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
+.claim-modal__card { padding: 24px; }
+.claim-modal__title { font-family: var(--font-heading); font-size: 1.25rem; font-weight: 700; color: #fff; margin: 0 0 4px; }
+.claim-modal__subtitle { font-family: var(--font-mono); font-size: 0.85rem; color: rgba(255, 255, 255, 0.6); margin: 0 0 20px; }
+.claim-modal__actions { display: flex; flex-direction: column; gap: 10px; }
+.claim-modal__btn {
+  font-family: var(--font-mono); font-size: 0.9rem; font-weight: 600;
+  padding: 12px 18px; border-radius: 8px;
+  border: none; cursor: pointer; text-align: center;
+}
+.claim-modal__btn--primary { background: rgba(99, 102, 241, 0.6); color: #fff; }
+.claim-modal__btn--primary:hover { background: rgba(99, 102, 241, 0.8); }
+.claim-modal__btn--secondary { background: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.9); }
+.claim-modal__btn--secondary:hover { background: rgba(255, 255, 255, 0.12); }

@@ -1,11 +1,16 @@
 import { useRef, useState, useEffect, useMemo, Suspense } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import type { WorldSource } from '../../../api/src/world';
 import { subscribeSim, sendStart, sendStop, getConnectionState, type FlyState } from '../lib/simWsClient';
 import { getApiBase } from '../lib/wsUrl';
+import { getApiBase as getClaimApiBase } from '../lib/constants';
 import { BrainOverlay, type NeuronWithPosition } from './BrainOverlay';
+import { ConnectButton } from './ConnectButton';
+import { BuyFlyModal } from './BuyFlyModal';
+import { usePrivyWallet } from '../lib/usePrivyWallet';
 import './FlyViewer.css';
 
 function getHungerColor(hunger: number): string {
@@ -118,6 +123,19 @@ function shortId(id: string): string {
 
 const DEFAULT_FLY: FlyState = { x: 0, y: 0, z: 0.35, heading: 0, t: 0, hunger: 100 };
 
+interface ClaimedFly {
+  id: string;
+  method: string;
+  claimedAt: string;
+}
+
+async function fetchMyFlies(address: string) {
+  const r = await fetch(`${getClaimApiBase()}/api/claim/my-flies?address=${address.toLowerCase()}`);
+  if (!r.ok) return [];
+  const data = await r.json();
+  return (data.flies ?? []) as ClaimedFly[];
+}
+
 function getFlyMode(fly: FlyState): string {
   if (fly.dead) return 'dead';
   if (fly.feeding) return 'feeding';
@@ -193,6 +211,8 @@ function FlyStatusCard({
 }
 
 export default function FlyViewer() {
+  const { address } = usePrivyWallet();
+  const queryClient = useQueryClient();
   const [flies, setFlies] = useState<FlyState[]>([]);
   const [selectedFlyIndex, setSelectedFlyIndex] = useState(0);
   const [sources, setSources] = useState<WorldSource[]>([]);
@@ -206,6 +226,13 @@ export default function FlyViewer() {
   const [fliesPanelOpen, setFliesPanelOpen] = useState(
     () => typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches ? false : true
   );
+  const [buyFlySlot, setBuyFlySlot] = useState<number | null>(null);
+
+  const { data: myFlies = [] } = useQuery({
+    queryKey: ['my-flies', address ?? ''],
+    queryFn: () => fetchMyFlies(address!),
+    enabled: !!address,
+  });
 
   useEffect(() => {
     const apiBase = getApiBase();
@@ -305,15 +332,21 @@ export default function FlyViewer() {
             {error}
           </div>
         )}
-        <div style={{ position: 'absolute', top: 12, right: 12, display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end', pointerEvents: 'auto' }}>
+        <div style={{ position: 'absolute', top: 12, right: 12, display: 'flex', gap: 12, alignItems: 'center', pointerEvents: 'auto' }}>
+          <ConnectButton />
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <button onClick={toggleSim} disabled={!connected} style={{ padding: '6px 14px', borderRadius: 8, border: 'none', background: connected ? (simRunning ? '#c44' : '#2a5') : '#555', color: '#fff', cursor: connected ? 'pointer' : 'not-allowed', fontWeight: 600 }}>
+            <button
+              onClick={toggleSim}
+              disabled={!connected}
+              className="neuroflies__btn"
+              style={{ background: connected ? (simRunning ? 'rgba(239,68,68,0.5)' : 'rgba(34,197,94,0.5)') : 'rgba(255,255,255,0.06)', border: 'none', color: '#fff' }}
+            >
               {simRunning ? 'Stop' : 'Start'}
             </button>
-            <span style={{ background: connected ? '#0a0' : '#555', color: '#fff', padding: '4px 12px', borderRadius: 8 }}>
-              {connected ? 'Connected' : 'Connecting...'}
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: connected ? '#4ade80' : '#888' }}>
+              {connected ? 'Sim connected' : 'Connecting…'}
             </span>
-            {activeCount > 0 && <span style={{ color: '#aaa', fontSize: 12 }}>Active: {activeCount}</span>}
+            {activeCount > 0 && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'rgba(255,255,255,0.6)' }}>Neurons: {activeCount}</span>}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             {focusedFly.dead && (
@@ -365,20 +398,43 @@ export default function FlyViewer() {
         >
           <div className="fly-viewer__flies-panel">
             <div style={{ color: '#888', marginBottom: 8, fontSize: 10 }}>Your Flies — click to view</div>
-            {flies.length === 0 && (
-              <div style={{ color: '#666', fontSize: 10 }}>—</div>
-            )}
-            {flies.map((fly, i) => (
-              <FlyStatusCard
-                key={i}
-                index={i}
-                fly={fly}
-                selected={i === selectedFlyIndex}
-                onSelect={() => setSelectedFlyIndex(i)}
-              />
-            ))}
+            {[0, 1, 2].map((i) => {
+              const hasFly = myFlies[i] != null;
+              const simFly = flies[i] ?? DEFAULT_FLY;
+              return (
+                <div key={i} style={{ marginBottom: 8 }}>
+                  {hasFly ? (
+                    <FlyStatusCard
+                      index={i}
+                      fly={simFly}
+                      selected={i === selectedFlyIndex}
+                      onSelect={() => setSelectedFlyIndex(i)}
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      className="neuroflies__btn"
+                      onClick={() => setBuyFlySlot(i)}
+                      style={{ width: '100%' }}
+                    >
+                      Buy Fly
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
+        {buyFlySlot != null && (
+          <BuyFlyModal
+            isOpen={true}
+            onClose={() => setBuyFlySlot(null)}
+            slotIndex={buyFlySlot}
+            onSuccess={() => {
+              if (address) queryClient.invalidateQueries({ queryKey: ['my-flies', address] });
+            }}
+          />
+        )}
         <BrainOverlay neurons={neuronsWithPositions} activity={activity} visible={connected} />
         <div style={{ position: 'absolute', bottom: 12, left: 12, maxWidth: 420, minWidth: 340, maxHeight: '40vh', overflow: 'auto', background: 'rgba(0,0,0,0.85)', color: '#ccc', fontSize: 11, padding: 10, borderRadius: 8, fontFamily: 'monospace', pointerEvents: 'auto' }}>
           <div style={{ color: '#888', marginBottom: 6 }}>Status</div>

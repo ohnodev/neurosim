@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { usePrivy } from '@privy-io/react-auth';
 import { base } from 'viem/chains';
@@ -116,10 +117,9 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
 
   const neuroDisabled = !config?.neuroTokenAddress || config.neuroTokenAddress === '0x0000000000000000000000000000000000000000';
 
-  if (!address) {
-    return (
-      <div className="neurosim-claim-overlay" onClick={onClose} role="dialog" aria-modal="true">
-        <div className="neurosim-claim-modal" onClick={(e) => e.stopPropagation()}>
+  const modalContent = !address ? (
+    <div className="neurosim-claim-overlay" onClick={onClose} role="dialog" aria-modal="true">
+      <div className="neurosim-claim-modal" onClick={(e) => e.stopPropagation()}>
           <button type="button" className="neurosim-claim__close" onClick={onClose} aria-label="Close">×</button>
           <div className="neurosim-claim__card">
             <h2 className="neurosim-claim__title">Connect Wallet</h2>
@@ -135,10 +135,7 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
           </div>
         </div>
       </div>
-    );
-  }
-
-  return (
+  ) : (
     <div className="neurosim-claim-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="buy-fly-title">
       <div className="neurosim-claim-modal" onClick={(e) => e.stopPropagation()}>
         <button type="button" className="neurosim-claim__close" onClick={onClose} aria-label="Close">×</button>
@@ -166,6 +163,7 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
           </div>
         </div>
       </div>
-    </div>
   );
+
+  return createPortal(modalContent, document.body);
 }

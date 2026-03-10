@@ -37,8 +37,11 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
   const EAT_RADIUS = 1.5;
   const HUNGER_DECAY = 1 / 30; // 1 per second at 30Hz
   const EAT_RATE = 15 / 30;    // +15 per second when eating
+  const FLY_TIME_MAX = 5;      // max seconds of continuous flight
   let fly: FlyState = { x: 0, y: 0, z: 2, heading: 0, t: 0, hunger: 100 };
   const pendingStimuli: { neurons: string[]; strength: number }[] = [];
+  let flyTimeLeft = FLY_TIME_MAX;
+  let restTimeLeft = 0;
 
   const TAU = 0.05;
   const DECAY = 0.9;
@@ -87,12 +90,15 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
     }
     motor = Math.tanh(motor) * 0.5;
 
-    // Hunger: decay 1/sec; eat when near food
+    // Hunger: decay 1/sec; eat only when resting and near food (must land to eat)
     let hunger = Math.max(0, fly.hunger - HUNGER_DECAY);
-    for (const s of worldSources) {
-      if (s.type !== 'food') continue;
-      const dist = Math.hypot(s.x - fly.x, s.y - fly.y);
-      if (dist < EAT_RADIUS) hunger = Math.min(100, hunger + EAT_RATE);
+    const canEat = restTimeLeft > 0;
+    if (canEat) {
+      for (const s of worldSources) {
+        if (s.type !== 'food') continue;
+        const dist = Math.hypot(s.x - fly.x, s.y - fly.y);
+        if (dist < EAT_RADIUS) hunger = Math.min(100, hunger + EAT_RATE);
+      }
     }
 
     // When not hungry (hunger > 90): stationary. When hungry: move and steer toward food.
@@ -121,7 +127,21 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
       }
     }
 
-    const effectiveMotor = hungry ? motor * responsiveness : 0;
+    // Tired/rest: fly can only fly 5s at a time, then must rest. Lower hunger = longer rest.
+    let effectiveMotor = hungry ? motor * responsiveness : 0;
+    if (restTimeLeft > 0) {
+      restTimeLeft -= dt;
+      effectiveMotor = 0;
+      if (restTimeLeft <= 0) flyTimeLeft = FLY_TIME_MAX;
+    } else if (effectiveMotor > 0.02) {
+      flyTimeLeft -= dt;
+      if (flyTimeLeft <= 0) {
+        restTimeLeft = hunger > 50 ? 2 : 4; // hungrier = longer rest
+      }
+    } else {
+      flyTimeLeft = Math.min(FLY_TIME_MAX, flyTimeLeft + dt * 0.5); // recover a bit when idle
+    }
+
     let nx = fly.x + Math.cos(fly.heading) * effectiveMotor * dt * 10;
     let ny = fly.y + Math.sin(fly.heading) * effectiveMotor * dt * 10;
     nx = Math.max(-ARENA, Math.min(ARENA, nx));

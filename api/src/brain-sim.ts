@@ -264,7 +264,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
       }
       if (nearestDist < Infinity) {
         const turn = angleToward(fly.heading, nearestDx, nearestDy);
-        headingBias += turn * 0.8 * foodResponsiveness * nearestWeight * dt;
+        headingBias += turn * 1.8 * foodResponsiveness * nearestWeight * dt;
       } else {
         // Hungry but no attractor in range: search behavior (stronger wandering)
         headingBias += 0.25 * Math.sin(t * 0.8) * dt + 0.12 * Math.sin(t * 1.5) * dt;

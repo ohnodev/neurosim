@@ -167,13 +167,27 @@ export default function FlyViewer() {
 
   return (
     <div style={{ width: '100vw', height: '100vh', position: 'relative' }}>
+      {/* Canvas layer - explicitly behind overlays */}
+      <div style={{ position: 'absolute', inset: 0, zIndex: 0 }}>
+        <Canvas camera={{ position: [8, 6, 8], fov: 50 }}>
+          <ambientLight intensity={0.6} />
+          <directionalLight position={[10, 10, 5]} intensity={1} castShadow />
+          <OrbitControls />
+          <FlyMesh state={flyState} />
+          <WorldSources sources={sources} />
+          <mesh position={[0, 0, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
+            <planeGeometry args={[50, 50]} />
+            <meshStandardMaterial color="#1a1a2e" />
+          </mesh>
+        </Canvas>
+      </div>
       {error && (
-        <div style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', background: '#333', color: '#f88', padding: '8px 16px', borderRadius: 8, zIndex: 10 }}>
+        <div style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', background: '#333', color: '#f88', padding: '8px 16px', borderRadius: 8, zIndex: 100 }}>
           {error}
         </div>
       )}
       {connected && (
-        <div style={{ position: 'absolute', top: 12, right: 12, display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end', zIndex: 10, pointerEvents: 'auto' }}>
+        <div style={{ position: 'absolute', top: 12, right: 12, display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end', zIndex: 100, pointerEvents: 'auto' }}>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <button onClick={startSim} style={{ padding: '6px 14px', borderRadius: 8, border: 'none', background: '#2a5', color: '#fff', cursor: 'pointer', fontWeight: 600 }}>
               Start
@@ -192,11 +206,11 @@ export default function FlyViewer() {
           </div>
         </div>
       )}
-      {connected && neuronsWithPositions.length > 0 && (
+      {connected && (
         <BrainOverlay neurons={neuronsWithPositions} activity={activity} visible={connected} />
       )}
       {connected && (
-        <div style={{ position: 'absolute', bottom: 12, left: 12, maxWidth: 320, maxHeight: '40vh', overflow: 'auto', background: 'rgba(0,0,0,0.75)', color: '#ccc', fontSize: 11, padding: 10, borderRadius: 8, fontFamily: 'monospace', zIndex: 10, pointerEvents: 'auto' }}>
+        <div style={{ position: 'absolute', bottom: 12, left: 12, maxWidth: 320, maxHeight: '40vh', overflow: 'auto', background: 'rgba(0,0,0,0.75)', color: '#ccc', fontSize: 11, padding: 10, borderRadius: 8, fontFamily: 'monospace', zIndex: 100, pointerEvents: 'auto' }}>
           <div style={{ color: '#888', marginBottom: 6 }}>Status</div>
           <div style={{ marginBottom: 4 }}>pos ({(flyState.x ?? 0).toFixed(1)}, {(flyState.y ?? 0).toFixed(1)}, {(flyState.z ?? 0).toFixed(1)})</div>
           <div style={{ marginBottom: 4 }}>heading {((flyState.heading ?? 0) * 180 / Math.PI).toFixed(0)}° | {flyMode}</div>
@@ -216,17 +230,6 @@ export default function FlyViewer() {
           )}
         </div>
       )}
-      <Canvas camera={{ position: [8, 6, 8], fov: 50 }}>
-        <ambientLight intensity={0.6} />
-        <directionalLight position={[10, 10, 5]} intensity={1} castShadow />
-        <OrbitControls />
-        <FlyMesh state={flyState} />
-        <WorldSources sources={sources} />
-        <mesh position={[0, 0, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
-          <planeGeometry args={[50, 50]} />
-          <meshStandardMaterial color="#1a1a2e" />
-        </mesh>
-      </Canvas>
     </div>
   );
 }

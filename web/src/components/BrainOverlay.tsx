@@ -124,7 +124,7 @@ export function BrainOverlay({ neurons, activity, visible = true }: BrainOverlay
     Plotly.restyle(plotRef.current, { 'marker.color': [color] }, [0]);
   }, [activity, visible]);
 
-  if (!visible || n === 0) return null;
+  if (!visible) return null;
 
   return (
     <div
@@ -139,14 +139,23 @@ export function BrainOverlay({ neurons, activity, visible = true }: BrainOverlay
         overflow: 'hidden',
         border: '1px solid rgba(100,100,140,0.3)',
         boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
-        zIndex: 10,
+        background: 'rgba(10,10,18,0.9)',
+        zIndex: 100,
         pointerEvents: 'auto',
       }}
     >
       <div style={{ position: 'absolute', top: 4, left: 8, fontSize: 10, color: '#888', zIndex: 1 }}>
         Brain activity
       </div>
-      <div ref={plotRef} style={{ width: '100%', height: '100%' }} />
+      {n === 0 ? (
+        <div style={{ padding: 24, fontSize: 11, color: '#888', textAlign: 'center' }}>
+          No neuron positions in connectome.
+          <br />
+          Run process-connectome with coordinates.csv.
+        </div>
+      ) : (
+        <div ref={plotRef} style={{ width: '100%', height: '100%' }} />
+      )}
     </div>
   );
 }

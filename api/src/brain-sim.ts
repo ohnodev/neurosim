@@ -205,7 +205,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
       effectiveMotor = 0;
       if (restTimeLeft <= 0) flyTimeLeft = FLY_TIME_MAX;
     } else if (Math.abs(effectiveMotor) > 0.02) {
-      flyTimeLeft -= dt;
+      flyTimeLeft -= dt * Math.abs(effectiveMotor);
       if (flyTimeLeft <= 0) {
         restTimeLeft = hunger > 50 ? 2 : 4; // hungrier = longer rest
       }

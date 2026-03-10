@@ -100,10 +100,21 @@ wss.on('connection', (ws) => {
       }
       if (msg.type !== 'stimulate') return;
       const neurons = msg.neurons;
-      const strength = msg.strength;
+      let strength = msg.strength;
       if (!Array.isArray(neurons) || typeof strength !== 'number') {
         console.warn('[ws] stimulate: requires { neurons: string[], strength: number }');
         return;
+      }
+      if (!Number.isFinite(strength)) {
+        console.warn('[ws] stimulate: strength must be finite');
+        return;
+      }
+      const MIN_STRENGTH = 0;
+      const MAX_STRENGTH = 1;
+      const orig = strength;
+      strength = Math.max(MIN_STRENGTH, Math.min(MAX_STRENGTH, strength));
+      if (orig !== strength) {
+        console.warn(`[ws] stimulate: strength clamped from ${orig} to ${strength}`);
       }
       const valid = neurons.filter((id) => neuronIds.includes(id));
       if (valid.length === 0) {

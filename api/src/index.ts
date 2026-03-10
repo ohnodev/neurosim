@@ -10,7 +10,47 @@ import { getWorld } from './world.js';
 const PORT = Number(process.env.PORT) || 3001;
 const connectome = loadConnectome();
 const world = getWorld();
-let wsClientCount = 0;
+
+const sim = createBrainSim(connectome, world.sources);
+const { step, inject, getState, neuronIds } = sim;
+let simRunning = false;
+let simIntervalId: ReturnType<typeof setInterval> | null = null;
+const STEP_LOG_INTERVAL = 150;
+let connectionStep = 0;
+
+const wsClients = new Set<import('ws').WebSocket>();
+
+function broadcast(data: unknown): void {
+  const payload = JSON.stringify(data);
+  for (const ws of wsClients) {
+    if (ws.readyState === 1) ws.send(payload);
+  }
+}
+
+function startSim(): void {
+  if (simRunning) return;
+  simRunning = true;
+  connectionStep = 0;
+  simIntervalId = setInterval(() => {
+    const state = step(1 / 30);
+    broadcast(state);
+    connectionStep += 1;
+    if (connectionStep % STEP_LOG_INTERVAL === 0) {
+      console.log('[sim] t=', state.t.toFixed(1), 'fly=', state.fly.x.toFixed(2), state.fly.y.toFixed(2), 'clients=', wsClients.size);
+    }
+  }, 1000 / 30);
+  console.log('[sim] started');
+}
+
+function stopSim(): void {
+  if (!simRunning) return;
+  simRunning = false;
+  if (simIntervalId) {
+    clearInterval(simIntervalId);
+    simIntervalId = null;
+  }
+  console.log('[sim] stopped');
+}
 
 const app = express();
 app.use(cors());
@@ -41,17 +81,23 @@ const httpServer = createServer(app);
 const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
 
 wss.on('connection', (ws) => {
-  wsClientCount += 1;
-  console.log('[ws] client connected, total=', wsClientCount);
+  wsClients.add(ws);
+  console.log('[ws] client connected, total=', wsClients.size);
 
-  const { step, inject, neuronIds } = createBrainSim(connectome, world.sources);
-  let stimulateCount = 0;
-  let connectionStep = 0;
-  const STEP_LOG_INTERVAL = 150;
+  const state = getState();
+  ws.send(JSON.stringify(state));
 
   ws.on('message', (raw) => {
     try {
       const msg = JSON.parse(raw.toString()) as { type: string; neurons?: string[]; strength?: number };
+      if (msg.type === 'start') {
+        startSim();
+        return;
+      }
+      if (msg.type === 'stop') {
+        stopSim();
+        return;
+      }
       if (msg.type !== 'stimulate') return;
       const neurons = msg.neurons;
       const strength = msg.strength;
@@ -65,30 +111,15 @@ wss.on('connection', (ws) => {
         return;
       }
       inject(valid, strength);
-      stimulateCount += 1;
       console.log('[ws] stimulate neurons=', valid.length, 'strength=', strength);
     } catch (err) {
       console.error('[ws] message error', err);
     }
   });
 
-  const interval = setInterval(() => {
-    if (ws.readyState !== ws.OPEN) {
-      clearInterval(interval);
-      return;
-    }
-    const state = step(1 / 30);
-    ws.send(JSON.stringify(state));
-    connectionStep += 1;
-    if (connectionStep % STEP_LOG_INTERVAL === 0) {
-      console.log('[sim] step t=', state.t.toFixed(1), 'fly=', state.fly.x.toFixed(2), state.fly.y.toFixed(2), 'clients=', wsClientCount);
-    }
-  }, 1000 / 30);
-
   ws.on('close', () => {
-    wsClientCount -= 1;
-    clearInterval(interval);
-    console.log('[ws] client disconnected, total=', wsClientCount, 'stimuli sent=', stimulateCount);
+    wsClients.delete(ws);
+    console.log('[ws] client disconnected, total=', wsClients.size);
   });
 
   ws.on('error', (err) => {

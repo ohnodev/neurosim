@@ -108,8 +108,9 @@ function main() {
     const pre = String(row[preCol] ?? '').trim();
     const post = String(row[postCol] ?? '').trim();
     if (!pre || !post) continue;
-    const w = weightCol ? parseInt(row[weightCol] ?? '1', 10) : 1;
-    if (w < MIN_SYNAPSES) continue;
+    const raw = weightCol ? parseInt(row[weightCol] ?? '1', 10) : 1;
+    if (!Number.isFinite(raw) || raw < MIN_SYNAPSES) continue;
+    const w = raw;
     connections.push({ pre, post, weight: w });
     allIds.add(pre);
     allIds.add(post);

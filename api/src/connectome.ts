@@ -41,7 +41,8 @@ export function buildAdjacency(connections: Connection[]): Map<string, { post: s
   const adj = new Map<string, { post: string; weight: number }[]>();
   for (const c of connections) {
     const list = adj.get(c.pre) ?? [];
-    list.push({ post: c.post, weight: c.weight ?? 1 });
+    const w = typeof c.weight === 'number' && Number.isFinite(c.weight) && c.weight >= 1 ? c.weight : 1;
+    list.push({ post: c.post, weight: w });
     adj.set(c.pre, list);
   }
   return adj;

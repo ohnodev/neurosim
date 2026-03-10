@@ -119,16 +119,16 @@ describe('brain-sim', () => {
     }
     const minZ = Math.min(...samples);
     const maxZ = Math.max(...samples);
-    expect(minZ).toBeGreaterThanOrEqual(1.9);
-    expect(maxZ).toBeLessThanOrEqual(3.2);
+    expect(minZ).toBeGreaterThanOrEqual(0.3);
+    expect(maxZ).toBeLessThanOrEqual(1.6);
   });
 
   it('fly z stays within ground and flight bounds', () => {
     const { step } = createBrainSim(testConnectome, [foodSource]);
     for (let i = 0; i < 300; i++) {
       const s = step(1 / 30);
-      expect(s.fly.z).toBeGreaterThanOrEqual(1.9);
-      expect(s.fly.z).toBeLessThanOrEqual(3.1);
+      expect(s.fly.z).toBeGreaterThanOrEqual(0.3);
+      expect(s.fly.z).toBeLessThanOrEqual(1.6);
     }
   });
 

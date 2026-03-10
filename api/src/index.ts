@@ -26,19 +26,13 @@ app.get('/api/connectome', (_, res) => {
 
 app.get('/api/health', (_, res) => res.json({ ok: true }));
 
-app.get('/api/neurons', (req, res) => {
-  const detail = req.query.detail === '1';
-  if (detail) {
-    const neurons = connectome.neurons.map((n) => ({
-      root_id: n.root_id,
-      role: n.role,
-      cell_type: n.cell_type,
-    }));
-    res.json({ neurons });
-  } else {
-    const ids = connectome.neurons.map((n) => n.root_id);
-    res.json({ neurons: ids });
-  }
+app.get('/api/neurons', (_, res) => {
+  const neurons = connectome.neurons.map((n) => ({
+    root_id: n.root_id,
+    role: n.role,
+    cell_type: n.cell_type,
+  }));
+  res.json({ neurons });
 });
 
 app.get('/api/world', (_, res) => res.json(world));
@@ -57,19 +51,22 @@ wss.on('connection', (ws) => {
 
   ws.on('message', (raw) => {
     try {
-      const msg = JSON.parse(raw.toString());
-      if (msg.type === 'stimulate') {
-        const neurons = Array.isArray(msg.neurons) ? msg.neurons : [msg.neuron].filter(Boolean);
-        const strength = typeof msg.strength === 'number' ? msg.strength : 0.8;
-        const valid = neurons.filter((id: string) => neuronIds.includes(id));
-        if (valid.length === 0) {
-          console.warn('[ws] stimulate: no valid neuron IDs (invalid:', neurons, '), skipping');
-          return;
-        }
-        inject(valid, strength);
-        stimulateCount += 1;
-        console.log('[ws] stimulate neurons=', valid.length, 'strength=', strength);
+      const msg = JSON.parse(raw.toString()) as { type: string; neurons?: string[]; strength?: number };
+      if (msg.type !== 'stimulate') return;
+      const neurons = msg.neurons;
+      const strength = msg.strength;
+      if (!Array.isArray(neurons) || typeof strength !== 'number') {
+        console.warn('[ws] stimulate: requires { neurons: string[], strength: number }');
+        return;
       }
+      const valid = neurons.filter((id) => neuronIds.includes(id));
+      if (valid.length === 0) {
+        console.warn('[ws] stimulate: no valid neuron IDs');
+        return;
+      }
+      inject(valid, strength);
+      stimulateCount += 1;
+      console.log('[ws] stimulate neurons=', valid.length, 'strength=', strength);
     } catch (err) {
       console.error('[ws] message error', err);
     }
@@ -102,6 +99,5 @@ wss.on('connection', (ws) => {
 httpServer.listen(PORT, () => {
   console.log('NeuroSim API http://localhost:' + PORT);
   console.log('WebSocket ws://localhost:' + PORT + '/ws');
-  console.log('World sources:', world.sources.length, '(food/light attractors)');
-  console.log('Connectome loaded. Place CSVs in data/raw/ and run process-connectome for full dataset.');
+  console.log('Connectome:', connectome.neurons.length, 'neurons,', connectome.connections.length, 'connections');
 });

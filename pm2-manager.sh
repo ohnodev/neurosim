@@ -90,19 +90,14 @@ stop_service() {
 
 restart_service() {
     create_logs_dir
-    if [[ "$QUICK_RESTART" == "1" ]]; then
-        log_info "Quick restart (no rebuild, no log clean)..."
-        service_exists && pm2 restart "$SERVICE" || pm2 start "$ECOSYSTEM_FILE" --only "$SERVICE"
-    else
-        log_info "Stopping $SERVICE..."
-        service_exists && pm2 delete "$SERVICE" 2>/dev/null || true
-        sleep 1
-        [[ "$PRESERVE_LOGS" != "1" && "$SKIP_CLEAN" != "1" ]] && clean_all_logs
-        log_info "Rebuilding $SERVICE..."
-        (cd "$API_DIR" && npm run build) || { log_error "Build failed"; exit 1; }
-        log_info "Starting $SERVICE..."
-        pm2 start "$ECOSYSTEM_FILE" --only "$SERVICE"
-    fi
+    log_info "Stopping $SERVICE..."
+    service_exists && pm2 delete "$SERVICE" 2>/dev/null || true
+    sleep 1
+    clean_all_logs
+    log_info "Rebuilding $SERVICE..."
+    (cd "$API_DIR" && npm run build) || { log_error "Build failed"; exit 1; }
+    log_info "Starting $SERVICE..."
+    pm2 start "$ECOSYSTEM_FILE" --only "$SERVICE"
     log_success "Restarted"
 }
 

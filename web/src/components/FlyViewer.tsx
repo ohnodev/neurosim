@@ -10,13 +10,12 @@ interface FlyState {
   z: number;
   heading: number;
   t: number;
-  hunger?: number;
+  hunger: number;
 }
 
-function getHungerColor(hunger: number | undefined): string {
-  const h = hunger ?? 100;
-  if (h > 50) return '#5a5';
-  if (h > 20) return '#ca0';
+function getHungerColor(hunger: number): string {
+  if (hunger > 50) return '#5a5';
+  if (hunger > 20) return '#ca0';
   return '#c44';
 }
 
@@ -88,17 +87,21 @@ export default function FlyViewer() {
 
   useEffect(() => {
     fetch(API_BASE + '/api/world')
-      .then((r) => r.json())
-      .then((d) => setSources(d.sources || []))
-      .catch((err) => {
-        console.error('[FlyViewer] failed to fetch /api/world:', err);
-        setSources([]);
-      });
-    fetch(API_BASE + '/api/neurons?detail=1')
-      .then((r) => r.json())
+      .then((r) => r.ok ? r.json() : Promise.reject(new Error(r.statusText)))
       .then((d) => {
-        const list = d.neurons || [];
-        setNeuronIds(list.map((n: { root_id: string }) => n.root_id));
+        if (!Array.isArray(d.sources)) throw new Error('Invalid /api/world response');
+        setSources(d.sources);
+      })
+      .catch((err) => {
+        console.error('[FlyViewer] /api/world:', err);
+        setError('Failed to load world');
+      });
+    fetch(API_BASE + '/api/neurons')
+      .then((r) => r.ok ? r.json() : Promise.reject(new Error(r.statusText)))
+      .then((d) => {
+        if (!Array.isArray(d.neurons)) throw new Error('Invalid /api/neurons response');
+        const list = d.neurons as { root_id: string; role?: string; cell_type?: string }[];
+        setNeuronIds(list.map((n) => n.root_id));
         const labels: Record<string, string> = {};
         for (const n of list) {
           const label = [n.cell_type, n.role].filter(Boolean).join(' ') || n.root_id;
@@ -106,7 +109,10 @@ export default function FlyViewer() {
         }
         setNeuronLabels(labels);
       })
-      .catch(() => setNeuronIds([]));
+      .catch((err) => {
+        console.error('[FlyViewer] /api/neurons:', err);
+        setError('Failed to load neurons');
+      });
   }, []);
 
   useEffect(() => {
@@ -142,17 +148,16 @@ export default function FlyViewer() {
 
   const stimulate = () => {
     if (wsRef.current?.readyState !== WebSocket.OPEN) return;
-    const ids = neuronIds.length > 0
-      ? [neuronIds[Math.floor(Math.random() * neuronIds.length)]]
-      : [];
-    setLastStimulated(ids);
-    wsRef.current.send(JSON.stringify({ type: 'stimulate', neurons: ids, strength: 0.9 }));
+    if (neuronIds.length === 0) return;
+    const id = neuronIds[Math.floor(Math.random() * neuronIds.length)];
+    setLastStimulated([id]);
+    wsRef.current.send(JSON.stringify({ type: 'stimulate', neurons: [id], strength: 0.9 }));
   };
 
   const topActivity = Object.entries(activity)
     .sort(([, a], [, b]) => b - a)
     .slice(0, 10);
-  const flyMode = (flyState.z ?? 2) > 2.5 ? 'flying' : (flyState.z ?? 2) < 2.2 ? 'resting' : 'idle';
+  const flyMode = flyState.z > 2.5 ? 'flying' : flyState.z < 2.2 ? 'resting' : 'idle';
 
   return (
     <div style={{ width: '100vw', height: '100vh', position: 'relative' }}>
@@ -164,7 +169,7 @@ export default function FlyViewer() {
       {connected && (
         <div style={{ position: 'absolute', top: 12, right: 12, display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end' }}>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <button onClick={stimulate} style={{ padding: '6px 14px', borderRadius: 8, border: 'none', background: '#333', color: '#fff', cursor: 'pointer', fontWeight: 600 }}>
+            <button onClick={stimulate} disabled={neuronIds.length === 0} style={{ padding: '6px 14px', borderRadius: 8, border: 'none', background: neuronIds.length === 0 ? '#222' : '#333', color: '#fff', cursor: neuronIds.length === 0 ? 'not-allowed' : 'pointer', fontWeight: 600 }}>
               Stimulate
             </button>
             <span style={{ background: '#0a0', color: '#fff', padding: '4px 12px', borderRadius: 8 }}>Connected</span>
@@ -173,7 +178,7 @@ export default function FlyViewer() {
           <div style={{ width: 120, background: '#222', borderRadius: 4, overflow: 'hidden' }}>
             <div style={{ fontSize: 10, color: '#888', padding: '2px 6px' }}>Hunger</div>
             <div style={{ height: 8, background: '#333', borderRadius: 2, margin: '0 4px 4px', overflow: 'hidden' }}>
-              <div style={{ width: `${flyState.hunger ?? 100}%`, height: '100%', background: getHungerColor(flyState.hunger), transition: 'width 0.2s' }} />
+              <div style={{ width: `${flyState.hunger}%`, height: '100%', background: getHungerColor(flyState.hunger), transition: 'width 0.2s' }} />
             </div>
           </div>
         </div>
@@ -181,9 +186,9 @@ export default function FlyViewer() {
       {connected && (
         <div style={{ position: 'absolute', bottom: 12, left: 12, maxWidth: 320, maxHeight: '40vh', overflow: 'auto', background: 'rgba(0,0,0,0.75)', color: '#ccc', fontSize: 11, padding: 10, borderRadius: 8, fontFamily: 'monospace' }}>
           <div style={{ color: '#888', marginBottom: 6 }}>Status</div>
-          <div style={{ marginBottom: 4 }}>pos ({flyState.x?.toFixed(1)}, {flyState.y?.toFixed(1)}, {flyState.z?.toFixed(1)})</div>
-          <div style={{ marginBottom: 4 }}>heading {((flyState.heading ?? 0) * 180 / Math.PI).toFixed(0)}° | {flyMode}</div>
-          <div style={{ marginBottom: 8 }}>t {flyState.t?.toFixed(1)}s | hunger {Math.round(flyState.hunger ?? 100)}</div>
+          <div style={{ marginBottom: 4 }}>pos ({flyState.x.toFixed(1)}, {flyState.y.toFixed(1)}, {flyState.z.toFixed(1)})</div>
+          <div style={{ marginBottom: 4 }}>heading {(flyState.heading * 180 / Math.PI).toFixed(0)}° | {flyMode}</div>
+          <div style={{ marginBottom: 8 }}>t {flyState.t.toFixed(1)}s | hunger {Math.round(flyState.hunger)}</div>
           <div style={{ color: '#888', marginBottom: 4 }}>Firing neurons ({activeCount})</div>
           <div style={{ maxHeight: 120, overflow: 'auto' }}>
             {topActivity.length === 0 && <span style={{ color: '#666' }}>—</span>}

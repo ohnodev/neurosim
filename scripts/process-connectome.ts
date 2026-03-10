@@ -1,6 +1,6 @@
 /**
  * Process FlyWire connectome CSVs from data/raw/ into a subset JSON.
- * Place connections.csv, neurons.csv, coordinates.csv in data/raw/ (from Kaggle download).
+ * Requires: connections.csv, coordinates.csv, classification.csv, consolidated_cell_types.csv
  */
 
 import * as fs from 'fs';
@@ -38,7 +38,7 @@ function ensureDataDir() {
   if (!fs.existsSync(DATA_RAW)) {
     fs.mkdirSync(DATA_RAW, { recursive: true });
     console.error(`\nMissing data. Please place FlyWire CSVs in:\n  ${DATA_RAW}\n`);
-    console.error('Files needed: connections.csv, neurons.csv, coordinates.csv');
+    console.error('Files needed: connections.csv, coordinates.csv, classification.csv, consolidated_cell_types.csv');
     console.error('Download from: https://www.kaggle.com/datasets/leonidblokhinrs/flywire-brain-dataset-fafb-v783/data\n');
     process.exit(1);
   }
@@ -46,7 +46,9 @@ function ensureDataDir() {
 
 function loadCsv(name: string): Record<string, string>[] {
   const p = path.join(DATA_RAW, name);
-  if (!fs.existsSync(p)) return [];
+  if (!fs.existsSync(p)) {
+    throw new Error(`Missing ${name}. Place FlyWire CSVs in ${DATA_RAW}`);
+  }
   const buf = fs.readFileSync(p, 'utf-8');
   const rows = parse(buf, { columns: true, skip_empty_lines: true }) as Record<string, string>[];
   return rows;
@@ -76,20 +78,20 @@ function inferIdCol(rows: Record<string, string>[], hints: string[]): string {
     const c = cols.find((k) => k.toLowerCase().includes(h));
     if (c) return c;
   }
-  return cols[0] ?? 'id';
+  if (cols.length === 0) throw new Error('CSV has no columns');
+  return cols[0];
 }
 
 function main() {
   ensureDataDir();
 
   const connectionsRaw = loadCsv('connections.csv');
-  const neuronsRaw = loadCsv('neurons.csv');
   const coordsRaw = loadCsv('coordinates.csv');
   const classificationRaw = loadCsv('classification.csv');
   const consolidatedRaw = loadCsv('consolidated_cell_types.csv');
 
-  if (connectionsRaw.length === 0) {
-    console.error('connections.csv not found or empty. Place it in data/raw/');
+  if (connectionsRaw.length === 0 || coordsRaw.length === 0 || classificationRaw.length === 0 || consolidatedRaw.length === 0) {
+    console.error('connections.csv, coordinates.csv, classification.csv, consolidated_cell_types.csv must exist and be non-empty');
     process.exit(1);
   }
 
@@ -113,7 +115,7 @@ function main() {
     allIds.add(post);
   }
 
-  const idCol = inferIdCol(neuronsRaw.length ? neuronsRaw : coordsRaw, ['root_id', 'rootid', 'id', 'segment']);
+  const idCol = inferIdCol(coordsRaw, ['root_id', 'rootid', 'id', 'segment']);
   const coordCols = coordsRaw[0] ? Object.keys(coordsRaw[0]) : [];
   const xCol = coordCols.find((c) => /^x$|_x$/.test(c)) ?? 'x';
   const yCol = coordCols.find((c) => /^y$|_y$/.test(c)) ?? 'y';

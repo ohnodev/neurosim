@@ -12,7 +12,7 @@ import { parse } from 'csv-parse/sync';
 
 const DATA_RAW = path.join(process.cwd(), 'data', 'raw');
 const OUTPUT = path.join(process.cwd(), 'data', 'connectome-subset.json');
-const DEFAULT_SUBSET_SIZE = 5000; // neurons to include when not using --all (use --all for full connectome)
+const DEFAULT_SUBSET_SIZE = 2000; // curated subset for movement/odor/visual/feeding (use --all for full)
 const MIN_SYNAPSES = 2;
 
 const useAll = process.argv.includes('--all') || process.env.SUBSET_SIZE === '0';
@@ -76,6 +76,21 @@ function inferSide(side: string): NeuronSide {
   if (s === 'left') return 'left';
   if (s === 'right') return 'right';
   return 'unknown';
+}
+
+/** Relevance score for movement, odor, visual, feeding, reward. Higher = more relevant. */
+function relevanceScore(role: NeuronRole, cellType: string, primaryType: string, superClass: string): number {
+  let s = 0;
+  const t = (cellType + ' ' + primaryType).trim();
+  const sc = superClass?.toLowerCase() ?? '';
+  if (role === 'motor') s += 10;
+  if (role === 'sensory') s += 6;
+  if (sc === 'optic' || sc === 'visual_projection') s += 8;
+  if (/R[1-8]|T[45][a-d]?|L[1-5]|Dm\d|Mi\d|Tm\d|C[23]|MeTu/i.test(t)) s += 8; // visual
+  if (/^OR|olfact|antennal|smell|AN_/i.test(t) || /olfact|antennal/i.test(sc)) s += 7; // odor
+  if (/DAN|MB|KC|reward|dopamin/i.test(t)) s += 5; // reward
+  if (s === 0) s = 1; // interneurons still get a base score
+  return s;
 }
 
 function inferIdCol(rows: Record<string, string>[], hints: string[]): string {
@@ -149,8 +164,39 @@ function main() {
     for (const c of connections) {
       inDegree.set(c.post, (inDegree.get(c.post) ?? 0) + (c.weight ?? 1));
     }
-    const sorted = [...allIds].sort((a, b) => (inDegree.get(b) ?? 0) - (inDegree.get(a) ?? 0));
-    subsetIds = new Set(sorted.slice(0, SUBSET_SIZE));
+    const classificationByIdTemp = new Map<string, { flow: string; super_class: string; side: string; cell_type: string }>();
+    const classIdColTemp = inferIdCol(classificationRaw, ['root_id', 'rootid', 'id']);
+    const flowColTemp = Object.keys(classificationRaw[0] ?? {}).find((c) => /^flow$/i.test(c)) ?? 'flow';
+    const superColTemp = Object.keys(classificationRaw[0] ?? {}).find((c) => /super_class/i.test(c)) ?? 'super_class';
+    const sideColTemp = Object.keys(classificationRaw[0] ?? {}).find((c) => /^side$/i.test(c)) ?? 'side';
+    const cellTypeColTemp = Object.keys(classificationRaw[0] ?? {}).find((c) => /cell_type|celltype/i.test(c)) ?? 'cell_type';
+    for (const row of classificationRaw) {
+      const id = String(row[classIdColTemp] ?? '').trim();
+      if (!id) continue;
+      classificationByIdTemp.set(id, {
+        flow: row[flowColTemp] ?? '',
+        super_class: row[superColTemp] ?? '',
+        side: row[sideColTemp] ?? '',
+        cell_type: row[cellTypeColTemp] ?? '',
+      });
+    }
+    const consolidatedTemp = new Map<string, string>();
+    const consIdTemp = inferIdCol(consolidatedRaw, ['root_id', 'rootid', 'id']);
+    const primaryColTemp = Object.keys(consolidatedRaw[0] ?? {}).find((c) => /primary_type|primarytype/i.test(c)) ?? 'primary_type';
+    for (const row of consolidatedRaw) {
+      const id = String(row[consIdTemp] ?? '').trim();
+      if (id) consolidatedTemp.set(id, String(row[primaryColTemp] ?? '').trim());
+    }
+    const scored = [...allIds].map((id) => {
+      const cl = classificationByIdTemp.get(id);
+      const role = cl ? inferRole(cl.flow, cl.super_class) : 'interneuron';
+      const primary = consolidatedTemp.get(id) ?? '';
+      const score = relevanceScore(role, cl?.cell_type ?? '', primary, cl?.super_class ?? '');
+      const deg = inDegree.get(id) ?? 0;
+      return { id, score, deg };
+    });
+    scored.sort((a, b) => b.score - a.score || b.deg - a.deg);
+    subsetIds = new Set(scored.slice(0, SUBSET_SIZE).map((x) => x.id));
     subsetConnections = connections.filter((c) => subsetIds.has(c.pre) && subsetIds.has(c.post));
   }
 

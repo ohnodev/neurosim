@@ -13,7 +13,7 @@ export interface WorldSource {
 }
 
 export const WORLD_SOURCES: WorldSource[] = [
-  { id: 'food1', type: 'food', x: 6, y: 6, z: 2, radius: 12 },
+  { id: 'food1', type: 'food', x: 6, y: 6, z: 0.35, radius: 12 },
 ];
 
 export function getWorld() {

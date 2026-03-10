@@ -74,15 +74,16 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
   let activity = new Float32Array(neuronIds.length);
   const ARENA = 24;
   const EAT_RADIUS = 1.5;
-  const HUNGER_DECAY = 1;   // per second
-  const EAT_RATE = 15;      // per second when eating
+  const HUNGER_DECAY = 0.8;   // per second when not eating
+  const EAT_RATE = 12;        // per second when eating
 
   function isAttractorType(type: string): boolean {
     return type === 'food' || type === 'light';
   }
-  const FLY_TIME_MAX = 5;      // max seconds of continuous flight
+  const FLY_TIME_MAX = 6;      // max seconds of continuous flight before fatigue
   const GROUND_Z = 0.35;
   const FLIGHT_Z = 1.5;
+  const ON_GROUND_THRESH = 0.6; // z below this = on ground, can eat
   let fly: FlyState = { x: 0, y: 0, z: GROUND_Z, heading: 0, t: 0, hunger: 100 };
   const pendingStimuli: { neurons: string[]; strength: number }[] = [];
   let flyTimeLeft = FLY_TIME_MAX;
@@ -157,8 +158,9 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
     const forwardFromMotor = (motorLeft + motorRight + motorFwd) * motorScale;
     const motor = Math.tanh(forwardFromMotor) * 0.5;
 
-    // Hunger: decay per second when not eating; eat only when resting and near food (must land to eat)
-    const canEat = restTimeLeft > 0;
+    // Hunger: decay when not eating. Eat when near food AND on ground (or resting).
+    const onGround = fly.z < ON_GROUND_THRESH;
+    const canEat = (restTimeLeft > 0 || onGround) && fly.z < FLIGHT_Z * 0.6;
     let hunger = fly.hunger;
     let isEating = false;
     if (canEat) {
@@ -174,9 +176,10 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
     }
     if (!isEating) hunger = Math.max(0, hunger - HUNGER_DECAY * dt);
 
-    // When not hungry (hunger > 90): stationary. When hungry: move and steer toward food.
+    // Hungry (low hunger): steer toward food. Full (high hunger): explore. High hunger = less sensitive to food.
     const hungry = hunger <= 90;
-    const responsiveness = hungry ? (90 - hunger) / 90 : 0;
+    const full = hunger > 90;
+    const foodResponsiveness = hungry ? (90 - hunger) / 90 : 0; // full = 0 sensitivity to food
 
     let headingBias = turnFromMotor * dt + 0.1 * Math.sin(t * 0.7) * dt;
     if (hungry && worldSources.length > 0) {
@@ -199,12 +202,16 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
       }
       if (nearestDist < Infinity) {
         const turn = angleToward(fly.heading, nearestDx, nearestDy);
-        headingBias += turn * 0.8 * responsiveness * nearestWeight * dt;
+        headingBias += turn * 0.8 * foodResponsiveness * nearestWeight * dt;
       }
+    } else if (full) {
+      // Explore mode: light random wandering when full
+      headingBias += 0.15 * Math.sin(t * 0.5) * dt + 0.08 * Math.sin(t * 1.3) * dt;
     }
 
-    // Tired/rest: fly can only fly 5s at a time, then must rest. Lower hunger = longer rest.
-    let effectiveMotor = hungry ? motor * responsiveness : 0;
+    // Fatigue: fly time drains when moving. When flyTimeLeft hits 0 -> land and rest.
+    const moveResponsiveness = hungry ? foodResponsiveness : full ? 0.4 : 0; // explore at 40% when full
+    let effectiveMotor = motor * moveResponsiveness;
     if (restTimeLeft > 0) {
       restTimeLeft -= dt;
       effectiveMotor = 0;
@@ -212,7 +219,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
     } else if (Math.abs(effectiveMotor) > 0.02) {
       flyTimeLeft -= dt * Math.abs(effectiveMotor);
       if (flyTimeLeft <= 0) {
-        restTimeLeft = hunger > 50 ? 2 : 4; // hungrier = longer rest
+        restTimeLeft = hunger > 50 ? 2.5 : 4; // fatigued -> land and rest
       }
     } else {
       flyTimeLeft = Math.min(FLY_TIME_MAX, flyTimeLeft + dt * 0.5); // recover a bit when idle

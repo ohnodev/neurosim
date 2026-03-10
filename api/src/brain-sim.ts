@@ -105,11 +105,11 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
 
   const REF_STEP = 1 / 30;    // reference timestep (API calls at 30Hz)
   const TAU = 0.03;           // propagation strength (per REF_STEP)
-  const DECAY = 0.88;         // per REF_STEP decay
+  const DECAY = 0.92;         // per REF_STEP decay (higher = faster falloff, more dynamic variation)
   const PROP_CAP = 0.003;     // max contribution per synapse (per REF_STEP)
   const INPUT_RATE = 2;
-  const SENSORY_SCALE = 0.18;
-  const SENSORY_DUTY = 0.28;  // sensory bursts ~28% of the time
+  const SENSORY_SCALE = 0.12; // reduce drive so neurons don't saturate at 0.5
+  const SENSORY_DUTY = 0.12;  // sensory bursts ~12% of the time (more spaced out = more dark periods)
   const ACT_THRESHOLD = 0.08; // only report neurons above this (filters diffuse activity)
 
   function step(dt: number): SimState {

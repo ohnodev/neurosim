@@ -71,7 +71,8 @@ describe('brain-sim', () => {
   it('food source near fly increases activity in visual/sensory neurons', () => {
     const { step } = createBrainSim(testConnectome, [foodSource]);
     let maxActivity = 0;
-    for (let i = 0; i < 20; i++) {
+    // Run enough steps to cover multiple sensory cycles (SENSORY_DUTY ~12%)
+    for (let i = 0; i < 90; i++) {
       const s = step(1 / 30);
       if (s.activity) {
         for (const v of Object.values(s.activity)) maxActivity = Math.max(maxActivity, v);
@@ -355,5 +356,51 @@ describe('brain-sim', () => {
     expect(maxActiveFrac, 'At most 70% of neurons should be active (no saturation)').toBeLessThanOrEqual(0.70);
     expect(maxMeanActivity, 'Mean activity of active neurons should stay below max (0.5)').toBeLessThan(0.48);
     expect(activeCountStd, 'Active count should vary over time (not constant)').toBeGreaterThan(0.5);
+  });
+
+  it.skipIf(!fs.existsSync(connectomePath))('sensory neurons (LT58, Dm17, LPT48, Dm6, LPT42) vary over time, not stuck at 0.5', () => {
+    const connectome = loadConnectome(connectomePath);
+    const sensoryCellTypes = ['LT58', 'Dm17', 'LPT48', 'Dm6', 'LPT42'];
+    const trackedIds = new Set<string>();
+    for (const n of connectome.neurons) {
+      const ct = n.cell_type ?? '';
+      if (sensoryCellTypes.some((p) => ct.startsWith(p))) trackedIds.add(n.root_id);
+    }
+    expect(trackedIds.size).toBeGreaterThan(5);
+
+    const { step } = createBrainSim(connectome, [
+      { id: 'f1', type: 'food', x: 6, y: 6, z: 0.35, radius: 12 },
+    ]);
+    const dt = 1 / 30;
+    const sampleInterval = 5;
+    const runs = 600;
+    const activityByNeuron = new Map<string, number[]>();
+
+    for (let i = 0; i < runs; i++) {
+      const s = step(dt);
+      if (i % sampleInterval !== 0) continue;
+      for (const id of trackedIds) {
+        const v = s.activity?.[id] ?? 0;
+        if (!activityByNeuron.has(id)) activityByNeuron.set(id, []);
+        activityByNeuron.get(id)!.push(v);
+      }
+    }
+
+    const failures: string[] = [];
+    for (const [id, vals] of activityByNeuron) {
+      const max = Math.max(...vals);
+      const min = Math.min(...vals);
+      const range = max - min;
+      if (max < 0.4) continue; // only check neurons that can hit near-max
+      // Neurons that reach 0.4+ must vary: range >= 0.15, min < 0.35 (must dip, not stay at 0.5)
+      if (range < 0.15 || min >= 0.35) {
+        failures.push(`${id} range=${range.toFixed(2)} min=${min.toFixed(2)} max=${max.toFixed(2)}`);
+      }
+    }
+
+    expect(
+      failures,
+      `Sensory neurons that reach high activity must vary (range>=0.15, min<0.35). Stuck: ${failures.slice(0, 5).join('; ')}`
+    ).toHaveLength(0);
   });
 });

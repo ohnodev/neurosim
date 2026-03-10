@@ -13,6 +13,8 @@ export interface FlyState {
   flyTimeLeft?: number;
   /** seconds left in rest; 0 = not resting */
   restTimeLeft?: number;
+  /** true when eating at food source */
+  feeding?: boolean;
 }
 
 export interface SimState {
@@ -79,7 +81,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
   const ARENA = 24;
   const WALL_MARGIN = 6;      // start turning away from walls when within this
   const SEEK_RADIUS = ARENA * 1.5; // steer toward food even when beyond source radius
-  const EAT_RADIUS = 1.5;
+  const EAT_RADIUS = 2.5;     // larger so fly can eat when circling near food
   const HUNGER_DECAY = 0.8;   // per second when not eating
   const EAT_RATE = 12;        // per second when eating
 
@@ -98,11 +100,11 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
 
   const TAU = 0.03;           // propagation strength
   const DECAY = 0.88;         // per-step decay
-  const PROP_CAP = 0.004;     // max contribution per synapse (limits cascade in dense connectomes)
+  const PROP_CAP = 0.003;     // max contribution per synapse (limits cascade in dense connectomes)
   const INPUT_RATE = 2;
   const SENSORY_SCALE = 0.18;
   const SENSORY_DUTY = 0.28;  // sensory bursts ~28% of the time
-  const ACT_THRESHOLD = 0.05; // only report neurons above this
+  const ACT_THRESHOLD = 0.08; // only report neurons above this (filters diffuse activity)
 
   function step(dt: number): SimState {
     const t = fly.t + dt;
@@ -173,9 +175,9 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
     const forwardFromMotor = (motorLeft + motorRight + motorFwd) * motorScale;
     const motor = Math.tanh(forwardFromMotor) * 0.5;
 
-    // Hunger: decay when not eating. Eat when near food AND on ground (or resting).
+    // Hunger: decay when not eating. Eat when near food (allow slightly elevated z when close).
     const onGround = fly.z < ON_GROUND_THRESH;
-    const canEat = (restTimeLeft > 0 || onGround) && fly.z < FLIGHT_Z * 0.6;
+    const canEat = (restTimeLeft > 0 || onGround || fly.z < 1.1) && fly.z < 1.2;
     let hunger = fly.hunger;
     let isEating = false;
     if (canEat) {
@@ -300,6 +302,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
       hunger: Number.isFinite(hunger) ? hunger : fly.hunger,
       flyTimeLeft: flyTimeLeft / FLY_TIME_MAX,
       restTimeLeft: restTimeLeft > 0 ? restTimeLeft : 0,
+      feeding: isEating,
     };
 
     const actObj: Record<string, number> = {};
@@ -325,6 +328,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
       ...fly,
       flyTimeLeft: flyTimeLeft / FLY_TIME_MAX,
       restTimeLeft: restTimeLeft > 0 ? restTimeLeft : 0,
+      feeding: fly.feeding ?? false,
     };
     return { t: fly.t, fly: flyWithMeta, activity: Object.keys(actObj).length ? actObj : undefined };
   }

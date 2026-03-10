@@ -38,7 +38,7 @@ function FlyModel({ state }: { state: FlyState }) {
     <group ref={group} position={[x, z, y]} rotation={[0, h, 0]}>
       <primitive
         object={cloned}
-        scale={0.0008}
+        scale={0.00025}
         rotation={[0, 0, 0]}
       />
     </group>
@@ -150,7 +150,7 @@ export default function FlyViewer() {
   const topActivity = Object.entries(activity)
     .sort(([, a], [, b]) => b - a)
     .slice(0, 10);
-  const flyMode = flyState.z > 1.1 ? 'flying' : flyState.z < 0.6 ? 'resting' : 'idle';
+  const flyMode = flyState.feeding ? 'feeding' : flyState.z > 1.1 ? 'flying' : flyState.z < 0.6 ? 'resting' : 'idle';
 
   return (
     <div style={{ width: '100vw', height: '100vh', position: 'relative' }}>

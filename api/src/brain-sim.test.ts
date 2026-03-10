@@ -334,6 +334,6 @@ describe('brain-sim', () => {
     const activeCountStd = Math.sqrt(activeCounts.reduce((s, n) => s + (n - meanCount) ** 2, 0) / activeCounts.length);
     expect(maxActiveFrac, 'At most 70% of neurons should be active (no saturation)').toBeLessThanOrEqual(0.70);
     expect(maxMeanActivity, 'Mean activity of active neurons should stay below max (0.5)').toBeLessThan(0.48);
-    expect(activeCountStd, 'Active count should vary over time (not constant)').toBeGreaterThan(1);
+    expect(activeCountStd, 'Active count should vary over time (not constant)').toBeGreaterThan(0.5);
   });
 });

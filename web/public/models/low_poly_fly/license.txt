@@ -1,0 +1,11 @@
+Model Information:
+* title:	low poly fly
+* source:	https://sketchfab.com/3d-models/low-poly-fly-2a48c1d30ebb47fab89fc9868ee1d263
+* author:	Maf'j Alvarez (https://sketchfab.com/blujay)
+
+Model License:
+* license type:	CC-BY-NC-SA-4.0 (http://creativecommons.org/licenses/by-nc-sa/4.0/)
+* requirements:	Author must be credited. No commercial use. Modified versions must have the same license.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "low poly fly" (https://sketchfab.com/3d-models/low-poly-fly-2a48c1d30ebb47fab89fc9868ee1d263) by Maf'j Alvarez (https://sketchfab.com/blujay) licensed under CC-BY-NC-SA-4.0 (http://creativecommons.org/licenses/by-nc-sa/4.0/)

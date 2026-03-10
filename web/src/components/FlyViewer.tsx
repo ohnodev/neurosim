@@ -1,5 +1,5 @@
 import { useRef, useState, useEffect, useMemo, Suspense } from 'react';
-import { Canvas } from '@react-three/fiber';
+import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import type { WorldSource } from '../../../api/src/world';
@@ -27,21 +27,36 @@ function getHungerColor(hunger: number): string {
 const API_BASE =
   (import.meta.env.VITE_API_URL as string)?.trim() || 'http://localhost:3001';
 
+const WING_NAMES = ['Object_4', 'Object_5', 'Object_6']; // fly-white, flywings-dark, glass (wing materials)
+
 function FlyModel({ state }: { state: FlyState }) {
-  const { scene } = useGLTF('/models/fly/scene.gltf');
+  const { scene } = useGLTF('/models/low_poly_fly/scene.gltf');
   const group = useRef<THREE.Group>(null);
+  const wingsRef = useRef<THREE.Object3D[]>([]);
 
   const x = state.x ?? 0, y = state.y ?? 0, z = state.z ?? 0, h = state.heading ?? 0;
+  const isFlying = z > 0.8;
 
-  const cloned = useMemo(() => scene.clone(true), [scene]);
+  const cloned = useMemo(() => {
+    const c = scene.clone(true);
+    wingsRef.current = [];
+    c.traverse((obj) => {
+      if (obj.name && WING_NAMES.includes(obj.name)) wingsRef.current.push(obj);
+    });
+    return c;
+  }, [scene]);
+
+  useFrame(() => {
+    if (!isFlying) return;
+    const flap = Math.sin(performance.now() * 0.02) * 0.4;
+    for (const wing of wingsRef.current) {
+      wing.rotation.x = flap;
+    }
+  });
 
   return (
     <group ref={group} position={[x, z, y]} rotation={[0, h, 0]}>
-      <primitive
-        object={cloned}
-        scale={0.00025}
-        rotation={[0, 0, 0]}
-      />
+      <primitive object={cloned} scale={0.08} rotation={[0, 0, 0]} />
     </group>
   );
 }

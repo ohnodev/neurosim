@@ -6,6 +6,7 @@ import { WebSocketServer } from 'ws';
 import { loadConnectome } from './connectome.js';
 import { createBrainSim } from './brain-sim.js';
 import { getWorld } from './world.js';
+import claimsRouter from './routes/claims.js';
 
 const PORT = Number(process.env.PORT) || 3001;
 const connectome = loadConnectome();
@@ -80,6 +81,8 @@ app.get('/api/neurons', (_, res) => {
 });
 
 app.get('/api/world', (_, res) => res.json(world));
+
+app.use('/api/claim', claimsRouter);
 
 const httpServer = createServer(app);
 const wss = new WebSocketServer({ server: httpServer, path: '/ws' });

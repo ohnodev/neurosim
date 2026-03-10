@@ -41,9 +41,9 @@
 .fly-viewer__flies-overlay {
   position: absolute;
   left: 12px;
-  top: 12px;
+  top: 48px; /* below toggle button (12px + 30px height + 6px gap) */
   width: min(180px, calc(100% - 24px));
-  max-height: calc(100% - 24px);
+  max-height: calc(100% - 56px);
   overflow: hidden;
   z-index: 8;
   display: flex;

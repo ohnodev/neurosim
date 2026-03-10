@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import request from 'supertest';
 import WebSocket from 'ws';
-import { app, httpServer, startSim, stopSim } from './index.js';
+import { app, httpServer, startSim, stopSim, resetDeployStateForTesting } from './index.js';
 import { addFly, getFlies } from './services/flyStore.js';
 
 const TEST_ADDR = '0x0000000000000000000000000000000000000001';
@@ -61,6 +61,10 @@ describe('deploy flow: buy fly + deploy + sim updates', () => {
     });
   });
 
+  beforeEach(() => {
+    resetDeployStateForTesting();
+  });
+
   it('deploys a fly and sim receives it via WebSocket', async () => {
     const res = await request(app)
       .post('/api/deploy')
@@ -100,6 +104,7 @@ describe('deploy flow: buy fly + deploy + sim updates', () => {
   });
 
   it('GET /api/deploy/my-deployed returns deployed slots', async () => {
+    await request(app).post('/api/deploy').send({ address: TEST_ADDR, slotIndex: 0 });
     const res = await request(app).get(`/api/deploy/my-deployed?address=${TEST_ADDR}`);
     expect(res.status).toBe(200);
     expect(res.body.deployed).toBeDefined();
@@ -112,6 +117,7 @@ describe('deploy flow: buy fly + deploy + sim updates', () => {
     addFly(otherAddr, { method: 'pay', claimedAt: new Date().toISOString(), seed: 2 });
     addFly(otherAddr, { method: 'pay', claimedAt: new Date().toISOString(), seed: 3 });
 
+    await request(app).post('/api/deploy').send({ address: TEST_ADDR, slotIndex: 0 });
     await request(app).post('/api/deploy').send({ address: TEST_ADDR, slotIndex: 1 });
     await request(app).post('/api/deploy').send({ address: otherAddr, slotIndex: 0 });
     await request(app).post('/api/deploy').send({ address: otherAddr, slotIndex: 1 });

@@ -227,4 +227,10 @@ if (process.env.VITEST !== 'true') {
   });
 }
 
+/** Test-only: reset deploy state so tests can run independently. */
+export function resetDeployStateForTesting(): void {
+  deployedFlies.clear();
+  sims.splice(0, sims.length);
+}
+
 export { app, httpServer, startSim, stopSim };

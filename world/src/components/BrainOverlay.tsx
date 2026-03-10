@@ -34,7 +34,15 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
 
   const withPos = neurons.filter(hasPosition);
   const n = withPos.length;
-  const neuronIdsKey = useMemo(() => withPos.map((p) => p.root_id).sort().join(','), [withPos]);
+  const neuronIdsKey = useMemo(
+    () =>
+      neurons
+        .filter(hasPosition)
+        .map((p) => p.root_id)
+        .sort()
+        .join(','),
+    [neurons]
+  );
 
   // Initial plot when neuron set (with positions) is available
   useEffect(() => {

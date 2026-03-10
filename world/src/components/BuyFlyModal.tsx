@@ -16,10 +16,16 @@ interface ClaimConfig {
   flyEthReceiver: `0x${string}`;
 }
 
-async function fetchConfig(): Promise<ClaimConfig | null> {
+async function fetchConfig(): Promise<ClaimConfig> {
   const r = await fetch(`${getApiBase()}/api/claim/config`);
-  if (!r.ok) return null;
-  return r.json();
+  if (!r.ok) {
+    throw new Error(`Claim config failed: ${r.status} ${r.statusText}`);
+  }
+  try {
+    return (await r.json()) as ClaimConfig;
+  } catch (e) {
+    throw new Error('Failed to parse claim config');
+  }
 }
 
 interface BuyFlyModalProps {
@@ -122,11 +128,11 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
   const neuroDisabled = !config?.neuroTokenAddress || config.neuroTokenAddress === '0x0000000000000000000000000000000000000000';
 
   const modalContent = !address ? (
-    <div className="neurosim-claim-overlay" onClick={onClose} role="dialog" aria-modal="true">
+    <div className="neurosim-claim-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="connect-wallet-title">
       <div className="neurosim-claim-modal" onClick={(e) => e.stopPropagation()}>
           <button type="button" className="neurosim-claim__close" onClick={onClose} aria-label="Close">×</button>
           <div className="neurosim-claim__card">
-            <h2 className="neurosim-claim__title">Connect Wallet</h2>
+            <h2 id="connect-wallet-title" className="neurosim-claim__title">Connect Wallet</h2>
             <p className="neurosim-claim__subtitle">Connect your wallet to buy a NeuroFly.</p>
             <button
               type="button"

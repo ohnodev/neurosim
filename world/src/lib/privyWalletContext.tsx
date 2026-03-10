@@ -3,6 +3,7 @@ import {
   createContext,
   useContext,
   useMemo,
+  useRef,
   useState,
   useEffect,
 } from 'react';
@@ -39,6 +40,8 @@ export function PrivyWalletProvider({ children }: { children: ReactNode }) {
     : undefined;
   const isConnected = !!address && authenticated;
 
+  const chainChangedCleanupRef = useRef<(() => void) | null>(null);
+
   useEffect(() => {
     if (!activeWallet || !ready) {
       setWalletClient(undefined);
@@ -67,10 +70,25 @@ export function PrivyWalletProvider({ children }: { children: ReactNode }) {
         const provider = await wallet.getEthereumProvider();
         if (cancelled || !provider) return;
 
-        const p = provider as import('viem').EIP1193Provider;
+        const p = provider as import('viem').EIP1193Provider & { on?: (event: string, handler: (hex: string) => void) => void; removeListener?: (event: string, handler: (hex: string) => void) => void };
         const hexChainId = await p.request({ method: 'eth_chainId' });
         const chainId = hexChainId ? parseInt(String(hexChainId), 16) : undefined;
         if (!cancelled) setLiveChainId(chainId);
+
+        const onChainChanged = (hex: string) => {
+          if (cancelled) return;
+          const id = hex ? parseInt(String(hex), 16) : undefined;
+          setLiveChainId(id);
+        };
+        if (typeof p.on === 'function') {
+          p.on('chainChanged', onChainChanged);
+          chainChangedCleanupRef.current = () => {
+            if (typeof p.removeListener === 'function') {
+              p.removeListener('chainChanged', onChainChanged);
+            }
+            chainChangedCleanupRef.current = null;
+          };
+        }
 
         const client = createWalletClient({
           account: address as Address,
@@ -90,6 +108,7 @@ export function PrivyWalletProvider({ children }: { children: ReactNode }) {
     initWalletClient();
     return () => {
       cancelled = true;
+      chainChangedCleanupRef.current?.();
     };
   }, [activeWallet, address, ready]);
 

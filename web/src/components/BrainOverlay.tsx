@@ -13,6 +13,8 @@ interface BrainOverlayProps {
   neurons: NeuronWithPosition[];
   activity: Record<string, number>;
   visible?: boolean;
+  /** When true, overlay fills its container (no absolute positioning). */
+  embedded?: boolean;
 }
 
 function hasPosition(n: NeuronWithPosition): n is NeuronWithPosition & { x: number; y: number; z: number } {
@@ -23,7 +25,7 @@ function hasPosition(n: NeuronWithPosition): n is NeuronWithPosition & { x: numb
   );
 }
 
-export function BrainOverlay({ neurons, activity, visible = true }: BrainOverlayProps) {
+export function BrainOverlay({ neurons, activity, visible = true, embedded = false }: BrainOverlayProps) {
   const plotRef = useRef<HTMLDivElement>(null);
   const plotReady = useRef(false);
   const idsRef = useRef<string[]>([]);
@@ -164,24 +166,35 @@ export function BrainOverlay({ neurons, activity, visible = true }: BrainOverlay
 
   if (!visible) return null;
 
-  return (
-    <div
-      className="brain-overlay"
-      style={{
-        position: 'absolute',
+  const containerStyle = embedded
+    ? {
+        position: 'relative' as const,
+        width: '100%',
+        height: '100%',
+        borderRadius: 8,
+        overflow: 'hidden' as const,
+        border: '1px solid rgba(100,100,140,0.3)',
+        boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+        background: 'rgba(10,10,18,0.9)',
+        pointerEvents: 'auto' as const,
+      }
+    : {
+        position: 'absolute' as const,
         bottom: 12,
         right: 12,
         width: 320,
         height: 240,
         borderRadius: 8,
-        overflow: 'hidden',
+        overflow: 'hidden' as const,
         border: '1px solid rgba(100,100,140,0.3)',
         boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
         background: 'rgba(10,10,18,0.9)',
         zIndex: 100,
-        pointerEvents: 'auto',
-      }}
-    >
+        pointerEvents: 'auto' as const,
+      };
+
+  return (
+    <div className="brain-overlay" style={containerStyle}>
       <div style={{ position: 'absolute', top: 4, left: 8, fontSize: 10, color: '#888', zIndex: 1 }}>
         Brain activity
       </div>

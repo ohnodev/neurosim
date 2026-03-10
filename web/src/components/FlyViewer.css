@@ -73,6 +73,122 @@
   font-family: monospace;
 }
 
+/* Status and Brain side panels - collapsible with thin vertical bar when minimized */
+.fly-viewer__side-panel {
+  position: absolute;
+  z-index: 100;
+  pointer-events: auto;
+  display: flex;
+  transition: width 0.2s ease, min-width 0.2s ease;
+}
+
+.fly-viewer__status-panel {
+  bottom: 12px;
+  left: 12px;
+}
+
+.fly-viewer__brain-panel {
+  bottom: 12px;
+  right: 12px;
+}
+
+.fly-viewer__side-panel--open {
+  min-width: 0;
+}
+
+.fly-viewer__status-panel.fly-viewer__side-panel--open {
+  width: min(420px, calc(100% - 24px));
+  max-width: 420px;
+  min-width: 280px;
+}
+
+.fly-viewer__brain-panel.fly-viewer__side-panel--open {
+  width: 320px;
+  height: 240px;
+}
+
+.fly-viewer__side-panel--minimized {
+  width: 28px;
+  min-width: 28px;
+  height: 120px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.85);
+  border: 1px solid rgba(100, 100, 140, 0.3);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.fly-viewer__panel-minimize {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.8);
+  cursor: pointer;
+  z-index: 2;
+}
+
+.fly-viewer__panel-minimize:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+}
+
+.fly-viewer__panel-expand {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.85);
+  cursor: pointer;
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+}
+
+.fly-viewer__panel-expand:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+}
+
+.fly-viewer__panel-expand-label {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  transform: rotate(180deg);
+  letter-spacing: 0.5px;
+}
+
+.fly-viewer__status-panel.fly-viewer__side-panel--open .fly-viewer__status-content {
+  max-height: 40vh;
+  overflow: auto;
+  background: rgba(0, 0, 0, 0.85);
+  color: #ccc;
+  font-size: 11px;
+  padding: 10px;
+  padding-top: 32px;
+  border-radius: 8px;
+  border: 1px solid rgba(100, 100, 140, 0.3);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  font-family: monospace;
+}
+
+.fly-viewer__brain-panel.fly-viewer__side-panel--open .fly-viewer__panel-minimize {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 10;
+}
+
 @media (max-width: 768px) {
   .fly-viewer__flies-overlay {
     left: 8px;

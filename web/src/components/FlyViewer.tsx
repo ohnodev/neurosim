@@ -227,6 +227,9 @@ export default function FlyViewer() {
     () => typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches ? false : true
   );
   const [buyFlySlot, setBuyFlySlot] = useState<number | null>(null);
+  const isMobileDefault = () => typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches;
+  const [statusPanelOpen, setStatusPanelOpen] = useState(() => !isMobileDefault());
+  const [brainPanelOpen, setBrainPanelOpen] = useState(() => !isMobileDefault());
 
   const { data: myFlies = [] } = useQuery({
     queryKey: ['my-flies', address ?? ''],
@@ -435,22 +438,78 @@ export default function FlyViewer() {
             }}
           />
         )}
-        <BrainOverlay neurons={neuronsWithPositions} activity={activity} visible={connected} />
-        <div style={{ position: 'absolute', bottom: 12, left: 12, maxWidth: 420, minWidth: 340, maxHeight: '40vh', overflow: 'auto', background: 'rgba(0,0,0,0.85)', color: '#ccc', fontSize: 11, padding: 10, borderRadius: 8, fontFamily: 'monospace', pointerEvents: 'auto' }}>
-          <div style={{ color: '#888', marginBottom: 6 }}>Status</div>
-          <div style={{ marginBottom: 4 }}>Fly {selectedFlyIndex + 1} (viewing) | pos ({(focusedFly.x ?? 0).toFixed(1)}, {(focusedFly.y ?? 0).toFixed(1)}, {(focusedFly.z ?? 0).toFixed(1)})</div>
-          <div style={{ marginBottom: 4 }}>heading {((focusedFly.heading ?? 0) * 180 / Math.PI).toFixed(0)}° | {flyMode}</div>
-          <div style={{ marginBottom: 8 }}>t {(focusedFly.t ?? 0).toFixed(1)}s | hunger {Math.round(focusedFly.hunger ?? 0)} | health {Math.round(focusedFly.health ?? 100)}</div>
-          <div style={{ color: '#888', marginBottom: 4 }}>Firing neurons ({activeCount})</div>
-          <div style={{ maxHeight: 120, overflow: 'auto' }}>
-            {topActivity.length === 0 && <span style={{ color: '#666' }}>—</span>}
-            {topActivity.map(([id, v]) => (
-              <div key={id} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, minWidth: 0 }} title={`${neuronLabels[id] || id}\n${id}`}>
-                <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{neuronLabels[id] || shortId(id)}</span>
-                <span style={{ color: '#8cf', flexShrink: 0 }}>{(Math.min(v ?? 0, 1)).toFixed(2)}</span>
+        {/* Brain activity panel - collapsible, minimized on mobile by default */}
+        <div className={`fly-viewer__side-panel fly-viewer__brain-panel ${brainPanelOpen ? 'fly-viewer__side-panel--open' : 'fly-viewer__side-panel--minimized'}`}>
+          {brainPanelOpen ? (
+            <>
+              <button
+                type="button"
+                className="fly-viewer__panel-minimize"
+                onClick={() => setBrainPanelOpen(false)}
+                aria-label="Minimize brain activity"
+                title="Minimize"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
+              </button>
+              <div style={{ width: 320, height: 240, position: 'relative' }}>
+                <BrainOverlay neurons={neuronsWithPositions} activity={activity} visible={connected} embedded />
               </div>
-            ))}
-          </div>
+            </>
+          ) : (
+            <button
+              type="button"
+              className="fly-viewer__panel-expand"
+              onClick={() => setBrainPanelOpen(true)}
+              aria-label="Show brain activity"
+              title="Brain activity"
+            >
+              <span className="fly-viewer__panel-expand-label">Brain</span>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14M12 5l7 7-7 7" /></svg>
+            </button>
+          )}
+        </div>
+        {/* Status panel - collapsible, minimized on mobile by default */}
+        <div className={`fly-viewer__side-panel fly-viewer__status-panel ${statusPanelOpen ? 'fly-viewer__side-panel--open' : 'fly-viewer__side-panel--minimized'}`}>
+          {statusPanelOpen ? (
+            <>
+              <button
+                type="button"
+                className="fly-viewer__panel-minimize"
+                onClick={() => setStatusPanelOpen(false)}
+                aria-label="Minimize status"
+                title="Minimize"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
+              </button>
+              <div className="fly-viewer__status-content">
+                <div style={{ color: '#888', marginBottom: 6 }}>Status</div>
+                <div style={{ marginBottom: 4 }}>Fly {selectedFlyIndex + 1} (viewing) | pos ({(focusedFly.x ?? 0).toFixed(1)}, {(focusedFly.y ?? 0).toFixed(1)}, {(focusedFly.z ?? 0).toFixed(1)})</div>
+                <div style={{ marginBottom: 4 }}>heading {((focusedFly.heading ?? 0) * 180 / Math.PI).toFixed(0)}° | {flyMode}</div>
+                <div style={{ marginBottom: 8 }}>t {(focusedFly.t ?? 0).toFixed(1)}s | hunger {Math.round(focusedFly.hunger ?? 0)} | health {Math.round(focusedFly.health ?? 100)}</div>
+                <div style={{ color: '#888', marginBottom: 4 }}>Firing neurons ({activeCount})</div>
+                <div style={{ maxHeight: 120, overflow: 'auto' }}>
+                  {topActivity.length === 0 && <span style={{ color: '#666' }}>—</span>}
+                  {topActivity.map(([id, v]) => (
+                    <div key={id} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, minWidth: 0 }} title={`${neuronLabels[id] || id}\n${id}`}>
+                      <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{neuronLabels[id] || shortId(id)}</span>
+                      <span style={{ color: '#8cf', flexShrink: 0 }}>{(Math.min(v ?? 0, 1)).toFixed(2)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </>
+          ) : (
+            <button
+              type="button"
+              className="fly-viewer__panel-expand"
+              onClick={() => setStatusPanelOpen(true)}
+              aria-label="Show status"
+              title="Status"
+            >
+              <span className="fly-viewer__panel-expand-label">Status</span>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14M12 5l7 7-7 7" /></svg>
+            </button>
+          )}
         </div>
       </div>
     </div>

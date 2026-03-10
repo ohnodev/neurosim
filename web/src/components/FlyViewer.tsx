@@ -2,6 +2,7 @@ import { useRef, useState, useEffect } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
+import type { WorldSource } from '../../../api/src/world';
 
 interface FlyState {
   x: number;
@@ -12,13 +13,11 @@ interface FlyState {
   hunger?: number;
 }
 
-interface WorldSource {
-  id: string;
-  type: 'food' | 'light';
-  x: number;
-  y: number;
-  z: number;
-  radius: number;
+function getHungerColor(hunger: number | undefined): string {
+  const h = hunger ?? 100;
+  if (h > 50) return '#5a5';
+  if (h > 20) return '#ca0';
+  return '#c44';
 }
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
@@ -73,6 +72,7 @@ function WorldSources({ sources }: { sources: WorldSource[] }) {
 export default function FlyViewer() {
   const [flyState, setFlyState] = useState<FlyState>({ x: 0, y: 0, z: 2, heading: 0, t: 0, hunger: 100 });
   const [sources, setSources] = useState<WorldSource[]>([]);
+  const [neuronIds, setNeuronIds] = useState<string[]>([]);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeCount, setActiveCount] = useState(0);
@@ -82,7 +82,14 @@ export default function FlyViewer() {
     fetch(API_BASE + '/api/world')
       .then((r) => r.json())
       .then((d) => setSources(d.sources || []))
-      .catch(() => setSources([]));
+      .catch((err) => {
+        console.error('[FlyViewer] failed to fetch /api/world:', err);
+        setSources([]);
+      });
+    fetch(API_BASE + '/api/neurons')
+      .then((r) => r.json())
+      .then((d) => setNeuronIds(d.neurons || []))
+      .catch(() => setNeuronIds([]));
   }, []);
 
   useEffect(() => {
@@ -114,9 +121,11 @@ export default function FlyViewer() {
   }, []);
 
   const stimulate = () => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'stimulate', strength: 0.9 }));
-    }
+    if (wsRef.current?.readyState !== WebSocket.OPEN) return;
+    const ids = neuronIds.length > 0
+      ? [neuronIds[Math.floor(Math.random() * neuronIds.length)]]
+      : [];
+    wsRef.current.send(JSON.stringify({ type: 'stimulate', neurons: ids, strength: 0.9 }));
   };
 
   return (
@@ -138,7 +147,7 @@ export default function FlyViewer() {
           <div style={{ width: 120, background: '#222', borderRadius: 4, overflow: 'hidden' }}>
             <div style={{ fontSize: 10, color: '#888', padding: '2px 6px' }}>Hunger</div>
             <div style={{ height: 8, background: '#333', borderRadius: 2, margin: '0 4px 4px', overflow: 'hidden' }}>
-              <div style={{ width: `${flyState.hunger ?? 100}%`, height: '100%', background: (flyState.hunger ?? 100) > 50 ? '#5a5' : (flyState.hunger ?? 0) > 20 ? '#ca0' : '#c44', transition: 'width 0.2s' }} />
+              <div style={{ width: `${flyState.hunger ?? 100}%`, height: '100%', background: getHungerColor(flyState.hunger), transition: 'width 0.2s' }} />
             </div>
           </div>
         </div>

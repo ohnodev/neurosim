@@ -11,7 +11,6 @@ const PORT = Number(process.env.PORT) || 3001;
 const connectome = loadConnectome();
 const world = getWorld();
 let wsClientCount = 0;
-let stepLogTick = 0;
 
 const app = express();
 app.use(cors());
@@ -43,6 +42,8 @@ wss.on('connection', (ws) => {
 
   const { step, inject, neuronIds } = createBrainSim(connectome, world.sources);
   let stimulateCount = 0;
+  let connectionStep = 0;
+  const STEP_LOG_INTERVAL = 150;
 
   ws.on('message', (raw) => {
     try {
@@ -52,7 +53,8 @@ wss.on('connection', (ws) => {
         const strength = typeof msg.strength === 'number' ? msg.strength : 0.8;
         const valid = neurons.filter((id: string) => neuronIds.includes(id));
         if (valid.length === 0) {
-          valid.push(neuronIds[Math.floor(Math.random() * neuronIds.length)]);
+          console.warn('[ws] stimulate: no valid neuron IDs (invalid:', neurons, '), skipping');
+          return;
         }
         inject(valid, strength);
         stimulateCount += 1;
@@ -70,8 +72,8 @@ wss.on('connection', (ws) => {
     }
     const state = step(1 / 30);
     ws.send(JSON.stringify(state));
-    stepLogTick += 1;
-    if (stepLogTick % 150 === 0) {
+    connectionStep += 1;
+    if (connectionStep % STEP_LOG_INTERVAL === 0) {
       console.log('[sim] step t=', state.t.toFixed(1), 'fly=', state.fly.x.toFixed(2), state.fly.y.toFixed(2), 'clients=', wsClientCount);
     }
   }, 1000 / 30);

@@ -1,11 +1,16 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+export type NeuronRole = 'sensory' | 'motor' | 'interneuron';
+export type NeuronSide = 'left' | 'right' | 'unknown';
+
 export interface Neuron {
   root_id: string;
   x?: number;
   y?: number;
   z?: number;
+  role?: NeuronRole;
+  side?: NeuronSide;
 }
 
 export interface Connection {
@@ -34,11 +39,11 @@ export function loadConnectome(p: string = DEFAULT_PATH): Connectome {
 function getFallbackConnectome(): Connectome {
   return {
     neurons: [
-      { root_id: 'n1', x: 0, y: 0, z: 0 },
-      { root_id: 'n2', x: 1, y: 0, z: 0 },
-      { root_id: 'n3', x: 2, y: 1, z: 0 },
-      { root_id: 'n4', x: 1, y: 2, z: 0 },
-      { root_id: 'n5', x: 0, y: 1, z: 0 },
+      { root_id: 'n1', x: 0, y: 0, z: 0, role: 'sensory' },
+      { root_id: 'n2', x: 1, y: 0, z: 0, role: 'interneuron' },
+      { root_id: 'n3', x: 2, y: 1, z: 0, role: 'interneuron' },
+      { root_id: 'n4', x: 1, y: 2, z: 0, role: 'motor', side: 'left' },
+      { root_id: 'n5', x: 0, y: 1, z: 0, role: 'motor', side: 'right' },
     ],
     connections: [
       { pre: 'n1', post: 'n2', weight: 5 },

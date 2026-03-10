@@ -1,4 +1,4 @@
-import type { Connectome } from './connectome.js';
+import type { Connectome, Neuron } from './connectome.js';
 import { buildAdjacency } from './connectome.js';
 import type { WorldSource } from './world.js';
 
@@ -28,9 +28,27 @@ function angleToward(heading: number, dx: number, dy: number): number {
 
 export function createBrainSim(connectome: Connectome, worldSources: WorldSource[] = []) {
   const adj = buildAdjacency(connectome.connections);
-  const neuronIds = connectome.neurons.map((n) => n.root_id);
+  const neurons: Neuron[] = connectome.neurons;
+  const neuronIds = neurons.map((n) => n.root_id);
   const idToIdx = new Map<string, number>();
-  neuronIds.forEach((id, i) => idToIdx.set(id, i));
+  neuronIds.forEach((id, i) => {
+    idToIdx.set(id, i);
+  });
+
+  const sensoryIndices: number[] = [];
+  const motorLeftIndices: number[] = [];
+  const motorRightIndices: number[] = [];
+  const motorUnknownIndices: number[] = [];
+  for (let i = 0; i < neurons.length; i++) {
+    const r = neurons[i].role ?? 'interneuron';
+    if (r === 'sensory') sensoryIndices.push(i);
+    else if (r === 'motor') {
+      const s = neurons[i].side ?? 'unknown';
+      if (s === 'left') motorLeftIndices.push(i);
+      else if (s === 'right') motorRightIndices.push(i);
+      else motorUnknownIndices.push(i);
+    }
+  }
 
   let activity = new Float32Array(neuronIds.length);
   const ARENA = 24;
@@ -65,11 +83,22 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
       }
     }
 
-    // Inject noise into a few "sensory" neurons
-    const sensoryCount = Math.min(5, Math.floor(neuronIds.length / 100));
-    for (let k = 0; k < sensoryCount; k++) {
-      const idx = (Math.floor(t * INPUT_RATE) + k * 17) % neuronIds.length;
-      nextActivity[idx] += 0.3 * (0.5 + 0.5 * Math.sin(t * 3 + k));
+    // Inject world stimuli into sensory neurons (use classification, not arbitrary indices)
+    if (sensoryIndices.length > 0) {
+      let foodSignal = 0;
+      let lightSignal = 0;
+      for (const s of worldSources) {
+        const dist = Math.hypot(s.x - fly.x, s.y - fly.y);
+        if (dist < 1) continue;
+        const invDist = 1 / (1 + dist * 0.1);
+        if (s.type === 'food') foodSignal += invDist * (1 - fly.hunger / 100);
+        else if (s.type === 'light') lightSignal += invDist * 0.3;
+      }
+      const baseNoise = 0.15 * (0.5 + 0.5 * Math.sin(t * INPUT_RATE));
+      const perNeuron = (baseNoise + foodSignal * 0.5 + lightSignal) / sensoryIndices.length;
+      for (const idx of sensoryIndices) {
+        nextActivity[idx] += Math.min(perNeuron, 0.8);
+      }
     }
 
     // Apply pending stimuli (inject into specified neurons)
@@ -83,12 +112,15 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
 
     activity = nextActivity;
 
-    // Map activity to motor: sum of output neurons -> velocity
-    let motor = 0;
-    for (let i = 0; i < activity.length; i++) {
-      motor += activity[i] * 0.001;
-    }
-    motor = Math.tanh(motor) * 0.5;
+    // Read motor output from motor-type neurons only (classification-based, not scalar)
+    const motorScale = 0.002;
+    let motorLeft = 0, motorRight = 0, motorFwd = 0;
+    for (const i of motorLeftIndices) motorLeft += activity[i];
+    for (const i of motorRightIndices) motorRight += activity[i];
+    for (const i of motorUnknownIndices) motorFwd += activity[i];
+    const turnFromMotor = (motorRight - motorLeft) * motorScale;
+    const forwardFromMotor = (motorLeft + motorRight + motorFwd) * motorScale;
+    const motor = Math.tanh(forwardFromMotor) * 0.5;
 
     // Hunger: decay 1/sec; eat only when resting and near food (must land to eat)
     let hunger = Math.max(0, fly.hunger - HUNGER_DECAY);
@@ -105,7 +137,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
     const hungry = hunger <= 90;
     const responsiveness = hungry ? (90 - hunger) / 90 : 0;
 
-    let headingBias = 0.2 * Math.sin(t * 0.7) * dt;
+    let headingBias = turnFromMotor * dt + 0.1 * Math.sin(t * 0.7) * dt;
     if (hungry && worldSources.length > 0) {
       let nearestDist = Infinity;
       let nearestDx = 0;

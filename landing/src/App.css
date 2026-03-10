@@ -545,7 +545,7 @@
 .wallet-btn__icon {
   position: relative;
   z-index: 1;
-  stroke: currentColor;
+  stroke: currentcolor;
 }
 
 .wallet-btn--loading {

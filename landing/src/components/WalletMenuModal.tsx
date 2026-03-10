@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { usePrivy, useWallets } from '@privy-io/react-auth';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
@@ -33,6 +33,7 @@ interface WalletMenuModalProps {
 
 export function WalletMenuModal({ isOpen, onClose, anchorRef }: WalletMenuModalProps) {
   const [copied, setCopied] = useState(false);
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { isConnected, address, chainId } = usePrivyWallet();
   const { ready, authenticated, login, connectWallet } = usePrivy();
   const { logout } = useLogout({ onSuccess: onClose });
@@ -40,6 +41,12 @@ export function WalletMenuModal({ isOpen, onClose, anchorRef }: WalletMenuModalP
 
   const isOnBaseChain = chainId === base.id;
   const displayAddress = address ? `${address.slice(0, 6)}…${address.slice(-4)}` : '';
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -54,9 +61,13 @@ export function WalletMenuModal({ isOpen, onClose, anchorRef }: WalletMenuModalP
     if (!address) return;
     try {
       await navigator.clipboard.writeText(address);
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
       setCopied(true);
-      setTimeout(() => setCopied(false), 1800);
-      onClose();
+      copyTimeoutRef.current = setTimeout(() => {
+        copyTimeoutRef.current = null;
+        setCopied(false);
+        onClose();
+      }, 1800);
     } catch {
       /* ignore */
     }

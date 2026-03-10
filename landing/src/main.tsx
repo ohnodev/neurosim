@@ -7,6 +7,7 @@ const orig = HTMLCanvasElement.prototype.getContext;
   } else if (contextId === '2d') {
     options = { willReadFrequently: true };
   }
+  // @ts-expect-error - getContext overloads vary by contextId
   return orig.call(this, contextId, options);
 };
 

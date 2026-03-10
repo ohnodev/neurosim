@@ -77,6 +77,8 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
 
   let activity = new Float32Array(neuronIds.length);
   const ARENA = 24;
+  const WALL_MARGIN = 6;      // start turning away from walls when within this
+  const SEEK_RADIUS = ARENA * 1.5; // steer toward food even when beyond source radius
   const EAT_RADIUS = 1.5;
   const HUNGER_DECAY = 0.8;   // per second when not eating
   const EAT_RATE = 12;        // per second when eating
@@ -94,12 +96,13 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
   let flyTimeLeft = FLY_TIME_MAX;
   let restTimeLeft = 0;
 
-  const TAU = 0.04;           // propagation strength (slightly weaker so activity can decay)
-  const DECAY = 0.85;         // per-step decay; higher = faster return to baseline
+  const TAU = 0.03;           // propagation strength
+  const DECAY = 0.88;         // per-step decay
+  const PROP_CAP = 0.004;     // max contribution per synapse (limits cascade in dense connectomes)
   const INPUT_RATE = 2;
-  const SENSORY_SCALE = 0.15;
-  const SENSORY_DUTY = 0.3;   // only add sensory input ~30% of the time (pulses)
-  const ACT_THRESHOLD = 0.05; // only report neurons above this (avoids "all active" cascade)
+  const SENSORY_SCALE = 0.18;
+  const SENSORY_DUTY = 0.28;  // sensory bursts ~28% of the time
+  const ACT_THRESHOLD = 0.05; // only report neurons above this
 
   function step(dt: number): SimState {
     const t = fly.t + dt;
@@ -116,7 +119,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
       for (const { post, weight } of list) {
         const j = idToIdx.get(post);
         if (j != null) {
-          const v = activity[i] * TAU * Math.min(weight, 10);
+          const v = Math.min(activity[i] * TAU * Math.min(weight, 10), PROP_CAP);
           nextActivity[j] += Number.isFinite(v) ? v : 0;
         }
       }
@@ -137,7 +140,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
         }
         const baseNoise = 0.15 * (0.5 + 0.5 * Math.sin(t * INPUT_RATE));
         const rawPerNeuron = (baseNoise + foodSignal * 0.5 + lightSignal) / visualTargetIndices.length;
-        const perNeuron = Math.min(rawPerNeuron * SENSORY_SCALE, 0.8);
+        const perNeuron = Math.min(rawPerNeuron * SENSORY_SCALE, 0.5);
         for (const idx of visualTargetIndices) {
           nextActivity[idx] += perNeuron;
         }
@@ -194,6 +197,17 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
     const foodResponsiveness = hungry ? Math.max(0.25, (90 - hunger) / 90) : 0;
 
     let headingBias = turnFromMotor * dt + 0.1 * Math.sin(t * 0.7) * dt;
+
+    // Wall avoidance: turn away when near arena boundary (prevents flying into corners)
+    const nearRight = fly.x > ARENA - WALL_MARGIN;
+    const nearLeft = fly.x < -ARENA + WALL_MARGIN;
+    const nearTop = fly.y > ARENA - WALL_MARGIN;
+    const nearBottom = fly.y < -ARENA + WALL_MARGIN;
+    if (nearRight) headingBias -= 0.6 * dt;   // turn away from right wall
+    if (nearLeft) headingBias += 0.6 * dt;
+    if (nearTop) headingBias -= 0.5 * dt;     // turn away from top
+    if (nearBottom) headingBias += 0.5 * dt;
+
     if (hungry && worldSources.length > 0) {
       let nearestDist = Infinity;
       let nearestDx = 0;
@@ -205,7 +219,8 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
         const dy = s.y - fly.y;
         const dist = Math.hypot(dx, dy);
         const weight = s.type === 'food' ? 1 : 0.6;
-        if (dist < s.radius && dist < nearestDist && dist > 0.5) {
+        const inRange = dist < Math.max(s.radius, SEEK_RADIUS) && dist > 0.5;
+        if (inRange && dist < nearestDist) {
           nearestDist = dist;
           nearestDx = dx;
           nearestDy = dy;
@@ -215,6 +230,9 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
       if (nearestDist < Infinity) {
         const turn = angleToward(fly.heading, nearestDx, nearestDy);
         headingBias += turn * 0.8 * foodResponsiveness * nearestWeight * dt;
+      } else {
+        // Hungry but no attractor in range: search behavior (stronger wandering)
+        headingBias += 0.25 * Math.sin(t * 0.8) * dt + 0.12 * Math.sin(t * 1.5) * dt;
       }
     } else if (full) {
       // Explore mode: light random wandering when full

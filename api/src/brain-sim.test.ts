@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
+import * as path from 'path';
+import * as fs from 'fs';
 import { createBrainSim } from './brain-sim.js';
+import { loadConnectome } from './connectome.js';
 
 /** Connectome with roles and cell_types for stimulus routing and motor output. */
 const testConnectome = {
@@ -196,19 +199,24 @@ describe('brain-sim', () => {
     expect(distMoved).toBeGreaterThan(0.5);
   });
 
-  it('fly steers toward food when hungry (heading bias)', () => {
+  it('fly eventually reaches food when hungry (long run)', () => {
+    const EAT_RADIUS = 1.5;
     const { step } = createBrainSim(testConnectome, [foodSource]);
     const dt = 1 / 30;
+    const maxSteps = 3600; // 2 min
     let s = step(dt);
-    for (let i = 0; i < 500; i++) {
+    let reachedFood = false;
+    let minDistToFood = Infinity;
+    for (let i = 0; i < maxSteps; i++) {
       s = step(dt);
-      if (s.fly.hunger < 90) break;
+      const d = Math.hypot(5 - s.fly.x, 5 - s.fly.y);
+      minDistToFood = Math.min(minDistToFood, d);
+      if (d < EAT_RADIUS) {
+        reachedFood = true;
+        break;
+      }
     }
-    expect(s.fly.hunger).toBeLessThan(90);
-    const distWhenFirstHungry = Math.hypot(5 - s.fly.x, 5 - s.fly.y);
-    for (let i = 0; i < 600; i++) s = step(dt);
-    const distLater = Math.hypot(5 - s.fly.x, 5 - s.fly.y);
-    expect(distLater).toBeLessThanOrEqual(distWhenFirstHungry + 2);
+    expect(reachedFood, `Fly should reach food within ${maxSteps} steps; min dist was ${minDistToFood.toFixed(2)}`).toBe(true);
   });
 
   it('fly enters rest when fatigued', () => {
@@ -243,5 +251,89 @@ describe('brain-sim', () => {
     expect(explored).toBe(true);
     expect(gotHungry).toBe(true);
     expect(rested).toBe(true);
+  });
+
+  it('fly does not stay stuck at arena corner (wall avoidance)', () => {
+    const { step } = createBrainSim(testConnectome, [
+      { id: 'f', type: 'food', x: 20, y: 20, z: 2, radius: 30 },
+    ]);
+    const dt = 1 / 30;
+    let s = step(dt);
+    const cornerX = 22;
+    const cornerY = 22;
+    // Run until fly likely reaches corner or near it (head toward +x,+y)
+    for (let i = 0; i < 1500; i++) {
+      s = step(dt);
+      if (s.fly.x > 20 && s.fly.y > 20) break;
+    }
+    const xAtCorner = s.fly.x;
+    const yAtCorner = s.fly.y;
+    const headingAtCorner = s.fly.heading;
+    for (let i = 0; i < 300; i++) s = step(dt);
+    // Fly should have changed position or heading (wall avoidance turns it away)
+    const moved = Math.hypot(s.fly.x - xAtCorner, s.fly.y - yAtCorner);
+    const headingChange = Math.abs(s.fly.heading - headingAtCorner);
+    expect(moved > 0.5 || headingChange > 0.3, 'Fly stuck at corner').toBe(true);
+  });
+
+  it('fly changes direction over time during long run', () => {
+    const { step } = createBrainSim(testConnectome, [foodSource]);
+    const dt = 1 / 30;
+    const samples: number[] = [];
+    let s = step(dt);
+    for (let i = 0; i < 900; i++) {
+      s = step(dt);
+      if (i % 100 === 0) samples.push(s.fly.heading);
+    }
+    const headingVariance = Math.max(...samples) - Math.min(...samples);
+    expect(headingVariance, 'Heading should change over 30s').toBeGreaterThan(0.2);
+  });
+
+  it('fly covers meaningful distance over 60s simulation', () => {
+    const { step } = createBrainSim(testConnectome, [foodSource]);
+    const dt = 1 / 30;
+    const s0 = step(dt);
+    for (let i = 0; i < 1800; i++) step(dt);
+    const s1 = step(dt);
+    const totalDist = Math.hypot(s1.fly.x - s0.fly.x, s1.fly.y - s0.fly.y);
+    expect(totalDist, 'Fly should travel > 10 units over 60s').toBeGreaterThan(10);
+  });
+
+  it('neurons are balanced: not all firing at max, activity varies over time', () => {
+    const connectomePath = path.resolve(process.cwd(), '..', 'data', 'connectome-subset.json');
+    if (!fs.existsSync(connectomePath)) {
+      console.warn('Skipping neuron balance test: connectome-subset.json not found');
+      return;
+    }
+    const connectome = loadConnectome(connectomePath);
+    const { step } = createBrainSim(connectome, [
+      { id: 'f1', type: 'food', x: 6, y: 6, z: 0.35, radius: 12 },
+    ]);
+    const dt = 1 / 30;
+    const totalNeurons = connectome.neurons.length;
+    const sampleInterval = 30;
+    const samples: { activeCount: number; meanActivity: number; maxActivity: number }[] = [];
+    for (let i = 0; i < 600; i++) {
+      const s = step(dt);
+      if (i % sampleInterval === 0 && s.activity && Object.keys(s.activity).length > 0) {
+        const vals = Object.values(s.activity);
+        const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+        const max = Math.max(...vals);
+        samples.push({
+          activeCount: vals.length,
+          meanActivity: mean,
+          maxActivity: max,
+        });
+      }
+    }
+    expect(samples.length).toBeGreaterThan(5);
+    const maxActiveFrac = Math.max(...samples.map((x) => x.activeCount / totalNeurons));
+    const maxMeanActivity = Math.max(...samples.map((x) => x.meanActivity));
+    const activeCounts = samples.map((x) => x.activeCount);
+    const meanCount = activeCounts.reduce((a, b) => a + b, 0) / activeCounts.length;
+    const activeCountStd = Math.sqrt(activeCounts.reduce((s, n) => s + (n - meanCount) ** 2, 0) / activeCounts.length);
+    expect(maxActiveFrac, 'At most 70% of neurons should be active (no saturation)').toBeLessThanOrEqual(0.70);
+    expect(maxMeanActivity, 'Mean activity of active neurons should stay below max (0.5)').toBeLessThan(0.48);
+    expect(activeCountStd, 'Active count should vary over time (not constant)').toBeGreaterThan(1);
   });
 });

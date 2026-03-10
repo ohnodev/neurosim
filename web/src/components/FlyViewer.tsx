@@ -70,7 +70,7 @@ function GrassGround() {
     <primitive
       object={cloned}
       position={[0, 0, 0]}
-      rotation={[-Math.PI / 2, Math.PI / 2, 0]}
+      rotation={[-Math.PI / 2, 0, 0]}
       scale={[0.13, 0.13, 0.13]}
       receiveShadow
     />

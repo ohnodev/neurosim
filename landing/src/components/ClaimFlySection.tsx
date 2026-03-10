@@ -59,15 +59,21 @@ export function ClaimFlySection() {
       setEligibility({ method: null, loading: false });
       return;
     }
+    const ctrl = new AbortController();
+    const reqAddr = address.toLowerCase();
     setEligibility((e) => ({ ...e, loading: true }));
-    fetch(`${getApiBase()}/api/claim/eligibility/${address.toLowerCase()}`)
+    fetch(`${getApiBase()}/api/claim/eligibility/${reqAddr}`, { signal: ctrl.signal })
       .then((r) => r.json())
       .then((d: { method?: EligibilityMethod }) => {
+        if (address?.toLowerCase() !== reqAddr) return;
         setEligibility({ method: d.method ?? 'pay', loading: false });
       })
-      .catch(() => {
+      .catch((err) => {
+        if (err?.name === 'AbortError') return;
+        if (address?.toLowerCase() !== reqAddr) return;
         setEligibility({ method: 'pay', loading: false });
       });
+    return () => ctrl.abort();
   }, [isConnected, address]);
 
   const handleClaimFree = async () => {
@@ -94,8 +100,9 @@ export function ClaimFlySection() {
       setError('Wallet not ready');
       return;
     }
+    const zeroAddr = '0x0000000000000000000000000000000000000000';
     if (!config?.neuroTokenAddress || !config?.claimReceiverAddress ||
-        config.neuroTokenAddress === '0x0000000000000000000000000000000000000000') {
+        config.neuroTokenAddress === zeroAddr || config.claimReceiverAddress === zeroAddr) {
       setError('Claim not configured');
       return;
     }
@@ -186,7 +193,9 @@ export function ClaimFlySection() {
               disabled={
                 txState !== 'idle' ||
                 !config?.neuroTokenAddress ||
-                config.neuroTokenAddress === '0x0000000000000000000000000000000000000000'
+                !config?.claimReceiverAddress ||
+                config.neuroTokenAddress === '0x0000000000000000000000000000000000000000' ||
+                config.claimReceiverAddress === '0x0000000000000000000000000000000000000000'
               }
             >
               {txState === 'awaiting' && 'Confirm in wallet...'}

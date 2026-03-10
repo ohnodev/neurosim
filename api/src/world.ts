@@ -34,7 +34,7 @@ export function spawnFood(): WorldSource | null {
     radius: 12,
   };
   sources.push(source);
-  return source;
+  return { ...source };
 }
 
 export function removeFood(id: string): void {
@@ -50,7 +50,3 @@ export function getWorld() {
   return { sources: sources.map((s) => ({ ...s })) };
 }
 
-/** Internal: returns the live mutable sources array. Only for use by createBrainSim and other internal API logic. */
-export function getLiveSourcesForSim(): WorldSource[] {
-  return sources;
-}

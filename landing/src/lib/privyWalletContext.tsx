@@ -17,7 +17,7 @@ import { base } from 'viem/chains';
 
 export interface PrivyWalletContextValue {
   address: Address | undefined;
-  chainId: number;
+  chainId: number | undefined;
   isConnected: boolean;
   walletClient: WalletClient | undefined;
 }
@@ -44,6 +44,7 @@ export function PrivyWalletProvider({ children }: { children: ReactNode }) {
       return;
     }
 
+    setWalletClient(undefined);
     let cancelled = false;
 
     async function initWalletClient() {
@@ -84,14 +85,16 @@ export function PrivyWalletProvider({ children }: { children: ReactNode }) {
     };
   }, [activeWallet, address, ready]);
 
+  const chainId = walletClient?.chain?.id;
+
   const value: PrivyWalletContextValue = useMemo(
     () => ({
       address,
-      chainId: base.id,
+      chainId,
       isConnected,
       walletClient,
     }),
-    [address, isConnected, walletClient],
+    [address, chainId, isConnected, walletClient],
   );
 
   return (

@@ -56,7 +56,9 @@ function angleToward(heading: number, dx: number, dy: number): number {
   return d;
 }
 
-export function createBrainSim(connectome: Connectome, worldSources: WorldSource[] = []) {
+export function createBrainSim(connectome: Connectome, worldSources: WorldSource[] | (() => WorldSource[]) = []) {
+  const getSources = (): WorldSource[] =>
+    typeof worldSources === 'function' ? worldSources() : worldSources;
   const adj = buildAdjacency(connectome.connections);
   const neurons: Neuron[] = connectome.neurons;
   const neuronIds = neurons.map((n) => n.root_id);
@@ -113,6 +115,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
   const ACT_THRESHOLD = 0.08; // only report neurons above this (filters diffuse activity)
 
   function step(dt: number): SimState {
+    const currentSources = getSources();
     const t = fly.t + dt;
     const r = Math.max(0.1, Math.min(3, dt / REF_STEP)); // scale factor; clamp to avoid extremes
     const decayFactor = Math.pow(DECAY, r);
@@ -144,7 +147,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
       if (pulse > 0) {
         let foodSignal = 0;
         let lightSignal = 0;
-        for (const s of worldSources) {
+        for (const s of currentSources) {
           const dist = Math.hypot(s.x - fly.x, s.y - fly.y);
           if (dist < 1) continue;
           const invDist = 1 / (1 + dist * 0.1);
@@ -210,7 +213,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
     let isEating = false;
     let eatenFoodId: string | undefined;
     if (canFlyEat) {
-      for (const s of worldSources) {
+      for (const s of currentSources) {
         if (s.type !== 'food') continue;
         const dist = Math.hypot(s.x - fly.x, s.y - fly.y);
         if (dist < EAT_RADIUS) {
@@ -240,12 +243,12 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
     if (nearTop) headingBias -= 0.5 * dt;     // turn away from top
     if (nearBottom) headingBias += 0.5 * dt;
 
-    if (hungry && worldSources.length > 0) {
+    if (hungry && currentSources.length > 0) {
       let nearestDist = Infinity;
       let nearestDx = 0;
       let nearestDy = 0;
       let nearestWeight = 1;
-      for (const s of worldSources) {
+      for (const s of currentSources) {
         if (!isAttractorType(s.type)) continue;
         const dx = s.x - fly.x;
         const dy = s.y - fly.y;
@@ -303,7 +306,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
       zDrift = -0.5 * dt; // land while resting
     } else {
       let nearFood = false;
-      for (const s of worldSources) {
+      for (const s of currentSources) {
         if (s.type !== 'food') continue;
         if (Math.hypot(s.x - fly.x, s.y - fly.y) < EAT_RADIUS * 2) {
           nearFood = true;

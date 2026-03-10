@@ -378,7 +378,7 @@ describe('brain-sim', () => {
       const act = s.activity ?? {};
       for (const id of connectome.neurons.map((n) => n.root_id)) {
         const v = act[id] ?? 0;
-        const isOn = v >= ON_THRESHOLD;
+        const isOn = v > ON_THRESHOLD;
         const cur = consecOn.get(id) ?? 0;
         if (isOn) {
           const next = cur + 1;
@@ -391,7 +391,7 @@ describe('brain-sim', () => {
       }
     }
 
-    const stuck = [...maxConsecOn.entries()].filter(([, n]) => n >= MAX_CONSECUTIVE_ON);
+    const stuck = [...maxConsecOn.entries()].filter(([, n]) => n > MAX_CONSECUTIVE_ON);
     expect(
       stuck,
       `No neuron should stay on (>${ON_THRESHOLD}) for >${MAX_ON_SECONDS}s. Stuck: ${stuck.slice(0, 5).map(([id, n]) => `${id}=${(n / STEPS_PER_SEC).toFixed(1)}s`).join(', ')}`

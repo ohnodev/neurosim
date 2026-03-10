@@ -5,7 +5,7 @@ import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { loadConnectome } from './connectome.js';
 import { createBrainSim } from './brain-sim.js';
-import { getWorld, spawnFood, removeFood, getSources, getLiveSourcesForSim } from './world.js';
+import { getWorld, spawnFood, removeFood, getSources } from './world.js';
 import claimsRouter from './routes/claims.js';
 
 const PORT = Number(process.env.PORT) || 3001;
@@ -20,7 +20,7 @@ setInterval(() => {
   }
 }, 10_000);
 
-const sim = createBrainSim(connectome, getLiveSourcesForSim());
+const sim = createBrainSim(connectome, () => getSources());
 const { step, inject, getState, neuronIds } = sim;
 let simRunning = false;
 let simIntervalId: ReturnType<typeof setInterval> | null = null;

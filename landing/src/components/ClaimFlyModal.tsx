@@ -32,11 +32,45 @@ export function ClaimFlyModal({ open, onClose, seed = Date.now() }: ClaimFlyModa
 
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const modalEl = document.querySelector('.claim-modal');
+    const closeBtn = modalEl?.querySelector<HTMLElement>('.claim-modal__close');
+    if (closeBtn) closeBtn.focus();
+
+    const focusables = 'a, button, input, [tabindex]:not([tabindex="-1"])';
+
+    function getFocusables(container: Element): HTMLElement[] {
+      return Array.from(container.querySelectorAll<HTMLElement>(focusables));
+    }
+
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        onClose();
+        return;
+      }
+      if (e.key !== 'Tab' || !modalEl) return;
+      const els = getFocusables(modalEl);
+      if (els.length === 0) return;
+      const first = els[0];
+      const last = els[els.length - 1];
+      if (e.shiftKey) {
+        if (document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else {
+        if (document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    }
+
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      previouslyFocused?.focus();
+    };
   }, [open, onClose]);
 
   if (!open) return null;

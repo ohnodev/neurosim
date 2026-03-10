@@ -66,11 +66,12 @@ function FlyModel({ state }: { state: FlyState }) {
 function GrassGround() {
   const { scene } = useGLTF('/textures/grass_texture_pack/scene.gltf');
   const cloned = useMemo(() => scene.clone(true), [scene]);
+  // Root node already has -90° X baked in; do not add extra rotation or it stands vertical
   return (
     <primitive
       object={cloned}
       position={[0, 0, 0]}
-      rotation={[-Math.PI / 2, 0, 0]}
+      rotation={[0, 0, 0]}
       scale={[0.13, 0.13, 0.13]}
       receiveShadow
     />

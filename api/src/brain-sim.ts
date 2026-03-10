@@ -17,6 +17,23 @@ export interface SimState {
   activity?: Record<string, number>;
 }
 
+/** True if cell_type is a visual neuron (photoreceptor, motion, etc.). */
+function isVisualCellType(cellType: string | undefined): boolean {
+  if (!cellType?.trim()) return false;
+  const t = cellType.trim();
+  return (
+    /^R[1-8](-6)?$/i.test(t) ||
+    /^T[45][a-d]?$/i.test(t) ||
+    /^L[1-5]?$/i.test(t) ||
+    /^Dm\d*/i.test(t) ||
+    /^Mi\d*/i.test(t) ||
+    /^Tm\d*/i.test(t) ||
+    /^M\d+/i.test(t) ||
+    /^C[23]b?$/i.test(t) ||
+    /^MeTu/i.test(t)
+  );
+}
+
 /** Signed angle difference to turn from heading toward target (dx, dy), in [-PI, PI]. */
 function angleToward(heading: number, dx: number, dy: number): number {
   const target = Math.atan2(dy, dx);
@@ -36,19 +53,23 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
   });
 
   const sensoryIndices: number[] = [];
+  const visualIndices: number[] = [];
   const motorLeftIndices: number[] = [];
   const motorRightIndices: number[] = [];
   const motorUnknownIndices: number[] = [];
   for (let i = 0; i < neurons.length; i++) {
-    const r = neurons[i].role ?? 'interneuron';
+    const n = neurons[i];
+    const r = n.role ?? 'interneuron';
     if (r === 'sensory') sensoryIndices.push(i);
+    if (isVisualCellType(n.cell_type)) visualIndices.push(i);
     else if (r === 'motor') {
-      const s = neurons[i].side ?? 'unknown';
+      const s = n.side ?? 'unknown';
       if (s === 'left') motorLeftIndices.push(i);
       else if (s === 'right') motorRightIndices.push(i);
       else motorUnknownIndices.push(i);
     }
   }
+  const visualTargetIndices = visualIndices.length > 0 ? visualIndices : sensoryIndices;
 
   let activity = new Float32Array(neuronIds.length);
   const ARENA = 24;
@@ -83,8 +104,8 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
       }
     }
 
-    // Inject world stimuli into sensory neurons (use classification, not arbitrary indices)
-    if (sensoryIndices.length > 0) {
+    // Route visual stimuli (food/light) into visual-type neurons (R1-6, T4, T5, L*, Dm*, etc.)
+    if (visualTargetIndices.length > 0) {
       let foodSignal = 0;
       let lightSignal = 0;
       for (const s of worldSources) {
@@ -95,8 +116,8 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
         else if (s.type === 'light') lightSignal += invDist * 0.3;
       }
       const baseNoise = 0.15 * (0.5 + 0.5 * Math.sin(t * INPUT_RATE));
-      const perNeuron = (baseNoise + foodSignal * 0.5 + lightSignal) / sensoryIndices.length;
-      for (const idx of sensoryIndices) {
+      const perNeuron = (baseNoise + foodSignal * 0.5 + lightSignal) / visualTargetIndices.length;
+      for (const idx of visualTargetIndices) {
         nextActivity[idx] += Math.min(perNeuron, 0.8);
       }
     }
@@ -179,10 +200,17 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
     nx = Math.max(-ARENA, Math.min(ARENA, nx));
     ny = Math.max(-ARENA, Math.min(ARENA, ny));
 
+    const groundZ = 2;
+    const flightZ = 3;
+    const zDrift = effectiveMotor > 0.02 ? 0.3 * dt : restTimeLeft > 0 ? -0.4 * dt : 0;
+    const zOsc = 0.08 * Math.sin(t * 20) * dt;
+    let nz = fly.z + zDrift + zOsc;
+    nz = Math.max(groundZ, Math.min(flightZ, nz));
+
     fly = {
       x: nx,
       y: ny,
-      z: fly.z + 0.1 * Math.sin(t) * dt,
+      z: nz,
       heading: fly.heading + headingBias,
       t,
       hunger,

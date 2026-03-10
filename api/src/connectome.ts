@@ -11,6 +11,7 @@ export interface Neuron {
   z?: number;
   role?: NeuronRole;
   side?: NeuronSide;
+  cell_type?: string;
 }
 
 export interface Connection {

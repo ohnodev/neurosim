@@ -22,6 +22,7 @@ interface Neuron {
   z?: number;
   role?: NeuronRole;
   side?: NeuronSide;
+  cell_type?: string; // from classification.cell_type or consolidated.primary_type
   [k: string]: unknown;
 }
 
@@ -85,6 +86,7 @@ function main() {
   const neuronsRaw = loadCsv('neurons.csv');
   const coordsRaw = loadCsv('coordinates.csv');
   const classificationRaw = loadCsv('classification.csv');
+  const consolidatedRaw = loadCsv('consolidated_cell_types.csv');
 
   if (connectionsRaw.length === 0) {
     console.error('connections.csv not found or empty. Place it in data/raw/');
@@ -135,11 +137,12 @@ function main() {
   const sorted = [...allIds].sort((a, b) => (inDegree.get(b) ?? 0) - (inDegree.get(a) ?? 0));
   const subsetIds = new Set(sorted.slice(0, SUBSET_SIZE));
 
-  const classificationById = new Map<string, { flow: string; super_class: string; side: string }>();
+  const classificationById = new Map<string, { flow: string; super_class: string; side: string; cell_type: string }>();
   const classIdCol = inferIdCol(classificationRaw, ['root_id', 'rootid', 'id']);
   const flowCol = Object.keys(classificationRaw[0] ?? {}).find((c) => /^flow$/i.test(c)) ?? 'flow';
   const superCol = Object.keys(classificationRaw[0] ?? {}).find((c) => /super_class/i.test(c)) ?? 'super_class';
   const sideCol = Object.keys(classificationRaw[0] ?? {}).find((c) => /^side$/i.test(c)) ?? 'side';
+  const cellTypeCol = Object.keys(classificationRaw[0] ?? {}).find((c) => /cell_type|celltype/i.test(c)) ?? 'cell_type';
   for (const row of classificationRaw) {
     const id = String(row[classIdCol] ?? '').trim();
     if (!id) continue;
@@ -147,7 +150,18 @@ function main() {
       flow: row[flowCol] ?? '',
       super_class: row[superCol] ?? '',
       side: row[sideCol] ?? '',
+      cell_type: row[cellTypeCol] ?? '',
     });
+  }
+
+  const consolidatedById = new Map<string, string>();
+  const consIdCol = inferIdCol(consolidatedRaw, ['root_id', 'rootid', 'id']);
+  const primaryTypeCol = Object.keys(consolidatedRaw[0] ?? {}).find((c) => /primary_type|primarytype/i.test(c)) ?? 'primary_type';
+  for (const row of consolidatedRaw) {
+    const id = String(row[consIdCol] ?? '').trim();
+    if (!id) continue;
+    const pt = String(row[primaryTypeCol] ?? '').trim();
+    if (pt) consolidatedById.set(id, pt);
   }
 
   const subsetConnections = connections.filter((c) => subsetIds.has(c.pre) && subsetIds.has(c.post));
@@ -157,6 +171,7 @@ function main() {
     const cl = classificationById.get(id);
     const role = cl ? inferRole(cl.flow, cl.super_class) : 'interneuron';
     const side = cl ? inferSide(cl.side) : 'unknown';
+    const cell_type = (cl?.cell_type?.trim() || consolidatedById.get(id)) || undefined;
     neurons.push({
       root_id: id,
       x: coord?.x,
@@ -164,6 +179,7 @@ function main() {
       z: coord?.z,
       role,
       side,
+      cell_type: cell_type || undefined,
     });
   }
 

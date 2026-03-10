@@ -149,6 +149,22 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
     };
   }, [visible, n, withPos[0]?.root_id ?? '']); // Rebuild when neuron set changes
 
+  // Resize Plotly when container changes (e.g. panel expand after minimize)
+  useEffect(() => {
+    const el = plotRef.current;
+    if (!el || !embedded) return;
+    const resize = () => {
+      if (plotReady.current && el) Plotly.Plots.resize(el);
+    };
+    const ro = new ResizeObserver(resize);
+    ro.observe(el);
+    const t = setTimeout(resize, 300);
+    return () => {
+      ro.disconnect();
+      clearTimeout(t);
+    };
+  }, [embedded]);
+
   // Update colors when activity changes; skip while user is interacting (prevents camera snap-back)
   useEffect(() => {
     if (!plotRef.current || !plotReady.current || !visible || idsRef.current.length === 0 || interacting.current) return;
@@ -205,7 +221,15 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
           Run process-connectome with coordinates.csv.
         </div>
       ) : (
-        <div ref={plotRef} style={{ width: '100%', height: '100%' }} />
+        <div
+          ref={plotRef}
+          style={{
+            position: 'absolute',
+            inset: 0,
+            minWidth: 1,
+            minHeight: 1,
+          }}
+        />
       )}
     </div>
   );

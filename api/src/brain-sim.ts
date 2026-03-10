@@ -41,7 +41,11 @@ function angleToward(heading: number, dx: number, dy: number): number {
   return d;
 }
 
-export function createBrainSim(connectome: Connectome, worldSources: WorldSource[] | (() => WorldSource[]) = []) {
+export function createBrainSim(
+  connectome: Connectome,
+  worldSources: WorldSource[] | (() => WorldSource[]) = [],
+  initialFlyState?: Partial<FlyState>,
+) {
   const getSources = (): WorldSource[] =>
     typeof worldSources === 'function' ? worldSources() : worldSources;
   const adj = buildAdjacency(connectome.connections);
@@ -87,7 +91,16 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
   const GROUND_Z = 0.35;
   const FLIGHT_Z = 1.5;
   const ON_GROUND_THRESH = 0.6; // z below this = on ground, can eat
-  let fly: FlyState = { x: 0, y: 0, z: GROUND_Z, heading: 0, t: 0, hunger: 100, health: 100 };
+  let fly: FlyState = {
+    x: 0,
+    y: 0,
+    z: GROUND_Z,
+    heading: 0,
+    t: 0,
+    hunger: 100,
+    health: 100,
+    ...initialFlyState,
+  };
   const pendingStimuli: { neurons: string[]; strength: number }[] = [];
   let flyTimeLeftSec = FLY_TIME_MAX;
   let restTimeLeft = 0;

@@ -109,8 +109,10 @@ function shortId(id: string): string {
   return id.slice(-8);
 }
 
+const DEFAULT_FLY: FlyState = { x: 0, y: 0, z: 0.35, heading: 0, t: 0, hunger: 100 };
+
 export default function FlyViewer() {
-  const [flyState, setFlyState] = useState<FlyState>({ x: 0, y: 0, z: 0.35, heading: 0, t: 0, hunger: 100 });
+  const [flies, setFlies] = useState<FlyState[]>([]);
   const [sources, setSources] = useState<WorldSource[]>([]);
   const [neuronLabels, setNeuronLabels] = useState<Record<string, string>>({});
   const [connected, setConnected] = useState(false);
@@ -166,12 +168,13 @@ export default function FlyViewer() {
         }
         return;
       }
-      const data = event as { fly?: FlyState; activity?: Record<string, number>; simRunning?: boolean; error?: string; sources?: WorldSource[] };
+      const data = event as { flies?: FlyState[]; fly?: FlyState; activity?: Record<string, number>; simRunning?: boolean; error?: string; sources?: WorldSource[] };
       if (data.simRunning !== undefined) setSimRunning(data.simRunning);
       if (data.error) setError(data.error);
       if (data.sources && Array.isArray(data.sources)) setSources(data.sources);
       if (!data.error) {
-        if (data.fly) setFlyState(data.fly);
+        if (data.flies && data.flies.length > 0) setFlies(data.flies);
+        else if (data.fly) setFlies([data.fly]);
         if (data.activity) {
           setActivity(data.activity);
           setActiveCount(Object.keys(data.activity).length);
@@ -192,7 +195,8 @@ export default function FlyViewer() {
   const topActivity = Object.entries(activity)
     .sort(([, a], [, b]) => b - a)
     .slice(0, 10);
-  const flyMode = flyState.dead ? 'dead' : flyState.feeding ? 'feeding' : flyState.z > FLY_THRESHOLD ? 'flying' : flyState.z < 0.6 ? 'resting' : 'idle';
+  const focusedFly = flies.find((f) => !f.dead) ?? flies[0] ?? DEFAULT_FLY;
+  const flyMode = focusedFly.dead ? 'dead' : focusedFly.feeding ? 'feeding' : focusedFly.z > FLY_THRESHOLD ? 'flying' : focusedFly.z < 0.6 ? 'resting' : 'idle';
 
   return (
     <div style={{ width: '100vw', height: '100vh', position: 'relative' }}>
@@ -203,7 +207,7 @@ export default function FlyViewer() {
           <directionalLight position={[10, 10, 5]} intensity={1.2} castShadow />
           <OrbitControls />
           <Suspense fallback={null}>
-            {!flyState.dead && <FlyModel state={flyState} />}
+            {flies.map((fly, i) => !fly.dead && <FlyModel key={i} state={fly} />)}
           </Suspense>
           <WorldSources sources={sources} />
           <GroundPlane />
@@ -227,7 +231,7 @@ export default function FlyViewer() {
             {activeCount > 0 && <span style={{ color: '#aaa', fontSize: 12 }}>Active: {activeCount}</span>}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {flyState.dead && (
+            {focusedFly.dead && (
               <div style={{ width: 120, padding: '6px 8px', background: '#422', color: '#f88', borderRadius: 4, fontSize: 11, fontWeight: 600 }}>
                 Fly died
               </div>
@@ -235,24 +239,24 @@ export default function FlyViewer() {
             <div style={{ width: 120, background: '#222', borderRadius: 4, overflow: 'hidden' }}>
               <div style={{ fontSize: 10, color: '#888', padding: '2px 6px' }}>Hunger</div>
               <div style={{ height: 8, background: '#333', borderRadius: 2, margin: '0 4px 4px', overflow: 'hidden' }}>
-                <div style={{ width: `${flyState.hunger ?? 100}%`, height: '100%', background: getHungerColor(flyState.hunger ?? 100), transition: 'width 0.2s' }} />
+                <div style={{ width: `${focusedFly.hunger ?? 100}%`, height: '100%', background: getHungerColor(focusedFly.hunger ?? 100), transition: 'width 0.2s' }} />
               </div>
             </div>
             <div style={{ width: 120, background: '#222', borderRadius: 4, overflow: 'hidden' }}>
               <div style={{ fontSize: 10, color: '#888', padding: '2px 6px' }}>Health</div>
               <div style={{ height: 8, background: '#333', borderRadius: 2, margin: '0 4px 4px', overflow: 'hidden' }}>
-                <div style={{ width: `${flyState.health ?? 100}%`, height: '100%', background: (flyState.health ?? 100) > 50 ? '#5a5' : (flyState.health ?? 100) > 20 ? '#ca0' : '#c44', transition: 'width 0.2s' }} />
+                <div style={{ width: `${focusedFly.health ?? 100}%`, height: '100%', background: (focusedFly.health ?? 100) > 50 ? '#5a5' : (focusedFly.health ?? 100) > 20 ? '#ca0' : '#c44', transition: 'width 0.2s' }} />
               </div>
             </div>
             <div style={{ width: 120, background: '#222', borderRadius: 4, overflow: 'hidden' }}>
               <div style={{ fontSize: 10, color: '#888', padding: '2px 6px' }}>
-                {flyState.restTimeLeft != null && flyState.restTimeLeft > 0 ? 'Rest' : 'Fatigue'}
+                {focusedFly.restTimeLeft != null && focusedFly.restTimeLeft > 0 ? 'Rest' : 'Fatigue'}
               </div>
               <div style={{ height: 8, background: '#333', borderRadius: 2, margin: '0 4px 4px', overflow: 'hidden' }}>
-                {flyState.restTimeLeft != null && flyState.restTimeLeft > 0 ? (
-                  <div style={{ width: `${Math.max(0, 100 - ((flyState.restTimeLeft ?? 0) / (flyState.restDuration ?? REST_DURATION_FALLBACK)) * 100)}%`, height: '100%', background: '#6a6', transition: 'width 0.2s' }} />
+                {focusedFly.restTimeLeft != null && focusedFly.restTimeLeft > 0 ? (
+                  <div style={{ width: `${Math.max(0, 100 - ((focusedFly.restTimeLeft ?? 0) / (focusedFly.restDuration ?? REST_DURATION_FALLBACK)) * 100)}%`, height: '100%', background: '#6a6', transition: 'width 0.2s' }} />
                 ) : (
-                  <div style={{ width: `${((flyState.flyTimeLeft ?? 1) * 100).toFixed(0)}%`, height: '100%', background: '#48a', transition: 'width 0.2s' }} />
+                  <div style={{ width: `${((focusedFly.flyTimeLeft ?? 1) * 100).toFixed(0)}%`, height: '100%', background: '#48a', transition: 'width 0.2s' }} />
                 )}
               </div>
             </div>
@@ -261,9 +265,9 @@ export default function FlyViewer() {
         <BrainOverlay neurons={neuronsWithPositions} activity={activity} visible={connected} />
         <div style={{ position: 'absolute', bottom: 12, left: 12, maxWidth: 420, minWidth: 340, maxHeight: '40vh', overflow: 'auto', background: 'rgba(0,0,0,0.85)', color: '#ccc', fontSize: 11, padding: 10, borderRadius: 8, fontFamily: 'monospace', pointerEvents: 'auto' }}>
           <div style={{ color: '#888', marginBottom: 6 }}>Status</div>
-          <div style={{ marginBottom: 4 }}>pos ({(flyState.x ?? 0).toFixed(1)}, {(flyState.y ?? 0).toFixed(1)}, {(flyState.z ?? 0).toFixed(1)})</div>
-          <div style={{ marginBottom: 4 }}>heading {((flyState.heading ?? 0) * 180 / Math.PI).toFixed(0)}° | {flyMode}</div>
-          <div style={{ marginBottom: 8 }}>t {(flyState.t ?? 0).toFixed(1)}s | hunger {Math.round(flyState.hunger ?? 0)} | health {Math.round(flyState.health ?? 100)}</div>
+          <div style={{ marginBottom: 4 }}>flies {flies.length} | focused pos ({(focusedFly.x ?? 0).toFixed(1)}, {(focusedFly.y ?? 0).toFixed(1)}, {(focusedFly.z ?? 0).toFixed(1)})</div>
+          <div style={{ marginBottom: 4 }}>heading {((focusedFly.heading ?? 0) * 180 / Math.PI).toFixed(0)}° | {flyMode}</div>
+          <div style={{ marginBottom: 8 }}>t {(focusedFly.t ?? 0).toFixed(1)}s | hunger {Math.round(focusedFly.hunger ?? 0)} | health {Math.round(focusedFly.health ?? 100)}</div>
           <div style={{ color: '#888', marginBottom: 4 }}>Firing neurons ({activeCount})</div>
           <div style={{ maxHeight: 120, overflow: 'auto' }}>
             {topActivity.length === 0 && <span style={{ color: '#666' }}>—</span>}

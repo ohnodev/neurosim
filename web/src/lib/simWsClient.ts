@@ -9,9 +9,13 @@ export type { FlyState };
 
 export interface SimPayload {
   t?: number;
+  /** Multi-fly: array of fly states */
+  flies?: FlyState[];
+  /** Legacy: single fly (prefer flies when present) */
   fly?: FlyState;
   activity?: Record<string, number>;
   simRunning?: boolean;
+  sources?: unknown;
   error?: string;
 }
 

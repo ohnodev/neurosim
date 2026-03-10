@@ -11,6 +11,12 @@ import claimsRouter from './routes/claims.js';
 const PORT = Number(process.env.PORT) || 3001;
 const connectome = loadConnectome();
 
+/** Number of flies; supports 10–20. */
+const NUM_FLIES = 3;
+
+const GROUND_Z = 0.35;
+const INITIAL_SPREAD = 4;
+
 spawnFood(); // initial food
 setInterval(() => {
   const f = spawnFood();
@@ -20,8 +26,22 @@ setInterval(() => {
   }
 }, 10_000);
 
-const sim = createBrainSim(connectome, () => getSources());
-const { step, inject, getState, neuronIds } = sim;
+const sims = Array.from({ length: NUM_FLIES }, (_, i) => {
+  const angle = (2 * Math.PI * i) / NUM_FLIES;
+  const x = INITIAL_SPREAD * Math.cos(angle);
+  const y = INITIAL_SPREAD * Math.sin(angle);
+  return createBrainSim(connectome, () => getSources(), {
+    x,
+    y,
+    z: GROUND_Z,
+    heading: 0,
+    t: 0,
+    hunger: 100,
+    health: 100,
+  });
+});
+
+const neuronIds = sims[0].neuronIds;
 let simRunning = false;
 let simIntervalId: ReturnType<typeof setInterval> | null = null;
 const STEP_LOG_INTERVAL = 150;
@@ -41,15 +61,25 @@ function startSim(): void {
   simRunning = true;
   connectionStep = 0;
   simIntervalId = setInterval(() => {
-    const state = step(1 / 30);
-    if (state.eatenFoodId) {
-      removeFood(state.eatenFoodId);
-      console.log('[world] fly ate food', state.eatenFoodId);
+    const dt = 1 / 30;
+    const flies: ReturnType<typeof sims[0]['getState']>['fly'][] = [];
+    let t = 0;
+    let activity: Record<string, number> | undefined;
+    for (let i = 0; i < sims.length; i++) {
+      const state = sims[i].step(dt);
+      if (state.eatenFoodId) {
+        removeFood(state.eatenFoodId);
+        console.log('[world] fly', i, 'ate food', state.eatenFoodId);
+      }
+      flies.push(state.fly);
+      t = state.t;
+      if (i === 0) activity = state.activity;
     }
-    broadcast({ ...state, simRunning: true, sources: getSources() });
+    broadcast({ t, flies, activity, simRunning: true, sources: getSources() });
     connectionStep += 1;
     if (connectionStep % STEP_LOG_INTERVAL === 0) {
-      console.log('[sim] t=', state.t.toFixed(1), 'fly=', state.fly.x.toFixed(2), state.fly.y.toFixed(2), 'clients=', wsClients.size);
+      const first = flies[0];
+      console.log('[sim] t=', t.toFixed(1), 'flies=', flies.length, 'first=', first?.x?.toFixed(2), first?.y?.toFixed(2), 'clients=', wsClients.size);
     }
   }, 1000 / 30);
   console.log('[sim] started');
@@ -103,8 +133,15 @@ wss.on('connection', (ws) => {
   wsClients.add(ws);
   console.log('[ws] client connected, total=', wsClients.size);
 
-  const state = getState();
-  ws.send(JSON.stringify({ ...state, simRunning, sources: getSources() }));
+  const flies = sims.map((s) => s.getState().fly);
+  const firstState = sims[0].getState();
+  ws.send(JSON.stringify({
+    t: firstState.t,
+    flies,
+    activity: firstState.activity,
+    simRunning,
+    sources: getSources(),
+  }));
 
   ws.on('message', (raw) => {
     try {
@@ -140,7 +177,7 @@ wss.on('connection', (ws) => {
         console.warn('[ws] stimulate: no valid neuron IDs');
         return;
       }
-      inject(valid, strength);
+      sims[0].inject(valid, strength);
       console.log('[ws] stimulate neurons=', valid.length, 'strength=', strength);
     } catch (err) {
       console.error('[ws] message error', err);

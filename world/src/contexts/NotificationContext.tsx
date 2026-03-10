@@ -1,4 +1,4 @@
-import { type ReactNode, createContext, useContext, useState, useCallback, useMemo } from 'react';
+import { type ReactNode, createContext, useContext, useState, useCallback, useMemo, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 
 export type NotificationType = 'info' | 'success' | 'error' | 'warning';
@@ -18,7 +18,9 @@ export function useNotification() {
 }
 
 function NotificationToast({ message, type, visible, onClose }: { message: string; type: NotificationType; visible: boolean; onClose: () => void }) {
-  if (!visible) return null;
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  if (!visible || !mounted || typeof document === 'undefined') return null;
   const content = (
     <div className={`notification-toast notification-toast--${type}`} role="status" aria-live="polite">
       <span className="notification-toast__message">{message}</span>

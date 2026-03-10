@@ -76,6 +76,10 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
       const baseDelay = 1000;
       const verify = async (attempt = 0): Promise<void> => {
         if (!mountedRef.current) return;
+        if (attempt === 0) {
+          await new Promise((r) => setTimeout(r, Math.min(baseDelay, 8000)));
+          if (!mountedRef.current) return;
+        }
         notification.update('Verifying payment...', 'info');
         const res = await fetch(`${apiBase}/api/claim/verify-eth`, {
           method: 'POST',

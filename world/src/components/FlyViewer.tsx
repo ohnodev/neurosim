@@ -5,8 +5,7 @@ import { OrbitControls, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import type { WorldSource } from '../../../api/src/world';
 import { subscribeSim, type FlyState } from '../lib/simWsClient';
-import { getApiBase } from '../lib/wsUrl';
-import { getApiBase as getClaimApiBase } from '../lib/constants';
+import { getApiBase } from '../lib/constants';
 import { BrainOverlay, type NeuronWithPosition } from './BrainOverlay';
 import { ConnectButton } from './ConnectButton';
 import { BuyFlyModal } from './BuyFlyModal';
@@ -130,7 +129,7 @@ interface ClaimedFly {
 }
 
 async function fetchMyFlies(address: string) {
-  const r = await fetch(`${getClaimApiBase()}/api/claim/my-flies?address=${address.toLowerCase()}`);
+  const r = await fetch(`${getApiBase()}/api/claim/my-flies?address=${address.toLowerCase()}`);
   if (!r.ok) return [];
   const data = await r.json();
   return (data.flies ?? []) as ClaimedFly[];
@@ -176,7 +175,6 @@ function FlyStatusCard({
         width: '100%',
         textAlign: 'left',
         border: selected ? '1px solid rgba(99,102,241,0.5)' : '1px solid transparent',
-        outline: 'none',
         background: selected ? 'rgba(99,102,241,0.2)' : 'rgba(255,255,255,0.04)',
         borderRadius: 6,
         padding: 8,
@@ -315,28 +313,39 @@ export default function FlyViewer() {
   );
 
   const simIndexForSelected = deployed[selectedFlyIndex];
+  const firstValidSlot = deployedSlotKeys.find(
+    (slotIdx) => deployed[slotIdx] != null && flies[deployed[slotIdx]!] != null
+  );
+  const effectiveSimIndex =
+    simIndexForSelected != null && flies[simIndexForSelected] != null
+      ? simIndexForSelected
+      : firstValidSlot != null
+        ? deployed[firstValidSlot]!
+        : undefined;
+  const focusedFly =
+    effectiveSimIndex != null && flies[effectiveSimIndex]
+      ? flies[effectiveSimIndex]!
+      : DEFAULT_FLY;
   const activityForSelected =
-    simIndexForSelected != null && Array.isArray(activities) && activities[simIndexForSelected]
-      ? activities[simIndexForSelected]!
+    effectiveSimIndex != null && Array.isArray(activities) && activities[effectiveSimIndex]
+      ? activities[effectiveSimIndex]!
       : activity;
   const activeCount = Object.keys(activityForSelected).length;
   const topActivity = Object.entries(activityForSelected)
     .sort(([, a], [, b]) => b - a)
     .slice(0, 10);
-  const focusedFly =
-    simIndexForSelected != null && flies[simIndexForSelected]
-      ? flies[simIndexForSelected]!
-      : DEFAULT_FLY;
 
   useEffect(() => {
     if (deployedSlotKeys.length === 0) return;
     const valid =
-      simIndexForSelected != null &&
-      flies[simIndexForSelected] != null;
+      simIndexForSelected != null && flies[simIndexForSelected] != null;
     if (!valid) {
-      setSelectedFlyIndex(deployedSlotKeys[0]!);
+      const firstValid = deployedSlotKeys.find(
+        (slotIdx) => deployed[slotIdx] != null && flies[deployed[slotIdx]!] != null
+      );
+      setSelectedFlyIndex(firstValid ?? deployedSlotKeys[0]!);
     }
-  }, [deployedSlotKeys, simIndexForSelected, flies]);
+  }, [deployedSlotKeys, simIndexForSelected, flies, deployed]);
 
   const flyMode = getFlyMode(focusedFly);
 
@@ -459,7 +468,7 @@ export default function FlyViewer() {
                         try {
                           await deployFly(i);
                         } catch (e) {
-                          console.error('Deploy failed:', e);
+                          setError(e instanceof Error ? `Deploy failed: ${e.message}` : 'Deploy failed');
                         }
                       }}
                     >

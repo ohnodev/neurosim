@@ -79,6 +79,11 @@
   min-height: 100px;
 }
 
+.fly-viewer__fly-slot > button:focus-visible {
+  outline: 2px solid rgba(99, 102, 241, 0.8);
+  outline-offset: 2px;
+}
+
 .fly-viewer__fly-slot-empty {
   flex: 1;
   min-height: 100px;
@@ -152,7 +157,8 @@
 }
 
 .fly-viewer__brain-panel.fly-viewer__side-panel--open {
-  width: 320px;
+  width: min(320px, calc(100vw - 24px));
+  max-width: 320px;
   height: 240px;
 }
 

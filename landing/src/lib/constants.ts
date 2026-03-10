@@ -9,7 +9,8 @@ export function getApiBase(): string {
     typeof import.meta !== 'undefined' &&
     (import.meta as { env?: { VITE_API_BASE?: string } }).env?.VITE_API_BASE?.trim();
   if (envBase) return envBase.replace(/\/$/, '');
-  if (typeof window === 'undefined') return 'https://api.neurosim.fun';
-  const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+  if (typeof window === 'undefined') return 'http://localhost:3001';
+  const isLocal =
+    window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
   return isLocal ? 'http://localhost:3001' : 'https://api.neurosim.fun';
 }

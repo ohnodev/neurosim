@@ -26,6 +26,8 @@ export interface SimState {
   t: number;
   fly: FlyState;
   activity?: Record<string, number>;
+  /** id of food source consumed this step (API should remove it) */
+  eatenFoodId?: string;
 }
 
 /** True if cell_type is a visual neuron (photoreceptor, motion, etc.). */
@@ -87,7 +89,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
   const WALL_MARGIN = 6;      // start turning away from walls when within this
   const SEEK_RADIUS = ARENA * 1.5; // steer toward food even when beyond source radius
   const HUNGER_DECAY = 0.8;   // per second when not eating
-  const EAT_RATE = 12;        // per second when eating
+  const FOOD_HUNGER_RESTORE = 50; // hunger restored when consuming one food (then it disappears)
 
   function isAttractorType(type: string): boolean {
     return type === 'food' || type === 'light';
@@ -189,13 +191,15 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
     const canFlyEat = (restTimeLeft > 0 || onGround || fly.z < 1.1) && fly.z < 1.2;
     let hunger = fly.hunger;
     let isEating = false;
+    let eatenFoodId: string | undefined;
     if (canFlyEat) {
       for (const s of worldSources) {
         if (s.type !== 'food') continue;
         const dist = Math.hypot(s.x - fly.x, s.y - fly.y);
         if (dist < EAT_RADIUS) {
           isEating = true;
-          hunger = Math.min(100, hunger + EAT_RATE * dt);
+          hunger = Math.min(100, hunger + FOOD_HUNGER_RESTORE);
+          eatenFoodId = s.id;
           break;
         }
       }
@@ -322,7 +326,12 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
       if (v > ACT_THRESHOLD && Number.isFinite(v)) actObj[id] = Math.min(1, v);
     });
 
-    return { t, fly, activity: Object.keys(actObj).length ? actObj : undefined };
+    return {
+      t,
+      fly,
+      activity: Object.keys(actObj).length ? actObj : undefined,
+      ...(eatenFoodId && { eatenFoodId }),
+    };
   }
 
   function inject(neurons: string[], strength = 0.8) {

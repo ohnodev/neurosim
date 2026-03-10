@@ -28,6 +28,7 @@ export function BrainOverlay({ neurons, activity, visible = true }: BrainOverlay
   const plotReady = useRef(false);
   const idsRef = useRef<string[]>([]);
   const sidesRef = useRef<string[]>([]);
+  const interacting = useRef(false);
 
   const withPos = neurons.filter(hasPosition);
   const n = withPos.length;
@@ -118,6 +119,14 @@ export function BrainOverlay({ neurons, activity, visible = true }: BrainOverlay
     };
 
     const el = plotRef.current;
+    const onDown = () => { interacting.current = true; };
+    const onUp = () => { interacting.current = false; };
+    const touchOpts = { passive: false } as AddEventListenerOptions;
+    el.addEventListener('mousedown', onDown);
+    el.addEventListener('touchstart', onDown, touchOpts);
+    window.addEventListener('mouseup', onUp);
+    window.addEventListener('touchend', onUp, touchOpts);
+
     Plotly.newPlot(el, traces, layout, {
       responsive: true,
       displayModeBar: true,
@@ -129,14 +138,18 @@ export function BrainOverlay({ neurons, activity, visible = true }: BrainOverlay
     });
 
     return () => {
+      el.removeEventListener('mousedown', onDown);
+      el.removeEventListener('touchstart', onDown, touchOpts);
+      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('touchend', onUp, touchOpts);
       Plotly.purge(el);
       plotReady.current = false;
     };
   }, [visible, n, withPos[0]?.root_id ?? '']); // Rebuild when neuron set changes
 
-  // Update colors when activity changes: inactive=grey, active=colored
+  // Update colors when activity changes; skip while user is interacting (prevents camera snap-back)
   useEffect(() => {
-    if (!plotRef.current || !plotReady.current || !visible || idsRef.current.length === 0) return;
+    if (!plotRef.current || !plotReady.current || !visible || idsRef.current.length === 0 || interacting.current) return;
     const sides = sidesRef.current;
     const color = idsRef.current.map((id, i) => {
       const a = activity[id] ?? 0;

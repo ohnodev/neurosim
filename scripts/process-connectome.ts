@@ -93,6 +93,11 @@ function relevanceScore(role: NeuronRole, cellType: string, primaryType: string,
   return s;
 }
 
+/** Combined score: relevance × connectivity. Picks neurons that are both relevant and well connected. */
+function combinedScore(relevance: number, inDegree: number): number {
+  return relevance * Math.log2(1 + inDegree); // both matter; hubs within each type rank higher
+}
+
 function inferIdCol(rows: Record<string, string>[], hints: string[]): string {
   const cols = rows[0] ? Object.keys(rows[0]) : [];
   for (const h of hints) {
@@ -203,11 +208,11 @@ function main() {
       const cl = classificationByIdTemp.get(id);
       const role = cl ? inferRole(cl.flow, cl.super_class) : 'interneuron';
       const primary = consolidatedTemp.get(id) ?? '';
-      const score = relevanceScore(role, cl?.cell_type ?? '', primary, cl?.super_class ?? '');
+      const rel = relevanceScore(role, cl?.cell_type ?? '', primary, cl?.super_class ?? '');
       const deg = inDegree.get(id) ?? 0;
-      return { id, score, deg };
+      return { id, combined: combinedScore(rel, deg), deg };
     });
-    scored.sort((a, b) => b.score - a.score || b.deg - a.deg);
+    scored.sort((a, b) => b.combined - a.combined);
     subsetIds = new Set(scored.slice(0, SUBSET_SIZE).map((x) => x.id));
     subsetConnections = connections.filter((c) => subsetIds.has(c.pre) && subsetIds.has(c.post));
   }

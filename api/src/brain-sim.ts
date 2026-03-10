@@ -92,6 +92,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
   const TAU = 0.05;
   const DECAY = 0.9;
   const INPUT_RATE = 2;
+  const ACT_THRESHOLD = 0.05; // only report neurons above this (avoids "all active" cascade)
 
   function step(dt: number): SimState {
     const t = fly.t + dt;
@@ -232,7 +233,25 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
     nx = Math.max(-ARENA, Math.min(ARENA, nx));
     ny = Math.max(-ARENA, Math.min(ARENA, ny));
 
-    const zDrift = Math.abs(effectiveMotor) > 0.02 ? 0.4 * dt : restTimeLeft > 0 ? -0.5 * dt : 0;
+    // z: descend when resting or when hungry+near food (land to feed); rise when flying
+    let zDrift = 0;
+    if (restTimeLeft > 0) {
+      zDrift = -0.5 * dt; // land while resting
+    } else {
+      let nearFood = false;
+      for (const s of worldSources) {
+        if (s.type !== 'food') continue;
+        if (Math.hypot(s.x - fly.x, s.y - fly.y) < EAT_RADIUS * 2) {
+          nearFood = true;
+          break;
+        }
+      }
+      if (hungry && nearFood) {
+        zDrift = -0.6 * dt; // descend to land and feed
+      } else if (Math.abs(effectiveMotor) > 0.02) {
+        zDrift = 0.4 * dt; // rise when flying (hungry or explore)
+      }
+    }
     const zOsc = 0.08 * Math.sin(t * 20) * dt;
     let nz = fly.z + (Number.isFinite(zDrift) ? zDrift : 0) + (Number.isFinite(zOsc) ? zOsc : 0);
     nz = Math.max(GROUND_Z, Math.min(FLIGHT_Z, nz));
@@ -253,7 +272,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
     const actObj: Record<string, number> = {};
     neuronIds.forEach((id, i) => {
       const v = activity[i];
-      if (v > 0.01 && Number.isFinite(v)) actObj[id] = Math.min(1, v);
+      if (v > ACT_THRESHOLD && Number.isFinite(v)) actObj[id] = Math.min(1, v);
     });
 
     return { t, fly, activity: Object.keys(actObj).length ? actObj : undefined };
@@ -267,7 +286,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
     const actObj: Record<string, number> = {};
     neuronIds.forEach((id, i) => {
       const v = activity[i];
-      if (v > 0.01 && Number.isFinite(v)) actObj[id] = Math.min(1, v);
+      if (v > ACT_THRESHOLD && Number.isFinite(v)) actObj[id] = Math.min(1, v);
     });
     return { t: fly.t, fly, activity: Object.keys(actObj).length ? actObj : undefined };
   }

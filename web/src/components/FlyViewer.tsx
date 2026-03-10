@@ -107,8 +107,8 @@ export default function FlyViewer() {
         setNeuronsWithPositions(list.map((n) => ({ root_id: n.root_id, side: n.side, x: n.x, y: n.y, z: n.z })));
         const labels: Record<string, string> = {};
         for (const n of list) {
-          const label = [n.cell_type, n.role].filter(Boolean).join(' ') || n.root_id;
-          labels[n.root_id] = label.length > 14 ? label.slice(0, 12) + '…' : label;
+          const full = [n.cell_type, n.role].filter(Boolean).join(' ') || n.root_id;
+          labels[n.root_id] = full; // keep full label; UI uses overflow: ellipsis if needed
         }
         setNeuronLabels(labels);
       })
@@ -206,9 +206,9 @@ export default function FlyViewer() {
           <div style={{ maxHeight: 120, overflow: 'auto' }}>
             {topActivity.length === 0 && <span style={{ color: '#666' }}>—</span>}
             {topActivity.map(([id, v]) => (
-              <div key={id} style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }} title={id}>
-                <span>{neuronLabels[id] || shortId(id)}</span>
-                <span style={{ color: '#8cf' }}>{(Math.min(v ?? 0, 1)).toFixed(2)}</span>
+              <div key={id} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, minWidth: 0 }} title={`${neuronLabels[id] || id}\n${id}`}>
+                <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{neuronLabels[id] || shortId(id)}</span>
+                <span style={{ color: '#8cf', flexShrink: 0 }}>{(Math.min(v ?? 0, 1)).toFixed(2)}</span>
               </div>
             ))}
           </div>

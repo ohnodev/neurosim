@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { base } from 'viem/chains';
+import { ClaimFlyModal } from './ClaimFlyModal';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
 import { getApiBase } from '../lib/constants';
 
@@ -35,6 +36,8 @@ export function ClaimFlySection() {
   const [claimStatus, setClaimStatus] = useState<'idle' | 'pending' | 'success' | 'error'>('idle');
   const [txState, setTxState] = useState<'idle' | 'awaiting' | 'confirming' | 'done'>('idle');
   const [error, setError] = useState<string | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalSeed, setModalSeed] = useState(() => Date.now());
 
   useEffect(() => {
     fetch(`${getApiBase()}/api/claim/config`)
@@ -132,12 +135,23 @@ export function ClaimFlySection() {
   return (
     <div className="claim-section">
       <h2 className="section__title">Claim your fly</h2>
+      <ClaimFlyModal open={modalOpen} onClose={() => setModalOpen(false)} seed={modalSeed} />
       {!isConnected ? (
-        <p className="claim-hint">Connect your wallet to claim your fly.</p>
+        <>
+          <p className="claim-hint">Connect your wallet to claim your fly.</p>
+          <button className="claim-btn claim-btn-primary" onClick={() => { setModalSeed(Date.now()); setModalOpen(true); }}>
+            Claim your fly
+          </button>
+        </>
       ) : eligibility.loading ? (
         <p className="claim-hint">Checking eligibility...</p>
       ) : claimStatus === 'success' ? (
-        <div className="claim-success">You claimed your fly. Welcome.</div>
+        <>
+          <div className="claim-success">You claimed your fly. Welcome.</div>
+          <button className="claim-btn" onClick={() => { setModalSeed(Date.now()); setModalOpen(true); }}>
+            View your fly
+          </button>
+        </>
       ) : (
         <>
           {error && <div className="claim-error">{error}</div>}
@@ -169,6 +183,9 @@ export function ClaimFlySection() {
               {txState === 'idle' && 'Pay 1M $NEURO to Claim'}
             </button>
           )}
+          <button className="claim-btn" onClick={() => { setModalSeed(Date.now()); setModalOpen(true); }} style={{ marginTop: 8 }}>
+            Preview claim
+          </button>
         </>
       )}
     </div>

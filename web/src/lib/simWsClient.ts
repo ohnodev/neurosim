@@ -3,22 +3,9 @@
  * Single global connection with exponential backoff retry, matching basemarket pattern.
  */
 import { getWsUrl } from "./wsUrl";
+import type { FlyState } from "../../../api/src/fly-state";
 
-/** Fly state from sim WebSocket payload; should match api brain-sim FlyState. */
-export interface FlyState {
-  x: number;
-  y: number;
-  z: number;
-  heading: number;
-  t: number;
-  hunger: number;
-  health?: number;
-  dead?: boolean;
-  flyTimeLeft?: number;
-  restTimeLeft?: number;
-  restDuration?: number;
-  feeding?: boolean;
-}
+export type { FlyState };
 
 export interface SimPayload {
   t?: number;

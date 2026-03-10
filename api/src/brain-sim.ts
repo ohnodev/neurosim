@@ -1,30 +1,11 @@
 import type { Connectome, Neuron } from './connectome.js';
 import { buildAdjacency } from './connectome.js';
+import type { FlyState } from './fly-state.js';
 import type { WorldSource } from './world.js';
 
+export type { FlyState } from './fly-state.js';
 export const EAT_RADIUS = 2.5;
 export const REST_TIME = 4;
-
-export interface FlyState {
-  x: number;
-  y: number;
-  z: number;
-  heading: number;
-  t: number;
-  hunger: number;
-  /** 0–100; drains when hunger is 0; 0 = dead */
-  health?: number;
-  /** true when health has drained to 0 */
-  dead?: boolean;
-  /** 0–1, flight energy; 0 = must rest */
-  flyTimeLeft?: number;
-  /** seconds left in rest; 0 = not resting */
-  restTimeLeft?: number;
-  /** max rest duration (seconds) for UI progress */
-  restDuration?: number;
-  /** true when eating at food source */
-  feeding?: boolean;
-}
 
 export interface SimState {
   t: number;
@@ -394,6 +375,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
       t: Number.isFinite(t) ? t : fly.t,
       hunger: Number.isFinite(hunger) ? hunger : fly.hunger,
       health: Number.isFinite(health) ? health : (fly.health ?? 100),
+      dead: false,
       flyTimeLeft: Math.max(0, Math.min(1, flyTimeLeftSec / FLY_TIME_MAX)),
       restTimeLeft: restTimeLeft > 0 ? restTimeLeft : 0,
       restDuration: REST_TIME,

@@ -57,17 +57,15 @@ export function BrainOverlay({ neurons, activity, visible = true }: BrainOverlay
     const ys = y.map((v) => (v - cy) / scale);
     const zs = z.map((v) => (v - cz) / scale);
 
-    // Color: base on side (left=blue, right=red, center=gray) + brightness from activity
+    // Inactive = grey; active = colored (left=blue, right=red, center=amber)
     const act = ids.map((id) => activity[id] ?? 0);
-    const sideIdx = withPos.map((p) => {
-      const s = (p.side ?? '').toLowerCase();
-      if (s === 'left') return 0;
-      if (s === 'right') return 1;
-      return 0.5; // center/unknown
-    });
     const color = ids.map((id, i) => {
       const a = act[i];
-      return sideIdx[i] * 2 + (a > 0 ? 0.5 : 0); // mix side hue with activity
+      if (a <= 0) return 0; // grey
+      const s = (withPos[i]?.side ?? '').toLowerCase();
+      if (s === 'left') return 0.3 + a * 0.4;
+      if (s === 'right') return 0.7 + a * 0.3;
+      return 0.5 + a * 0.2; // center
     });
 
     const traces: Plotly.Data[] = [
@@ -78,17 +76,17 @@ export function BrainOverlay({ neurons, activity, visible = true }: BrainOverlay
         z: zs,
         mode: 'markers',
         marker: {
-          size: 5,
+          size: 3,
           color,
           colorscale: [
-            [0, '#2d4a9e'],
-            [0.25, '#4a7de8'],
-            [0.5, '#888888'],
-            [0.75, '#e85a4a'],
+            [0, '#888888'],
+            [0.3, '#4a7de8'],
+            [0.5, '#e8b84a'],
+            [0.7, '#e85a4a'],
             [1, '#ff8c7a'],
           ],
           cmin: 0,
-          cmax: 2.5,
+          cmax: 1,
           showscale: false,
           line: { width: 0 },
         },
@@ -107,12 +105,13 @@ export function BrainOverlay({ neurons, activity, visible = true }: BrainOverlay
       plot_bgcolor: 'rgba(10,10,18,0.9)',
       font: { color: '#aaa', size: 10 },
       showlegend: false,
+      uirevision: 'brain-activity',
       scene: {
         xaxis: { visible: false, range: [-1.2, 1.2] },
         yaxis: { visible: false, range: [-1.2, 1.2] },
         zaxis: { visible: false, range: [-1.2, 1.2] },
         bgcolor: 'rgba(10,10,18,0)',
-        camera: { eye: { x: 1.4, y: 1.4, z: 1.1 } },
+        camera: { eye: { x: 1.8, y: -1.8, z: 1.2 } },
         aspectmode: 'cube',
         dragmode: 'orbit',
       },
@@ -121,10 +120,11 @@ export function BrainOverlay({ neurons, activity, visible = true }: BrainOverlay
     const el = plotRef.current;
     Plotly.newPlot(el, traces, layout, {
       responsive: true,
-      displayModeBar: false,
+      displayModeBar: true,
       displaylogo: false,
+      modeBarButtonsToRemove: ['lasso2d', 'select2d'],
       staticPlot: false,
-    }).then(() => {
+    } as Record<string, unknown>).then(() => {
       plotReady.current = true;
     });
 
@@ -134,15 +134,17 @@ export function BrainOverlay({ neurons, activity, visible = true }: BrainOverlay
     };
   }, [visible, n, withPos[0]?.root_id ?? '']); // Rebuild when neuron set changes
 
-  // Update colors when activity changes (side-based + activity)
+  // Update colors when activity changes: inactive=grey, active=colored
   useEffect(() => {
     if (!plotRef.current || !plotReady.current || !visible || idsRef.current.length === 0) return;
     const sides = sidesRef.current;
     const color = idsRef.current.map((id, i) => {
-      const s = sides[i] ?? '';
-      const sideIdx = s === 'left' ? 0 : s === 'right' ? 1 : 0.5;
       const a = activity[id] ?? 0;
-      return sideIdx * 2 + (a > 0 ? 0.5 : 0);
+      if (a <= 0) return 0;
+      const s = sides[i] ?? '';
+      if (s === 'left') return 0.3 + a * 0.4;
+      if (s === 'right') return 0.7 + a * 0.3;
+      return 0.5 + a * 0.2;
     });
     Plotly.restyle(plotRef.current, { 'marker.color': [color] }, [0]);
   }, [activity, visible]);

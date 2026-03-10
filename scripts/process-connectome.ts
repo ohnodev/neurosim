@@ -12,7 +12,7 @@ import { parse } from 'csv-parse/sync';
 
 const DATA_RAW = path.join(process.cwd(), 'data', 'raw');
 const OUTPUT = path.join(process.cwd(), 'data', 'connectome-subset.json');
-const DEFAULT_SUBSET_SIZE = 2000; // curated subset for movement/odor/visual/feeding (use --all for full)
+const DEFAULT_SUBSET_SIZE = 10000; // curated subset for movement/odor/visual/feeding (use --all for full)
 const MIN_SYNAPSES = 2;
 
 const useAll = process.argv.includes('--all') || process.env.SUBSET_SIZE === '0';
@@ -139,17 +139,29 @@ function main() {
 
   const idCol = inferIdCol(coordsRaw, ['root_id', 'rootid', 'id', 'segment']);
   const coordCols = coordsRaw[0] ? Object.keys(coordsRaw[0]) : [];
-  const xCol = coordCols.find((c) => /^x$|_x$/.test(c)) ?? 'x';
-  const yCol = coordCols.find((c) => /^y$|_y$/.test(c)) ?? 'y';
-  const zCol = coordCols.find((c) => /^z$|_z$/.test(c)) ?? 'z';
+  const xCol = coordCols.find((c) => /^x$|_x$/.test(c));
+  const yCol = coordCols.find((c) => /^y$|_y$/.test(c));
+  const zCol = coordCols.find((c) => /^z$|_z$/.test(c));
+  const posCol = coordCols.find((c) => /^position$/i.test(c));
 
   const coordById = new Map<string, { x: number; y: number; z: number }>();
   for (const row of coordsRaw) {
     const id = String(row[idCol] ?? '').trim();
     if (!id) continue;
-    const x = parseFloat(row[xCol] ?? '0');
-    const y = parseFloat(row[yCol] ?? '0');
-    const z = parseFloat(row[zCol] ?? '0');
+    let x = 0, y = 0, z = 0;
+    if (xCol && yCol && zCol && row[xCol] != null && row[yCol] != null && row[zCol] != null) {
+      x = parseFloat(String(row[xCol])) || 0;
+      y = parseFloat(String(row[yCol])) || 0;
+      z = parseFloat(String(row[zCol])) || 0;
+    } else if (posCol && row[posCol]) {
+      // FlyWire format: "[352484 175164 229040]"
+      const m = String(row[posCol]).match(/\[?\s*([-\d.eE+]+)\s+([-\d.eE+]+)\s+([-\d.eE+]+)\s*\]?/);
+      if (m) {
+        x = parseFloat(m[1]) || 0;
+        y = parseFloat(m[2]) || 0;
+        z = parseFloat(m[3]) || 0;
+      }
+    }
     coordById.set(id, { x, y, z });
   }
 

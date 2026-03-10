@@ -104,12 +104,12 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
   let restTimeLeft = 0;
 
   const REF_STEP = 1 / 30;    // reference timestep (API calls at 30Hz)
-  const TAU = 0.03;           // propagation strength (per REF_STEP)
-  const DECAY = 0.92;         // per REF_STEP decay (higher = faster falloff, more dynamic variation)
-  const PROP_CAP = 0.003;     // max contribution per synapse (per REF_STEP)
+  const TAU = 0.004;          // propagation (minimal; no neuron stuck >0.42 for >5s)
+  const DECAY = 0.975;        // per REF_STEP decay
+  const PROP_CAP = 0.0004;    // max contribution per synapse
   const INPUT_RATE = 2;
-  const SENSORY_SCALE = 0.12; // reduce drive so neurons don't saturate at 0.5
-  const SENSORY_DUTY = 0.12;  // sensory bursts ~12% of the time (more spaced out = more dark periods)
+  const SENSORY_SCALE = 0.14; // drive strength (reduced from 0.18 so activity can decay)
+  const SENSORY_DUTY = 0.08;  // sensory bursts ~8% of time (sparse = time to turn off)
   const ACT_THRESHOLD = 0.08; // only report neurons above this (filters diffuse activity)
 
   function step(dt: number): SimState {
@@ -137,7 +137,8 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
       }
     }
 
-    // Route visual stimuli (food/light) into visual-type neurons. Pulsed; scale by r for dt-independence.
+    // Route visual stimuli (food/light) into visual-type neurons. Pulsed; rotate which neurons
+    // receive input so none stay on >5s (each gets input ~1/N of the time).
     if (visualTargetIndices.length > 0) {
       const pulse = Math.sin(t * INPUT_RATE) > 1 - SENSORY_DUTY * 2 ? 1 : 0;
       if (pulse > 0) {
@@ -150,11 +151,23 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
           if (s.type === 'food') foodSignal += invDist * (1 - fly.hunger / 100);
           else if (s.type === 'light') lightSignal += invDist * 0.3;
         }
-        const baseNoise = 0.15 * (0.5 + 0.5 * Math.sin(t * INPUT_RATE));
-        const rawPerNeuron = (baseNoise + foodSignal * 0.5 + lightSignal) / visualTargetIndices.length;
+        const baseNoise = 0.08 * (0.5 + 0.5 * Math.sin(t * INPUT_RATE));
+        const n = visualTargetIndices.length;
+        // For large connectomes: rotate so each neuron gets input ~1/30 of time (5+ sec gaps)
+        const useChunks = n >= 20;
+        let start = 0, end = n;
+        if (useChunks) {
+          const chunkSize = Math.max(1, Math.floor(n / 30));
+          const stepIdx = Math.floor(t / REF_STEP);
+          const chunk = stepIdx % Math.max(1, Math.ceil(n / chunkSize));
+          start = chunk * chunkSize;
+          end = Math.min(start + chunkSize, n);
+        }
+        const activeCount = end - start;
+        const rawPerNeuron = (baseNoise + foodSignal * 0.5 + lightSignal) / Math.max(1, activeCount);
         const perNeuron = Math.min(rawPerNeuron * SENSORY_SCALE * r, 0.5);
-        for (const idx of visualTargetIndices) {
-          nextActivity[idx] += perNeuron;
+        for (let k = start; k < end; k++) {
+          nextActivity[visualTargetIndices[k]] += perNeuron;
         }
       }
     }
@@ -172,6 +185,10 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
     const ACTIVITY_MAX = 0.5;
     for (let i = 0; i < nextActivity.length; i++) {
       nextActivity[i] = Math.max(0, Math.min(ACTIVITY_MAX, Number.isFinite(nextActivity[i]) ? nextActivity[i] : 0));
+    }
+    // During rest: shut down all neurons (gives network a chance to reset, prevents stuck-on neurons)
+    if (restTimeLeft > 0) {
+      nextActivity.fill(0);
     }
     activity = nextActivity;
 

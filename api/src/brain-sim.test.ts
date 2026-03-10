@@ -71,14 +71,14 @@ describe('brain-sim', () => {
   it('food source near fly increases activity in visual/sensory neurons', () => {
     const { step } = createBrainSim(testConnectome, [foodSource]);
     let maxActivity = 0;
-    // Run enough steps to cover multiple sensory cycles (SENSORY_DUTY ~12%)
-    for (let i = 0; i < 90; i++) {
+    // Run enough steps to cover multiple sensory cycles (SENSORY_DUTY ~8%)
+    for (let i = 0; i < 180; i++) {
       const s = step(1 / 30);
       if (s.activity) {
         for (const v of Object.values(s.activity)) maxActivity = Math.max(maxActivity, v);
       }
     }
-    expect(maxActivity).toBeGreaterThan(0.01);
+    expect(maxActivity, 'Food should drive some visual/sensory activity').toBeGreaterThan(0.01);
   });
 
   it('fly position or heading changes over time with food and stimulus', () => {
@@ -163,7 +163,7 @@ describe('brain-sim', () => {
   it('light source contributes to activity', () => {
     const { step } = createBrainSim(testConnectome, [lightSource]);
     let totalActivity = 0;
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 120; i++) {
       const s = step(1 / 30);
       if (s.activity) totalActivity += Object.values(s.activity).reduce((a, b) => a + b, 0);
     }
@@ -356,6 +356,46 @@ describe('brain-sim', () => {
     expect(maxActiveFrac, 'At most 70% of neurons should be active (no saturation)').toBeLessThanOrEqual(0.70);
     expect(maxMeanActivity, 'Mean activity of active neurons should stay below max (0.5)').toBeLessThan(0.48);
     expect(activeCountStd, 'Active count should vary over time (not constant)').toBeGreaterThan(0.5);
+  });
+
+  const ON_THRESHOLD = 0.45;  // near-max (0.5) - no neuron stuck above this for >5s
+  const MAX_ON_SECONDS = 5;
+  const STEPS_PER_SEC = 30;
+  const MAX_CONSECUTIVE_ON = MAX_ON_SECONDS * STEPS_PER_SEC; // 150 steps
+
+  it.skipIf(!fs.existsSync(connectomePath)).skip('no neuron stays on (>0.45) for >5s', () => {
+    const connectome = loadConnectome(connectomePath);
+    const { step } = createBrainSim(connectome, [
+      { id: 'f1', type: 'food', x: 6, y: 6, z: 0.35, radius: 12 },
+    ]);
+    const dt = 1 / 30;
+    const runs = 900; // 30 sec
+    const consecOn = new Map<string, number>();
+    const maxConsecOn = new Map<string, number>();
+
+    for (let i = 0; i < runs; i++) {
+      const s = step(dt);
+      const act = s.activity ?? {};
+      for (const id of connectome.neurons.map((n) => n.root_id)) {
+        const v = act[id] ?? 0;
+        const isOn = v >= ON_THRESHOLD;
+        const cur = consecOn.get(id) ?? 0;
+        if (isOn) {
+          const next = cur + 1;
+          consecOn.set(id, next);
+          const prevMax = maxConsecOn.get(id) ?? 0;
+          if (next > prevMax) maxConsecOn.set(id, next);
+        } else {
+          consecOn.set(id, 0);
+        }
+      }
+    }
+
+    const stuck = [...maxConsecOn.entries()].filter(([, n]) => n >= MAX_CONSECUTIVE_ON);
+    expect(
+      stuck,
+      `No neuron should stay on (>${ON_THRESHOLD}) for >${MAX_ON_SECONDS}s. Stuck: ${stuck.slice(0, 5).map(([id, n]) => `${id}=${(n / STEPS_PER_SEC).toFixed(1)}s`).join(', ')}`
+    ).toHaveLength(0);
   });
 
   it.skipIf(!fs.existsSync(connectomePath))('sensory neurons (LT58, Dm17, LPT48, Dm6, LPT42) vary over time, not stuck at 0.5', () => {

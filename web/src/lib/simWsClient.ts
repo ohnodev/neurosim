@@ -4,9 +4,25 @@
  */
 import { getWsUrl } from "./wsUrl";
 
+/** Fly state from sim WebSocket payload; should match api brain-sim FlyState. */
+export interface FlyState {
+  x: number;
+  y: number;
+  z: number;
+  heading: number;
+  t: number;
+  hunger: number;
+  health?: number;
+  dead?: boolean;
+  flyTimeLeft?: number;
+  restTimeLeft?: number;
+  restDuration?: number;
+  feeding?: boolean;
+}
+
 export interface SimPayload {
   t?: number;
-  fly?: { x: number; y: number; z: number; heading: number; t: number; hunger: number; health?: number; dead?: boolean; flyTimeLeft?: number; restTimeLeft?: number };
+  fly?: FlyState;
   activity?: Record<string, number>;
   simRunning?: boolean;
   error?: string;

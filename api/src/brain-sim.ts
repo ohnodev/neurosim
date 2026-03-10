@@ -123,6 +123,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
   function step(dt: number): SimState {
     if (fly.dead) {
       const t = fly.t + dt;
+      fly = { ...fly, t };
       const actObj: Record<string, number> = {};
       neuronIds.forEach((id, i) => {
         const v = activity[i];
@@ -130,7 +131,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
       });
       return {
         t,
-        fly: { ...fly, t },
+        fly,
         activity: Object.keys(actObj).length ? actObj : undefined,
       };
     }
@@ -246,10 +247,18 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
         }
       }
     }
+    const prevHunger = hunger;
     if (!isEating) hunger = Math.max(0, hunger - HUNGER_DECAY * dt);
 
+    let timeAtZero = 0;
     if (hunger <= 0) {
-      health = Math.max(0, health - HEALTH_DECAY * dt);
+      if (prevHunger <= 0) {
+        timeAtZero = dt;
+      } else {
+        const overflow = Math.max(0, HUNGER_DECAY * dt - prevHunger);
+        timeAtZero = overflow / HUNGER_DECAY;
+      }
+      health = Math.max(0, health - HEALTH_DECAY * timeAtZero);
       if (health <= 0) {
         fly = {
           ...fly,

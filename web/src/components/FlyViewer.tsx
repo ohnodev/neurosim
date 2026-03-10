@@ -3,24 +3,9 @@ import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import type { WorldSource } from '../../../api/src/world';
-import { subscribeSim, sendStart, sendStop, getConnectionState } from '../lib/simWsClient';
+import { subscribeSim, sendStart, sendStop, getConnectionState, type FlyState } from '../lib/simWsClient';
 import { getApiBase } from '../lib/wsUrl';
 import { BrainOverlay, type NeuronWithPosition } from './BrainOverlay';
-
-interface FlyState {
-  x: number;
-  y: number;
-  z: number;
-  heading: number;
-  t: number;
-  hunger: number;
-  health?: number;
-  dead?: boolean;
-  flyTimeLeft?: number;  // 0-1, flight energy
-  restTimeLeft?: number; // seconds resting
-  restDuration?: number; // max rest duration (for UI progress)
-  feeding?: boolean;
-}
 
 function getHungerColor(hunger: number): string {
   if (hunger > 50) return '#5a5';

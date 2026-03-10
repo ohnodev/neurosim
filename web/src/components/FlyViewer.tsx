@@ -3,7 +3,7 @@ import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import type { WorldSource } from '../../../api/src/world';
-import { subscribeSim, sendStimulate, sendStart, getConnectionState } from '../lib/simWsClient';
+import { subscribeSim, sendStart, getConnectionState } from '../lib/simWsClient';
 import { BrainOverlay, type NeuronWithPosition } from './BrainOverlay';
 
 interface FlyState {
@@ -58,11 +58,11 @@ function WorldSources({ sources }: { sources: WorldSource[] }) {
       {sources.map((s) => (
         <group key={s.id} position={[s.x, s.z, s.y]}>
           <mesh>
-            <sphereGeometry args={[0.4, 16, 16]} />
+            <sphereGeometry args={[0.8, 24, 24]} />
             <meshStandardMaterial
               color={s.type === 'food' ? '#e8a838' : '#88ccff'}
-              emissive={s.type === 'light' ? '#4488ff' : '#332200'}
-              emissiveIntensity={s.type === 'light' ? 0.6 : 0.1}
+              emissive={s.type === 'food' ? '#553300' : '#4488ff'}
+              emissiveIntensity={s.type === 'light' ? 0.6 : 0.2}
             />
           </mesh>
         </group>
@@ -85,7 +85,6 @@ export default function FlyViewer() {
   const [error, setError] = useState<string | null>(null);
   const [activeCount, setActiveCount] = useState(0);
   const [activity, setActivity] = useState<Record<string, number>>({});
-  const [lastStimulated, setLastStimulated] = useState<string[]>([]);
   const [neuronsWithPositions, setNeuronsWithPositions] = useState<NeuronWithPosition[]>([]);
 
   useEffect(() => {
@@ -152,14 +151,6 @@ export default function FlyViewer() {
     sendStart();
   };
 
-  const stimulate = () => {
-    if (getConnectionState() !== 'open') return;
-    if (neuronIds.length === 0) return;
-    const id = neuronIds[Math.floor(Math.random() * neuronIds.length)];
-    setLastStimulated([id]);
-    sendStimulate([id], 0.9);
-  };
-
   const topActivity = Object.entries(activity)
     .sort(([, a], [, b]) => b - a)
     .slice(0, 10);
@@ -175,10 +166,10 @@ export default function FlyViewer() {
           <OrbitControls />
           <FlyMesh state={flyState} />
           <WorldSources sources={sources} />
-          <mesh position={[0, 0, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
-            <planeGeometry args={[50, 50]} />
-            <meshStandardMaterial color="#1a1a2e" />
-          </mesh>
+        <mesh position={[0, 0, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
+          <planeGeometry args={[50, 50, 32, 32]} />
+          <meshStandardMaterial color="#2d5a27" roughness={0.9} metalness={0.05} />
+        </mesh>
         </Canvas>
       </div>
       {error && (
@@ -191,9 +182,6 @@ export default function FlyViewer() {
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <button onClick={startSim} style={{ padding: '6px 14px', borderRadius: 8, border: 'none', background: '#2a5', color: '#fff', cursor: 'pointer', fontWeight: 600 }}>
               Start
-            </button>
-            <button onClick={stimulate} disabled={neuronIds.length === 0} style={{ padding: '6px 14px', borderRadius: 8, border: 'none', background: neuronIds.length === 0 ? '#222' : '#333', color: '#fff', cursor: neuronIds.length === 0 ? 'not-allowed' : 'pointer', fontWeight: 600 }}>
-              Stimulate
             </button>
             <span style={{ background: '#0a0', color: '#fff', padding: '4px 12px', borderRadius: 8 }}>Connected</span>
             {activeCount > 0 && <span style={{ color: '#aaa', fontSize: 12 }}>Active: {activeCount}</span>}
@@ -221,13 +209,10 @@ export default function FlyViewer() {
             {topActivity.map(([id, v]) => (
               <div key={id} style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }} title={id}>
                 <span>{neuronLabels[id] || shortId(id)}</span>
-                <span style={{ color: '#8cf' }}>{(v ?? 0).toFixed(2)}</span>
+                <span style={{ color: '#8cf' }}>{(Math.min(v ?? 0, 1)).toFixed(2)}</span>
               </div>
             ))}
           </div>
-          {lastStimulated.length > 0 && (
-            <div style={{ marginTop: 8, color: '#c96' }}>Last stim: {lastStimulated.map((id) => neuronLabels[id] || shortId(id)).join(', ')}</div>
-          )}
         </div>
       )}
     </div>

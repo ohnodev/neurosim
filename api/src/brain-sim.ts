@@ -140,6 +140,11 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
       }
     }
 
+    // Clamp activity to prevent numerical explosion
+    const ACTIVITY_MAX = 1;
+    for (let i = 0; i < nextActivity.length; i++) {
+      nextActivity[i] = Math.max(0, Math.min(ACTIVITY_MAX, Number.isFinite(nextActivity[i]) ? nextActivity[i] : 0));
+    }
     activity = nextActivity;
 
     // Read motor output from motor-type neurons only (classification-based, not scalar)
@@ -225,7 +230,10 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
     let nz = fly.z + (Number.isFinite(zDrift) ? zDrift : 0) + (Number.isFinite(zOsc) ? zOsc : 0);
     nz = Math.max(GROUND_Z, Math.min(FLIGHT_Z, nz));
 
-    const nHeading = fly.heading + (Number.isFinite(headingBias) ? headingBias : 0);
+    let nHeading = fly.heading + (Number.isFinite(headingBias) ? headingBias : 0);
+    while (nHeading > Math.PI) nHeading -= 2 * Math.PI;
+    while (nHeading < -Math.PI) nHeading += 2 * Math.PI;
+    nHeading = Number.isFinite(nHeading) ? nHeading : fly.heading;
     fly = {
       x: Number.isFinite(nx) ? nx : fly.x,
       y: Number.isFinite(ny) ? ny : fly.y,
@@ -237,7 +245,8 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
 
     const actObj: Record<string, number> = {};
     neuronIds.forEach((id, i) => {
-      if (activity[i] > 0.01) actObj[id] = activity[i];
+      const v = activity[i];
+      if (v > 0.01 && Number.isFinite(v)) actObj[id] = Math.min(1, v);
     });
 
     return { t, fly, activity: Object.keys(actObj).length ? actObj : undefined };
@@ -250,7 +259,8 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
   function getState(): SimState {
     const actObj: Record<string, number> = {};
     neuronIds.forEach((id, i) => {
-      if (activity[i] > 0.01) actObj[id] = activity[i];
+      const v = activity[i];
+      if (v > 0.01 && Number.isFinite(v)) actObj[id] = Math.min(1, v);
     });
     return { t: fly.t, fly, activity: Object.keys(actObj).length ? actObj : undefined };
   }

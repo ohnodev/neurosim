@@ -117,7 +117,7 @@ export function WalletMenuModal({ isOpen, onClose, anchorRef }: WalletMenuModalP
       />
       <div
         className="wallet-modal"
-        role="menu"
+        role="dialog"
         aria-label="Wallet menu"
         style={{ top, right }}
       >

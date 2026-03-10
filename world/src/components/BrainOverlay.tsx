@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useMemo } from 'react';
 import Plotly from 'plotly.js-dist-min';
 
 export interface NeuronWithPosition {
@@ -34,6 +34,7 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
 
   const withPos = neurons.filter(hasPosition);
   const n = withPos.length;
+  const neuronIdsKey = useMemo(() => withPos.map((p) => p.root_id).sort().join(','), [withPos]);
 
   // Initial plot when neuron set (with positions) is available
   useEffect(() => {
@@ -147,7 +148,7 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
       Plotly.purge(el);
       plotReady.current = false;
     };
-  }, [visible, n, withPos[0]?.root_id ?? '']); // Rebuild when neuron set changes
+  }, [visible, n, neuronIdsKey]);
 
   // Resize Plotly when container changes (e.g. panel expand after minimize)
   useEffect(() => {

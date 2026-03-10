@@ -1,4 +1,4 @@
-import { type ReactNode, createContext, useContext, useState, useCallback } from 'react';
+import { type ReactNode, createContext, useContext, useState, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 
 export type NotificationType = 'info' | 'success' | 'error' | 'warning';
@@ -33,8 +33,9 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const show = useCallback((message: string, type: NotificationType = 'info') => setState({ message, type, visible: true }), []);
   const hide = useCallback(() => setState((s) => ({ ...s, visible: false })), []);
   const update = useCallback((message: string, type: NotificationType = 'info') => setState((s) => ({ ...s, message, type })), []);
+  const value = useMemo(() => ({ show, hide, update }), [show, hide, update]);
   return (
-    <NotificationContext.Provider value={{ show, hide, update }}>
+    <NotificationContext.Provider value={value}>
       {children}
       <NotificationToast message={state.message} type={state.type} visible={state.visible} onClose={hide} />
     </NotificationContext.Provider>

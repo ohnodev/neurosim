@@ -15,14 +15,7 @@ const connectome = loadConnectome();
 const GROUND_Z = 0.35;
 const INITIAL_SPREAD = 4;
 
-spawnFood(); // initial food
-setInterval(() => {
-  const f = spawnFood();
-  if (f) {
-    console.log('[world] spawned food', f.id, 'at', f.x.toFixed(1), f.y.toFixed(1));
-    broadcast({ simRunning, sources: getSources() });
-  }
-}, 10_000);
+let foodIntervalId: ReturnType<typeof setInterval> | null = null;
 
 /** Simulation flies; starts empty, users deploy flies. */
 const sims: ReturnType<typeof createBrainSim>[] = [];
@@ -63,6 +56,14 @@ function startSim(): void {
   if (simRunning) return;
   simRunning = true;
   connectionStep = 0;
+  spawnFood();
+  foodIntervalId = setInterval(() => {
+    const f = spawnFood();
+    if (f) {
+      console.log('[world] spawned food', f.id, 'at', f.x.toFixed(1), f.y.toFixed(1));
+      broadcast({ simRunning, sources: getSources() });
+    }
+  }, 10_000);
   simIntervalId = setInterval(() => {
     const dt = 1 / 30;
     const flies: ReturnType<typeof sims[0]['getState']>['fly'][] = [];
@@ -89,6 +90,10 @@ function startSim(): void {
 }
 
 function stopSim(): void {
+  if (foodIntervalId) {
+    clearInterval(foodIntervalId);
+    foodIntervalId = null;
+  }
   if (!simRunning) return;
   simRunning = false;
   if (simIntervalId) {
@@ -221,4 +226,4 @@ if (process.env.VITEST !== 'true') {
   });
 }
 
-export { app, httpServer, startSim };
+export { app, httpServer, startSim, stopSim };

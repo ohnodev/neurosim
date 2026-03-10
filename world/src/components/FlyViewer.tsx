@@ -313,10 +313,29 @@ export default function FlyViewer() {
     .sort(([, a], [, b]) => b - a)
     .slice(0, 10);
 
+  const deployedSlotKeys = useMemo(
+    () => Object.keys(deployed)
+      .map((k) => parseInt(k, 10))
+      .filter((n) => !Number.isNaN(n) && deployed[n] != null)
+      .sort((a, b) => a - b),
+    [deployed]
+  );
+
   const simIndexForSelected = deployed[selectedFlyIndex];
   const focusedFly =
-    (simIndexForSelected != null && flies[simIndexForSelected]) ??
-    (flies[0] ?? DEFAULT_FLY);
+    simIndexForSelected != null && flies[simIndexForSelected]
+      ? flies[simIndexForSelected]!
+      : DEFAULT_FLY;
+
+  useEffect(() => {
+    if (deployedSlotKeys.length === 0) return;
+    const valid =
+      simIndexForSelected != null &&
+      flies[simIndexForSelected] != null;
+    if (!valid) {
+      setSelectedFlyIndex(deployedSlotKeys[0]!);
+    }
+  }, [deployedSlotKeys, simIndexForSelected, flies]);
 
   const flyMode = getFlyMode(focusedFly);
 
@@ -410,6 +429,8 @@ export default function FlyViewer() {
         <div
           className={`fly-viewer__flies-overlay ${fliesPanelOpen ? 'fly-viewer__flies-overlay--open' : ''}`}
           id="flies-panel-overlay"
+          inert={!fliesPanelOpen ? true : undefined}
+          aria-hidden={!fliesPanelOpen}
         >
           <div className="fly-viewer__flies-panel">
             <div style={{ color: '#888', marginBottom: 8, fontSize: 10 }}>Your Flies — click to view</div>

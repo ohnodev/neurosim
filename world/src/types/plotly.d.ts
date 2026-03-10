@@ -21,6 +21,7 @@ declare module 'plotly.js-dist-min' {
   }
 
   const Plotly: {
+    Plots?: { resize: (el: HTMLElement) => void };
     newPlot: (
       el: HTMLElement,
       data: PlotlyData[],

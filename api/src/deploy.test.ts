@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
 import WebSocket from 'ws';
-import { app, httpServer, startSim } from './index.js';
+import { app, httpServer, startSim, stopSim } from './index.js';
 import { addFly, getFlies } from './services/flyStore.js';
 
 const TEST_ADDR = '0x0000000000000000000000000000000000000001';
@@ -55,6 +55,7 @@ describe('deploy flow: buy fly + deploy + sim updates', () => {
   });
 
   afterAll(async () => {
+    stopSim();
     await new Promise<void>((resolve) => {
       httpServer.close(() => resolve());
     });

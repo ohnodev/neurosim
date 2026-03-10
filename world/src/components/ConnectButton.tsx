@@ -46,7 +46,7 @@ export function ConnectButton() {
         onClick={handleClick}
         aria-label={isConnected ? 'Open wallet menu' : 'Connect wallet'}
         aria-expanded={modalOpen}
-        aria-haspopup="menu"
+        aria-haspopup="dialog"
       >
         <span className="wallet-btn__icon">
           <WalletIcon />

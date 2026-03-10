@@ -30,7 +30,7 @@ interface BuyFlyModalProps {
 }
 
 export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyModalProps) {
-  const { ready, login } = usePrivy();
+  const { ready, authenticated, login, connectWallet } = usePrivy();
   const { address, walletClient } = usePrivyWallet();
   const queryClient = useQueryClient();
   const notification = useNotification();
@@ -127,7 +127,7 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
             <button
               type="button"
               className="neurosim-claim__btn neurosim-claim__btn--primary"
-              onClick={() => { login(); onClose(); }}
+              onClick={() => { (authenticated ? connectWallet : login)(); onClose(); }}
               disabled={!ready}
             >
               Connect Wallet
@@ -148,7 +148,7 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
               type="button"
               className="neurosim-claim__btn neurosim-claim__btn--primary"
               onClick={handleBuyEth}
-              disabled={!!busy || !config?.flyEthReceiver}
+              disabled={!!busy || !walletClient || !address || !config?.flyEthReceiver}
             >
               {busy === 'eth' ? 'Confirming...' : 'Pay with 0.0001 ETH'}
             </button>

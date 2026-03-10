@@ -30,6 +30,7 @@ export function PrivyWalletProvider({ children }: { children: ReactNode }) {
   const [walletClient, setWalletClient] = useState<WalletClient | undefined>(
     undefined,
   );
+  const [liveChainId, setLiveChainId] = useState<number | undefined>(undefined);
 
   const activeWallet =
     ready && authenticated && wallets.length > 0 ? wallets[0] : null;
@@ -41,6 +42,7 @@ export function PrivyWalletProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!activeWallet || !ready) {
       setWalletClient(undefined);
+      setLiveChainId(undefined);
       return;
     }
 
@@ -50,32 +52,38 @@ export function PrivyWalletProvider({ children }: { children: ReactNode }) {
     async function initWalletClient() {
       if (!address) {
         setWalletClient(undefined);
+        setLiveChainId(undefined);
         return;
       }
       try {
         const wallet = activeWallet as {
           getEthereumProvider?: () => Promise<unknown>;
-          switchChain?: (id: number) => Promise<void>;
         };
         if (typeof wallet.getEthereumProvider !== 'function') {
           setWalletClient(undefined);
+          setLiveChainId(undefined);
           return;
-        }
-        if (typeof wallet.switchChain === 'function') {
-          await wallet.switchChain(base.id);
         }
         const provider = await wallet.getEthereumProvider();
         if (cancelled || !provider) return;
 
+        const p = provider as import('viem').EIP1193Provider;
+        const hexChainId = await p.request({ method: 'eth_chainId' });
+        const chainId = hexChainId ? parseInt(String(hexChainId), 16) : undefined;
+        if (!cancelled) setLiveChainId(chainId);
+
         const client = createWalletClient({
           account: address as Address,
           chain: base,
-          transport: custom(provider as import('viem').EIP1193Provider),
+          transport: custom(p),
         });
         if (!cancelled) setWalletClient(client);
       } catch (err) {
         console.error('Failed to create wallet client:', err);
-        if (!cancelled) setWalletClient(undefined);
+        if (!cancelled) {
+          setWalletClient(undefined);
+          setLiveChainId(undefined);
+        }
       }
     }
 
@@ -85,7 +93,7 @@ export function PrivyWalletProvider({ children }: { children: ReactNode }) {
     };
   }, [activeWallet, address, ready]);
 
-  const chainId = walletClient?.chain?.id;
+  const chainId = liveChainId;
 
   const value: PrivyWalletContextValue = useMemo(
     () => ({

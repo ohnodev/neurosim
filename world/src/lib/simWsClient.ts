@@ -4,6 +4,7 @@
  */
 import { getWsUrl } from "./wsUrl";
 import type { FlyState } from "../../../api/src/fly-state";
+import type { WorldSource } from "../../../api/src/world";
 
 export type { FlyState };
 
@@ -15,7 +16,7 @@ export interface SimPayload {
   fly?: FlyState;
   activity?: Record<string, number>;
   simRunning?: boolean;
-  sources?: unknown;
+  sources?: WorldSource[];
   error?: string;
 }
 

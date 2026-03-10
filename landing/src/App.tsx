@@ -7,7 +7,6 @@ import { getApiBase } from './lib/constants';
 import './App.css';
 
 const LORE_ARTICLE = 'https://theinnermostloop.substack.com/p/the-first-multi-behavior-brain-upload';
-const WORLD_URL = 'https://world.neurosim.fun';
 const X_PLACEHOLDER = 'https://x.com/neurosim';
 const TG_PLACEHOLDER = 'https://t.me/neurosim';
 
@@ -67,9 +66,6 @@ function App() {
         <header className="header">
           <span className="header__ticker">$NEURO</span>
           <div className="header__actions">
-            <a href={WORLD_URL} target="_blank" rel="noopener noreferrer" className="btn btn--world">
-              Enter World
-            </a>
             <ConnectButton />
           </div>
         </header>
@@ -101,7 +97,7 @@ function App() {
               <a href={LORE_ARTICLE} target="_blank" rel="noopener noreferrer" className="card__link">
                 Lore · First Multi-Behavior Brain Upload
               </a>
-              <a href={WORLD_URL} target="_blank" rel="noopener noreferrer" className="card__link">
+              <a href="https://world.neurosim.fun" target="_blank" rel="noopener noreferrer" className="card__link">
                 Enter World
               </a>
             </div>

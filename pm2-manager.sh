@@ -52,8 +52,7 @@ module.exports = {
     log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
     max_restarts: 10,
     min_uptime: '10s',
-    env_file: '.env',
-    env: { NODE_ENV: 'production' }
+    env_file: '.env'
   }]
 };
 EOF

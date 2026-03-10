@@ -29,13 +29,16 @@ let disposed = false;
 
 function clearConnection(): void {
   if (ws) {
-    try {
-      ws.onclose = null;
-      ws.onerror = null;
-      ws.onmessage = null;
-      ws.close();
-    } catch {
-      /* ignore */
+    ws.onclose = null;
+    ws.onerror = null;
+    ws.onmessage = null;
+    // Avoid ws.close() when CONNECTING—triggers "closed before connection established" in console
+    if (ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.close();
+      } catch {
+        /* ignore */
+      }
     }
     ws = null;
   }

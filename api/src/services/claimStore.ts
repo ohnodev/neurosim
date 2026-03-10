@@ -1,9 +1,9 @@
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 
-// json-store uses require - we need CommonJS interop
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const JSONStore = require('json-store');
+const require = createRequire(import.meta.url);
+const JSONStore = require('json-store') as (path: string) => { get: (k: string) => unknown; set: (k: string, v: unknown) => void };
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const claimsPath = path.join(__dirname, '../../data/claims.json');
@@ -18,7 +18,7 @@ export interface ClaimRecord {
 
 function getClaims(): Record<string, ClaimRecord> {
   const data = store.get('claims');
-  return data && typeof data === 'object' ? data : {};
+  return (data && typeof data === 'object' ? data : {}) as Record<string, ClaimRecord>;
 }
 
 export function getClaim(address: string): ClaimRecord | undefined {

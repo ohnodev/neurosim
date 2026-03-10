@@ -1,6 +1,5 @@
-import { Suspense, useEffect, useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { FlyModelPreview } from './FlyModelPreview';
 
 const WORLD_URL = 'https://world.neurosim.fun';
 const DOCS_URL = 'https://docs.neurosim.fun';
@@ -76,26 +75,26 @@ export function ClaimFlyModal({ open, onClose, seed = Date.now() }: ClaimFlyModa
   if (!open) return null;
 
   const modalContent = (
-    <div className="claim-modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label="Claim your fly">
-      <div className="claim-modal" onClick={(e) => e.stopPropagation()}>
+    <div className="claim-modal-overlay" onClick={onClose}>
+      <div
+        className="claim-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="claim-modal-title"
+        onClick={(e) => e.stopPropagation()}
+      >
         <button className="claim-modal__close" onClick={onClose} aria-label="Close">
           ×
         </button>
         <div className="claim-modal__brain">
-          <Suspense
-            fallback={
-              <div className="claim-modal__brain-placeholder">
-                <div className="claim-modal__pulse" />
-                <span>Loading fly...</span>
-              </div>
-            }
-          >
-            <FlyModelPreview />
-          </Suspense>
+          <div className="claim-modal__brain-placeholder">
+            <div className="claim-modal__pulse" />
+            <span>Your fly</span>
+          </div>
         </div>
         <div className="claim-modal__card">
           <div className="claim-modal__card-glow" />
-          <h2 className="claim-modal__title">Congratulations on your fly!</h2>
+          <h2 id="claim-modal-title" className="claim-modal__title">Congratulations on your fly!</h2>
           <p className="claim-modal__subtitle">Your digital fly has been minted.</p>
           <div className="claim-modal__stats">
             <div className="claim-modal__stat">

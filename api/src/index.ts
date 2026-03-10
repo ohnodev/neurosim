@@ -67,8 +67,8 @@ function startSim(): void {
   simIntervalId = setInterval(() => {
     const dt = 1 / 30;
     const flies: ReturnType<typeof sims[0]['getState']>['fly'][] = [];
+    const activities: (Record<string, number> | undefined)[] = [];
     let t = 0;
-    let activity: Record<string, number> | undefined;
     for (let i = 0; i < sims.length; i++) {
       const state = sims[i].step(dt);
       if (state.eatenFoodId) {
@@ -76,10 +76,11 @@ function startSim(): void {
         console.log('[world] fly', i, 'ate food', state.eatenFoodId);
       }
       flies.push(state.fly);
+      activities.push(state.activity);
       t = state.t;
-      if (i === 0) activity = state.activity;
     }
-    broadcast({ t, flies, activity: activity ?? undefined, simRunning: true, sources: getSources() });
+    const activity = activities[0];
+    broadcast({ t, flies, activities, activity: activity ?? undefined, simRunning: true, sources: getSources() });
     connectionStep += 1;
     if (connectionStep % STEP_LOG_INTERVAL === 0) {
       const first = flies[0];

@@ -227,6 +227,7 @@ export default function FlyViewer() {
   const [error, setError] = useState<string | null>(null);
   const [activeCount, setActiveCount] = useState(0);
   const [activity, setActivity] = useState<Record<string, number>>({});
+  const [activities, setActivities] = useState<(Record<string, number> | undefined)[]>([]);
   const [neuronsWithPositions, setNeuronsWithPositions] = useState<NeuronWithPosition[]>([]);
   const [fliesPanelOpen, setFliesPanelOpen] = useState(
     () => typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches ? false : true
@@ -292,24 +293,21 @@ export default function FlyViewer() {
         }
         return;
       }
-      const data = event as { flies?: FlyState[]; fly?: FlyState; activity?: Record<string, number>; error?: string; sources?: WorldSource[] };
+      const data = event as { flies?: FlyState[]; fly?: FlyState; activity?: Record<string, number>; activities?: (Record<string, number> | undefined)[]; error?: string; sources?: WorldSource[] };
       if (data.error) setError(data.error);
       if (data.sources && Array.isArray(data.sources)) setSources(data.sources);
       if (!data.error) {
         if (Array.isArray(data.flies)) setFlies(data.flies);
         else if (data.fly) setFlies([data.fly]);
-        if (data.activity) {
-          setActivity(data.activity);
-          setActiveCount(Object.keys(data.activity).length);
-        } else if (data.activity !== undefined) {
-          setActivity({});
-        }
+        if (Array.isArray(data.activities)) setActivities(data.activities);
+        if (data.activity) setActivity(data.activity);
+        else if (data.activity !== undefined) setActivity({});
       }
     });
     return unsub;
   }, []);
 
-  const topActivity = Object.entries(activity)
+  const topActivity = Object.entries(activityForSelected)
     .sort(([, a], [, b]) => b - a)
     .slice(0, 10);
 
@@ -322,6 +320,11 @@ export default function FlyViewer() {
   );
 
   const simIndexForSelected = deployed[selectedFlyIndex];
+  const activityForSelected =
+    simIndexForSelected != null && Array.isArray(activities) && activities[simIndexForSelected]
+      ? activities[simIndexForSelected]!
+      : activity;
+  const activeCount = Object.keys(activityForSelected).length;
   const focusedFly =
     simIndexForSelected != null && flies[simIndexForSelected]
       ? flies[simIndexForSelected]!
@@ -502,8 +505,9 @@ export default function FlyViewer() {
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
                 <span>Minimize</span>
               </button>
+              <div style={{ color: '#888', marginBottom: 6 }}>Brain activity — Fly {selectedFlyIndex + 1} (viewing)</div>
               <div style={{ width: 320, height: 240, position: 'relative' }}>
-                <BrainOverlay neurons={neuronsWithPositions} activity={activity} visible={connected} embedded />
+                <BrainOverlay neurons={neuronsWithPositions} activity={activityForSelected} visible={connected} embedded />
               </div>
             </>
           ) : (

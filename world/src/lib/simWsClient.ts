@@ -15,6 +15,8 @@ export interface SimPayload {
   /** Legacy: single fly (prefer flies when present) */
   fly?: FlyState;
   activity?: Record<string, number>;
+  /** Per-fly brain activity (index = sim index) */
+  activities?: (Record<string, number> | undefined)[];
   simRunning?: boolean;
   sources?: WorldSource[];
   error?: string;

@@ -10,3 +10,4 @@ data/raw/
 data/connectome-subset.json
 *.log
 .pm2/
+.venv/

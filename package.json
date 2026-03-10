@@ -3,6 +3,7 @@
   "private": true,
   "scripts": {
     "process-connectome": "tsx scripts/process-connectome.ts",
+    "setup-kaggle": "./scripts/setup-kaggle.sh",
     "download-dataset": "./scripts/download-dataset.sh",
     "api:dev": "cd api && npm run dev",
     "web:dev": "cd web && npm run dev",

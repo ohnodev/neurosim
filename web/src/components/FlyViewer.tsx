@@ -1,6 +1,6 @@
-import { useRef, useState, useEffect } from 'react';
+import { useRef, useState, useEffect, useMemo, Suspense } from 'react';
 import { Canvas } from '@react-three/fiber';
-import { OrbitControls } from '@react-three/drei';
+import { OrbitControls, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import type { WorldSource } from '../../../api/src/world';
 import { subscribeSim, sendStart, sendStop, getConnectionState } from '../lib/simWsClient';
@@ -26,30 +26,21 @@ function getHungerColor(hunger: number): string {
 const API_BASE =
   (import.meta.env.VITE_API_URL as string)?.trim() || 'http://localhost:3001';
 
-function FlyMesh({ state }: { state: FlyState }) {
-  const mesh = useRef<THREE.Mesh>(null);
-  const lerp = useRef(state);
-
-  useEffect(() => {
-    if (!mesh.current) return;
-    lerp.current = { ...state };
-  }, [state]);
+function FlyModel({ state }: { state: FlyState }) {
+  const { scene } = useGLTF('/models/fly/scene.gltf');
+  const group = useRef<THREE.Group>(null);
 
   const x = state.x ?? 0, y = state.y ?? 0, z = state.z ?? 0, h = state.heading ?? 0;
+
+  const cloned = useMemo(() => scene.clone(true), [scene]);
+
   return (
-    <group position={[x, z, y]} rotation={[0, h, 0]}>
-      <mesh ref={mesh}>
-        <capsuleGeometry args={[0.15, 0.4, 4, 8]} />
-        <meshStandardMaterial color="#333" metalness={0.3} roughness={0.7} />
-      </mesh>
-      <mesh position={[0.2, 0.15, 0]} rotation={[0, 0, Math.PI / 2]}>
-        <planeGeometry args={[0.4, 0.08]} />
-        <meshStandardMaterial color="#666" side={THREE.DoubleSide} />
-      </mesh>
-      <mesh position={[-0.2, 0.15, 0]} rotation={[0, 0, Math.PI / 2]}>
-        <planeGeometry args={[0.4, 0.08]} />
-        <meshStandardMaterial color="#666" side={THREE.DoubleSide} />
-      </mesh>
+    <group ref={group} position={[x, z, y]} rotation={[0, h, 0]}>
+      <primitive
+        object={cloned}
+        scale={0.0008}
+        rotation={[Math.PI / 2, 0, 0]}
+      />
     </group>
   );
 }
@@ -81,7 +72,7 @@ function shortId(id: string): string {
 export default function FlyViewer() {
   const [flyState, setFlyState] = useState<FlyState>({ x: 0, y: 0, z: 0.35, heading: 0, t: 0, hunger: 100 });
   const [sources, setSources] = useState<WorldSource[]>([]);
-  const [neuronIds, setNeuronIds] = useState<string[]>([]);
+  const [, setNeuronIds] = useState<string[]>([]);
   const [neuronLabels, setNeuronLabels] = useState<Record<string, string>>({});
   const [connected, setConnected] = useState(false);
   const [simRunning, setSimRunning] = useState(false);
@@ -169,7 +160,9 @@ export default function FlyViewer() {
           <ambientLight intensity={0.6} />
           <directionalLight position={[10, 10, 5]} intensity={1} castShadow />
           <OrbitControls />
-          <FlyMesh state={flyState} />
+          <Suspense fallback={null}>
+            <FlyModel state={flyState} />
+          </Suspense>
           <WorldSources sources={sources} />
           <mesh position={[0, 0, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
             <planeGeometry args={[50, 50, 32, 32]} />

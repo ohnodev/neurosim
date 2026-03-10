@@ -60,7 +60,7 @@ export function BrainOverlay({ neurons, activity, visible = true }: BrainOverlay
 
     // Inactive = grey; active = colored (left=blue, right=red, center=amber)
     const act = ids.map((id) => activity[id] ?? 0);
-    const color = ids.map((id, i) => {
+    const color = ids.map((_, i) => {
       const a = act[i];
       if (a <= 0) return 0; // grey
       const s = (withPos[i]?.side ?? '').toLowerCase();

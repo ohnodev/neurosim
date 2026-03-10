@@ -43,7 +43,7 @@ export function removeFood(id: string): void {
 }
 
 export function getSources(): WorldSource[] {
-  return sources;
+  return sources.slice();
 }
 
 export function getWorld() {

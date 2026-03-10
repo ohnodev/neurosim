@@ -32,7 +32,6 @@ function clearConnection(): void {
     ws.onclose = null;
     ws.onerror = null;
     ws.onmessage = null;
-    // Avoid ws.close() when CONNECTING—triggers "closed before connection established" in console
     if (ws.readyState === WebSocket.OPEN) {
       try {
         ws.close();
@@ -60,6 +59,8 @@ function scheduleRestart(): void {
 
 function connect(): void {
   if (disposed || ws?.readyState === WebSocket.OPEN) return;
+  // Don't abandon a handshaking socket; wait for it to finish (open/close) first
+  if (ws?.readyState === WebSocket.CONNECTING) return;
   clearConnection();
   const url = getWsUrl();
   ws = new WebSocket(url);

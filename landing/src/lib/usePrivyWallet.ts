@@ -1,7 +1,7 @@
 import type { Address } from 'viem';
-import { usePrivyWalletContext } from './privyWalletContext';
+import { usePrivyWalletContext, type PrivyWalletContextValue } from './privyWalletContext';
 
-export function usePrivyWallet() {
+export function usePrivyWallet(): PrivyWalletContextValue {
   return usePrivyWalletContext();
 }
 

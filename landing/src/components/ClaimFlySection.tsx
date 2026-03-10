@@ -40,7 +40,9 @@ export function ClaimFlySection() {
     fetch(`${getApiBase()}/api/claim/config`)
       .then((r) => r.ok ? r.json() : null)
       .then((d: ClaimConfig | null) => d && setConfig(d))
-      .catch(() => {});
+      .catch((err) => {
+        console.error('Failed to fetch claim config:', err);
+      });
   }, []);
 
   useEffect(() => {

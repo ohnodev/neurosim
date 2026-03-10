@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { OnchainProviders } from './components/OnchainProviders';
 import { BrainPlot } from './components/BrainPlot';
 import { ClaimFlySection } from './components/ClaimFlySection';
 import { ConnectButton } from './components/ConnectButton';
+import { getApiBase } from './lib/constants';
 import './App.css';
 
 const LORE_ARTICLE = 'https://theinnermostloop.substack.com/p/the-first-multi-behavior-brain-upload';
@@ -27,13 +28,31 @@ function CheckIcon() {
   );
 }
 
+function formatAddress(addr: string): string {
+  if (!addr || addr.length < 10) return addr;
+  return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+}
+
 function App() {
   const [caCopied, setCaCopied] = useState(false);
-  const CA_PLACEHOLDER = '0x0000...0000';
+  const [neuroTokenAddress, setNeuroTokenAddress] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch(`${getApiBase()}/api/claim/config`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { neuroTokenAddress?: string } | null) => {
+        const addr = d?.neuroTokenAddress;
+        if (addr && addr !== '0x0000000000000000000000000000000000000000') {
+          setNeuroTokenAddress(addr);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const handleCopyCA = async () => {
+    if (!neuroTokenAddress) return;
     try {
-      await navigator.clipboard.writeText(CA_PLACEHOLDER);
+      await navigator.clipboard.writeText(neuroTokenAddress);
       setCaCopied(true);
       setTimeout(() => setCaCopied(false), 1800);
     } catch {
@@ -99,18 +118,20 @@ function App() {
               </div>
             </div>
 
-            <div className="card card--ca">
-              <h2 className="card__title">Contract</h2>
-              <button
-                type="button"
-                className="ca-copy"
-                onClick={handleCopyCA}
-                aria-label="Copy contract address"
-              >
-                <code className="ca-copy__value">{CA_PLACEHOLDER}</code>
-                <span className="ca-copy__icon">{caCopied ? <CheckIcon /> : <CopyIcon />}</span>
-              </button>
-            </div>
+            {neuroTokenAddress && (
+              <div className="card card--ca">
+                <h2 className="card__title">Contract</h2>
+                <button
+                  type="button"
+                  className="ca-copy"
+                  onClick={handleCopyCA}
+                  aria-label="Copy contract address"
+                >
+                  <code className="ca-copy__value">{formatAddress(neuroTokenAddress)}</code>
+                  <span className="ca-copy__icon">{caCopied ? <CheckIcon /> : <CopyIcon />}</span>
+                </button>
+              </div>
+            )}
 
             <div className="card card--claim">
               <ClaimFlySection />

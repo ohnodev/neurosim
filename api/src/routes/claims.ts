@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { decodeEventLog } from 'viem';
 import { baseRpcClient } from '../services/baseRpcClient.js';
-import { getClaim, setClaim } from '../services/claimStore.js';
+import { getClaim, setClaim, tryClaim } from '../services/claimStore.js';
 import {
   OBELISK_NFT_ADDRESS,
   NEURO_TOKEN_ADDRESS,
@@ -34,6 +34,13 @@ const TRANSFER_EVENT_ABI = [
 ] as const;
 
 const REQUIRED_AMOUNT = 1_000_000n * 10n ** 18n;
+
+router.get('/config', (_req: Request, res: Response) => {
+  res.json({
+    neuroTokenAddress: NEURO_TOKEN_ADDRESS,
+    claimReceiverAddress: CLAIM_RECEIVER_ADDRESS,
+  });
+});
 
 router.get('/eligibility/:address', async (req: Request, res: Response) => {
   try {
@@ -76,12 +83,6 @@ router.post('/free', async (req: Request, res: Response) => {
       return;
     }
 
-    const existing = getClaim(address);
-    if (existing) {
-      res.status(400).json({ error: 'Already claimed' });
-      return;
-    }
-
     const balance = await baseRpcClient.readContract({
       address: OBELISK_NFT_ADDRESS,
       abi: ERC721_ABI,
@@ -94,10 +95,14 @@ router.post('/free', async (req: Request, res: Response) => {
       return;
     }
 
-    setClaim(address, {
+    const ok = await tryClaim(address, {
       method: 'obelisk',
       claimedAt: new Date().toISOString(),
     });
+    if (!ok) {
+      res.status(400).json({ error: 'Already claimed' });
+      return;
+    }
     res.json({ success: true });
   } catch (err) {
     console.error('[claims] free claim error:', err);
@@ -123,18 +128,17 @@ router.post('/verify-payment', async (req: Request, res: Response) => {
       return;
     }
 
-    const existing = getClaim(userLower);
-    if (existing) {
-      res.json({ success: true, message: 'Already claimed' });
-      return;
-    }
-
     const receipt = await baseRpcClient.getTransactionReceipt({
       hash: txHash as `0x${string}`,
     });
 
     if (!receipt) {
       res.status(400).json({ error: 'Transaction not found' });
+      return;
+    }
+
+    if (receipt.status !== 'success') {
+      res.status(400).json({ error: 'Transaction failed or reverted' });
       return;
     }
 
@@ -167,11 +171,15 @@ router.post('/verify-payment', async (req: Request, res: Response) => {
       return;
     }
 
-    setClaim(userLower, {
+    const ok = await tryClaim(userLower, {
       method: 'pay',
       txHash,
       claimedAt: new Date().toISOString(),
     });
+    if (!ok) {
+      res.json({ success: true, message: 'Already claimed' });
+      return;
+    }
     res.json({ success: true });
   } catch (err) {
     console.error('[claims] verify-payment error:', err);

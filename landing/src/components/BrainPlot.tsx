@@ -34,8 +34,13 @@ export function BrainPlot() {
 
   useEffect(() => {
     const fetchNeurons = async () => {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 4000);
       try {
-        const res = await fetch(`${getApiBase()}/api/neurons`);
+        const res = await fetch(`${getApiBase()}/api/neurons`, {
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
         if (res.ok) {
           const data = await res.json();
           const list = Array.isArray(data.neurons) ? data.neurons : data;
@@ -50,7 +55,10 @@ export function BrainPlot() {
           );
           return;
         }
-      } catch {
+      } catch (e) {
+        if (typeof AbortSignal !== 'undefined' && e instanceof Error && e.name === 'AbortError') {
+          /* timeout, fall through to fallback */
+        }
         /* fallback */
       }
       try {

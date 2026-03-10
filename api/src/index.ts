@@ -5,7 +5,7 @@ import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { loadConnectome } from './connectome.js';
 import { createBrainSim } from './brain-sim.js';
-import { getWorld, spawnFood, removeFood } from './world.js';
+import { getWorld, spawnFood, removeFood, getSources } from './world.js';
 import claimsRouter from './routes/claims.js';
 
 const PORT = Number(process.env.PORT) || 3001;
@@ -15,7 +15,10 @@ const world = getWorld();
 spawnFood(); // initial food
 setInterval(() => {
   const f = spawnFood();
-  if (f) console.log('[world] spawned food', f.id, 'at', f.x.toFixed(1), f.y.toFixed(1));
+  if (f) {
+    console.log('[world] spawned food', f.id, 'at', f.x.toFixed(1), f.y.toFixed(1));
+    broadcast({ simRunning, sources: getSources() });
+  }
 }, 10_000);
 
 const sim = createBrainSim(connectome, world.sources);

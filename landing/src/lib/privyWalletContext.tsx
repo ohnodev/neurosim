@@ -15,7 +15,7 @@ import {
 } from 'viem';
 import { base } from 'viem/chains';
 
-interface PrivyWalletContextValue {
+export interface PrivyWalletContextValue {
   address: Address | undefined;
   chainId: number;
   isConnected: boolean;

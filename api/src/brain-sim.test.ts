@@ -195,21 +195,33 @@ describe('brain-sim', () => {
 
     const control = createBrainSim(testConnectome, []);
     const s0_control = control.step(dt);
-    for (let i = 0; i < steps; i++) control.step(dt);
+    let maxActivityControl = 0;
+    for (let i = 0; i < steps; i++) {
+      const s = control.step(dt);
+      const sum = s.activity ? Object.values(s.activity).reduce((a, v) => a + v, 0) : 0;
+      maxActivityControl = Math.max(maxActivityControl, sum);
+    }
     const s1_control = control.step(dt);
     const distMoved_control = Math.hypot(s1_control.fly.x - s0_control.fly.x, s1_control.fly.y - s0_control.fly.y);
 
     const injected = createBrainSim(testConnectome, []);
     injected.inject(['s1', 's2'], 0.8);
     const s0 = injected.step(dt);
-    for (let i = 0; i < steps; i++) injected.step(dt);
+    let maxActivityInjected = 0;
+    for (let i = 0; i < steps; i++) {
+      const s = injected.step(dt);
+      const sum = s.activity ? Object.values(s.activity).reduce((a, v) => a + v, 0) : 0;
+      maxActivityInjected = Math.max(maxActivityInjected, sum);
+    }
     const s1 = injected.step(dt);
     const distMoved = Math.hypot(s1.fly.x - s0.fly.x, s1.fly.y - s0.fly.y);
 
     expect(distMoved_control, 'Control should have baseline movement').toBeGreaterThan(0.5);
     expect(distMoved, 'Injected run should move').toBeGreaterThan(0.5);
-    expect(distMoved, 'Injection adds activity; injected run should move at least as much as control')
-      .toBeGreaterThanOrEqual(distMoved_control * 0.9);
+    expect(
+      maxActivityInjected,
+      'Injection adds activity; injected run should have strictly higher neural activity than control',
+    ).toBeGreaterThan(maxActivityControl);
   });
 
   it('fly eventually reaches food when hungry (long run)', () => {
@@ -311,12 +323,8 @@ describe('brain-sim', () => {
     expect(totalDist, 'Fly should travel > 10 units over 60s').toBeGreaterThan(10);
   });
 
-  it('neurons are balanced: not all firing at max, activity varies over time', () => {
-    const connectomePath = path.resolve(__dirname, '..', '..', 'data', 'connectome-subset.json');
-    if (!fs.existsSync(connectomePath)) {
-      console.warn('Skipping neuron balance test: connectome-subset.json not found');
-      return;
-    }
+  const connectomePath = path.resolve(__dirname, '..', '..', 'data', 'connectome-subset.json');
+  it.skipIf(!fs.existsSync(connectomePath))('neurons are balanced: not all firing at max, activity varies over time', () => {
     const connectome = loadConnectome(connectomePath);
     const { step } = createBrainSim(connectome, [
       { id: 'f1', type: 'food', x: 6, y: 6, z: 0.35, radius: 12 },

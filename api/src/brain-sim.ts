@@ -183,7 +183,8 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
     const forwardFromMotor = (motorLeft + motorRight + motorFwd) * motorScale;
     const motor = Math.tanh(forwardFromMotor) * 0.5;
 
-    // Hunger: allow eating when resting, on ground, or flying low near food (z < 1.2)
+    // Hunger: allow eating when (a) resting or on ground, or (b) flying low (z < 1.1). At z ∈ [1.1, 1.2)
+    // only resting/on-ground flies can eat; above z >= 1.2 never (prevents eating while hovering high).
     const onGround = fly.z < ON_GROUND_THRESH;
     const canFlyEat = (restTimeLeft > 0 || onGround || fly.z < 1.1) && fly.z < 1.2;
     let hunger = fly.hunger;
@@ -299,8 +300,8 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
     nz = Math.max(GROUND_Z, Math.min(FLIGHT_Z, nz));
 
     let nHeading = fly.heading + (Number.isFinite(headingBias) ? headingBias : 0);
-    while (nHeading > Math.PI) nHeading -= 2 * Math.PI;
-    while (nHeading < -Math.PI) nHeading += 2 * Math.PI;
+    const TWO_PI = 2 * Math.PI;
+    nHeading = nHeading - TWO_PI * Math.floor((nHeading + Math.PI) / TWO_PI); // normalize to (-π, π]
     nHeading = Number.isFinite(nHeading) ? nHeading : fly.heading;
     fly = {
       x: Number.isFinite(nx) ? nx : fly.x,

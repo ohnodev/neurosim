@@ -39,7 +39,7 @@ function FlyModel({ state }: { state: FlyState }) {
       <primitive
         object={cloned}
         scale={0.0008}
-        rotation={[Math.PI / 2, 0, 0]}
+        rotation={[0, 0, 0]}
       />
     </group>
   );

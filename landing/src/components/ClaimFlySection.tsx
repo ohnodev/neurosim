@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { base } from 'viem/chains';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
-import { API_BASE } from '../lib/constants';
+import { getApiBase } from '../lib/constants';
 
 const ERC20_ABI = [
   {
@@ -16,15 +16,18 @@ const ERC20_ABI = [
   },
 ] as const;
 
-// Placeholder - user will deploy and set
-const NEURO_TOKEN_ADDRESS = (import.meta.env.VITE_NEURO_TOKEN_ADDRESS as `0x${string}`) || '0x0000000000000000000000000000000000000000' as `0x${string}`;
-const CLAIM_RECEIVER_ADDRESS = (import.meta.env.VITE_CLAIM_RECEIVER_ADDRESS as `0x${string}`) || '0x0000000000000000000000000000000000000000' as `0x${string}`;
 const CLAIM_AMOUNT = 1_000_000n * 10n ** 18n;
 
 type EligibilityMethod = 'obelisk' | 'pay' | 'already_claimed' | null;
 
+interface ClaimConfig {
+  neuroTokenAddress: `0x${string}`;
+  claimReceiverAddress: `0x${string}`;
+}
+
 export function ClaimFlySection() {
-  const { isConnected, address, walletClient, publicClient } = usePrivyWallet();
+  const { isConnected, address, walletClient } = usePrivyWallet();
+  const [config, setConfig] = useState<ClaimConfig | null>(null);
   const [eligibility, setEligibility] = useState<{
     method: EligibilityMethod;
     loading: boolean;
@@ -34,12 +37,19 @@ export function ClaimFlySection() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    fetch(`${getApiBase()}/api/claim/config`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((d: ClaimConfig | null) => d && setConfig(d))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
     if (!isConnected || !address) {
       setEligibility({ method: null, loading: false });
       return;
     }
     setEligibility((e) => ({ ...e, loading: true }));
-    fetch(`${API_BASE}/api/claim/eligibility/${address.toLowerCase()}`)
+    fetch(`${getApiBase()}/api/claim/eligibility/${address.toLowerCase()}`)
       .then((r) => r.json())
       .then((d: { method?: EligibilityMethod }) => {
         setEligibility({ method: d.method ?? 'pay', loading: false });
@@ -54,7 +64,7 @@ export function ClaimFlySection() {
     setClaimStatus('pending');
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/claim/free`, {
+      const res = await fetch(`${getApiBase()}/api/claim/free`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ address: address.toLowerCase() }),
@@ -69,12 +79,13 @@ export function ClaimFlySection() {
   };
 
   const handlePayAndClaim = async () => {
-    if (!walletClient || !address || !publicClient) {
+    if (!walletClient || !address) {
       setError('Wallet not ready');
       return;
     }
-    if (NEURO_TOKEN_ADDRESS === '0x0000000000000000000000000000000000000000' as `0x${string}`) {
-      setError('Token address not configured');
+    if (!config?.neuroTokenAddress || !config?.claimReceiverAddress ||
+        config.neuroTokenAddress === '0x0000000000000000000000000000000000000000') {
+      setError('Claim not configured');
       return;
     }
     setTxState('awaiting');
@@ -82,24 +93,32 @@ export function ClaimFlySection() {
     try {
       const hash = await walletClient.writeContract({
         account: address,
-        address: NEURO_TOKEN_ADDRESS,
+        address: config.neuroTokenAddress,
         abi: ERC20_ABI,
         functionName: 'transfer',
-        args: [CLAIM_RECEIVER_ADDRESS, CLAIM_AMOUNT],
+        args: [config.claimReceiverAddress, CLAIM_AMOUNT],
         chain: base,
       });
       setTxState('confirming');
-      await publicClient.waitForTransactionReceipt({ hash });
-      const res = await fetch(`${API_BASE}/api/claim/verify-payment`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          txHash: hash,
-          userAddress: address.toLowerCase(),
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? 'Verification failed');
+      const apiBase = getApiBase();
+      const verifyWithRetry = async (attempt = 0): Promise<void> => {
+        const res = await fetch(`${apiBase}/api/claim/verify-payment`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            txHash: hash,
+            userAddress: address.toLowerCase(),
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) return;
+        if (data.error === 'Transaction not found' && attempt < 12) {
+          await new Promise((r) => setTimeout(r, 3000));
+          return verifyWithRetry(attempt + 1);
+        }
+        throw new Error(data.error ?? 'Verification failed');
+      };
+      await verifyWithRetry();
       setTxState('done');
       setClaimStatus('success');
     } catch (err) {
@@ -140,7 +159,8 @@ export function ClaimFlySection() {
               onClick={handlePayAndClaim}
               disabled={
                 txState !== 'idle' ||
-                NEURO_TOKEN_ADDRESS === '0x0000000000000000000000000000000000000000'
+                !config?.neuroTokenAddress ||
+                config.neuroTokenAddress === '0x0000000000000000000000000000000000000000'
               }
             >
               {txState === 'awaiting' && 'Confirm in wallet...'}

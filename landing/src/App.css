@@ -22,7 +22,45 @@
   align-items: center;
   justify-content: center;
   min-height: 100vh;
+  min-height: 100dvh;
   padding: 24px;
+}
+
+@supports (padding: env(safe-area-inset-top)) {
+  .main {
+    padding: max(24px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  }
+}
+
+@media (max-width: 768px) {
+  .main {
+    padding: 16px;
+    align-items: flex-start;
+    padding-top: max(80px, env(safe-area-inset-top));
+  }
+  .claim-section {
+    padding: 32px 24px;
+    margin-top: 0;
+  }
+  .claim-title {
+    font-size: 1.9rem;
+  }
+  .claim-tagline {
+    font-size: 0.95rem;
+    margin-bottom: 24px;
+  }
+  .claim-btn {
+    padding: 16px 24px;
+    min-height: 48px;
+    font-size: 1rem;
+  }
+  .header {
+    padding: 12px 16px;
+  }
+  .connect-btn {
+    padding: 12px 18px;
+    min-height: 44px;
+  }
 }
 
 /* Connect button */

@@ -9,22 +9,17 @@ import {
 import { useWallets, usePrivy } from '@privy-io/react-auth';
 import {
   createWalletClient,
-  createPublicClient,
   custom,
-  http,
   type WalletClient,
-  type PublicClient,
   type Address,
 } from 'viem';
 import { base } from 'viem/chains';
-import { BASE_RPC } from './constants';
 
 interface PrivyWalletContextValue {
   address: Address | undefined;
   chainId: number;
   isConnected: boolean;
   walletClient: WalletClient | undefined;
-  publicClient: PublicClient;
 }
 
 const PrivyWalletContext = createContext<PrivyWalletContextValue | null>(null);
@@ -42,15 +37,6 @@ export function PrivyWalletProvider({ children }: { children: ReactNode }) {
     ? (activeWallet.address as Address)
     : undefined;
   const isConnected = !!address && authenticated;
-
-  const publicClient = useMemo(
-    () =>
-      createPublicClient({
-        chain: base,
-        transport: http(BASE_RPC),
-      }),
-    [],
-  );
 
   useEffect(() => {
     if (!activeWallet || !ready) {
@@ -100,9 +86,8 @@ export function PrivyWalletProvider({ children }: { children: ReactNode }) {
       chainId: base.id,
       isConnected,
       walletClient,
-      publicClient: publicClient as PublicClient,
     }),
-    [address, isConnected, walletClient, publicClient],
+    [address, isConnected, walletClient],
   );
 
   return (

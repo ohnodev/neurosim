@@ -13,6 +13,3 @@ export function useWalletClient() {
   return usePrivyWalletContext().walletClient;
 }
 
-export function usePublicClient() {
-  return usePrivyWalletContext().publicClient;
-}

@@ -1,6 +1,18 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useMemo } from 'react';
 import Plotly from 'plotly.js-dist-min';
-import { API_BASE } from '../lib/constants';
+import { getApiBase } from '../lib/constants';
+
+function useIsMobile(): boolean {
+  const [mobile, setMobile] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 768px)');
+    setMobile(mq.matches);
+    const fn = () => setMobile(mq.matches);
+    mq.addEventListener('change', fn);
+    return () => mq.removeEventListener('change', fn);
+  }, []);
+  return mobile;
+}
 
 interface NeuronWithPosition {
   root_id: string;
@@ -24,6 +36,7 @@ function hasPosition(
 }
 
 export function BrainBackground() {
+  const isMobile = useIsMobile();
   const plotRef = useRef<HTMLDivElement>(null);
   const plotReady = useRef(false);
   const idsRef = useRef<string[]>([]);
@@ -35,7 +48,7 @@ export function BrainBackground() {
   useEffect(() => {
     const fetchNeurons = async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/neurons`);
+        const res = await fetch(`${getApiBase()}/api/neurons`);
         if (res.ok) {
           const data = await res.json();
           const list = Array.isArray(data.neurons) ? data.neurons : data;
@@ -90,20 +103,22 @@ export function BrainBackground() {
 
   useEffect(() => {
     if (neurons.length === 0) return;
-    const ids = neurons
-      .filter(hasPosition)
-      .map((n) => n.root_id);
+    const ids = neurons.filter(hasPosition).map((n) => n.root_id);
     if (ids.length === 0) return;
+    const count = isMobile ? 3 : 8;
     const interval = setInterval(() => {
-      for (let i = 0; i < 8; i++) {
+      for (let i = 0; i < count; i++) {
         const id = ids[Math.floor(Math.random() * ids.length)];
         setActivity((prev) => ({ ...prev, [id]: 0.6 + Math.random() * 0.4 }));
       }
-    }, 180);
+    }, isMobile ? 280 : 180);
     return () => clearInterval(interval);
-  }, [neurons]);
+  }, [neurons, isMobile]);
 
-  const withPos = neurons.filter(hasPosition);
+  const withPos = useMemo(() => {
+    const list = neurons.filter(hasPosition);
+    return isMobile ? list.slice(0, 180) : list;
+  }, [neurons, isMobile]);
   const n = withPos.length;
 
   useEffect(() => {
@@ -148,7 +163,7 @@ export function BrainBackground() {
         z: zs,
         mode: 'markers',
         marker: {
-          size: 2.5,
+          size: isMobile ? 1.8 : 2.5,
           color,
           colorscale: [
             [0, '#444466'],
@@ -214,12 +229,13 @@ export function BrainBackground() {
     Plotly.restyle(plotRef.current, { 'marker.color': [color] }, [0]);
   }, [activity]);
 
-  // Slow camera rotation
+  // Slow camera rotation (slower on mobile for performance)
   useEffect(() => {
     if (!plotRef.current || !plotReady.current) return;
     let t = 0;
+    const speed = isMobile ? 0.0015 : 0.003;
     const animate = () => {
-      t += 0.003;
+      t += speed;
       const r = 1.2;
       Plotly.relayout(plotRef.current!, {
         'scene.camera.eye': {
@@ -232,7 +248,7 @@ export function BrainBackground() {
     };
     rafRef.current = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [n]);
+  }, [n, isMobile]);
 
   return (
     <div

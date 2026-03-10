@@ -35,6 +35,13 @@ const TRANSFER_EVENT_ABI = [
 
 const REQUIRED_AMOUNT = 1_000_000n * 10n ** 18n;
 
+router.get('/config', (_req: Request, res: Response) => {
+  res.json({
+    neuroTokenAddress: NEURO_TOKEN_ADDRESS,
+    claimReceiverAddress: CLAIM_RECEIVER_ADDRESS,
+  });
+});
+
 router.get('/eligibility/:address', async (req: Request, res: Response) => {
   try {
     const address = (req.params.address as string)?.toLowerCase();
@@ -129,10 +136,15 @@ router.post('/verify-payment', async (req: Request, res: Response) => {
       return;
     }
 
-    const receipt = await baseRpcClient.getTransactionReceipt({
+    let receipt = await baseRpcClient.getTransactionReceipt({
       hash: txHash as `0x${string}`,
     });
-
+    for (let i = 0; !receipt && i < 15; i++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      receipt = await baseRpcClient.getTransactionReceipt({
+        hash: txHash as `0x${string}`,
+      });
+    }
     if (!receipt) {
       res.status(400).json({ error: 'Transaction not found' });
       return;

@@ -9,6 +9,7 @@ ecosystem.config.js
 data/raw/
 data/connectome-subset.json
 api/data/claims.json
+api/data/flies.json
 *.log
 .pm2/
 .venv/

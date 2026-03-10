@@ -7,12 +7,10 @@ import { loadConnectome } from './connectome.js';
 import { createBrainSim } from './brain-sim.js';
 import { getWorld, spawnFood, removeFood, getSources } from './world.js';
 import claimsRouter from './routes/claims.js';
+import { getFlies } from './services/flyStore.js';
 
 const PORT = Number(process.env.PORT) || 3001;
 const connectome = loadConnectome();
-
-/** Number of flies; supports 10–20. */
-const NUM_FLIES = 3;
 
 const GROUND_Z = 0.35;
 const INITIAL_SPREAD = 4;
@@ -26,11 +24,17 @@ setInterval(() => {
   }
 }, 10_000);
 
-const sims = Array.from({ length: NUM_FLIES }, (_, i) => {
-  const angle = (2 * Math.PI * i) / NUM_FLIES;
+/** Simulation flies; starts empty, users deploy flies. */
+const sims: ReturnType<typeof createBrainSim>[] = [];
+/** address -> slotIndex -> simIndex */
+const deployedFlies = new Map<string, Map<number, number>>();
+let neuronIds: string[] = [];
+
+function addFlyToSim(): number {
+  const angle = (2 * Math.PI * sims.length) / Math.max(1, sims.length + 1);
   const x = INITIAL_SPREAD * Math.cos(angle);
   const y = INITIAL_SPREAD * Math.sin(angle);
-  return createBrainSim(connectome, () => getSources(), {
+  const sim = createBrainSim(connectome, () => getSources(), {
     x,
     y,
     z: GROUND_Z,
@@ -39,9 +43,10 @@ const sims = Array.from({ length: NUM_FLIES }, (_, i) => {
     hunger: 100,
     health: 100,
   });
-});
-
-const neuronIds = sims[0].neuronIds;
+  sims.push(sim);
+  if (neuronIds.length === 0) neuronIds = sim.neuronIds;
+  return sims.length - 1;
+}
 let simRunning = false;
 let simIntervalId: ReturnType<typeof setInterval> | null = null;
 const STEP_LOG_INTERVAL = 150;
@@ -75,11 +80,11 @@ function startSim(): void {
       t = state.t;
       if (i === 0) activity = state.activity;
     }
-    broadcast({ t, flies, activity, simRunning: true, sources: getSources() });
+    broadcast({ t, flies, activity: activity ?? undefined, simRunning: true, sources: getSources() });
     connectionStep += 1;
     if (connectionStep % STEP_LOG_INTERVAL === 0) {
       const first = flies[0];
-      console.log('[sim] t=', t.toFixed(1), 'flies=', flies.length, 'first=', first?.x?.toFixed(2), first?.y?.toFixed(2), 'clients=', wsClients.size);
+      console.log('[sim] t=', t.toFixed(1), 'flies=', flies.length, first ? `first=(${first.x?.toFixed(2)},${first.y?.toFixed(2)})` : '', 'clients=', wsClients.size);
     }
   }, 1000 / 30);
   console.log('[sim] started');
@@ -126,6 +131,57 @@ app.get('/api/world', (_, res) => res.json(getWorld()));
 
 app.use('/api/claim', claimsRouter);
 
+app.post('/api/deploy', (req, res) => {
+  try {
+    const address = (req.body?.address as string)?.toLowerCase();
+    const slotIndex = typeof req.body?.slotIndex === 'number' ? req.body.slotIndex : parseInt(String(req.body?.slotIndex ?? ''), 10);
+    if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address) || !Number.isInteger(slotIndex) || slotIndex < 0 || slotIndex > 2) {
+      res.status(400).json({ error: 'Invalid address or slotIndex (0-2)' });
+      return;
+    }
+    const userFlies = getFlies(address);
+    if (!userFlies[slotIndex]) {
+      res.status(400).json({ error: 'No fly in that slot; buy a fly first' });
+      return;
+    }
+    let map = deployedFlies.get(address);
+    if (map?.has(slotIndex)) {
+      res.json({ success: true, simIndex: map.get(slotIndex), message: 'Already deployed' });
+      return;
+    }
+    const simIndex = addFlyToSim();
+    if (!map) {
+      map = new Map();
+      deployedFlies.set(address, map);
+    }
+    map.set(slotIndex, simIndex);
+    console.log('[deploy]', address.slice(0, 10) + '…', 'slot', slotIndex, '-> sim', simIndex);
+    res.json({ success: true, simIndex });
+  } catch (err) {
+    console.error('[deploy] error:', err);
+    res.status(500).json({ error: 'Deploy failed' });
+  }
+});
+
+app.get('/api/deploy/my-deployed', (req, res) => {
+  try {
+    const address = (req.query.address as string)?.toLowerCase();
+    if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address)) {
+      res.status(400).json({ error: 'Invalid address' });
+      return;
+    }
+    const map = deployedFlies.get(address);
+    const deployed: Record<number, number> = {};
+    if (map) {
+      for (const [slot, idx] of map) deployed[slot] = idx;
+    }
+    res.json({ deployed });
+  } catch (err) {
+    console.error('[deploy] my-deployed error:', err);
+    res.status(500).json({ error: 'Failed to get deployed flies' });
+  }
+});
+
 const httpServer = createServer(app);
 const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
 
@@ -134,11 +190,11 @@ wss.on('connection', (ws) => {
   console.log('[ws] client connected, total=', wsClients.size);
 
   const flies = sims.map((s) => s.getState().fly);
-  const firstState = sims[0].getState();
+  const firstState = sims[0]?.getState();
   ws.send(JSON.stringify({
-    t: firstState.t,
+    t: firstState?.t ?? 0,
     flies,
-    activity: firstState.activity,
+    activity: firstState?.activity,
     simRunning,
     sources: getSources(),
   }));
@@ -146,39 +202,27 @@ wss.on('connection', (ws) => {
   ws.on('message', (raw) => {
     try {
       const msg = JSON.parse(raw.toString()) as { type: string; neurons?: string[]; strength?: number };
-      if (msg.type === 'start') {
-        startSim();
-        return;
+      if (msg.type === 'stimulate') {
+        const neurons = msg.neurons;
+        let strength = msg.strength;
+        if (!Array.isArray(neurons) || typeof strength !== 'number') {
+          console.warn('[ws] stimulate: requires { neurons: string[], strength: number }');
+          return;
+        }
+        if (!Number.isFinite(strength)) {
+          console.warn('[ws] stimulate: strength must be finite');
+          return;
+        }
+        strength = Math.max(0, Math.min(1, strength));
+        const valid = neurons.filter((id) => neuronIds.includes(id));
+        if (valid.length === 0) {
+          console.warn('[ws] stimulate: no valid neuron IDs');
+          return;
+        }
+        const target = sims[0];
+        if (target) target.inject(valid, strength);
+        console.log('[ws] stimulate neurons=', valid.length, 'strength=', strength);
       }
-      if (msg.type === 'stop') {
-        stopSim();
-        return;
-      }
-      if (msg.type !== 'stimulate') return;
-      const neurons = msg.neurons;
-      let strength = msg.strength;
-      if (!Array.isArray(neurons) || typeof strength !== 'number') {
-        console.warn('[ws] stimulate: requires { neurons: string[], strength: number }');
-        return;
-      }
-      if (!Number.isFinite(strength)) {
-        console.warn('[ws] stimulate: strength must be finite');
-        return;
-      }
-      const MIN_STRENGTH = 0;
-      const MAX_STRENGTH = 1;
-      const orig = strength;
-      strength = Math.max(MIN_STRENGTH, Math.min(MAX_STRENGTH, strength));
-      if (orig !== strength) {
-        console.warn(`[ws] stimulate: strength clamped from ${orig} to ${strength}`);
-      }
-      const valid = neurons.filter((id) => neuronIds.includes(id));
-      if (valid.length === 0) {
-        console.warn('[ws] stimulate: no valid neuron IDs');
-        return;
-      }
-      sims[0].inject(valid, strength);
-      console.log('[ws] stimulate neurons=', valid.length, 'strength=', strength);
     } catch (err) {
       console.error('[ws] message error', err);
     }
@@ -194,8 +238,14 @@ wss.on('connection', (ws) => {
   });
 });
 
-httpServer.listen(PORT, () => {
-  console.log('NeuroSim API http://localhost:' + PORT);
-  console.log('WebSocket ws://localhost:' + PORT + '/ws');
-  console.log('Connectome:', connectome.neurons.length, 'neurons,', connectome.connections.length, 'connections');
-});
+if (process.env.VITEST !== 'true') {
+  httpServer.listen(PORT, () => {
+    startSim();
+    console.log('NeuroSim API http://localhost:' + PORT);
+    console.log('WebSocket ws://localhost:' + PORT + '/ws');
+    console.log('Connectome:', connectome.neurons.length, 'neurons,', connectome.connections.length, 'connections');
+    console.log('[sim] auto-started with 0 flies; users deploy flies via POST /api/deploy');
+  });
+}
+
+export { app, httpServer, startSim };

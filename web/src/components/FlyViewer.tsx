@@ -4,7 +4,7 @@ import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import type { WorldSource } from '../../../api/src/world';
-import { subscribeSim, sendStart, sendStop, getConnectionState, type FlyState } from '../lib/simWsClient';
+import { subscribeSim, type FlyState } from '../lib/simWsClient';
 import { getApiBase } from '../lib/wsUrl';
 import { getApiBase as getClaimApiBase } from '../lib/constants';
 import { BrainOverlay, type NeuronWithPosition } from './BrainOverlay';
@@ -136,6 +136,13 @@ async function fetchMyFlies(address: string) {
   return (data.flies ?? []) as ClaimedFly[];
 }
 
+async function fetchMyDeployed(address: string): Promise<Record<number, number>> {
+  const r = await fetch(`${getApiBase()}/api/deploy/my-deployed?address=${address.toLowerCase()}`);
+  if (!r.ok) return {};
+  const data = await r.json();
+  return data.deployed ?? {};
+}
+
 function getFlyMode(fly: FlyState): string {
   if (fly.dead) return 'dead';
   if (fly.feeding) return 'feeding';
@@ -217,7 +224,6 @@ export default function FlyViewer() {
   const [sources, setSources] = useState<WorldSource[]>([]);
   const [neuronLabels, setNeuronLabels] = useState<Record<string, string>>({});
   const [connected, setConnected] = useState(false);
-  const [simRunning, setSimRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeCount, setActiveCount] = useState(0);
   const [activity, setActivity] = useState<Record<string, number>>({});
@@ -233,6 +239,12 @@ export default function FlyViewer() {
   const { data: myFlies = [] } = useQuery({
     queryKey: ['my-flies', address ?? ''],
     queryFn: () => fetchMyFlies(address!),
+    enabled: !!address,
+  });
+
+  const { data: deployed = {}, refetch: refetchDeployed } = useQuery({
+    queryKey: ['my-deployed', address ?? ''],
+    queryFn: () => fetchMyDeployed(address!),
     enabled: !!address,
   });
 
@@ -275,19 +287,16 @@ export default function FlyViewer() {
           setError(null);
         } else if (event._event === 'closed') {
           setConnected(false);
-          setSimRunning(false);
         } else if (event._event === 'error') {
           setError(event.error);
-          setSimRunning(false);
         }
         return;
       }
-      const data = event as { flies?: FlyState[]; fly?: FlyState; activity?: Record<string, number>; simRunning?: boolean; error?: string; sources?: WorldSource[] };
-      if (data.simRunning !== undefined) setSimRunning(data.simRunning);
+      const data = event as { flies?: FlyState[]; fly?: FlyState; activity?: Record<string, number>; error?: string; sources?: WorldSource[] };
       if (data.error) setError(data.error);
       if (data.sources && Array.isArray(data.sources)) setSources(data.sources);
       if (!data.error) {
-        if (data.flies && data.flies.length > 0) setFlies(data.flies);
+        if (Array.isArray(data.flies)) setFlies(data.flies);
         else if (data.fly) setFlies([data.fly]);
         if (data.activity) {
           setActivity(data.activity);
@@ -300,17 +309,31 @@ export default function FlyViewer() {
     return unsub;
   }, []);
 
-  const toggleSim = () => {
-    if (getConnectionState() !== 'open') return;
-    if (simRunning) sendStop();
-    else sendStart();
-  };
-
   const topActivity = Object.entries(activity)
     .sort(([, a], [, b]) => b - a)
     .slice(0, 10);
-  const focusedFly = flies[selectedFlyIndex] ?? flies[0] ?? DEFAULT_FLY;
+
+  const simIndexForSelected = deployed[selectedFlyIndex];
+  const focusedFly =
+    (simIndexForSelected != null && flies[simIndexForSelected]) ??
+    (flies[0] ?? DEFAULT_FLY);
+
   const flyMode = getFlyMode(focusedFly);
+
+  const deployFly = async (slotIndex: number) => {
+    if (!address) return;
+    const r = await fetch(`${getApiBase()}/api/deploy`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ address: address.toLowerCase(), slotIndex }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.error ?? 'Deploy failed');
+    }
+    queryClient.invalidateQueries({ queryKey: ['my-deployed', address] });
+    refetchDeployed();
+  };
 
   return (
     <div style={{ width: '100vw', height: '100vh', position: 'relative' }}>
@@ -334,22 +357,8 @@ export default function FlyViewer() {
             {error}
           </div>
         )}
-        <div style={{ position: 'absolute', top: 12, right: 12, display: 'flex', gap: 12, alignItems: 'center', pointerEvents: 'auto' }}>
+        <div style={{ position: 'absolute', top: 12, right: 12, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, pointerEvents: 'auto' }}>
           <ConnectButton />
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <button
-              onClick={toggleSim}
-              disabled={!connected}
-              className="neuroflies__btn"
-              style={{ background: connected ? (simRunning ? 'rgba(239,68,68,0.5)' : 'rgba(34,197,94,0.5)') : 'rgba(255,255,255,0.06)', border: 'none', color: '#fff' }}
-            >
-              {simRunning ? 'Stop' : 'Start'}
-            </button>
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: connected ? '#4ade80' : '#888' }}>
-              {connected ? 'Sim connected' : 'Connecting…'}
-            </span>
-            {activeCount > 0 && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'rgba(255,255,255,0.6)' }}>Neurons: {activeCount}</span>}
-          </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             {focusedFly.dead && (
               <div style={{ width: 120, padding: '6px 8px', background: '#422', color: '#f88', borderRadius: 4, fontSize: 11, fontWeight: 600 }}>
@@ -381,6 +390,10 @@ export default function FlyViewer() {
               </div>
             </div>
           </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 11, color: connected ? '#4ade80' : '#888' }}>
+            {connected ? 'Sim running' : 'Connecting…'}
+            {activeCount > 0 && <span style={{ color: 'rgba(255,255,255,0.6)' }}>Neurons: {activeCount}</span>}
+          </div>
         </div>
         <button
           type="button"
@@ -402,17 +415,12 @@ export default function FlyViewer() {
             <div style={{ color: '#888', marginBottom: 8, fontSize: 10 }}>Your Flies — click to view</div>
             {[0, 1, 2].map((i) => {
               const hasFly = myFlies[i] != null;
-              const simFly = flies[i] ?? DEFAULT_FLY;
+              const simIdx = deployed[i];
+              const isDeployed = simIdx != null;
+              const simFly = isDeployed ? (flies[simIdx] ?? DEFAULT_FLY) : DEFAULT_FLY;
               return (
                 <div key={i} className="fly-viewer__fly-slot">
-                  {hasFly ? (
-                    <FlyStatusCard
-                      index={i}
-                      fly={simFly}
-                      selected={i === selectedFlyIndex}
-                      onSelect={() => setSelectedFlyIndex(i)}
-                    />
-                  ) : (
+                  {!hasFly ? (
                     <button
                       type="button"
                       className="fly-viewer__fly-slot-empty"
@@ -421,6 +429,28 @@ export default function FlyViewer() {
                       <span className="fly-viewer__fly-slot-label">Fly {i + 1}</span>
                       <span className="fly-viewer__fly-slot-buy">Buy Fly</span>
                     </button>
+                  ) : !isDeployed ? (
+                    <button
+                      type="button"
+                      className="fly-viewer__fly-slot-empty"
+                      onClick={async () => {
+                        try {
+                          await deployFly(i);
+                        } catch (e) {
+                          console.error('Deploy failed:', e);
+                        }
+                      }}
+                    >
+                      <span className="fly-viewer__fly-slot-label">Fly {i + 1}</span>
+                      <span className="fly-viewer__fly-slot-buy">Deploy</span>
+                    </button>
+                  ) : (
+                    <FlyStatusCard
+                      index={i}
+                      fly={simFly}
+                      selected={i === selectedFlyIndex}
+                      onSelect={() => setSelectedFlyIndex(i)}
+                    />
                   )}
                 </div>
               );

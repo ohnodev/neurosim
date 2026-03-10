@@ -163,6 +163,7 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
           </div>
         </div>
       </div>
+    </div>
   );
 
   return createPortal(modalContent, document.body);

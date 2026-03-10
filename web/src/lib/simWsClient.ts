@@ -163,13 +163,6 @@ export function sendStop(): void {
   }
 }
 
-/** Send stimulate message. No-op if not connected. */
-export function sendStimulate(neurons: string[], strength: number): void {
-  if (ws?.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: "stimulate", neurons, strength }));
-  }
-}
-
 export function getConnectionState(): "connecting" | "open" | "closed" {
   if (!ws) return "closed";
   switch (ws.readyState) {

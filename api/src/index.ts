@@ -28,7 +28,6 @@ setInterval(() => {
 const sims: ReturnType<typeof createBrainSim>[] = [];
 /** address -> slotIndex -> simIndex */
 const deployedFlies = new Map<string, Map<number, number>>();
-let neuronIds: string[] = [];
 
 function addFlyToSim(): number {
   const angle = (2 * Math.PI * sims.length) / Math.max(1, sims.length + 1);
@@ -44,7 +43,6 @@ function addFlyToSim(): number {
     health: 100,
   });
   sims.push(sim);
-  if (neuronIds.length === 0) neuronIds = sim.neuronIds;
   return sims.length - 1;
 }
 let simRunning = false;
@@ -199,33 +197,8 @@ wss.on('connection', (ws) => {
     sources: getSources(),
   }));
 
-  ws.on('message', (raw) => {
-    try {
-      const msg = JSON.parse(raw.toString()) as { type: string; neurons?: string[]; strength?: number };
-      if (msg.type === 'stimulate') {
-        const neurons = msg.neurons;
-        let strength = msg.strength;
-        if (!Array.isArray(neurons) || typeof strength !== 'number') {
-          console.warn('[ws] stimulate: requires { neurons: string[], strength: number }');
-          return;
-        }
-        if (!Number.isFinite(strength)) {
-          console.warn('[ws] stimulate: strength must be finite');
-          return;
-        }
-        strength = Math.max(0, Math.min(1, strength));
-        const valid = neurons.filter((id) => neuronIds.includes(id));
-        if (valid.length === 0) {
-          console.warn('[ws] stimulate: no valid neuron IDs');
-          return;
-        }
-        const target = sims[0];
-        if (target) target.inject(valid, strength);
-        console.log('[ws] stimulate neurons=', valid.length, 'strength=', strength);
-      }
-    } catch (err) {
-      console.error('[ws] message error', err);
-    }
+  ws.on('message', () => {
+    /* Client sends no messages; sim runs server-side */
   });
 
   ws.on('close', () => {

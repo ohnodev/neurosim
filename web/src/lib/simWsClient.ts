@@ -26,19 +26,31 @@ let lastError: string | null = null;
 let retryDelayMs = INITIAL_RETRY_MS;
 let retryTimeoutId: ReturnType<typeof setTimeout> | null = null;
 let disposed = false;
+let deferredCleanup = false;
 
-function clearConnection(): void {
-  if (ws) {
+function doTeardown(): void {
+  if (!ws) return;
+  ws.onclose = null;
+  ws.onerror = null;
+  ws.onmessage = null;
+  if (ws.readyState === WebSocket.OPEN) {
     try {
-      ws.onclose = null;
-      ws.onerror = null;
-      ws.onmessage = null;
       ws.close();
     } catch {
       /* ignore */
     }
-    ws = null;
   }
+  ws = null;
+  deferredCleanup = false;
+}
+
+function clearConnection(): void {
+  if (!ws) return;
+  if (ws.readyState === WebSocket.CONNECTING) {
+    deferredCleanup = true;
+    return;
+  }
+  doTeardown();
 }
 
 function scheduleRestart(): void {
@@ -57,11 +69,17 @@ function scheduleRestart(): void {
 
 function connect(): void {
   if (disposed || ws?.readyState === WebSocket.OPEN) return;
+  // Don't abandon a handshaking socket; wait for it to finish (open/close) first
+  if (ws?.readyState === WebSocket.CONNECTING) return;
   clearConnection();
   const url = getWsUrl();
   ws = new WebSocket(url);
 
   ws.onopen = () => {
+    if (deferredCleanup) {
+      doTeardown();
+      return;
+    }
     retryDelayMs = INITIAL_RETRY_MS;
     lastError = null;
     for (const fn of listeners) fn({ _event: "open" });
@@ -86,7 +104,8 @@ function connect(): void {
 
   ws.onclose = () => {
     for (const fn of listeners) fn({ _event: "closed" });
-    clearConnection();
+    deferredCleanup = false;
+    doTeardown();
     if (listeners.size > 0 && !disposed) scheduleRestart();
   };
 

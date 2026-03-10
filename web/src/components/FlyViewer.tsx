@@ -4,6 +4,7 @@ import { OrbitControls, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import type { WorldSource } from '../../../api/src/world';
 import { subscribeSim, sendStart, sendStop, getConnectionState } from '../lib/simWsClient';
+import { getApiBase } from '../lib/wsUrl';
 import { BrainOverlay, type NeuronWithPosition } from './BrainOverlay';
 
 interface FlyState {
@@ -24,9 +25,6 @@ function getHungerColor(hunger: number): string {
   if (hunger > 20) return '#ca0';
   return '#c44';
 }
-
-const API_BASE =
-  (import.meta.env.VITE_API_URL as string)?.trim() || 'http://localhost:3001';
 
 const FLY_THRESHOLD = 1.1; // z above this = flying (wings flap + HUD mode)
 const REST_DURATION_FALLBACK = 4; // fallback when flyState.restDuration not in payload
@@ -136,7 +134,8 @@ export default function FlyViewer() {
   const [neuronsWithPositions, setNeuronsWithPositions] = useState<NeuronWithPosition[]>([]);
 
   useEffect(() => {
-    fetch(API_BASE + '/api/world')
+    const apiBase = getApiBase();
+    fetch(apiBase + '/api/world')
       .then((r) => r.ok ? r.json() : Promise.reject(new Error(r.statusText)))
       .then((d) => {
         if (!Array.isArray(d.sources)) throw new Error('Invalid /api/world response');
@@ -146,7 +145,7 @@ export default function FlyViewer() {
         console.error('[FlyViewer] /api/world:', err);
         setError('Failed to load world');
       });
-    fetch(API_BASE + '/api/neurons')
+    fetch(apiBase + '/api/neurons')
       .then((r) => r.ok ? r.json() : Promise.reject(new Error(r.statusText)))
       .then((d) => {
         if (!Array.isArray(d.neurons)) throw new Error('Invalid /api/neurons response');
@@ -180,15 +179,16 @@ export default function FlyViewer() {
         }
         return;
       }
-      const data = event as { fly?: FlyState; activity?: Record<string, number>; simRunning?: boolean; error?: string };
+      const data = event as { fly?: FlyState; activity?: Record<string, number>; simRunning?: boolean; error?: string; sources?: WorldSource[] };
       if (data.simRunning !== undefined) setSimRunning(data.simRunning);
       if (data.error) setError(data.error);
-      else {
+      if (data.sources && Array.isArray(data.sources)) setSources(data.sources);
+      if (!data.error) {
         if (data.fly) setFlyState(data.fly);
         if (data.activity) {
           setActivity(data.activity);
           setActiveCount(Object.keys(data.activity).length);
-        } else {
+        } else if (data.activity !== undefined) {
           setActivity({});
         }
       }

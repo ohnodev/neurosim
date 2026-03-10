@@ -26,6 +26,8 @@ export interface SimState {
   t: number;
   fly: FlyState;
   activity?: Record<string, number>;
+  /** id of food source consumed this step (API should remove it) */
+  eatenFoodId?: string;
 }
 
 /** True if cell_type is a visual neuron (photoreceptor, motion, etc.). */
@@ -54,7 +56,9 @@ function angleToward(heading: number, dx: number, dy: number): number {
   return d;
 }
 
-export function createBrainSim(connectome: Connectome, worldSources: WorldSource[] = []) {
+export function createBrainSim(connectome: Connectome, worldSources: WorldSource[] | (() => WorldSource[]) = []) {
+  const getSources = (): WorldSource[] =>
+    typeof worldSources === 'function' ? worldSources() : worldSources;
   const adj = buildAdjacency(connectome.connections);
   const neurons: Neuron[] = connectome.neurons;
   const neuronIds = neurons.map((n) => n.root_id);
@@ -87,7 +91,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
   const WALL_MARGIN = 6;      // start turning away from walls when within this
   const SEEK_RADIUS = ARENA * 1.5; // steer toward food even when beyond source radius
   const HUNGER_DECAY = 0.8;   // per second when not eating
-  const EAT_RATE = 12;        // per second when eating
+  const FOOD_HUNGER_RESTORE = 50; // hunger restored when consuming one food (then it disappears)
 
   function isAttractorType(type: string): boolean {
     return type === 'food' || type === 'light';
@@ -102,15 +106,16 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
   let restTimeLeft = 0;
 
   const REF_STEP = 1 / 30;    // reference timestep (API calls at 30Hz)
-  const TAU = 0.03;           // propagation strength (per REF_STEP)
-  const DECAY = 0.88;         // per REF_STEP decay
-  const PROP_CAP = 0.003;     // max contribution per synapse (per REF_STEP)
+  const TAU = 0.004;          // propagation (minimal; no neuron stuck >0.42 for >5s)
+  const DECAY = 0.975;        // per REF_STEP decay
+  const PROP_CAP = 0.0004;    // max contribution per synapse
   const INPUT_RATE = 2;
-  const SENSORY_SCALE = 0.18;
-  const SENSORY_DUTY = 0.28;  // sensory bursts ~28% of the time
+  const SENSORY_SCALE = 0.14; // drive strength (reduced from 0.18 so activity can decay)
+  const SENSORY_DUTY = 0.08;  // sensory bursts ~8% of time (sparse = time to turn off)
   const ACT_THRESHOLD = 0.08; // only report neurons above this (filters diffuse activity)
 
   function step(dt: number): SimState {
+    const currentSources = getSources();
     const t = fly.t + dt;
     const r = Math.max(0.1, Math.min(3, dt / REF_STEP)); // scale factor; clamp to avoid extremes
     const decayFactor = Math.pow(DECAY, r);
@@ -135,24 +140,37 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
       }
     }
 
-    // Route visual stimuli (food/light) into visual-type neurons. Pulsed; scale by r for dt-independence.
+    // Route visual stimuli (food/light) into visual-type neurons. Pulsed; rotate which neurons
+    // receive input so none stay on >5s (each gets input ~1/N of the time).
     if (visualTargetIndices.length > 0) {
       const pulse = Math.sin(t * INPUT_RATE) > 1 - SENSORY_DUTY * 2 ? 1 : 0;
       if (pulse > 0) {
         let foodSignal = 0;
         let lightSignal = 0;
-        for (const s of worldSources) {
+        for (const s of currentSources) {
           const dist = Math.hypot(s.x - fly.x, s.y - fly.y);
           if (dist < 1) continue;
           const invDist = 1 / (1 + dist * 0.1);
           if (s.type === 'food') foodSignal += invDist * (1 - fly.hunger / 100);
           else if (s.type === 'light') lightSignal += invDist * 0.3;
         }
-        const baseNoise = 0.15 * (0.5 + 0.5 * Math.sin(t * INPUT_RATE));
-        const rawPerNeuron = (baseNoise + foodSignal * 0.5 + lightSignal) / visualTargetIndices.length;
+        const baseNoise = 0.08 * (0.5 + 0.5 * Math.sin(t * INPUT_RATE));
+        const n = visualTargetIndices.length;
+        // For large connectomes: rotate so each neuron gets input ~1/30 of time (5+ sec gaps)
+        const useChunks = n >= 20;
+        let start = 0, end = n;
+        if (useChunks) {
+          const chunkSize = Math.max(1, Math.floor(n / 30));
+          const stepIdx = Math.floor(t / REF_STEP);
+          const chunk = stepIdx % Math.max(1, Math.ceil(n / chunkSize));
+          start = chunk * chunkSize;
+          end = Math.min(start + chunkSize, n);
+        }
+        const activeCount = end - start;
+        const rawPerNeuron = (baseNoise + foodSignal * 0.5 + lightSignal) / Math.max(1, activeCount);
         const perNeuron = Math.min(rawPerNeuron * SENSORY_SCALE * r, 0.5);
-        for (const idx of visualTargetIndices) {
-          nextActivity[idx] += perNeuron;
+        for (let k = start; k < end; k++) {
+          nextActivity[visualTargetIndices[k]] += perNeuron;
         }
       }
     }
@@ -170,6 +188,10 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
     const ACTIVITY_MAX = 0.5;
     for (let i = 0; i < nextActivity.length; i++) {
       nextActivity[i] = Math.max(0, Math.min(ACTIVITY_MAX, Number.isFinite(nextActivity[i]) ? nextActivity[i] : 0));
+    }
+    // During rest: shut down all neurons (gives network a chance to reset, prevents stuck-on neurons)
+    if (restTimeLeft > 0) {
+      nextActivity.fill(0);
     }
     activity = nextActivity;
 
@@ -189,13 +211,15 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
     const canFlyEat = (restTimeLeft > 0 || onGround || fly.z < 1.1) && fly.z < 1.2;
     let hunger = fly.hunger;
     let isEating = false;
+    let eatenFoodId: string | undefined;
     if (canFlyEat) {
-      for (const s of worldSources) {
+      for (const s of currentSources) {
         if (s.type !== 'food') continue;
         const dist = Math.hypot(s.x - fly.x, s.y - fly.y);
         if (dist < EAT_RADIUS) {
           isEating = true;
-          hunger = Math.min(100, hunger + EAT_RATE * dt);
+          hunger = Math.min(100, hunger + FOOD_HUNGER_RESTORE);
+          eatenFoodId = s.id;
           break;
         }
       }
@@ -219,12 +243,12 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
     if (nearTop) headingBias -= 0.5 * dt;     // turn away from top
     if (nearBottom) headingBias += 0.5 * dt;
 
-    if (hungry && worldSources.length > 0) {
+    if (hungry && currentSources.length > 0) {
       let nearestDist = Infinity;
       let nearestDx = 0;
       let nearestDy = 0;
       let nearestWeight = 1;
-      for (const s of worldSources) {
+      for (const s of currentSources) {
         if (!isAttractorType(s.type)) continue;
         const dx = s.x - fly.x;
         const dy = s.y - fly.y;
@@ -240,7 +264,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
       }
       if (nearestDist < Infinity) {
         const turn = angleToward(fly.heading, nearestDx, nearestDy);
-        headingBias += turn * 0.8 * foodResponsiveness * nearestWeight * dt;
+        headingBias += turn * 3.8 * foodResponsiveness * nearestWeight * dt;
       } else {
         // Hungry but no attractor in range: search behavior (stronger wandering)
         headingBias += 0.25 * Math.sin(t * 0.8) * dt + 0.12 * Math.sin(t * 1.5) * dt;
@@ -282,7 +306,7 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
       zDrift = -0.5 * dt; // land while resting
     } else {
       let nearFood = false;
-      for (const s of worldSources) {
+      for (const s of currentSources) {
         if (s.type !== 'food') continue;
         if (Math.hypot(s.x - fly.x, s.y - fly.y) < EAT_RADIUS * 2) {
           nearFood = true;
@@ -322,7 +346,12 @@ export function createBrainSim(connectome: Connectome, worldSources: WorldSource
       if (v > ACT_THRESHOLD && Number.isFinite(v)) actObj[id] = Math.min(1, v);
     });
 
-    return { t, fly, activity: Object.keys(actObj).length ? actObj : undefined };
+    return {
+      t,
+      fly,
+      activity: Object.keys(actObj).length ? actObj : undefined,
+      ...(eatenFoodId && { eatenFoodId }),
+    };
   }
 
   function inject(neurons: string[], strength = 0.8) {

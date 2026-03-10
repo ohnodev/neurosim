@@ -5,13 +5,22 @@ import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { loadConnectome } from './connectome.js';
 import { createBrainSim } from './brain-sim.js';
-import { getWorld } from './world.js';
+import { getWorld, spawnFood, removeFood, getSources } from './world.js';
+import claimsRouter from './routes/claims.js';
 
 const PORT = Number(process.env.PORT) || 3001;
 const connectome = loadConnectome();
-const world = getWorld();
 
-const sim = createBrainSim(connectome, world.sources);
+spawnFood(); // initial food
+setInterval(() => {
+  const f = spawnFood();
+  if (f) {
+    console.log('[world] spawned food', f.id, 'at', f.x.toFixed(1), f.y.toFixed(1));
+    broadcast({ simRunning, sources: getSources() });
+  }
+}, 10_000);
+
+const sim = createBrainSim(connectome, () => getSources());
 const { step, inject, getState, neuronIds } = sim;
 let simRunning = false;
 let simIntervalId: ReturnType<typeof setInterval> | null = null;
@@ -33,7 +42,11 @@ function startSim(): void {
   connectionStep = 0;
   simIntervalId = setInterval(() => {
     const state = step(1 / 30);
-    broadcast({ ...state, simRunning: true });
+    if (state.eatenFoodId) {
+      removeFood(state.eatenFoodId);
+      console.log('[world] fly ate food', state.eatenFoodId);
+    }
+    broadcast({ ...state, simRunning: true, sources: getSources() });
     connectionStep += 1;
     if (connectionStep % STEP_LOG_INTERVAL === 0) {
       console.log('[sim] t=', state.t.toFixed(1), 'fly=', state.fly.x.toFixed(2), state.fly.y.toFixed(2), 'clients=', wsClients.size);
@@ -79,7 +92,9 @@ app.get('/api/neurons', (_, res) => {
   res.json({ neurons });
 });
 
-app.get('/api/world', (_, res) => res.json(world));
+app.get('/api/world', (_, res) => res.json(getWorld()));
+
+app.use('/api/claim', claimsRouter);
 
 const httpServer = createServer(app);
 const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
@@ -89,7 +104,7 @@ wss.on('connection', (ws) => {
   console.log('[ws] client connected, total=', wsClients.size);
 
   const state = getState();
-  ws.send(JSON.stringify({ ...state, simRunning }));
+  ws.send(JSON.stringify({ ...state, simRunning, sources: getSources() }));
 
   ws.on('message', (raw) => {
     try {

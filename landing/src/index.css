@@ -1,0 +1,83 @@
+:root {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color: rgba(255, 255, 255, 0.95);
+  background-color: #0a0a0f;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  min-width: 320px;
+}
+
+@media (min-width: 1200px) {
+  html, body, #root {
+    height: 100dvh;
+    overflow: hidden;
+  }
+}
+
+@media (max-width: 1199px) {
+  html, body, #root {
+    min-height: 100dvh;
+    overflow-y: auto;
+  }
+}
+
+/* Global notification toast */
+.notification-toast {
+  position: fixed;
+  bottom: 1.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1.25rem;
+  border-radius: 0.5rem;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+  font-size: 0.9rem;
+  max-width: 90vw;
+}
+.notification-toast--info {
+  background: rgba(99, 102, 241, 0.95);
+  color: #fff;
+}
+.notification-toast--success {
+  background: rgba(34, 197, 94, 0.95);
+  color: #fff;
+}
+.notification-toast--error {
+  background: rgba(239, 68, 68, 0.95);
+  color: #fff;
+}
+.notification-toast--warning {
+  background: rgba(245, 158, 11, 0.95);
+  color: #111;
+}
+.notification-toast__message {
+  flex: 1;
+}
+.notification-toast__close {
+  background: none;
+  border: none;
+  color: inherit;
+  font-size: 1.25rem;
+  cursor: pointer;
+  opacity: 0.85;
+  padding: 0;
+  line-height: 1;
+}
+.notification-toast__close:hover {
+  opacity: 1;
+}

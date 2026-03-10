@@ -11,8 +11,10 @@
   },
   "dependencies": {
     "cors": "^2.8.5",
+    "json-store": "^1.0.0",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
+    "viem": "^2.17.0",
     "ws": "^8.14.2"
   },
   "devDependencies": {

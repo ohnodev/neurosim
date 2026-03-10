@@ -7,7 +7,9 @@
     "download-dataset": "./scripts/download-dataset.sh",
     "api:dev": "cd api && npm run dev",
     "web:dev": "cd web && npm run dev",
-    "test": "npm run test:api && npm run test:smoke",
+    "landing:dev": "cd landing && npm run dev",
+    "landing:build": "cd landing && npm run build",
+    "test": "npm run test:api && npm run test:smoke && npm run landing:build",
     "test:api": "cd api && npm run test",
     "test:smoke": "node scripts/smoke-test.mjs"
   },

@@ -1,6 +1,6 @@
 /**
- * Shared world definition: attractors (food/light) the fly can sense and steer toward.
- * Same positions used by API (sim) and frontend (rendering).
+ * Dynamic world: attractors (food/light) the fly can sense and steer toward.
+ * API spawns food periodically and removes it when eaten.
  */
 
 export interface WorldSource {
@@ -9,13 +9,44 @@ export interface WorldSource {
   x: number;
   y: number;
   z: number;
-  radius: number; // sense/attract radius
+  radius: number;
 }
 
-export const WORLD_SOURCES: WorldSource[] = [
-  { id: 'food1', type: 'food', x: 6, y: 6, z: 0.35, radius: 12 },
-];
+const ARENA = 24;
+const GROUND_Z = 0.35;
+
+const sources: WorldSource[] = [];
+let nextFoodId = 1;
+
+function randomInRange(min: number, max: number): number {
+  return min + Math.random() * (max - min);
+}
+
+export function spawnFood(): WorldSource | null {
+  if (sources.filter((s) => s.type === 'food').length >= 2) return null;
+  const id = `food${nextFoodId++}`;
+  const source: WorldSource = {
+    id,
+    type: 'food',
+    x: randomInRange(-ARENA + 2, ARENA - 2),
+    y: randomInRange(-ARENA + 2, ARENA - 2),
+    z: GROUND_Z,
+    radius: 12,
+  };
+  sources.push(source);
+  return { ...source };
+}
+
+export function removeFood(id: string): void {
+  const idx = sources.findIndex((s) => s.id === id);
+  if (idx >= 0) sources.splice(idx, 1);
+}
+
+export function getSources(): WorldSource[] {
+  return sources.map((s) => ({ ...s }));
+}
 
 export function getWorld() {
-  return { sources: WORLD_SOURCES };
+  return { sources: sources.map((s) => ({ ...s })) };
 }
+

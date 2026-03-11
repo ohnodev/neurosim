@@ -232,8 +232,8 @@
 }
 
 .neuroflies__slot {
-  width: 72px;
-  height: 72px;
+  width: 100px;
+  height: 100px;
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -520,6 +520,12 @@
 
 .wallet-btn__svg {
   display: block;
+  width: 36px;
+  height: 36px;
+  background: currentColor;
+  mask: url('/neurosim-logo-v1.svg') center/contain no-repeat;
+  -webkit-mask: url('/neurosim-logo-v1.svg') center/contain no-repeat;
+  transition: color 0.2s ease;
 }
 
 .wallet-btn--loading {

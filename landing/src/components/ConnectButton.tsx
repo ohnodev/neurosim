@@ -2,18 +2,9 @@ import { useState, useRef } from 'react';
 import { usePrivy } from '@privy-io/react-auth';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
 import { WalletMenuModal } from './WalletMenuModal';
-/** NeuroSim logo icon for wallet button */
+/** NeuroSim logo – mask so fill inherits button color (hover/active) */
 function WalletIcon() {
-  return (
-    <img
-      src="/neurosim-logo-v1.svg"
-      alt=""
-      width={36}
-      height={36}
-      className="wallet-btn__svg"
-      aria-hidden
-    />
-  );
+  return <span className="wallet-btn__svg" aria-hidden />;
 }
 
 export function ConnectButton() {

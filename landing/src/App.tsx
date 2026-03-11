@@ -6,7 +6,7 @@ import { ConnectButton } from './components/ConnectButton';
 import './App.css';
 
 const LORE_ARTICLE = 'https://theinnermostloop.substack.com/p/the-first-multi-behavior-brain-upload';
-const X_URL = 'https://x.com/neurosim';
+const X_URL = 'https://x.com/i/communities/2031850986466078872';
 const TG_URL = 'https://t.me/neurosimportal';
 
 /** Token address - single config to update later. */

@@ -59,7 +59,7 @@ export default function MenuModal({ isOpen, activeSection, navSubLinks, onClose 
             <a href="https://t.me/neurosimportal" target="_blank" rel="noopener noreferrer" aria-label="Telegram">
               <img src="/icons/telegram-logo.svg" alt="Telegram" />
             </a>
-            <a href="https://x.com/neurosim" target="_blank" rel="noopener noreferrer" aria-label="X">
+            <a href="https://x.com/i/communities/2031850986466078872" target="_blank" rel="noopener noreferrer" aria-label="X Community">
               <img src="/icons/x-logo.svg" alt="X" />
             </a>
           </div>

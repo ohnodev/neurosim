@@ -233,10 +233,10 @@
 .neuroflies {
   padding: 16px 20px;
   width: 100%;
-  background: linear-gradient(135deg, rgba(30, 58, 175, 0.25) 0%, rgba(67, 56, 202, 0.2) 100%);
-  border: 1px solid rgba(99, 102, 241, 0.35);
+  /* background: linear-gradient(135deg, rgba(30, 58, 175, 0.25) 0%, rgba(67, 56, 202, 0.2) 100%); */
+  /* border: 1px solid rgba(99, 102, 241, 0.35); */
   border-radius: 10px;
-  backdrop-filter: blur(16px);
+  /* backdrop-filter: blur(16px); */
   -webkit-backdrop-filter: blur(16px);
 }
 

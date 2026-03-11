@@ -21,12 +21,15 @@ const CABAL_ABI = [
   },
 ] as const;
 
+/** CabalTokenDistributor has MAX_BATCH_SIZE = 200; use a safe chunk size. */
+const MAX_RECIPIENTS_PER_BATCH = 100;
+
 let flushing = false;
 
 /**
  * Flush pending rewards to recipients via CabalTokenDistributor.
  * Waits for on-chain confirmation before marking distributed.
- * Serialized: only one flush runs at a time.
+ * Serialized: only one flush runs at a time. Batches are chunked to stay under contract limit.
  */
 export async function flushRewards(): Promise<void> {
   if (flushing) return;
@@ -34,46 +37,48 @@ export async function flushRewards(): Promise<void> {
   if (!wallet?.account) return;
 
   flushing = true;
-  const { recipients, amounts } = takeBatchForFlush();
-  if (recipients.length === 0) {
-    flushing = false;
-    return;
-  }
-
-  let txHash: `0x${string}` | undefined;
   try {
-    const recipientAddresses = recipients.map((r) => getAddress(r)) as `0x${string}`[];
-    const totalWei = amounts.reduce((a, b) => a + b, 0n);
-
-    txHash = await wallet.sendTransaction({
-      account: wallet.account!,
-      chain: base,
-      to: CABAL_TOKEN_DISTRIBUTOR,
-      data: encodeFunctionData({
-        abi: CABAL_ABI,
-        functionName: 'distributeETH',
-        args: [recipientAddresses, amounts],
-      }),
-      value: totalWei,
-    });
-
     const publicClient = getNeurosimPublicClient();
-    const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+    while (true) {
+      const { recipients, amounts } = takeBatchForFlush(MAX_RECIPIENTS_PER_BATCH);
+      if (recipients.length === 0) break;
 
-    if (receipt.status !== 'success') {
-      console.error('[rewardDistributor] tx reverted, rolling back', txHash);
-      rollbackBatch(recipients, amounts);
-      return;
-    }
+      let txHash: `0x${string}` | undefined;
+      try {
+        const recipientAddresses = recipients.map((r) => getAddress(r)) as `0x${string}`[];
+        const totalWei = amounts.reduce((a, b) => a + b, 0n);
 
-    confirmDistributed(recipients, amounts);
-    console.log('[rewardDistributor] flushed', recipients.length, 'recipients, tx', txHash);
-  } catch (err) {
-    console.error('[rewardDistributor] flush failed:', err);
-    if (txHash === undefined) {
-      rollbackBatch(recipients, amounts);
-    } else {
-      console.error('[rewardDistributor] tx was broadcast; batch left in-flight for reconciliation', txHash);
+        txHash = await wallet.sendTransaction({
+          account: wallet.account!,
+          chain: base,
+          to: CABAL_TOKEN_DISTRIBUTOR,
+          data: encodeFunctionData({
+            abi: CABAL_ABI,
+            functionName: 'distributeETH',
+            args: [recipientAddresses, amounts],
+          }),
+          value: totalWei,
+        });
+
+        const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+
+        if (receipt.status !== 'success') {
+          console.error('[rewardDistributor] tx reverted, rolling back', txHash);
+          rollbackBatch(recipients, amounts);
+          return;
+        }
+
+        confirmDistributed(recipients, amounts);
+        console.log('[rewardDistributor] flushed', recipients.length, 'recipients, tx', txHash);
+      } catch (err) {
+        console.error('[rewardDistributor] flush failed:', err);
+        if (txHash === undefined) {
+          rollbackBatch(recipients, amounts);
+        } else {
+          console.error('[rewardDistributor] tx was broadcast; chunk left in-flight for reconciliation', txHash);
+        }
+        return;
+      }
     }
   } finally {
     flushing = false;

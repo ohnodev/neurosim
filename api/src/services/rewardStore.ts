@@ -1,11 +1,13 @@
 /**
  * In-memory reward store with JSON persistence.
  * Tracks pending rewards per owner, NeuroFly stats, and distributed history.
+ * Persistence uses write-to-temp-then-rename for atomic writes (openclaw-style).
  */
-import fs from 'fs/promises';
-import { readFileSync } from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { NeuroFlyStats, RewardState } from '../types/index.js';
 import { getDeployments } from './deployStore.js';
 import { getFlies } from './flyStore.js';
@@ -45,18 +47,29 @@ function load(): void {
   }
 }
 
-function persist(): void {
+async function persist(): Promise<void> {
   if (process.env.VITEST === 'true') return;
   const state: RewardState = {
     pending: Object.fromEntries([...pending].map(([k, v]) => [k, v.toString()])),
     distributed,
     neuroflyStats,
   };
-  const data = JSON.stringify(state, null, 2);
+  const data = `${JSON.stringify(state, null, 2)}\n`;
   const dir = path.dirname(rewardsPath);
-  fs.mkdir(dir, { recursive: true })
-    .then(() => fs.writeFile(rewardsPath, data))
-    .catch((err) => console.error('[rewardStore] save error:', err));
+  const tmp = path.join(dir, `${path.basename(rewardsPath)}.${crypto.randomUUID()}.tmp`);
+  try {
+    await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+    await fs.writeFile(tmp, data, { encoding: 'utf-8' });
+    await fs.chmod(tmp, 0o600);
+    await fs.rename(tmp, rewardsPath);
+  } catch (err) {
+    console.error('[rewardStore] save error:', err);
+    try {
+      await fs.unlink(tmp);
+    } catch {
+      // ignore cleanup failure
+    }
+  }
 }
 
 function save(): void {
@@ -64,7 +77,7 @@ function save(): void {
   if (saveScheduled) clearTimeout(saveScheduled);
   saveScheduled = setTimeout(() => {
     saveScheduled = null;
-    persist();
+    void persist();
   }, SAVE_DEBOUNCE_MS);
 }
 
@@ -117,13 +130,16 @@ export function recordFoodCollected(simIndex: number): void {
 }
 
 /**
- * Atomically move pending rewards to in-flight and return the batch.
+ * Atomically move up to maxCount pending rewards to in-flight and return the batch.
  * Call confirmDistributed on success, rollbackBatch on failure.
+ * @param maxCount - Max recipients to take (default no limit).
  */
-export function takeBatchForFlush(): { recipients: string[]; amounts: bigint[] } {
+export function takeBatchForFlush(maxCount?: number): { recipients: string[]; amounts: bigint[] } {
   const recipients: string[] = [];
   const amounts: bigint[] = [];
+  const limit = maxCount != null && maxCount > 0 ? maxCount : Number.POSITIVE_INFINITY;
   for (const [addr, amt] of pending) {
+    if (recipients.length >= limit) break;
     if (amt > 0n) {
       recipients.push(addr);
       amounts.push(amt);

@@ -564,7 +564,7 @@ export default function FlyViewer() {
                               <img src="/fly.svg" alt="" width={28} height={28} className="fly-viewer__fly-slot-icon" aria-hidden />
                               <span className="fly-viewer__fly-slot-label" style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
                                 {isEmpty ? 'You have no flies' : `Fly ${i + 1}`}
-                                <span style={{ fontSize: 9, color: '#8a8', fontFamily: 'monospace' }}>{statsBySlot[i] ?? 0} pts</span>
+                                <span style={{ fontSize: 9, color: '#8a8', fontFamily: 'monospace' }}>0 pts</span>
                               </span>
                               <span className="fly-viewer__fly-slot-buy">{isEmpty ? 'Buy your first fly' : 'Buy Fly'}</span>
                             </button>
@@ -583,7 +583,7 @@ export default function FlyViewer() {
                               <img src="/fly.svg" alt="" width={28} height={28} className="fly-viewer__fly-slot-icon" aria-hidden />
                               <span className="fly-viewer__fly-slot-label" style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
                                 Fly {i + 1}
-                                <span style={{ fontSize: 9, color: '#8a8', fontFamily: 'monospace' }}>{statsBySlot[i] ?? 0} pts</span>
+                                <span style={{ fontSize: 9, color: '#8a8', fontFamily: 'monospace' }}>0 pts</span>
                               </span>
                               <span className="fly-viewer__fly-slot-buy">Deploy</span>
                             </button>

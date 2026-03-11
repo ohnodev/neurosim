@@ -65,7 +65,7 @@ function FlyModel({ state }: { state: FlyState }) {
       const action = actions[name];
       if (!action) continue;
       if (isFlying) {
-        action.reset().setLoop(THREE.LoopRepeat, Infinity).play();
+        action.reset().setLoop(THREE.LoopRepeat, Infinity).setEffectiveTimeScale(2).play();
       } else {
         action.stop();
       }

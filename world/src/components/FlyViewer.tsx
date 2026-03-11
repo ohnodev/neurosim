@@ -25,6 +25,15 @@ function getHealthColor(health: number): string {
   return '#c44';
 }
 
+/** Bigint-safe ETH formatter to avoid precision loss. */
+function formatEth(wei: bigint, decimals = 6): string {
+  const ONE = 10n ** 18n;
+  const whole = wei / ONE;
+  const frac = wei % ONE;
+  const fracStr = frac.toString().padStart(18, '0').slice(0, decimals);
+  return `${whole}.${fracStr}`;
+}
+
 const FLY_THRESHOLD = 1.1; // z above this = flying (wings flap + HUD mode)
 const REST_DURATION_FALLBACK = 4; // fallback when flyState.restDuration not in payload
 const WING_NAMES = ['Object_4', 'Object_5', 'Object_6']; // fly-white, flywings-dark, glass (wing materials)
@@ -212,6 +221,7 @@ function FlyStatusCard({
   return (
     <button
       type="button"
+      className="fly-viewer__status-card"
       onClick={onSelect}
       style={{
         width: '100%',
@@ -223,7 +233,6 @@ function FlyStatusCard({
         cursor: 'pointer',
         color: 'inherit',
         font: 'inherit',
-        outline: 'none',
       }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 10, color: selected ? '#aaf' : '#aaa', marginBottom: 6, fontWeight: 600 }}>
@@ -413,6 +422,10 @@ export default function FlyViewer() {
     }
   }, [deployedSlotKeys, simIndexForSelected, flies, deployed]);
 
+  useEffect(() => {
+    if (effectiveSimIndex == null && cameraMode === 'fly') setCameraMode('god');
+  }, [effectiveSimIndex, cameraMode]);
+
   const flyMode = getFlyMode(focusedFly);
 
   const flyCameraContextValue = useMemo(
@@ -548,8 +561,9 @@ export default function FlyViewer() {
                       const hasFly = myFlies[i] != null;
                       const simIdx = deployed[i];
                       const isDeployed = simIdx != null;
-                      const simFly = isDeployed ? (flies[simIdx] ?? DEFAULT_FLY) : DEFAULT_FLY;
-                      const isDead = isDeployed && simFly.dead;
+                      const hasSimFly = isDeployed && flies[simIdx] != null;
+                      const simFly = hasSimFly ? flies[simIdx]! : DEFAULT_FLY;
+                      const isDead = hasSimFly && simFly.dead;
                       const isEmpty = myFlies.length === 0 && i === 0;
                       return (
                         <div key={i} className="fly-viewer__fly-slot">
@@ -591,6 +605,12 @@ export default function FlyViewer() {
                               </span>
                               <span className="fly-viewer__fly-slot-buy">Deploy</span>
                             </button>
+                          ) : isDeployed && !hasSimFly ? (
+                            <div className="fly-viewer__fly-slot-empty fly-viewer__fly-slot--connecting">
+                              <img src="/fly.svg" alt="" width={28} height={28} className="fly-viewer__fly-slot-icon" aria-hidden />
+                              <span className="fly-viewer__fly-slot-label">Fly {i + 1}</span>
+                              <span style={{ fontSize: 9, color: '#888' }}>Connecting…</span>
+                            </div>
                           ) : isDead ? (
                             <div className="fly-viewer__fly-slot-dead">
                               <span className="fly-viewer__fly-slot-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -640,7 +660,7 @@ export default function FlyViewer() {
                   const inGraveyard = graveyardSlots.has(i);
                   const pts = statsBySlot[i] ?? 0;
                   const wei = flyStatsData?.rewardPerPointWei ? BigInt(flyStatsData.rewardPerPointWei) * BigInt(pts) : 0n;
-                  const ethStr = pts > 0 ? (Number(wei) / 1e18).toFixed(6) : '0';
+                  const ethStr = pts > 0 ? formatEth(wei) : '0';
                   return (
                     <div key={i} className={`fly-viewer__fly-slot fly-viewer__fly-slot--graveyard ${!inGraveyard ? 'fly-viewer__fly-slot--graveyard-empty' : ''}`}>
                       {inGraveyard ? (

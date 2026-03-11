@@ -259,6 +259,11 @@
   outline: none;
 }
 
+.fly-viewer__fly-slot .fly-viewer__status-card:focus-visible {
+  outline: 2px solid rgba(168, 85, 247, 0.8);
+  outline-offset: 2px;
+}
+
 .fly-viewer__fly-slot-empty {
   flex: 1;
   min-height: 100px;
@@ -350,11 +355,17 @@
   transition: background 0.15s, color 0.15s;
 }
 
-.fly-viewer__side-toggle:focus,
-.fly-viewer__side-toggle:focus-visible,
+.fly-viewer__side-toggle:focus {
+  outline: none;
+  border-color: rgba(100, 100, 140, 0.3);
+}
+.fly-viewer__side-toggle:focus-visible {
+  outline: 2px solid rgba(168, 85, 247, 0.8);
+  outline-offset: 2px;
+  border-color: rgba(100, 100, 140, 0.3);
+}
 .fly-viewer__side-toggle:active {
   outline: none;
-  box-shadow: none;
   border-color: rgba(100, 100, 140, 0.3);
 }
 

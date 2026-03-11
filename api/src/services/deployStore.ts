@@ -59,10 +59,14 @@ export function addDeployment(address: string, slotIndex: number): void {
   const flies = getFlies(addr);
   // Flies array index = slot (flies appended in claim order: first claim => slot 0, etc.)
   const fly = flies[slotIndex];
+  const flyId = fly?.id;
+  if (!flyId || typeof flyId !== 'string') {
+    throw new Error(`[deployStore] Cannot add deployment: no fly at slot ${slotIndex} for ${addr}`);
+  }
   deployments.push({
     address: addr,
     slotIndex,
-    flyId: fly?.id,
+    flyId,
     timeDeployed: new Date().toISOString(),
   });
   save();

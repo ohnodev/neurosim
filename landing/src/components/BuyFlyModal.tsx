@@ -112,8 +112,12 @@ export function BuyFlyModal({
 
   if (!isOpen) return null;
 
+  const ZERO = '0x0000000000000000000000000000000000000000';
   const neuroDisabled =
-    !config?.neuroTokenAddress || config.neuroTokenAddress === '0x0000000000000000000000000000000000000000';
+    !config?.neuroTokenAddress ||
+    config.neuroTokenAddress === ZERO ||
+    !config?.claimReceiverAddress ||
+    config.claimReceiverAddress === ZERO;
 
   const modalContent = !address ? (
     <div

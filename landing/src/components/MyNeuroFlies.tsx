@@ -85,6 +85,7 @@ export function MyNeuroFlies() {
     return m;
   }, [flyStatsData?.stats]);
 
+  // Slot user is buying for; API assigns next available slot (same as clicked empty slot)
   const [buyFlySlot, setBuyFlySlot] = useState<number | null>(null);
 
   useEffect(() => {

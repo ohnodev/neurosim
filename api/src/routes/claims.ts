@@ -47,6 +47,8 @@ const TRANSFER_EVENT_ABI = [
 ] as const;
 
 const REQUIRED_AMOUNT = 1_000_000n * 10n ** 18n;
+/** Approx gas for ERC20 transfer + buffer; ETH send ~21k. ~100k gas @ 0.1 gwei ≈ 0.00001 ETH */
+const GAS_BUFFER_WEI = 50_000_000_000_000n; // ~0.00005 ETH
 
 function parseAndValidateAddress(raw: unknown): `0x${string}` {
   const s = (typeof raw === 'string' ? raw : '')?.trim().toLowerCase();
@@ -76,11 +78,15 @@ router.get('/balance-check', async (req: Request, res: Response) => {
           })
         : 0n,
     ]);
+    const flyEthWithGas = FLY_ETH_AMOUNT + GAS_BUFFER_WEI;
+    const flyNeuroEthGasWei = GAS_BUFFER_WEI;
     res.json({
       ethBalanceWei: ethBalance.toString(),
       neuroBalanceWei: neuroBalance.toString(),
       flyEthRequiredWei: FLY_ETH_AMOUNT.toString(),
       flyNeuroRequiredWei: REQUIRED_AMOUNT.toString(),
+      flyEthRequiredWithGasWei: flyEthWithGas.toString(),
+      flyNeuroEthRequiredWithGasWei: flyNeuroEthGasWei.toString(),
     });
   } catch (err) {
     console.error('[claims] balance-check error:', err);

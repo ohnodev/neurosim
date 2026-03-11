@@ -17,6 +17,8 @@ export interface BalanceCheck {
   neuroBalanceWei: string;
   flyEthRequiredWei: string;
   flyNeuroRequiredWei: string;
+  flyEthRequiredWithGasWei: string;
+  flyNeuroEthRequiredWithGasWei: string;
 }
 
 export async function fetchBalanceCheck(address: string): Promise<BalanceCheck | null> {

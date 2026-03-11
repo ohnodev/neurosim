@@ -13,8 +13,12 @@ export function parseWalletError(err: unknown): string {
   const msg = (e.shortMessage ?? e.message ?? e.cause?.message ?? '').toLowerCase();
   const code = e.code ?? e.cause?.code;
 
-  // User rejected (MetaMask: 4001, WalletConnect may use 5000 or different)
-  if (code === 4001 || code === 4100 || code === 5000) {
+  // 4100: Unauthorized / wallet needs reauthorization
+  if (code === 4100) {
+    return 'Wallet not authorized. Please reconnect or reauthorize the dApp.';
+  }
+  // User rejected (MetaMask: 4001, WalletConnect may use 5000)
+  if (code === 4001 || code === 5000) {
     return "Transaction rejected. Please try again when you're ready.";
   }
   if (

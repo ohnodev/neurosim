@@ -189,10 +189,18 @@ export function MyNeuroFlies() {
     setError(null);
     try {
       const bal = await fetchBalanceCheck(address);
-      if (bal && BigInt(bal.neuroBalanceWei) < BigInt(bal.flyNeuroRequiredWei)) {
-        const msg = 'Insufficient $NEURO. You need 1M $NEURO to buy a fly.';
-        if (mountedRef.current) setError(msg);
-        throw new Error(msg);
+      if (bal) {
+        if (BigInt(bal.neuroBalanceWei) < BigInt(bal.flyNeuroRequiredWei)) {
+          const msg = 'Insufficient $NEURO. You need 1M $NEURO to buy a fly.';
+          if (mountedRef.current) setError(msg);
+          throw new Error(msg);
+        }
+        const minGasWei = BigInt(bal.flyNeuroEthRequiredWithGasWei);
+        if (minGasWei > 0n && BigInt(bal.ethBalanceWei) < minGasWei) {
+          const msg = 'Insufficient ETH for gas. Add more ETH to your wallet to complete this purchase.';
+          if (mountedRef.current) setError(msg);
+          throw new Error(msg);
+        }
       }
       const hash = await walletClient.writeContract({
         account: address,

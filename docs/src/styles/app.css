@@ -1,0 +1,46 @@
+#root {
+  min-height: 100dvh;
+}
+
+.api-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.api-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  padding: 12px;
+}
+
+.api-card-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.api-card-top code {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.api-card p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.doc-section pre {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  padding: 12px;
+}
+
+.doc-section code {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}

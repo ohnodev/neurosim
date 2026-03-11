@@ -9,6 +9,9 @@
     "world:dev": "cd world && npm run dev",
     "landing:dev": "cd landing && npm run dev",
     "landing:build": "cd landing && npm run build",
+    "docs:dev": "cd docs && npm run dev",
+    "docs:build": "cd docs && npm run build",
+    "docs:deploy": "cd docs && npm run deploy",
     "test": "npm run test:api && npm run test:smoke && npm run landing:build",
     "test:api": "cd api && npm run test",
     "test:smoke": "node scripts/smoke-test.mjs"

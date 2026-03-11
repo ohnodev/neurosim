@@ -1,0 +1,112 @@
+/* Prism.js — Tomorrow Night theme adapted for Basemarket */
+code[class*="language-"],
+pre[class*="language-"] {
+  color: #c9d8ff;
+  background: none;
+  font-family: "Space Mono", "Courier New", monospace;
+  font-size: 0.82rem;
+  text-align: left;
+  white-space: pre;
+  word-spacing: normal;
+  word-break: normal;
+  overflow-wrap: normal;
+  line-height: 1.65;
+  tab-size: 2;
+  hyphens: none;
+}
+
+pre[class*="language-"] {
+  padding: 16px;
+  margin: 0;
+  overflow: auto;
+  background: #161a28;
+  border-radius: 0;
+}
+
+:not(pre) > code[class*="language-"],
+pre[class*="language-"] {
+  background: #161a28;
+}
+
+:not(pre) > code[class*="language-"] {
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: normal;
+}
+
+/* Tokens */
+.token.comment,
+.token.prolog,
+.token.doctype,
+.token.cdata {
+  color: #555575;
+  font-style: italic;
+}
+
+.token.punctuation { color: #6677aa; }
+
+.namespace { opacity: 0.7; }
+
+.token.property,
+.token.tag,
+.token.boolean,
+.token.number,
+.token.constant,
+.token.symbol,
+.token.deleted {
+  color: #f78c6c;
+}
+
+.token.selector,
+.token.attr-name,
+.token.string,
+.token.char,
+.token.builtin,
+.token.inserted {
+  color: #c3e88d;
+}
+
+.token.operator,
+.token.entity,
+.token.url,
+.language-css .token.string,
+.style .token.string {
+  color: #89ddff;
+  background: transparent;
+}
+
+.token.atrule,
+.token.attr-value,
+.token.keyword {
+  color: #82aaff;
+}
+
+.token.function,
+.token.class-name {
+  color: #ffcb6b;
+}
+
+.token.regex,
+.token.important,
+.token.variable {
+  color: #f07178;
+}
+
+.token.important,
+.token.bold { font-weight: 700; }
+
+.token.italic { font-style: italic; }
+
+.token.entity { cursor: help; }
+
+/* JSON specific */
+.language-json .token.property { color: #82aaff; }
+.language-json .token.string { color: #c3e88d; }
+.language-json .token.number { color: #f78c6c; }
+.language-json .token.boolean { color: #f78c6c; }
+.language-json .token.null { color: #f78c6c; font-style: italic; }
+
+/* Bash specific */
+.language-bash .token.function { color: #82aaff; }
+.language-bash .token.string { color: #c3e88d; }
+.language-bash .token.comment { color: #555575; font-style: italic; }

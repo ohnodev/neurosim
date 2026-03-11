@@ -286,15 +286,22 @@ export function createBrainSim(
 
     let headingBias = turnFromMotor * dt + 0.1 * Math.sin(t * 0.7) * dt;
 
-    // Wall avoidance: turn away when near arena boundary (prevents flying into corners)
+    // Wall avoidance: turn away when near arena boundary. Corner escape: when near 2+ walls,
+    // steer strongly toward center to avoid conflicting biases that trap the fly.
     const nearRight = fly.x > ARENA - WALL_MARGIN;
     const nearLeft = fly.x < -ARENA + WALL_MARGIN;
     const nearTop = fly.y > ARENA - WALL_MARGIN;
     const nearBottom = fly.y < -ARENA + WALL_MARGIN;
-    if (nearRight) headingBias -= 0.6 * dt;   // turn away from right wall
-    if (nearLeft) headingBias += 0.6 * dt;
-    if (nearTop) headingBias -= 0.5 * dt;     // turn away from top
-    if (nearBottom) headingBias += 0.5 * dt;
+    const nearCorner = (nearRight ? 1 : 0) + (nearLeft ? 1 : 0) + (nearTop ? 1 : 0) + (nearBottom ? 1 : 0) >= 2;
+    if (nearCorner) {
+      const turn = angleToward(fly.heading, -fly.x, -fly.y);
+      headingBias += turn * 2.2 * dt; // strong turn toward arena center
+    } else {
+      if (nearRight) headingBias -= 0.6 * dt;
+      if (nearLeft) headingBias += 0.6 * dt;
+      if (nearTop) headingBias -= 0.5 * dt;
+      if (nearBottom) headingBias += 0.5 * dt;
+    }
 
     if (hungry && currentSources.length > 0) {
       let nearestDist = Infinity;

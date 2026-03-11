@@ -268,7 +268,8 @@ export default function FlyViewer() {
     () => typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches ? false : true
   );
   const [buyFlySlot, setBuyFlySlot] = useState<number | null>(null);
-  const [fliesTab, setFliesTab] = useState<'current' | 'past'>('current');
+  const [fliesTab, setFliesTab] = useState<'current' | 'graveyard'>('current');
+  const [graveyardSlots, setGraveyardSlots] = useState<Set<number>>(() => new Set());
   const isMobileDefault = () => typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches;
   const [statusPanelOpen, setStatusPanelOpen] = useState(() => !isMobileDefault());
   const [brainPanelOpen, setBrainPanelOpen] = useState(() => !isMobileDefault());
@@ -505,10 +506,13 @@ export default function FlyViewer() {
               </button>
               <button
                 type="button"
-                className={`fly-viewer__flies-tab ${fliesTab === 'past' ? 'fly-viewer__flies-tab--active' : ''}`}
-                onClick={() => setFliesTab('past')}
+                className={`fly-viewer__flies-tab ${fliesTab === 'graveyard' ? 'fly-viewer__flies-tab--active' : ''}`}
+                onClick={() => setFliesTab('graveyard')}
               >
-                Past
+                <svg width={14} height={14} viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+                  <path d="M12 2C8 2 6 5 6 8v2H4v2h2v10h12V12h2v-2h-2V8c0-3-2-6-6-6zm0 2c2.2 0 4 2 4 5v2H8V9c0-3 1.8-5 4-5zm-2 10h4v6h-4z" />
+                </svg>
+                Graveyard
               </button>
             </div>
             {fliesTab === 'current' ? (
@@ -525,78 +529,83 @@ export default function FlyViewer() {
                     </button>
                   </div>
                 ) : (
-                  [0, 1, 2].map((i) => {
-                    const hasFly = myFlies[i] != null;
-                    const simIdx = deployed[i];
-                    const isDeployed = simIdx != null;
-                    const simFly = isDeployed ? (flies[simIdx] ?? DEFAULT_FLY) : DEFAULT_FLY;
-                    return (
-                      <div key={i} className="fly-viewer__fly-slot">
-                        {!hasFly ? (
-                          <button
-                            type="button"
-                            className="fly-viewer__fly-slot-empty"
-                            onClick={() => setBuyFlySlot(i)}
-                          >
-                            <span className="fly-viewer__fly-slot-label">Fly {i + 1}</span>
-                            <span className="fly-viewer__fly-slot-buy">Buy Fly</span>
-                          </button>
-                        ) : !isDeployed ? (
-                          <button
-                            type="button"
-                            className="fly-viewer__fly-slot-empty"
-                            onClick={async () => {
-                              try {
-                                await deployFly(i);
-                              } catch (e) {
-                                setError(e instanceof Error ? `Deploy failed: ${e.message}` : 'Deploy failed');
-                              }
-                            }}
-                          >
-                            <span className="fly-viewer__fly-slot-label">Fly {i + 1}</span>
-                            <span className="fly-viewer__fly-slot-buy">Deploy</span>
-                          </button>
-                        ) : (
-                          <FlyStatusCard
-                            index={i}
-                            fly={simFly}
-                            selected={i === selectedFlyIndex}
-                            onSelect={() => setSelectedFlyIndex(i)}
-                          />
-                        )}
-                      </div>
-                    );
-                  })
+                  [0, 1, 2]
+                    .filter((i) => !graveyardSlots.has(i))
+                    .map((i) => {
+                      const hasFly = myFlies[i] != null;
+                      const simIdx = deployed[i];
+                      const isDeployed = simIdx != null;
+                      const simFly = isDeployed ? (flies[simIdx] ?? DEFAULT_FLY) : DEFAULT_FLY;
+                      const isDead = isDeployed && simFly.dead;
+                      return (
+                        <div key={i} className="fly-viewer__fly-slot">
+                          {!hasFly ? (
+                            <button
+                              type="button"
+                              className="fly-viewer__fly-slot-empty"
+                              onClick={() => setBuyFlySlot(i)}
+                            >
+                              <span className="fly-viewer__fly-slot-label">Fly {i + 1}</span>
+                              <span className="fly-viewer__fly-slot-buy">Buy Fly</span>
+                            </button>
+                          ) : !isDeployed ? (
+                            <button
+                              type="button"
+                              className="fly-viewer__fly-slot-empty"
+                              onClick={async () => {
+                                try {
+                                  await deployFly(i);
+                                } catch (e) {
+                                  setError(e instanceof Error ? `Deploy failed: ${e.message}` : 'Deploy failed');
+                                }
+                              }}
+                            >
+                              <span className="fly-viewer__fly-slot-label">Fly {i + 1}</span>
+                              <span className="fly-viewer__fly-slot-buy">Deploy</span>
+                            </button>
+                          ) : isDead ? (
+                            <div className="fly-viewer__fly-slot-dead">
+                              <span className="fly-viewer__fly-slot-label">Fly {i + 1} (dead)</span>
+                              <button
+                                type="button"
+                                className="fly-viewer__fly-slot-graveyard"
+                                onClick={() => {
+                                  setGraveyardSlots((prev) => new Set(prev).add(i));
+                                  const next = [0, 1, 2].find((j) => j !== i && !graveyardSlots.has(j) && myFlies[j] != null);
+                                  if (next != null && selectedFlyIndex === i) setSelectedFlyIndex(next);
+                                }}
+                              >
+                                Send to NeuroFly Graveyard
+                              </button>
+                            </div>
+                          ) : (
+                            <FlyStatusCard
+                              index={i}
+                              fly={simFly}
+                              selected={i === selectedFlyIndex}
+                              onSelect={() => setSelectedFlyIndex(i)}
+                            />
+                          )}
+                        </div>
+                      );
+                    })
                 )}
               </>
             ) : (
               <>
+                <div className="fly-viewer__graveyard-title">NeuroFly Graveyard</div>
                 {[0, 1, 2]
-                  .filter((i) => {
-                    const hasFly = myFlies[i] != null;
-                    const simIdx = deployed[i];
-                    const isDeployed = simIdx != null;
-                    const simFly = isDeployed ? (flies[simIdx] ?? DEFAULT_FLY) : DEFAULT_FLY;
-                    return hasFly && isDeployed && simFly.dead;
-                  })
-                  .map((i) => {
-                    return (
-                      <div key={i} className="fly-viewer__fly-slot fly-viewer__fly-slot--past">
-                        <div className="fly-viewer__fly-past-card">
-                          <span className="fly-viewer__fly-slot-label">Fly {i + 1}</span>
-                          <span style={{ fontSize: 10, color: '#f88' }}>dead</span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                {[0, 1, 2].filter((i) => {
-                  const hasFly = myFlies[i] != null;
-                  const simIdx = deployed[i];
-                  const isDeployed = simIdx != null;
-                  const simFly = isDeployed ? (flies[simIdx] ?? DEFAULT_FLY) : DEFAULT_FLY;
-                  return hasFly && isDeployed && simFly.dead;
-                }).length === 0 && (
-                  <div style={{ color: '#666', fontSize: 10, padding: 12 }}>No past flies</div>
+                  .filter((i) => graveyardSlots.has(i))
+                  .map((i) => (
+                    <div key={i} className="fly-viewer__fly-slot fly-viewer__fly-slot--graveyard">
+                      <svg className="fly-viewer__graveyard-icon" width={20} height={20} viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+                        <path d="M12 2C8 2 6 5 6 8v2H4v2h2v10h12V12h2v-2h-2V8c0-3-2-6-6-6zm0 2c2.2 0 4 2 4 5v2H8V9c0-3 1.8-5 4-5zm-2 10h4v6h-4z" />
+                      </svg>
+                      <span className="fly-viewer__fly-slot-label">Fly {i + 1}</span>
+                    </div>
+                  ))}
+                {graveyardSlots.size === 0 && (
+                  <div style={{ color: '#666', fontSize: 10, padding: 12 }}>No flies in graveyard</div>
                 )}
               </>
             )}

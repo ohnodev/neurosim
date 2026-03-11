@@ -216,15 +216,20 @@
 
 /* My NeuroFlies - one row on desktop, stacked on mobile */
 .neuroflies {
-  padding: 12px 0;
+  padding: 16px 20px;
   width: 100%;
+  background: linear-gradient(135deg, rgba(30, 58, 175, 0.25) 0%, rgba(67, 56, 202, 0.2) 100%);
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  border-radius: 10px;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
 }
 
 .neuroflies__title {
   font-family: var(--font-heading);
   font-size: 0.9rem;
   font-weight: 700;
-  color: rgba(255, 255, 255, 0.9);
+  color: #fff;
   margin: 0 0 10px;
 }
 
@@ -266,10 +271,10 @@
   justify-content: center;
   gap: 8px;
   padding: 8px;
-  border: 1px solid rgba(99, 102, 241, 0.3);
+  border: 1px solid rgba(99, 102, 241, 0.4);
   border-radius: 6px;
-  background: rgba(99, 102, 241, 0.06);
-  color: rgba(255, 255, 255, 0.9);
+  background: rgba(15, 23, 42, 0.6);
+  color: #fff;
   font-size: 11px;
   font-family: monospace;
 }
@@ -284,10 +289,10 @@
   justify-content: center;
   gap: 8px;
   padding: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(99, 102, 241, 0.4);
   border-radius: 6px;
-  background: rgba(255, 255, 255, 0.04);
-  color: #888;
+  background: rgba(15, 23, 42, 0.7);
+  color: #fff;
   font-size: 11px;
   font-family: monospace;
   cursor: pointer;
@@ -296,8 +301,8 @@
 }
 
 .neuroflies__slot-empty:hover {
-  background: rgba(99, 102, 241, 0.15);
-  color: #a5b4fc;
+  background: rgba(99, 102, 241, 0.25);
+  color: #fff;
 }
 
 .neuroflies__slot-empty:focus,
@@ -311,8 +316,12 @@
   outline-offset: 2px;
 }
 
+.neuroflies__slot-empty .neuroflies__fly-slot-label {
+  color: rgba(255, 255, 255, 0.95);
+}
+
 .neuroflies__slot-empty--first .neuroflies__fly-slot-label {
-  color: rgba(255, 255, 255, 0.85);
+  color: #fff;
 }
 
 .neuroflies__fly-icon-img {
@@ -322,7 +331,7 @@
 
 .neuroflies__fly-slot-label {
   font-weight: 600;
-  color: #666;
+  color: #fff;
 }
 
 .neuroflies__fly-pts {
@@ -335,9 +344,9 @@
   font-size: 10px;
   padding: 4px 12px;
   border-radius: 4px;
-  background: rgba(99, 102, 241, 0.25);
-  color: #a5b4fc;
-  border: 1px solid rgba(99, 102, 241, 0.4);
+  background: rgba(99, 102, 241, 0.4);
+  color: #fff;
+  border: 1px solid rgba(99, 102, 241, 0.5);
 }
 
 .neuroflies__slot-filled .neuroflies__fly-slot-label {
@@ -358,7 +367,7 @@
 .neuroflies__hint {
   font-family: var(--font-mono);
   font-size: 0.8rem;
-  color: rgba(255, 255, 255, 0.5);
+  color: rgba(255, 255, 255, 0.85);
   margin: 0;
 }
 

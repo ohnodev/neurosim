@@ -22,8 +22,10 @@
   position: fixed;
   inset: 0;
   width: 100%;
-  height: 100dvh;
+  height: 100%;
+  min-height: 100vh;
   min-height: 100dvh;
+  min-height: -webkit-fill-available;
   z-index: 0;
   background-color: #000;
   background-image:
@@ -32,6 +34,17 @@
     url('/neurosim-bg-v2.jpg');
   background-size: cover;
   background-position: center;
+  background-attachment: scroll;
+}
+
+/* Mobile: use absolute so bg scrolls with content — avoids fixed + viewport resize jump */
+@media (max-width: 1199px) {
+  .bg {
+    position: absolute;
+    inset: 0;
+    min-height: 100dvh;
+    min-height: -webkit-fill-available;
+  }
 }
 
 /* Header - transparent */

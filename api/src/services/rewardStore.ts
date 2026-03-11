@@ -18,6 +18,9 @@ const rewardsPath = dataPath('rewards-state.json');
 /** 0.000001 ETH per food collected */
 export const REWARD_PER_FOOD = 10n ** 12n;
 
+/** Number of NeuroFly slots per address */
+export const MAX_SLOTS = 3;
+
 /** Max distributed history entries to keep in memory */
 const MAX_DISTRIBUTED_HISTORY = 10_000;
 
@@ -223,7 +226,7 @@ export function getStatsForAddress(address: string): { slotIndex: number; feedCo
   const addr = address.toLowerCase();
   const flies = getFlies(addr);
   const result: { slotIndex: number; feedCount: number }[] = [];
-  for (let slotIndex = 0; slotIndex < 3; slotIndex++) {
+  for (let slotIndex = 0; slotIndex < MAX_SLOTS; slotIndex++) {
     const fly = flies[slotIndex];
     const feedCount = fly
       ? (findStats(addr, slotIndex, fly.id)?.feedCount ?? 0)

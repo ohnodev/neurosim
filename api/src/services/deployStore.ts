@@ -57,6 +57,7 @@ export function addDeployment(address: string, slotIndex: number): void {
   const addr = address.toLowerCase();
   if (deployments.some((d) => d.address === addr && d.slotIndex === slotIndex)) return;
   const flies = getFlies(addr);
+  // Flies array index = slot (flies appended in claim order: first claim => slot 0, etc.)
   const fly = flies[slotIndex];
   deployments.push({
     address: addr,

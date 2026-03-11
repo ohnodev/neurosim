@@ -4,6 +4,7 @@ import { base } from 'viem/chains';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
 import { useNotification } from '../contexts/NotificationContext';
 import { getApiBase } from '../lib/constants';
+import { fetchClaimConfig } from '../lib/claimApi';
 import { BuyFlyModal } from './BuyFlyModal';
 
 const ERC20_ABI = [
@@ -28,19 +29,7 @@ interface NeuroFly {
   claimedAt: string;
 }
 
-interface ClaimConfig {
-  neuroTokenAddress: `0x${string}`;
-  claimReceiverAddress: `0x${string}`;
-  flyEthReceiver: `0x${string}`;
-}
-
 const SUPPORT_MESSAGE = 'Please contact support via our Telegram channel for help.';
-
-async function fetchConfig(): Promise<ClaimConfig | null> {
-  const r = await fetch(`${getApiBase()}/api/claim/config`);
-  if (!r.ok) return null;
-  return r.json();
-}
 
 async function fetchMyFliesAndEligibility(address: string) {
   const apiBase = getApiBase();
@@ -71,7 +60,7 @@ export function MyNeuroFlies() {
 
   const { data: config } = useQuery({
     queryKey: ['claim-config'],
-    queryFn: fetchConfig,
+    queryFn: fetchClaimConfig,
     staleTime: 60_000,
   });
 
@@ -104,7 +93,10 @@ export function MyNeuroFlies() {
   }, []);
 
   const invalidateMyFlies = () => {
-    if (address) queryClient.invalidateQueries({ queryKey: ['my-flies', address] });
+    if (address) {
+      queryClient.invalidateQueries({ queryKey: ['my-flies', address] });
+      queryClient.invalidateQueries({ queryKey: ['fly-stats', address] });
+    }
   };
 
   const handleClaimFree = async () => {

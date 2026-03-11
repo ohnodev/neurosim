@@ -4,19 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { usePrivy, useWallets } from '@privy-io/react-auth';
 import { base } from 'viem/chains';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
-import { getApiBase } from '../lib/constants';
-
-interface ClaimConfig {
-  neuroTokenAddress: `0x${string}`;
-  claimReceiverAddress: `0x${string}`;
-  flyEthReceiver: `0x${string}`;
-}
-
-async function fetchConfig(): Promise<ClaimConfig | null> {
-  const r = await fetch(`${getApiBase()}/api/claim/config`);
-  if (!r.ok) return null;
-  return r.json();
-}
+import { fetchClaimConfig } from '../lib/claimApi';
 
 interface BuyFlyModalProps {
   isOpen: boolean;
@@ -49,7 +37,7 @@ export function BuyFlyModal({
 
   const { data: config } = useQuery({
     queryKey: ['claim-config'],
-    queryFn: fetchConfig,
+    queryFn: fetchClaimConfig,
     staleTime: 60_000,
     enabled: isOpen,
   });
@@ -91,9 +79,10 @@ export function BuyFlyModal({
     try {
       await onClaimFree();
       onSuccess();
-      onClose();
     } catch (err) {
       if (mountedRef.current) setError(err instanceof Error ? err.message : 'Claim failed');
+    } finally {
+      onClose();
     }
   };
 
@@ -102,9 +91,10 @@ export function BuyFlyModal({
     try {
       await onBuyEth();
       onSuccess();
-      onClose();
     } catch (err) {
       if (mountedRef.current) setError(err instanceof Error ? err.message : 'Transaction failed');
+    } finally {
+      onClose();
     }
   };
 
@@ -113,9 +103,10 @@ export function BuyFlyModal({
     try {
       await onBuyNeuro();
       onSuccess();
-      onClose();
     } catch (err) {
       if (mountedRef.current) setError(err instanceof Error ? err.message : 'Transaction failed');
+    } finally {
+      onClose();
     }
   };
 

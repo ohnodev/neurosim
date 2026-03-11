@@ -35,9 +35,14 @@ function FlyModel({ state }: { state: FlyState }) {
   const wingsRef = useRef<THREE.Object3D[]>([]);
   const prevRef = useRef({ x: state.x ?? 0, y: state.y ?? 0 });
   const headingRef = useRef(state.heading ?? 0);
+  const targetHeadingRef = useRef(state.heading ?? 0);
 
   const x = state.x ?? 0, y = state.y ?? 0, z = state.z ?? 0;
   const isFlying = z > FLY_THRESHOLD;
+
+  /** Only use velocity-based heading when movement is meaningful (avoids jitter from micro-deltas). */
+  const MIN_MOVEMENT_SQ = 0.004;
+  const HEADING_LERP = 0.52;
 
   const cloned = useMemo(() => {
     const c = scene.clone(true);
@@ -51,10 +56,16 @@ function FlyModel({ state }: { state: FlyState }) {
   useFrame(() => {
     const dx = x - prevRef.current.x, dy = y - prevRef.current.y;
     prevRef.current = { x, y };
-    let target = state.heading ?? 0;
-    if (dx * dx + dy * dy > 1e-8) target = Math.atan2(dx, dy) + Math.PI / 2;
+    const moveSq = dx * dx + dy * dy;
+    if (moveSq > MIN_MOVEMENT_SQ) {
+      targetHeadingRef.current = Math.atan2(dx, dy) + Math.PI / 2;
+    }
+    const target = targetHeadingRef.current;
     if (group.current) {
-      headingRef.current += (target - headingRef.current) * 0.85;
+      let d = target - headingRef.current;
+      if (d > Math.PI) d -= 2 * Math.PI;
+      if (d < -Math.PI) d += 2 * Math.PI;
+      headingRef.current += d * HEADING_LERP;
       group.current.rotation.y = headingRef.current;
     }
     if (isFlying) {

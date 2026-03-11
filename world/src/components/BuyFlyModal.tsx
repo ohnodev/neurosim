@@ -6,6 +6,7 @@ import { base } from 'viem/chains';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
 import { useNotification } from '../contexts/NotificationContext';
 import { getApiBase } from '../lib/constants';
+import { parseWalletError } from '../lib/parseWalletError';
 
 const ETH_AMOUNT = 100000000000000n; // 0.0001 ETH
 const SUPPORT_MESSAGE = 'Please contact support via our Telegram channel for help.';
@@ -87,6 +88,14 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
     setBusy('eth');
     setError(null);
     try {
+      const balRes = await fetch(`${getApiBase()}/api/claim/balance-check?address=${address.toLowerCase()}`);
+      if (balRes.ok) {
+        const bal = await balRes.json();
+        if (BigInt(bal.ethBalanceWei ?? 0) < BigInt(bal.flyEthRequiredWei ?? ETH_AMOUNT.toString())) {
+          if (mountedRef.current) setError('Insufficient ETH. Add more ETH to your wallet to complete this purchase.');
+          return;
+        }
+      }
       const hash = await walletClient.sendTransaction({
         account: address,
         to: config.flyEthReceiver,
@@ -130,7 +139,7 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
       };
       await verify();
     } catch (err) {
-      if (mountedRef.current) setError(err instanceof Error ? err.message : 'Transaction failed');
+      if (mountedRef.current) setError(parseWalletError(err));
     } finally {
       if (mountedRef.current) setBusy(null);
     }

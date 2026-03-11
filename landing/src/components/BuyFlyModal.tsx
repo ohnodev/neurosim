@@ -5,6 +5,7 @@ import { usePrivy, useWallets } from '@privy-io/react-auth';
 import { base } from 'viem/chains';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
 import { fetchClaimConfig } from '../lib/claimApi';
+import { parseWalletError } from '../lib/parseWalletError';
 
 interface BuyFlyModalProps {
   isOpen: boolean;
@@ -79,10 +80,9 @@ export function BuyFlyModal({
     try {
       await onClaimFree();
       onSuccess();
+      onClose();
     } catch (err) {
       if (mountedRef.current) setError(err instanceof Error ? err.message : 'Claim failed');
-    } finally {
-      onClose();
     }
   };
 
@@ -91,10 +91,9 @@ export function BuyFlyModal({
     try {
       await onBuyEth();
       onSuccess();
-    } catch (err) {
-      if (mountedRef.current) setError(err instanceof Error ? err.message : 'Transaction failed');
-    } finally {
       onClose();
+    } catch (err) {
+      if (mountedRef.current) setError(parseWalletError(err));
     }
   };
 
@@ -103,10 +102,9 @@ export function BuyFlyModal({
     try {
       await onBuyNeuro();
       onSuccess();
-    } catch (err) {
-      if (mountedRef.current) setError(err instanceof Error ? err.message : 'Transaction failed');
-    } finally {
       onClose();
+    } catch (err) {
+      if (mountedRef.current) setError(parseWalletError(err));
     }
   };
 

@@ -11,6 +11,16 @@ import {
   FLY_ETH_AMOUNT,
 } from '../lib/addresses.js';
 
+const ERC20_BALANCE_ABI = [
+  {
+    inputs: [{ internalType: 'address', name: 'account', type: 'address' }],
+    name: 'balanceOf',
+    outputs: [{ internalType: 'uint256', name: '', type: 'uint256' }],
+    stateMutability: 'view',
+    type: 'function',
+  },
+] as const;
+
 const router = Router();
 
 const ERC721_ABI = [
@@ -37,6 +47,37 @@ const TRANSFER_EVENT_ABI = [
 ] as const;
 
 const REQUIRED_AMOUNT = 1_000_000n * 10n ** 18n;
+
+router.get('/balance-check', async (req: Request, res: Response) => {
+  try {
+    const address = (req.query.address as string)?.toLowerCase();
+    if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address)) {
+      res.status(400).json({ error: 'Invalid address' });
+      return;
+    }
+    const addr = address as `0x${string}`;
+    const [ethBalance, neuroBalance] = await Promise.all([
+      baseRpcClient.getBalance({ address: addr }),
+      NEURO_TOKEN_ADDRESS !== '0x0000000000000000000000000000000000000000' as `0x${string}`
+        ? baseRpcClient.readContract({
+            address: NEURO_TOKEN_ADDRESS,
+            abi: ERC20_BALANCE_ABI,
+            functionName: 'balanceOf',
+            args: [addr],
+          })
+        : 0n,
+    ]);
+    res.json({
+      ethBalanceWei: ethBalance.toString(),
+      neuroBalanceWei: neuroBalance.toString(),
+      flyEthRequiredWei: FLY_ETH_AMOUNT.toString(),
+      flyNeuroRequiredWei: REQUIRED_AMOUNT.toString(),
+    });
+  } catch (err) {
+    console.error('[claims] balance-check error:', err);
+    res.status(500).json({ error: 'Failed to check balance' });
+  }
+});
 
 router.get('/config', (_req: Request, res: Response) => {
   res.json({

@@ -4,7 +4,8 @@ import { base } from 'viem/chains';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
 import { useNotification } from '../contexts/NotificationContext';
 import { getApiBase } from '../lib/constants';
-import { fetchClaimConfig } from '../lib/claimApi';
+import { fetchClaimConfig, fetchBalanceCheck } from '../lib/claimApi';
+import { parseWalletError } from '../lib/parseWalletError';
 import { BuyFlyModal } from './BuyFlyModal';
 
 const ERC20_ABI = [
@@ -125,6 +126,11 @@ export function MyNeuroFlies() {
     setBusy('eth');
     setError(null);
     try {
+      const bal = await fetchBalanceCheck(address);
+      if (bal && BigInt(bal.ethBalanceWei) < BigInt(bal.flyEthRequiredWei)) {
+        if (mountedRef.current) setError('Insufficient ETH. Add more ETH to your wallet to complete this purchase.');
+        return;
+      }
       const hash = await walletClient.sendTransaction({
         account: address,
         to: config.flyEthReceiver,
@@ -162,7 +168,7 @@ export function MyNeuroFlies() {
       };
       await verify();
     } catch (err) {
-      if (mountedRef.current) setError(err instanceof Error ? err.message : 'Transaction failed');
+      if (mountedRef.current) setError(parseWalletError(err));
     } finally {
       if (mountedRef.current) setBusy(null);
     }
@@ -178,6 +184,11 @@ export function MyNeuroFlies() {
     setBusy('neuro');
     setError(null);
     try {
+      const bal = await fetchBalanceCheck(address);
+      if (bal && BigInt(bal.neuroBalanceWei) < BigInt(bal.flyNeuroRequiredWei)) {
+        if (mountedRef.current) setError('Insufficient $NEURO. You need 1M $NEURO to buy a fly.');
+        return;
+      }
       const hash = await walletClient.writeContract({
         account: address,
         address: config.neuroTokenAddress,
@@ -217,7 +228,7 @@ export function MyNeuroFlies() {
       };
       await verify();
     } catch (err) {
-      if (mountedRef.current) setError(err instanceof Error ? err.message : 'Transaction failed');
+      if (mountedRef.current) setError(parseWalletError(err));
     } finally {
       if (mountedRef.current) setBusy(null);
     }

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { OnchainProviders } from './components/OnchainProviders';
 import { BrainPlot } from './components/BrainPlot';
 import { MyNeuroFlies } from './components/MyNeuroFlies';

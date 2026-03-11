@@ -18,7 +18,7 @@ export const docContentMarkdown = [
   "",
   "## How It Works",
   "",
-  "1. Buy a NeuroFly for 1,000,000 $NEURO tokens.",
+  "1. Buy a NeuroFly for 10,000 $NEURO tokens.",
   "2. Release it into the simulation (Enter World).",
   "3. The fly autonomously navigates — seeks food, rests, explores.",
   "4. Each food collected rewards approximately 1,000 $NEURO.",
@@ -33,7 +33,7 @@ export const docContentMarkdown = [
   "",
   "## Pricing",
   "",
-  "1 NeuroFly = 1,000,000 $NEURO. Each food = ~1,000 $NEURO."
+  "1 NeuroFly = 10,000 $NEURO. Each food = ~1,000 $NEURO."
 ].join("\n");
 
 export default function PlatformPage(props: DocActionsProps) {
@@ -76,7 +76,7 @@ export default function PlatformPage(props: DocActionsProps) {
         <h2>How It Works</h2>
         <p>Buy a NeuroFly, release it into the simulation, and earn rewards as it collects food.</p>
         <ol>
-          <li>Buy a NeuroFly for 1,000,000 $NEURO tokens.</li>
+          <li>Buy a NeuroFly for 10,000 $NEURO tokens.</li>
           <li>Release it into the simulation (Enter World).</li>
           <li>The fly autonomously navigates — it gets hungry, seeks food, rests when tired, and explores.</li>
           <li>Each food item collected rewards approximately 1,000 $NEURO tokens.</li>
@@ -107,7 +107,7 @@ export default function PlatformPage(props: DocActionsProps) {
       <section className="section" id="pricing">
         <h2>Pricing</h2>
         <div className="callout">
-          <p><strong>1 NeuroFly</strong> = 1,000,000 $NEURO tokens. Each food collected rewards approximately <strong>1,000 $NEURO</strong>.</p>
+          <p><strong>1 NeuroFly</strong> = 10,000 $NEURO tokens. Each food collected rewards approximately <strong>1,000 $NEURO</strong>.</p>
         </div>
       </section>
     </div>

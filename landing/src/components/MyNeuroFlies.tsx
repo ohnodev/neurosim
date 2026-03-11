@@ -21,8 +21,8 @@ const ERC20_ABI = [
   },
 ] as const;
 
-const NEURO_AMOUNT = 1_000_000n * 10n ** 18n;
-const ETH_AMOUNT = 100000000000000n; // 0.0001 ETH
+/** 10,000 $NEURO to buy one fly */
+const NEURO_AMOUNT = 10_000n * 10n ** 18n;
 
 interface NeuroFly {
   id: string;
@@ -55,7 +55,7 @@ export function MyNeuroFlies() {
   const { isConnected, address, walletClient } = usePrivyWallet();
   const queryClient = useQueryClient();
   const notification = useNotification();
-  const [busy, setBusy] = useState<'obelisk' | 'neuro' | 'eth' | null>(null);
+  const [busy, setBusy] = useState<'obelisk' | 'neuro' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const mountedRef = useRef(true);
 
@@ -126,82 +126,6 @@ export function MyNeuroFlies() {
     }
   };
 
-  const handleBuyEth = async () => {
-    if (!walletClient) {
-      const msg = 'Wallet client missing';
-      if (mountedRef.current) setError(msg);
-      throw new Error(msg);
-    }
-    if (!address) {
-      const msg = 'Address missing';
-      if (mountedRef.current) setError(msg);
-      throw new Error(msg);
-    }
-    if (!config?.flyEthReceiver) {
-      const msg = 'Fly ETH receiver config missing';
-      if (mountedRef.current) setError(msg);
-      throw new Error(msg);
-    }
-    setBusy('eth');
-    setError(null);
-    let submittedHash: string | null = null;
-    try {
-      const bal = await fetchBalanceCheck(address);
-      if (bal && BigInt(bal.ethBalanceWei) < BigInt(bal.flyEthRequiredWithGasWei)) {
-        const msg = 'Insufficient ETH. Add more ETH to your wallet to complete this purchase.';
-        if (mountedRef.current) setError(msg);
-        throw new Error(msg);
-      }
-      submittedHash = await walletClient.sendTransaction({
-        account: address,
-        to: config.flyEthReceiver,
-        value: ETH_AMOUNT,
-        chain: base,
-      });
-      notification.show('Transaction sent, pending...', 'info');
-      const apiBase = getApiBase();
-      const maxAttempts = 5;
-      const baseDelay = 1000;
-      const verify = async (attempt = 0): Promise<void> => {
-        if (!mountedRef.current) return;
-        notification.update('Verifying payment...', 'info');
-        const res = await fetch(`${apiBase}/api/claim/verify-eth`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ txHash: submittedHash, userAddress: address.toLowerCase() }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok) {
-          invalidateMyFlies();
-          notification.update('NeuroFly added!', 'success');
-          setTimeout(() => notification.hide(), 2000);
-          return;
-        }
-        const retryable = data.error === 'Transaction not found' || data.error === 'Verification failed';
-        if (retryable && attempt < maxAttempts) {
-          const delay = Math.min(baseDelay * Math.pow(2, attempt), 8000);
-          await new Promise((r) => setTimeout(r, delay));
-          if (mountedRef.current) return verify(attempt + 1);
-        }
-        notification.update(SUPPORT_MESSAGE, 'error');
-        setTimeout(() => notification.hide(), 5000);
-        throw new Error(data.error ?? 'Verification failed');
-      };
-      await verify();
-    } catch (err) {
-      if (submittedHash) {
-        const e = new Error(SUPPORT_MESSAGE) as Error & { txSentNonRetryable?: boolean; submittedTxHash?: string };
-        e.txSentNonRetryable = true;
-        e.submittedTxHash = submittedHash;
-        throw e;
-      }
-      if (mountedRef.current) setError(parseWalletError(err));
-      throw err;
-    } finally {
-      if (mountedRef.current) setBusy(null);
-    }
-  };
-
   const handleBuyNeuro = async () => {
     if (!walletClient) {
       const msg = 'Wallet client missing';
@@ -229,18 +153,10 @@ export function MyNeuroFlies() {
     let submittedHash: string | null = null;
     try {
       const bal = await fetchBalanceCheck(address);
-      if (bal) {
-        if (BigInt(bal.neuroBalanceWei) < BigInt(bal.flyNeuroRequiredWei)) {
-          const msg = 'Insufficient $NEURO. You need 1M $NEURO to buy a fly.';
-          if (mountedRef.current) setError(msg);
-          throw new Error(msg);
-        }
-        const minGasWei = BigInt(bal.flyNeuroEthRequiredWithGasWei);
-        if (minGasWei > 0n && BigInt(bal.ethBalanceWei) < minGasWei) {
-          const msg = 'Insufficient ETH for gas. Add more ETH to your wallet to complete this purchase.';
-          if (mountedRef.current) setError(msg);
-          throw new Error(msg);
-        }
+      if (bal && BigInt(bal.neuroBalanceWei) < BigInt(bal.flyNeuroRequiredWei)) {
+        const msg = 'Insufficient $NEURO. You need 10k $NEURO to buy a fly.';
+        if (mountedRef.current) setError(msg);
+        throw new Error(msg);
       }
       submittedHash = await walletClient.writeContract({
         account: address,
@@ -346,7 +262,6 @@ export function MyNeuroFlies() {
         onSuccess={invalidateMyFlies}
         eligibility={eligibility}
         onClaimFree={handleClaimFree}
-        onBuyEth={handleBuyEth}
         onBuyNeuro={handleBuyNeuro}
         busy={busy}
       />

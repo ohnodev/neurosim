@@ -8,13 +8,27 @@ import { useNotification } from '../contexts/NotificationContext';
 import { getApiBase } from '../lib/constants';
 import { parseWalletError } from '../../../shared/lib/parseWalletError';
 
-const ETH_AMOUNT = 100000000000000n; // 0.0001 ETH
+const ERC20_ABI = [
+  {
+    inputs: [
+      { internalType: 'address', name: 'to', type: 'address' },
+      { internalType: 'uint256', name: 'amount', type: 'uint256' },
+    ],
+    name: 'transfer',
+    outputs: [{ internalType: 'bool', name: '', type: 'bool' }],
+    stateMutability: 'nonpayable',
+    type: 'function',
+  },
+] as const;
+
+/** 10,000 $NEURO to buy one fly */
+const NEURO_AMOUNT = 10_000n * 10n ** 18n;
 const SUPPORT_MESSAGE = 'Please contact support via our Telegram channel for help.';
 
 interface ClaimConfig {
   neuroTokenAddress: `0x${string}`;
   claimReceiverAddress: `0x${string}`;
-  flyEthReceiver: `0x${string}`;
+  flyNeuroAmountWei: string;
 }
 
 async function fetchConfig(): Promise<ClaimConfig> {
@@ -42,7 +56,7 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
   const { address, walletClient, chainId } = usePrivyWallet();
   const queryClient = useQueryClient();
   const notification = useNotification();
-  const [busy, setBusy] = useState<'eth' | 'neuro' | null>(null);
+  const [busy, setBusy] = useState<'neuro' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const mountedRef = useRef(true);
 
@@ -88,23 +102,31 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
     }
   }, [ready, wallets, address]);
 
-  const handleBuyEth = async () => {
-    if (!walletClient || !address || !config?.flyEthReceiver || !isOnBaseChain) return;
-    setBusy('eth');
+  const handleBuyNeuro = useCallback(async () => {
+    if (!walletClient || !address || !config?.neuroTokenAddress || !config?.claimReceiverAddress || !isOnBaseChain) return;
+    const zero = '0x0000000000000000000000000000000000000000';
+    if (config.neuroTokenAddress === zero || config.claimReceiverAddress === zero) {
+      setError('Claim not configured');
+      return;
+    }
+    setBusy('neuro');
     setError(null);
     try {
       const balRes = await fetch(`${getApiBase()}/api/claim/balance-check?address=${address.toLowerCase()}`);
       if (balRes.ok) {
         const bal = await balRes.json();
-        if (BigInt(bal.ethBalanceWei ?? 0) < BigInt(bal.flyEthRequiredWei ?? ETH_AMOUNT.toString())) {
-          if (mountedRef.current) setError('Insufficient ETH. Add more ETH to your wallet to complete this purchase.');
+        const required = BigInt(bal.flyNeuroRequiredWei ?? config.flyNeuroAmountWei ?? NEURO_AMOUNT.toString());
+        if (BigInt(bal.neuroBalanceWei ?? 0) < required) {
+          if (mountedRef.current) setError('Insufficient $NEURO. You need 10k $NEURO to buy a fly.');
           return;
         }
       }
-      const hash = await walletClient.sendTransaction({
+      const hash = await walletClient.writeContract({
         account: address,
-        to: config.flyEthReceiver,
-        value: ETH_AMOUNT,
+        address: config.neuroTokenAddress,
+        abi: ERC20_ABI,
+        functionName: 'transfer',
+        args: [config.claimReceiverAddress, NEURO_AMOUNT],
         chain: base,
       });
       notification.show('Transaction sent, pending...', 'info');
@@ -118,7 +140,7 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
           if (!mountedRef.current) return;
         }
         notification.update('Verifying payment...', 'info');
-        const res = await fetch(`${apiBase}/api/claim/verify-eth`, {
+        const res = await fetch(`${apiBase}/api/claim/verify-payment`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ txHash: hash, userAddress: address.toLowerCase() }),
@@ -148,15 +170,15 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
     } finally {
       if (mountedRef.current) setBusy(null);
     }
-  };
-
-  const handleBuyNeuro = () => {
-    notification.show('$NEURO payment coming soon. Use ETH for now.', 'info');
-  };
+  }, [walletClient, address, config, isOnBaseChain, queryClient, notification, onSuccess, onClose]);
 
   if (!isOpen) return null;
 
-  const neuroDisabled = !config?.neuroTokenAddress || config.neuroTokenAddress === '0x0000000000000000000000000000000000000000';
+  const neuroDisabled =
+    !config?.neuroTokenAddress ||
+    config.neuroTokenAddress === '0x0000000000000000000000000000000000000000' ||
+    !config?.claimReceiverAddress ||
+    config.claimReceiverAddress === '0x0000000000000000000000000000000000000000';
 
   const modalContent = !address ? (
     <div className="neurosim-claim-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="connect-wallet-title">
@@ -182,7 +204,7 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
         <button type="button" className="neurosim-claim__close" onClick={onClose} aria-label="Close">×</button>
         <div className="neurosim-claim__card">
           <h2 id="buy-fly-title" className="neurosim-claim__title">Buy NeuroFly #{slotIndex + 1}</h2>
-          <p className="neurosim-claim__subtitle">Choose payment method</p>
+          <p className="neurosim-claim__subtitle">Pay with 10k $NEURO to buy a fly</p>
           {error && <div className="neuroflies__error">{error}</div>}
           {!isOnBaseChain && (
             <div className="neuroflies__error" style={{ marginBottom: 12 }}>
@@ -202,20 +224,12 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
               <button
                 type="button"
                 className="neurosim-claim__btn neurosim-claim__btn--primary"
-                onClick={handleBuyEth}
-                disabled={!!busy || !walletClient || !address || !config?.flyEthReceiver}
+                onClick={handleBuyNeuro}
+                disabled={!!busy || !walletClient || !address || neuroDisabled}
               >
-                {busy === 'eth' ? 'Confirming...' : 'Pay with 0.0001 ETH'}
+                {busy === 'neuro' ? 'Confirming...' : 'Pay with 10k $NEURO'}
               </button>
             )}
-            <button
-              type="button"
-              className="neurosim-claim__btn neurosim-claim__btn--secondary"
-              onClick={handleBuyNeuro}
-              disabled={!!busy || neuroDisabled}
-            >
-              {busy === 'neuro' ? 'Confirming...' : 'Pay with $NEURO (coming soon)'}
-            </button>
           </div>
         </div>
       </div>

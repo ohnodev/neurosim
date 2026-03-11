@@ -1,36 +1,38 @@
 /**
- * Flushes pending rewards to CabalTokenDistributor on Base.
+ * Flushes pending rewards as $NEURO token transfers (ERC20) on Base.
+ * Sends one transfer per recipient from the neurosim wallet.
  */
 import { encodeFunctionData, getAddress } from 'viem';
 import { base } from 'viem/chains';
-import { CABAL_TOKEN_DISTRIBUTOR } from '../lib/addresses.js';
+import { NEURO_TOKEN_ADDRESS } from '../lib/addresses.js';
 import { getNeurosimWallet } from './neurosimWallet.js';
 import { getNeurosimPublicClient } from './neurosimWallet.js';
-import { executeContractTx, type PublicClientLike, type WalletLike } from './transactionFacilitator.js';
+import {
+  executeContractTx,
+  type PublicClientLike,
+  type WalletLike,
+} from './transactionFacilitator.js';
 import { takeBatchForFlush, confirmDistributed, rollbackBatch } from './rewardStore.js';
 
-const CABAL_ABI = [
+const ERC20_TRANSFER_ABI = [
   {
     inputs: [
-      { name: 'recipients', type: 'address[]' },
-      { name: 'amounts', type: 'uint256[]' },
+      { name: 'to', type: 'address' },
+      { name: 'amount', type: 'uint256' },
     ],
-    name: 'distributeETH',
-    outputs: [],
-    stateMutability: 'payable',
+    name: 'transfer',
+    outputs: [{ name: '', type: 'bool' }],
+    stateMutability: 'nonpayable',
     type: 'function',
   },
 ] as const;
 
-/** CabalTokenDistributor has MAX_BATCH_SIZE = 200; use a safe chunk size. */
-const MAX_RECIPIENTS_PER_BATCH = 100;
-
 let flushing = false;
 
 /**
- * Flush pending rewards to recipients via CabalTokenDistributor.
+ * Flush pending rewards to recipients via ERC20 transfer.
  * Waits for on-chain confirmation before marking distributed.
- * Serialized: only one flush runs at a time. Batches are chunked to stay under contract limit.
+ * Serialized: only one flush runs at a time. One tx per recipient.
  */
 export async function flushRewards(): Promise<void> {
   if (flushing) return;
@@ -41,33 +43,54 @@ export async function flushRewards(): Promise<void> {
   try {
     const publicClient = getNeurosimPublicClient();
     while (true) {
-      const { recipients, amounts } = takeBatchForFlush(MAX_RECIPIENTS_PER_BATCH);
+      const { recipients, amounts } = takeBatchForFlush();
       if (recipients.length === 0) break;
 
-      try {
-        const recipientAddresses = recipients.map((r) => getAddress(r)) as `0x${string}`[];
-        const totalWei = amounts.reduce((a, b) => a + b, 0n);
+      const confirmed: string[] = [];
+      const confirmedAmounts: bigint[] = [];
+      let failed = false;
 
-        const { txHash } = await executeContractTx({
-          wallet: wallet as WalletLike,
-          publicClient: publicClient as PublicClientLike,
-          chain: base,
-          to: CABAL_TOKEN_DISTRIBUTOR,
-          data: encodeFunctionData({
-            abi: CABAL_ABI,
-            functionName: 'distributeETH',
-            args: [recipientAddresses, amounts],
-          }),
-          value: totalWei,
-          timeoutMs: 60_000,
-          label: 'rewardDistributor',
-        });
+      for (let i = 0; i < recipients.length; i++) {
+        const recipient = recipients[i];
+        const amount = amounts[i];
+        if (amount === undefined) continue;
 
-        confirmDistributed(recipients, amounts, txHash);
-        console.log('[rewardDistributor] flushed', recipients.length, 'recipients, tx', txHash);
-      } catch (err) {
-        console.error('[rewardDistributor] flush failed:', err);
+        try {
+          const to = getAddress(recipient) as `0x${string}`;
+          const { txHash } = await executeContractTx({
+            wallet: wallet as WalletLike,
+            publicClient: publicClient as PublicClientLike,
+            chain: base,
+            to: NEURO_TOKEN_ADDRESS,
+            data: encodeFunctionData({
+              abi: ERC20_TRANSFER_ABI,
+              functionName: 'transfer',
+              args: [to, amount],
+            }),
+            value: 0n,
+            timeoutMs: 60_000,
+            label: 'rewardDistributor',
+          });
+
+          confirmed.push(recipient);
+          confirmedAmounts.push(amount);
+          confirmDistributed([recipient], [amount], txHash);
+          console.log('[rewardDistributor] transferred to', recipient, 'tx', txHash);
+        } catch (err) {
+          console.error('[rewardDistributor] transfer failed for', recipient, err);
+          failed = true;
+          break;
+        }
+      }
+
+      if (failed && confirmed.length === 0) {
         rollbackBatch(recipients, amounts);
+        return;
+      }
+      if (failed && confirmed.length > 0) {
+        const remainderR = recipients.slice(confirmed.length);
+        const remainderA = amounts.slice(confirmed.length);
+        rollbackBatch(remainderR, remainderA);
         return;
       }
     }

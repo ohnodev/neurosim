@@ -754,7 +754,7 @@ export default function FlyViewer() {
                           <img src="/tombstone.svg" alt="" width={18} height={18} className="fly-viewer__graveyard-icon" aria-hidden />
                           <div className="fly-viewer__graveyard-fly-info">
                             <span className="fly-viewer__fly-slot-label">Fly {i + 1}</span>
-                            <span className="fly-viewer__graveyard-stats">{pts} pts · {ethStr} ETH</span>
+                            <span className="fly-viewer__graveyard-stats">{pts} pts · {ethStr} $NEURO</span>
                           </div>
                         </>
                       ) : (

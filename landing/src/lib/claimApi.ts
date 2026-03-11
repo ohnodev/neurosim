@@ -3,7 +3,7 @@ import { getApiBase } from './constants';
 export interface ClaimConfig {
   neuroTokenAddress: `0x${string}`;
   claimReceiverAddress: `0x${string}`;
-  flyEthReceiver: `0x${string}`;
+  flyNeuroAmountWei?: string;
 }
 
 export async function fetchClaimConfig(): Promise<ClaimConfig | null> {
@@ -15,10 +15,7 @@ export async function fetchClaimConfig(): Promise<ClaimConfig | null> {
 export interface BalanceCheck {
   ethBalanceWei: string;
   neuroBalanceWei: string;
-  flyEthRequiredWei: string;
   flyNeuroRequiredWei: string;
-  flyEthRequiredWithGasWei: string;
-  flyNeuroEthRequiredWithGasWei: string;
 }
 
 export async function fetchBalanceCheck(address: string): Promise<BalanceCheck | null> {

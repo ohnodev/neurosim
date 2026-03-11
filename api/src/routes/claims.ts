@@ -7,8 +7,7 @@ import {
   OBELISK_NFT_ADDRESS,
   NEURO_TOKEN_ADDRESS,
   CLAIM_RECEIVER_ADDRESS,
-  FLY_ETH_RECEIVER,
-  FLY_ETH_AMOUNT,
+  FLY_NEURO_AMOUNT,
 } from '../lib/addresses.js';
 
 const ERC20_BALANCE_ABI = [
@@ -46,9 +45,8 @@ const TRANSFER_EVENT_ABI = [
   },
 ] as const;
 
-const REQUIRED_AMOUNT = 1_000_000n * 10n ** 18n;
-/** Approx gas for ERC20 transfer; formula: wei = gas × gasPrice. 50_000_000_000_000 wei = 0.00005 ETH (e.g. ~100k gas @ 0.5 gwei). */
-const GAS_BUFFER_WEI = 50_000_000_000_000n;
+/** 10,000 $NEURO required to buy one fly */
+const REQUIRED_AMOUNT = 10_000n * 10n ** 18n;
 
 function parseAndValidateAddress(raw: unknown): `0x${string}` {
   const s = (typeof raw === 'string' ? raw : '')?.trim().toLowerCase();
@@ -79,15 +77,10 @@ router.get('/balance-check', async (req: Request, res: Response) => {
           })
         : 0n,
     ]);
-    const flyEthWithGas = FLY_ETH_AMOUNT + GAS_BUFFER_WEI;
-    const flyNeuroEthGasWei = GAS_BUFFER_WEI;
     res.json({
       ethBalanceWei: ethBalance.toString(),
       neuroBalanceWei: neuroBalance.toString(),
-      flyEthRequiredWei: FLY_ETH_AMOUNT.toString(),
-      flyNeuroRequiredWei: REQUIRED_AMOUNT.toString(),
-      flyEthRequiredWithGasWei: flyEthWithGas.toString(),
-      flyNeuroEthRequiredWithGasWei: flyNeuroEthGasWei.toString(),
+      flyNeuroRequiredWei: FLY_NEURO_AMOUNT.toString(),
     });
   } catch (err) {
     console.error('[claims] balance-check error:', err);
@@ -99,8 +92,7 @@ router.get('/config', (_req: Request, res: Response) => {
   res.json({
     neuroTokenAddress: NEURO_TOKEN_ADDRESS,
     claimReceiverAddress: CLAIM_RECEIVER_ADDRESS,
-    flyEthReceiver: FLY_ETH_RECEIVER,
-    flyEthAmountWei: FLY_ETH_AMOUNT.toString(),
+    flyNeuroAmountWei: FLY_NEURO_AMOUNT.toString(),
   });
 });
 
@@ -278,54 +270,6 @@ router.post('/verify-payment', async (req: Request, res: Response) => {
     res.json({ success: true, fly });
   } catch (err) {
     console.error('[claims] verify-payment error:', err);
-    res.status(500).json({ error: 'Verification failed' });
-  }
-});
-
-router.post('/verify-eth', async (req: Request, res: Response) => {
-  try {
-    const { txHash, userAddress } = req.body as { txHash?: string; userAddress?: string };
-    const userLower = (userAddress as string)?.toLowerCase();
-    if (!txHash || !userLower || !/^0x[a-fA-F0-9]{64}$/.test(txHash) || !/^0x[a-fA-F0-9]{40}$/.test(userLower)) {
-      res.status(400).json({ error: 'Invalid txHash or userAddress' });
-      return;
-    }
-
-    const tx = await baseRpcClient.getTransaction({ hash: txHash as `0x${string}` });
-    if (!tx) {
-      res.status(400).json({ error: 'Transaction not found' });
-      return;
-    }
-
-    const receipt = await baseRpcClient.getTransactionReceipt({ hash: txHash as `0x${string}` });
-    if (!receipt || receipt.status !== 'success') {
-      res.status(400).json({ error: 'Transaction failed or reverted' });
-      return;
-    }
-
-    const from = (tx.from as string)?.toLowerCase();
-    const to = (tx.to as string)?.toLowerCase();
-    const value = tx.value ?? 0n;
-
-    if (from !== userLower || to !== FLY_ETH_RECEIVER.toLowerCase() || value < FLY_ETH_AMOUNT) {
-      res.status(400).json({ error: 'Invalid ETH transfer: must send at least 0.0001 ETH to fly receiver' });
-      return;
-    }
-
-    const fly = addFly(userLower, {
-      method: 'pay',
-      txHash,
-      claimedAt: new Date().toISOString(),
-      seed: Date.now(),
-    });
-    if (!fly) {
-      res.json({ success: true, message: 'At max flies' });
-      return;
-    }
-    await tryClaim(userLower, { method: 'pay', txHash, claimedAt: fly.claimedAt });
-    res.json({ success: true, fly });
-  } catch (err) {
-    console.error('[claims] verify-eth error:', err);
     res.status(500).json({ error: 'Verification failed' });
   }
 });

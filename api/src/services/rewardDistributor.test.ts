@@ -1,64 +1,64 @@
 /**
- * Integration test: distributes ETH to self via CabalTokenDistributor.
+ * Integration test: sends 1 $NEURO to self via ERC20 transfer.
  * Skips if NEUROSIM_PRIVATE_KEY or BASE_RPC_URL are missing.
- * Costs a small amount of gas but validates distributions work.
+ * Costs a small amount of gas but validates token distribution works.
  */
 import 'dotenv/config';
 import { describe, it, expect } from 'vitest';
-import { createWalletClient, createPublicClient, http, encodeFunctionData, getAddress } from 'viem';
+import { createWalletClient, createPublicClient, http, encodeFunctionData } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { base } from 'viem/chains';
-import { CABAL_TOKEN_DISTRIBUTOR } from '../lib/addresses.js';
+import { NEURO_TOKEN_ADDRESS } from '../lib/addresses.js';
 
-const CABAL_ABI = [
+const ERC20_TRANSFER_ABI = [
   {
     inputs: [
-      { name: 'recipients', type: 'address[]' },
-      { name: 'amounts', type: 'uint256[]' },
+      { name: 'to', type: 'address' },
+      { name: 'amount', type: 'uint256' },
     ],
-    name: 'distributeETH',
-    outputs: [],
-    stateMutability: 'payable',
+    name: 'transfer',
+    outputs: [{ name: '', type: 'bool' }],
+    stateMutability: 'nonpayable',
     type: 'function',
   },
 ] as const;
 
-const AMOUNT = 10n ** 12n; // 0.000001 ETH
+const AMOUNT = 1n * 10n ** 18n; // 1 $NEURO
 
 const pk = process.env.NEUROSIM_PRIVATE_KEY?.trim();
 const rpc = process.env.BASE_RPC_URL?.trim();
 
 describe('rewardDistributor integration', () => {
-  it.skipIf(!pk || !rpc)('distributes ETH to self via CabalTokenDistributor', async () => {
-    const account = privateKeyToAccount(pk! as `0x${string}`);
-    const wallet = createWalletClient({
-      account,
-      chain: base,
-      transport: http(rpc!),
-    });
+  it.skipIf(!pk || !rpc || NEURO_TOKEN_ADDRESS === '0x0000000000000000000000000000000000000000')(
+    'sends 1 $NEURO to self via ERC20 transfer',
+    async () => {
+      const account = privateKeyToAccount(pk! as `0x${string}`);
+      const wallet = createWalletClient({
+        account,
+        chain: base,
+        transport: http(rpc!),
+      });
 
-    const recipients = [getAddress(account.address)] as `0x${string}`[];
-    const amounts = [AMOUNT];
+      const hash = await wallet!.sendTransaction({
+        to: NEURO_TOKEN_ADDRESS,
+        data: encodeFunctionData({
+          abi: ERC20_TRANSFER_ABI,
+          functionName: 'transfer',
+          args: [account.address, AMOUNT],
+        }),
+        value: 0n,
+      });
 
-    const hash = await wallet!.sendTransaction({
-      to: CABAL_TOKEN_DISTRIBUTOR,
-      data: encodeFunctionData({
-        abi: CABAL_ABI,
-        functionName: 'distributeETH',
-        args: [recipients, amounts],
-      }),
-      value: AMOUNT,
-    });
+      expect(hash).toBeDefined();
+      expect(typeof hash).toBe('string');
+      expect(hash).toMatch(/^0x[a-fA-F0-9]{64}$/);
 
-    expect(hash).toBeDefined();
-    expect(typeof hash).toBe('string');
-    expect(hash).toMatch(/^0x[a-fA-F0-9]{64}$/);
-
-    const publicClient = createPublicClient({
-      chain: base,
-      transport: http(rpc),
-    });
-    const receipt = await publicClient.waitForTransactionReceipt({ hash });
-    expect(receipt.status).toBe('success');
-  });
+      const publicClient = createPublicClient({
+        chain: base,
+        transport: http(rpc),
+      });
+      const receipt = await publicClient.waitForTransactionReceipt({ hash });
+      expect(receipt.status).toBe('success');
+    }
+  );
 });

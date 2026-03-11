@@ -17,7 +17,7 @@ const ERC20_ABI = [
   },
 ] as const;
 
-const CLAIM_AMOUNT = 1_000_000n * 10n ** 18n;
+const CLAIM_AMOUNT = 10_000n * 10n ** 18n;
 
 type EligibilityMethod = 'obelisk' | 'pay' | 'already_claimed' | null;
 
@@ -201,7 +201,7 @@ export function ClaimFlySection() {
               {txState === 'awaiting' && 'Confirm in wallet...'}
               {txState === 'confirming' && 'Confirming...'}
               {txState === 'done' && 'Claimed!'}
-              {txState === 'idle' && 'Pay 1M $NEURO to Claim'}
+              {txState === 'idle' && 'Pay 10k $NEURO to Claim'}
             </button>
           )}
           <button className="claim-btn" onClick={() => { setModalSeed(Date.now()); setModalOpen(true); }} style={{ marginTop: 8 }}>

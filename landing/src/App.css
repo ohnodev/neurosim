@@ -203,7 +203,7 @@
   height: 100%;
   min-height: 220px;
   position: relative;
-  touch-action: none;
+  touch-action: pan-y;
   -webkit-touch-callout: none;
 }
 

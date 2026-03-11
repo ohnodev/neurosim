@@ -5,7 +5,7 @@ import { usePrivy, useWallets } from '@privy-io/react-auth';
 import { base } from 'viem/chains';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
 import { fetchClaimConfig } from '../lib/claimApi';
-import { parseWalletError } from '../lib/parseWalletError';
+import { parseWalletError } from '../../../shared/lib/parseWalletError';
 
 interface BuyFlyModalProps {
   isOpen: boolean;

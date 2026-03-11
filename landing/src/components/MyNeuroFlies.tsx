@@ -5,7 +5,7 @@ import { usePrivyWallet } from '../lib/usePrivyWallet';
 import { useNotification } from '../contexts/NotificationContext';
 import { getApiBase } from '../lib/constants';
 import { fetchClaimConfig, fetchBalanceCheck } from '../lib/claimApi';
-import { parseWalletError } from '../lib/parseWalletError';
+import { parseWalletError } from '../../../shared/lib/parseWalletError';
 import { BuyFlyModal } from './BuyFlyModal';
 
 const ERC20_ABI = [
@@ -116,6 +116,7 @@ export function MyNeuroFlies() {
       invalidateMyFlies();
     } catch (err) {
       if (mountedRef.current) setError(err instanceof Error ? err.message : 'Claim failed');
+      throw err;
     } finally {
       if (mountedRef.current) setBusy(null);
     }
@@ -128,8 +129,9 @@ export function MyNeuroFlies() {
     try {
       const bal = await fetchBalanceCheck(address);
       if (bal && BigInt(bal.ethBalanceWei) < BigInt(bal.flyEthRequiredWei)) {
-        if (mountedRef.current) setError('Insufficient ETH. Add more ETH to your wallet to complete this purchase.');
-        return;
+        const msg = 'Insufficient ETH. Add more ETH to your wallet to complete this purchase.';
+        if (mountedRef.current) setError(msg);
+        throw new Error(msg);
       }
       const hash = await walletClient.sendTransaction({
         account: address,
@@ -169,6 +171,7 @@ export function MyNeuroFlies() {
       await verify();
     } catch (err) {
       if (mountedRef.current) setError(parseWalletError(err));
+      throw err;
     } finally {
       if (mountedRef.current) setBusy(null);
     }
@@ -178,16 +181,18 @@ export function MyNeuroFlies() {
     if (!walletClient || !address || !config?.neuroTokenAddress || !config?.claimReceiverAddress) return;
     const zero = '0x0000000000000000000000000000000000000000';
     if (config.neuroTokenAddress === zero || config.claimReceiverAddress === zero) {
-      setError('Claim not configured');
-      return;
+      const msg = 'Claim not configured';
+      setError(msg);
+      throw new Error(msg);
     }
     setBusy('neuro');
     setError(null);
     try {
       const bal = await fetchBalanceCheck(address);
       if (bal && BigInt(bal.neuroBalanceWei) < BigInt(bal.flyNeuroRequiredWei)) {
-        if (mountedRef.current) setError('Insufficient $NEURO. You need 1M $NEURO to buy a fly.');
-        return;
+        const msg = 'Insufficient $NEURO. You need 1M $NEURO to buy a fly.';
+        if (mountedRef.current) setError(msg);
+        throw new Error(msg);
       }
       const hash = await walletClient.writeContract({
         account: address,
@@ -229,6 +234,7 @@ export function MyNeuroFlies() {
       await verify();
     } catch (err) {
       if (mountedRef.current) setError(parseWalletError(err));
+      throw err;
     } finally {
       if (mountedRef.current) setBusy(null);
     }

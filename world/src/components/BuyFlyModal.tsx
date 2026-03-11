@@ -6,7 +6,7 @@ import { base } from 'viem/chains';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
 import { useNotification } from '../contexts/NotificationContext';
 import { getApiBase } from '../lib/constants';
-import { parseWalletError } from '../lib/parseWalletError';
+import { parseWalletError } from '../../../shared/lib/parseWalletError';
 
 const ETH_AMOUNT = 100000000000000n; // 0.0001 ETH
 const SUPPORT_MESSAGE = 'Please contact support via our Telegram channel for help.';

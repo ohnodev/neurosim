@@ -46,9 +46,12 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
     [neurons]
   );
 
-  // Initial plot when neuron set (with positions) is available
+  // Stable key for plot creation (match landing: only recreate when neuron set changes, not when visible/activity changes)
+  const plotCreationKey = n > 0 ? `${n}-${neuronIdsKey}` : '';
+
+  // Initial plot when neuron set (with positions) is available — do NOT depend on visible so we don't purge/recreate on connect toggle
   useEffect(() => {
-    if (!plotRef.current || !visible || n === 0) return;
+    if (!plotRef.current || n === 0 || !plotCreationKey) return;
 
     const x = withPos.map((p) => p.x);
     const y = withPos.map((p) => p.y);
@@ -158,14 +161,15 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
       Plotly.purge(el);
       plotReady.current = false;
     };
-  }, [visible, n, neuronIdsKey]);
+  }, [n, plotCreationKey]);
 
-  // Resize Plotly when container changes (e.g. panel expand after minimize)
+  // Resize Plotly when container changes (e.g. panel expand after minimize) — skip while user is interacting to prevent camera snap-back
   useEffect(() => {
     if (!embedded || !visible) return;
     const el = plotRef.current;
     if (!el) return;
     const resize = () => {
+      if (interacting.current) return;
       if (plotReady.current && el) Plotly.Plots?.resize(el);
     };
     const ro = new ResizeObserver(resize);
@@ -177,13 +181,17 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
     };
   }, [embedded, visible]);
 
-  // Force resize when panel becomes visible (e.g. after expand from collapsed)
+  // Force resize when panel becomes visible (e.g. after expand from collapsed) — skip while user is interacting
   useEffect(() => {
     if (!embedded || !visible || !containerVisible) return;
     const el = plotRef.current;
     if (!el) return;
-    const t1 = setTimeout(() => { if (plotReady.current && el) Plotly.Plots?.resize(el); }, 50);
-    const t2 = setTimeout(() => { if (plotReady.current && el) Plotly.Plots?.resize(el); }, 350);
+    const resize = () => {
+      if (interacting.current) return;
+      if (plotReady.current && el) Plotly.Plots?.resize(el);
+    };
+    const t1 = setTimeout(resize, 50);
+    const t2 = setTimeout(resize, 350);
     return () => { clearTimeout(t1); clearTimeout(t2); };
   }, [embedded, visible, containerVisible]);
 
@@ -201,8 +209,6 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
     });
     Plotly.restyle(plotRef.current, { 'marker.color': [color] }, [0]);
   }, [activity, visible]);
-
-  if (!visible) return null;
 
   const containerStyle = embedded
     ? {
@@ -232,7 +238,13 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
       };
 
   return (
-    <div className="brain-overlay" style={containerStyle}>
+    <div
+      className="brain-overlay"
+      style={{
+        ...containerStyle,
+        ...(!visible ? { visibility: 'hidden' as const, pointerEvents: 'none' as const } : {}),
+      }}
+    >
       <div style={{ position: 'absolute', top: 4, left: 8, fontSize: 10, color: '#888', zIndex: 1 }}>
         Brain activity
       </div>

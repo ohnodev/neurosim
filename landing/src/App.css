@@ -631,18 +631,37 @@
   color: #fff;
 }
 
+.card__link-inline {
+  color: #a5b4fc;
+  text-decoration: none;
+  font-weight: 600;
+}
+.card__link-inline:hover {
+  color: #c7d2fe;
+  text-decoration: underline;
+}
+
+.socials__ca {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
 /* CA copy */
 .ca-copy {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   padding: 8px 12px;
-  background: rgba(0, 0, 0, 0.2);
-  border-radius: 4px;
-  border: none;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  border-radius: 6px;
   cursor: pointer;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   text-align: left;
+  font-family: inherit;
 }
 
 .ca-copy:hover {
@@ -651,12 +670,13 @@
 
 .ca-copy__value {
   font-family: var(--font-mono);
-  font-size: 0.8rem;
-  color: rgba(255, 255, 255, 0.8);
+  font-size: 0.78rem;
+  color: #fff;
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  letter-spacing: 0.02em;
 }
 
 .ca-copy__icon {
@@ -666,6 +686,22 @@
 
 .ca-copy:hover .ca-copy__icon {
   color: #fff;
+}
+
+.ca-basescan {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  border-radius: 6px;
+  color: inherit;
+}
+.ca-basescan:hover {
+  background: rgba(99, 102, 241, 0.2);
+}
+.ca-basescan img {
+  display: block;
 }
 
 /* Claim section */

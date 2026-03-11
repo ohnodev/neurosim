@@ -3,12 +3,14 @@ import { OnchainProviders } from './components/OnchainProviders';
 import { BrainPlot } from './components/BrainPlot';
 import { MyNeuroFlies } from './components/MyNeuroFlies';
 import { ConnectButton } from './components/ConnectButton';
-import { getApiBase } from './lib/constants';
 import './App.css';
 
 const LORE_ARTICLE = 'https://theinnermostloop.substack.com/p/the-first-multi-behavior-brain-upload';
 const X_PLACEHOLDER = 'https://x.com/neurosim';
 const TG_PLACEHOLDER = 'https://t.me/neurosim';
+
+/** Token address - single config to update later. */
+const TOKEN_ADDRESS = '0x0000000000000000000000000000000000000000';
 
 function CopyIcon() {
   return (
@@ -68,24 +70,10 @@ function formatAddress(addr: string): string {
 
 function App() {
   const [caCopied, setCaCopied] = useState(false);
-  const [neuroTokenAddress, setNeuroTokenAddress] = useState<string | null>(null);
-
-  useEffect(() => {
-    fetch(`${getApiBase()}/api/claim/config`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d: { neuroTokenAddress?: string } | null) => {
-        const addr = d?.neuroTokenAddress;
-        if (addr && addr !== '0x0000000000000000000000000000000000000000') {
-          setNeuroTokenAddress(addr);
-        }
-      })
-      .catch(() => {});
-  }, []);
 
   const handleCopyCA = async () => {
-    if (!neuroTokenAddress) return;
     try {
-      await navigator.clipboard.writeText(neuroTokenAddress);
+      await navigator.clipboard.writeText(TOKEN_ADDRESS);
       setCaCopied(true);
       setTimeout(() => setCaCopied(false), 1800);
     } catch {
@@ -124,7 +112,9 @@ function App() {
             <div className="card card--intro">
               <h2 className="card__title">About</h2>
               <p className="card__text">
-                Token launched on <strong>The Cabal</strong>. Heard about the first multi-behavior brain upload, went down the rabbit hole, got the dataset, added the interface, wrapped crypto around it, and shipped it — Cabal style.
+                Token launched on{' '}
+                <a href={`https://thecabal.app/base/${TOKEN_ADDRESS}`} target="_blank" rel="noopener noreferrer" className="card__link-inline">The Cabal</a>
+                . Heard about the first multi-behavior brain upload, went down the rabbit hole, got the dataset, added the interface, wrapped crypto around it, and shipped it — Cabal style.
               </p>
             </div>
 
@@ -154,22 +144,28 @@ function App() {
                   Telegram
                 </a>
               </div>
-            </div>
-
-            {neuroTokenAddress && (
-              <div className="card card--ca">
-                <h2 className="card__title">Contract</h2>
+              <div className="socials__ca">
                 <button
                   type="button"
                   className="ca-copy"
                   onClick={handleCopyCA}
                   aria-label="Copy contract address"
                 >
-                  <code className="ca-copy__value">{formatAddress(neuroTokenAddress)}</code>
+                  <code className="ca-copy__value">{formatAddress(TOKEN_ADDRESS)}</code>
                   <span className="ca-copy__icon">{caCopied ? <CheckIcon /> : <CopyIcon />}</span>
                 </button>
+                <a
+                  href={`https://basescan.org/address/${TOKEN_ADDRESS}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="ca-basescan"
+                  title="View on BaseScan"
+                  aria-label="View contract on BaseScan"
+                >
+                  <img src="/basescan-logo.svg" alt="" width={20} height={20} />
+                </a>
               </div>
-            )}
+            </div>
 
           </aside>
         </div>

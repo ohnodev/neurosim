@@ -539,41 +539,34 @@ export default function FlyViewer() {
             </div>
             {fliesTab === 'current' ? (
               <>
-                {myFlies.length === 0 ? (
-                  <div className="fly-viewer__fly-slot">
-                    <button
-                      type="button"
-                      className="fly-viewer__fly-slot-empty fly-viewer__fly-slot-empty--first"
-                      onClick={() => setBuyFlySlot(0)}
-                    >
-                      <img src="/fly.svg" alt="" width={32} height={32} className="fly-viewer__fly-slot-icon" aria-hidden />
-                      <span className="fly-viewer__fly-slot-label">You have no flies</span>
-                      <span className="fly-viewer__fly-slot-buy">Buy your first fly</span>
-                    </button>
-                  </div>
-                ) : (
-                  [0, 1, 2]
-                    .filter((i) => !graveyardSlots.has(i))
-                    .map((i) => {
+                {[0, 1, 2].map((i) => {
+                      const inGraveyard = graveyardSlots.has(i);
                       const hasFly = myFlies[i] != null;
                       const simIdx = deployed[i];
                       const isDeployed = simIdx != null;
                       const simFly = isDeployed ? (flies[simIdx] ?? DEFAULT_FLY) : DEFAULT_FLY;
                       const isDead = isDeployed && simFly.dead;
+                      const isEmpty = myFlies.length === 0 && i === 0;
                       return (
                         <div key={i} className="fly-viewer__fly-slot">
-                          {!hasFly ? (
+                          {inGraveyard ? (
+                            <div className="fly-viewer__fly-slot-empty fly-viewer__fly-slot--in-graveyard">
+                              <img src="/fly.svg" alt="" width={28} height={28} className="fly-viewer__fly-slot-icon" aria-hidden />
+                              <span className="fly-viewer__fly-slot-label">Fly {i + 1}</span>
+                              <span style={{ fontSize: 9, color: '#666' }}>In graveyard</span>
+                            </div>
+                          ) : !hasFly ? (
                             <button
                               type="button"
-                              className="fly-viewer__fly-slot-empty"
+                              className={`fly-viewer__fly-slot-empty ${isEmpty ? 'fly-viewer__fly-slot-empty--first' : ''}`}
                               onClick={() => setBuyFlySlot(i)}
                             >
                               <img src="/fly.svg" alt="" width={28} height={28} className="fly-viewer__fly-slot-icon" aria-hidden />
                               <span className="fly-viewer__fly-slot-label" style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
-                                Fly {i + 1}
+                                {isEmpty ? 'You have no flies' : `Fly ${i + 1}`}
                                 <span style={{ fontSize: 9, color: '#8a8', fontFamily: 'monospace' }}>{statsBySlot[i] ?? 0} pts</span>
                               </span>
-                              <span className="fly-viewer__fly-slot-buy">Buy Fly</span>
+                              <span className="fly-viewer__fly-slot-buy">{isEmpty ? 'Buy your first fly' : 'Buy Fly'}</span>
                             </button>
                           ) : !isDeployed ? (
                             <button
@@ -623,32 +616,36 @@ export default function FlyViewer() {
                           )}
                         </div>
                       );
-                    })
-                )}
+                    })}
               </>
             ) : (
               <>
                 <div className="fly-viewer__graveyard-title">NeuroFly Graveyard</div>
-                {[0, 1, 2]
-                  .filter((i) => graveyardSlots.has(i))
-                  .map((i) => {
-                    const pts = statsBySlot[i] ?? 0;
-                    const wei = flyStatsData?.rewardPerPointWei ? BigInt(flyStatsData.rewardPerPointWei) * BigInt(pts) : 0n;
-                    const ethStr = pts > 0 ? (Number(wei) / 1e18).toFixed(6) : '0';
-                    return (
-                      <div key={i} className="fly-viewer__fly-slot fly-viewer__fly-slot--graveyard">
-                        <img src="/fly.svg" alt="" width={20} height={20} className="fly-viewer__fly-slot-icon" aria-hidden />
-                        <img src="/tombstone.svg" alt="" width={18} height={18} className="fly-viewer__graveyard-icon" aria-hidden />
-                        <div className="fly-viewer__graveyard-fly-info">
-                          <span className="fly-viewer__fly-slot-label">Fly {i + 1}</span>
-                          <span className="fly-viewer__graveyard-stats">{pts} pts · {ethStr} ETH</span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                {graveyardSlots.size === 0 && (
-                  <div style={{ color: '#666', fontSize: 10, padding: 12 }}>No flies in graveyard</div>
-                )}
+                {[0, 1, 2].map((i) => {
+                  const inGraveyard = graveyardSlots.has(i);
+                  const pts = statsBySlot[i] ?? 0;
+                  const wei = flyStatsData?.rewardPerPointWei ? BigInt(flyStatsData.rewardPerPointWei) * BigInt(pts) : 0n;
+                  const ethStr = pts > 0 ? (Number(wei) / 1e18).toFixed(6) : '0';
+                  return (
+                    <div key={i} className={`fly-viewer__fly-slot fly-viewer__fly-slot--graveyard ${!inGraveyard ? 'fly-viewer__fly-slot--graveyard-empty' : ''}`}>
+                      {inGraveyard ? (
+                        <>
+                          <img src="/fly.svg" alt="" width={20} height={20} className="fly-viewer__fly-slot-icon" aria-hidden />
+                          <img src="/tombstone.svg" alt="" width={18} height={18} className="fly-viewer__graveyard-icon" aria-hidden />
+                          <div className="fly-viewer__graveyard-fly-info">
+                            <span className="fly-viewer__fly-slot-label">Fly {i + 1}</span>
+                            <span className="fly-viewer__graveyard-stats">{pts} pts · {ethStr} ETH</span>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <img src="/tombstone.svg" alt="" width={18} height={18} className="fly-viewer__graveyard-icon" aria-hidden />
+                          <span className="fly-viewer__fly-slot-label" style={{ color: '#555' }}>—</span>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
               </>
             )}
           </div>

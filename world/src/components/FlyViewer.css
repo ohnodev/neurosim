@@ -238,7 +238,7 @@
 }
 
 .fly-viewer__side-strip--left .fly-viewer__side-toggle {
-  border-right: none;
+  border-left: none;
   border-radius: 0 8px 8px 0;
 }
 
@@ -290,8 +290,8 @@
   overflow-y: auto;
   font-family: monospace;
   border: 1px solid rgba(100, 100, 140, 0.3);
-  border-left: none;
-  border-radius: 0 8px 8px 0;
+  border-right: none;
+  border-radius: 8px 0 0 8px;
   box-shadow: 4px 0 12px rgba(0, 0, 0, 0.4);
 }
 

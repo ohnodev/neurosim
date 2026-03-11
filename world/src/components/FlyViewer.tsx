@@ -544,19 +544,8 @@ export default function FlyViewer() {
             }}
           />
         )}
-        {/* Left: Status vertical toggle + panel */}
+        {/* Left: Status panel + toggle (toggle moves with panel edge, same as Brain on right) */}
         <div className="fly-viewer__side-strip fly-viewer__side-strip--left">
-          <button
-            type="button"
-            className={`fly-viewer__side-toggle fly-viewer__side-toggle--status ${statusPanelOpen ? 'fly-viewer__side-toggle--active' : ''}`}
-            onClick={() => setStatusPanelOpen((o) => !o)}
-            aria-label={statusPanelOpen ? 'Hide status' : 'Show status'}
-            aria-expanded={statusPanelOpen}
-            title={statusPanelOpen ? 'Hide status' : 'Show status'}
-          >
-            <span className="fly-viewer__side-toggle-label">Status</span>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d={statusPanelOpen ? 'M19 12H5M12 19l-7-7 7-7' : 'M5 12h14M12 5l7 7-7 7'} /></svg>
-          </button>
           <div className={`fly-viewer__status-panel ${statusPanelOpen ? 'fly-viewer__status-panel--open' : ''}`}>
             <div className="fly-viewer__status-content">
                 <div style={{ color: '#888', marginBottom: 6 }}>Status</div>
@@ -575,6 +564,17 @@ export default function FlyViewer() {
                 </div>
             </div>
           </div>
+          <button
+            type="button"
+            className={`fly-viewer__side-toggle fly-viewer__side-toggle--status ${statusPanelOpen ? 'fly-viewer__side-toggle--active' : ''}`}
+            onClick={() => setStatusPanelOpen((o) => !o)}
+            aria-label={statusPanelOpen ? 'Hide status' : 'Show status'}
+            aria-expanded={statusPanelOpen}
+            title={statusPanelOpen ? 'Hide status' : 'Show status'}
+          >
+            <span className="fly-viewer__side-toggle-label">Status</span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d={statusPanelOpen ? 'M19 12H5M12 19l-7-7 7-7' : 'M5 12h14M12 5l7 7-7 7'} /></svg>
+          </button>
         </div>
         {/* Right: Brain vertical toggle + panel */}
         <div className="fly-viewer__side-strip fly-viewer__side-strip--right">

@@ -8,6 +8,7 @@ import { createBrainSim } from './brain-sim.js';
 import { getWorld, spawnFood, removeFood, getSources } from './world.js';
 import claimsRouter from './routes/claims.js';
 import { getFlies } from './services/flyStore.js';
+import { getDeployments, addDeployment, clearForTesting } from './services/deployStore.js';
 
 const PORT = Number(process.env.PORT) || 3001;
 const connectome = loadConnectome();
@@ -37,6 +38,22 @@ function addFlyToSim(): number {
   });
   sims.push(sim);
   return sims.length - 1;
+}
+
+function restoreDeployFromStore(): void {
+  const records = getDeployments();
+  for (const { address, slotIndex } of records) {
+    const simIndex = addFlyToSim();
+    let map = deployedFlies.get(address);
+    if (!map) {
+      map = new Map();
+      deployedFlies.set(address, map);
+    }
+    map.set(slotIndex, simIndex);
+  }
+  if (records.length > 0) {
+    console.log('[deploy] restored', records.length, 'deployments from store');
+  }
 }
 let simRunning = false;
 let simIntervalId: ReturnType<typeof setInterval> | null = null;
@@ -159,6 +176,7 @@ app.post('/api/deploy', (req, res) => {
       deployedFlies.set(address, map);
     }
     map.set(slotIndex, simIndex);
+    addDeployment(address, slotIndex);
     console.log('[deploy]', address.slice(0, 10) + '…', 'slot', slotIndex, '-> sim', simIndex);
     res.json({ success: true, simIndex });
   } catch (err) {
@@ -218,6 +236,7 @@ wss.on('connection', (ws) => {
 });
 
 if (process.env.VITEST !== 'true') {
+  restoreDeployFromStore();
   httpServer.listen(PORT, () => {
     startSim();
     console.log('NeuroSim API http://localhost:' + PORT);
@@ -231,6 +250,7 @@ if (process.env.VITEST !== 'true') {
 export function resetDeployStateForTesting(): void {
   deployedFlies.clear();
   sims.splice(0, sims.length);
+  clearForTesting();
 }
 
 export { app, httpServer, startSim, stopSim };

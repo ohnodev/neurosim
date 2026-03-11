@@ -327,8 +327,8 @@ export default function FlyViewer() {
       ? flies[effectiveSimIndex]!
       : DEFAULT_FLY;
   const activityForSelected =
-    effectiveSimIndex != null && Array.isArray(activities) && activities[effectiveSimIndex]
-      ? activities[effectiveSimIndex]!
+    effectiveSimIndex != null && Array.isArray(activities)
+      ? (activities[effectiveSimIndex] ?? {})
       : activity;
   const activeCount = Object.keys(activityForSelected).length;
   const topActivity = Object.entries(activityForSelected)

@@ -160,8 +160,9 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
 
   // Resize Plotly when container changes (e.g. panel expand after minimize)
   useEffect(() => {
+    if (!embedded || !visible) return;
     const el = plotRef.current;
-    if (!el || !embedded) return;
+    if (!el) return;
     const resize = () => {
       if (plotReady.current && el) Plotly.Plots?.resize(el);
     };
@@ -172,7 +173,7 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
       ro.disconnect();
       clearTimeout(t);
     };
-  }, [embedded]);
+  }, [embedded, visible]);
 
   // Update colors when activity changes; skip while user is interacting (prevents camera snap-back)
   useEffect(() => {

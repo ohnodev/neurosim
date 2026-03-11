@@ -32,9 +32,10 @@ function FlyModel({ state }: { state: FlyState }) {
   const { scene } = useGLTF('/models/low_poly_fly/scene.gltf');
   const group = useRef<THREE.Group>(null);
   const wingsRef = useRef<THREE.Object3D[]>([]);
+  const prevRef = useRef({ x: state.x ?? 0, y: state.y ?? 0 });
+  const headingRef = useRef(state.heading ?? 0);
 
   const x = state.x ?? 0, y = state.y ?? 0, z = state.z ?? 0;
-  const heading = state.heading ?? 0;
   const isFlying = z > FLY_THRESHOLD;
 
   const cloned = useMemo(() => {
@@ -47,20 +48,24 @@ function FlyModel({ state }: { state: FlyState }) {
   }, [scene]);
 
   useFrame(() => {
+    const dx = x - prevRef.current.x, dy = y - prevRef.current.y;
+    prevRef.current = { x, y };
+    let target = state.heading ?? 0;
+    if (dx * dx + dy * dy > 1e-8) target = Math.atan2(dx, dy);
+    if (group.current) {
+      headingRef.current += (target - headingRef.current) * 0.85;
+      group.current.rotation.y = headingRef.current;
+    }
     if (isFlying) {
       const flap = Math.sin(performance.now() * 0.02) * 0.4;
-      for (const wing of wingsRef.current) {
-        wing.rotation.x = flap;
-      }
+      for (const wing of wingsRef.current) wing.rotation.x = flap;
     } else {
-      for (const wing of wingsRef.current) {
-        wing.rotation.x = 0;
-      }
+      for (const wing of wingsRef.current) wing.rotation.x = 0;
     }
   });
 
   return (
-    <group ref={group} position={[x, z, y]} rotation={[0, heading, 0]}>
+    <group ref={group} position={[x, z, y]}>
       <primitive object={cloned} scale={0.08} rotation={[0, 0, 0]} />
     </group>
   );

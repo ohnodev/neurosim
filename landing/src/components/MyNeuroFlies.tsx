@@ -1,9 +1,11 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { base } from 'viem/chains';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
 import { useNotification } from '../contexts/NotificationContext';
 import { getApiBase } from '../lib/constants';
+import { fetchClaimConfig } from '../lib/claimApi';
+import { BuyFlyModal } from './BuyFlyModal';
 
 const ERC20_ABI = [
   {
@@ -27,19 +29,7 @@ interface NeuroFly {
   claimedAt: string;
 }
 
-interface ClaimConfig {
-  neuroTokenAddress: `0x${string}`;
-  claimReceiverAddress: `0x${string}`;
-  flyEthReceiver: `0x${string}`;
-}
-
 const SUPPORT_MESSAGE = 'Please contact support via our Telegram channel for help.';
-
-async function fetchConfig(): Promise<ClaimConfig | null> {
-  const r = await fetch(`${getApiBase()}/api/claim/config`);
-  if (!r.ok) return null;
-  return r.json();
-}
 
 async function fetchMyFliesAndEligibility(address: string) {
   const apiBase = getApiBase();
@@ -53,6 +43,13 @@ async function fetchMyFliesAndEligibility(address: string) {
   return { flies, method };
 }
 
+async function fetchFlyStats(address: string): Promise<{ stats: { slotIndex: number; feedCount: number }[] }> {
+  const r = await fetch(`${getApiBase()}/api/rewards/stats?address=${address.toLowerCase()}`);
+  if (!r.ok) return { stats: [] };
+  const data = await r.json();
+  return { stats: data.stats ?? [] };
+}
+
 export function MyNeuroFlies() {
   const { isConnected, address, walletClient } = usePrivyWallet();
   const queryClient = useQueryClient();
@@ -63,7 +60,7 @@ export function MyNeuroFlies() {
 
   const { data: config } = useQuery({
     queryKey: ['claim-config'],
-    queryFn: fetchConfig,
+    queryFn: fetchClaimConfig,
     staleTime: 60_000,
   });
 
@@ -77,7 +74,19 @@ export function MyNeuroFlies() {
   const eligibility = data
     ? { method: data.method, loading: false }
     : { method: 'pay' as const, loading: isLoading };
-  const full = eligibility.method === 'full' || flies.length >= 3;
+  const { data: flyStatsData } = useQuery({
+    queryKey: ['fly-stats', address ?? ''],
+    queryFn: () => fetchFlyStats(address!),
+    enabled: !!address,
+  });
+  const statsBySlot = useMemo(() => {
+    const m: Record<number, number> = {};
+    for (const s of flyStatsData?.stats ?? []) m[s.slotIndex] = s.feedCount;
+    return m;
+  }, [flyStatsData?.stats]);
+
+  // Slot user is buying for; API assigns next available slot (same as clicked empty slot)
+  const [buyFlySlot, setBuyFlySlot] = useState<number | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -85,7 +94,10 @@ export function MyNeuroFlies() {
   }, []);
 
   const invalidateMyFlies = () => {
-    if (address) queryClient.invalidateQueries({ queryKey: ['my-flies', address] });
+    if (address) {
+      queryClient.invalidateQueries({ queryKey: ['my-flies', address] });
+      queryClient.invalidateQueries({ queryKey: ['fly-stats', address] });
+    }
   };
 
   const handleClaimFree = async () => {
@@ -217,63 +229,56 @@ export function MyNeuroFlies() {
     <div className="neuroflies">
       <h3 className="neuroflies__title">My NeuroFlies</h3>
       <div className="neuroflies__slots">
-        {slots.map((i) => (
-          <div
-            key={i}
-            className={`neuroflies__slot ${flies[i] ? 'neuroflies__slot--filled' : 'neuroflies__slot--empty'}`}
-          >
-            {flies[i] ? (
-              <div className="neuroflies__fly">
-                <div className="neuroflies__fly-icon" />
-                <span className="neuroflies__fly-label">#{i + 1}</span>
-              </div>
-            ) : (
-              <span className="neuroflies__slot-placeholder">—</span>
-            )}
-          </div>
-        ))}
+        {slots.map((i) => {
+          const hasFly = !!flies[i];
+          const isEmpty = flies.length === 0 && i === 0;
+          return (
+            <div key={i} className="neuroflies__slot">
+              {hasFly ? (
+                <div className="neuroflies__slot-filled">
+                  <img src="/fly.svg" alt="" width={28} height={28} className="neuroflies__fly-icon-img" aria-hidden />
+                  <span className="neuroflies__fly-slot-label" style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+                    Fly {i + 1}
+                    <span className="neuroflies__fly-pts">{statsBySlot[i] ?? 0} pts</span>
+                  </span>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className={`neuroflies__slot-empty ${isEmpty ? 'neuroflies__slot-empty--first' : ''}`}
+                  onClick={() => {
+                    if (!isConnected) {
+                      notification.show('Connect your wallet first', 'info');
+                      return;
+                    }
+                    setBuyFlySlot(i);
+                  }}
+                >
+                  <img src="/fly.svg" alt="" width={28} height={28} className="neuroflies__fly-icon-img" aria-hidden />
+                  <span className="neuroflies__fly-slot-label">
+                    {isEmpty ? 'You have no flies' : `Fly ${i + 1}`}
+                  </span>
+                  <span className="neuroflies__fly-slot-buy">{isEmpty ? 'Buy your first fly' : 'Buy Fly'}</span>
+                </button>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       {error && <div className="neuroflies__error">{error}</div>}
 
-      {!isConnected ? (
-        <p className="neuroflies__hint">Connect wallet to claim or buy NeuroFlies.</p>
-      ) : eligibility.loading ? (
-        <p className="neuroflies__hint">Loading...</p>
-      ) : full ? (
-        <p className="neuroflies__hint">You have 3 NeuroFlies.</p>
-      ) : (
-        <div className="neuroflies__actions">
-          {eligibility.method === 'obelisk' && (
-            <button
-              className="neuroflies__btn neuroflies__btn--primary"
-              onClick={handleClaimFree}
-              disabled={!!busy}
-            >
-              {busy === 'obelisk' ? 'Claiming...' : 'Claim free (Obelisk)'}
-            </button>
-          )}
-          <button
-            className="neuroflies__btn"
-            onClick={handleBuyEth}
-            disabled={!!busy || !config?.flyEthReceiver}
-          >
-            {busy === 'eth' ? 'Confirming...' : 'Buy with 0.0001 ETH'}
-          </button>
-          <button
-            className="neuroflies__btn"
-            onClick={handleBuyNeuro}
-            disabled={
-              !!busy ||
-              !config?.neuroTokenAddress ||
-              !config?.claimReceiverAddress ||
-              config.neuroTokenAddress === '0x0000000000000000000000000000000000000000'
-            }
-          >
-            {busy === 'neuro' ? 'Confirming...' : 'Buy with 1M $NEURO'}
-          </button>
-        </div>
-      )}
+      <BuyFlyModal
+        isOpen={buyFlySlot !== null}
+        onClose={() => setBuyFlySlot(null)}
+        slotIndex={buyFlySlot ?? 0}
+        onSuccess={invalidateMyFlies}
+        eligibility={eligibility}
+        onClaimFree={handleClaimFree}
+        onBuyEth={handleBuyEth}
+        onBuyNeuro={handleBuyNeuro}
+        busy={busy}
+      />
     </div>
   );
 }

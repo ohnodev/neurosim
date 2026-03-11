@@ -3,12 +3,14 @@ import { OnchainProviders } from './components/OnchainProviders';
 import { BrainPlot } from './components/BrainPlot';
 import { MyNeuroFlies } from './components/MyNeuroFlies';
 import { ConnectButton } from './components/ConnectButton';
-import { getApiBase } from './lib/constants';
 import './App.css';
 
 const LORE_ARTICLE = 'https://theinnermostloop.substack.com/p/the-first-multi-behavior-brain-upload';
 const X_PLACEHOLDER = 'https://x.com/neurosim';
 const TG_PLACEHOLDER = 'https://t.me/neurosim';
+
+/** Token address - single config to update later. */
+const TOKEN_ADDRESS = '0x0000000000000000000000000000000000000000';
 
 function CopyIcon() {
   return (
@@ -27,6 +29,40 @@ function CheckIcon() {
   );
 }
 
+function DocsIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <polyline points="14 2 14 8 20 8" />
+      <line x1="16" y1="13" x2="8" y2="13" />
+      <line x1="16" y1="17" x2="8" y2="17" />
+      <polyline points="10 9 9 9 8 9" />
+    </svg>
+  );
+}
+
+function ArticleIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+      <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+      <line x1="8" y1="7" x2="16" y2="7" />
+      <line x1="8" y1="11" x2="16" y2="11" />
+      <line x1="8" y1="15" x2="12" y2="15" />
+    </svg>
+  );
+}
+
+function WorldIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <circle cx="12" cy="12" r="10" />
+      <line x1="2" y1="12" x2="22" y2="12" />
+      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+    </svg>
+  );
+}
+
 function formatAddress(addr: string): string {
   if (!addr || addr.length < 10) return addr;
   return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
@@ -34,24 +70,10 @@ function formatAddress(addr: string): string {
 
 function App() {
   const [caCopied, setCaCopied] = useState(false);
-  const [neuroTokenAddress, setNeuroTokenAddress] = useState<string | null>(null);
-
-  useEffect(() => {
-    fetch(`${getApiBase()}/api/claim/config`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d: { neuroTokenAddress?: string } | null) => {
-        const addr = d?.neuroTokenAddress;
-        if (addr && addr !== '0x0000000000000000000000000000000000000000') {
-          setNeuroTokenAddress(addr);
-        }
-      })
-      .catch(() => {});
-  }, []);
 
   const handleCopyCA = async () => {
-    if (!neuroTokenAddress) return;
     try {
-      await navigator.clipboard.writeText(neuroTokenAddress);
+      await navigator.clipboard.writeText(TOKEN_ADDRESS);
       setCaCopied(true);
       setTimeout(() => setCaCopied(false), 1800);
     } catch {
@@ -90,20 +112,25 @@ function App() {
             <div className="card card--intro">
               <h2 className="card__title">About</h2>
               <p className="card__text">
-                Token launched on <strong>The Cabal</strong>. Heard about the first multi-behavior brain upload, went down the rabbit hole, got the dataset, added the interface, wrapped crypto around it, and shipped it — Cabal style.
+                Token launched on{' '}
+                <a href={`https://thecabal.app/base/${TOKEN_ADDRESS}`} target="_blank" rel="noopener noreferrer" className="card__link-inline">The Cabal</a>
+                . Heard about the first multi-behavior brain upload, went down the rabbit hole, got the dataset, added the interface, wrapped crypto around it, and shipped it — Cabal style.
               </p>
             </div>
 
             <div className="card card--links">
               <h2 className="card__title">Links</h2>
-              <a href="https://docs.neurosim.fun" target="_blank" rel="noopener noreferrer" className="card__link">
-                Docs
+              <a href="https://docs.neurosim.fun" target="_blank" rel="noopener noreferrer" className="card__link-btn">
+                <DocsIcon />
+                <span>Docs</span>
               </a>
-              <a href={LORE_ARTICLE} target="_blank" rel="noopener noreferrer" className="card__link">
-                Lore · First Multi-Behavior Brain Upload
+              <a href={LORE_ARTICLE} target="_blank" rel="noopener noreferrer" className="card__link-btn">
+                <ArticleIcon />
+                <span>Lore · First Multi-Behavior Brain Upload</span>
               </a>
-              <a href="https://world.neurosim.fun" target="_blank" rel="noopener noreferrer" className="card__link">
-                Enter World
+              <a href="https://world.neurosim.fun" target="_blank" rel="noopener noreferrer" className="card__link-btn">
+                <WorldIcon />
+                <span>Enter World</span>
               </a>
             </div>
 
@@ -117,22 +144,28 @@ function App() {
                   Telegram
                 </a>
               </div>
-            </div>
-
-            {neuroTokenAddress && (
-              <div className="card card--ca">
-                <h2 className="card__title">Contract</h2>
+              <div className="socials__ca">
                 <button
                   type="button"
                   className="ca-copy"
                   onClick={handleCopyCA}
                   aria-label="Copy contract address"
                 >
-                  <code className="ca-copy__value">{formatAddress(neuroTokenAddress)}</code>
+                  <code className="ca-copy__value">{formatAddress(TOKEN_ADDRESS)}</code>
                   <span className="ca-copy__icon">{caCopied ? <CheckIcon /> : <CopyIcon />}</span>
                 </button>
+                <a
+                  href={`https://basescan.org/address/${TOKEN_ADDRESS}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="ca-basescan"
+                  title="View on BaseScan"
+                  aria-label="View contract on BaseScan"
+                >
+                  <img src="/basescan-logo.svg" alt="" width={20} height={20} />
+                </a>
               </div>
-            )}
+            </div>
 
           </aside>
         </div>

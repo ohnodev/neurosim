@@ -1,8 +1,7 @@
 export const WORLD_URL = 'https://world.neurosim.fun';
 
-export const PRIVY_APP_ID =
-  (typeof import.meta !== 'undefined' && (import.meta as { env?: { VITE_PRIVY_APP_ID?: string } }).env?.VITE_PRIVY_APP_ID) ||
-  'cmmkr8zge00b00eky502lv0kn';
+/** Privy app ID – hardcoded so production always has a valid ID. */
+export const PRIVY_APP_ID = 'cmmkr8zge00b00eky502lv0kn';
 
 export function getApiBase(): string {
   const envBase =

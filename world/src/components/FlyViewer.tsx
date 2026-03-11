@@ -556,6 +556,7 @@ export default function FlyViewer() {
             </div>
             {fliesTab === 'current' ? (
               <>
+                <div className="fly-viewer__current-title">Current Flies</div>
                 {[0, 1, 2].map((i) => {
                       const inGraveyard = graveyardSlots.has(i);
                       const hasFly = myFlies[i] != null;
@@ -580,9 +581,8 @@ export default function FlyViewer() {
                               onClick={() => setBuyFlySlot(i)}
                             >
                               <img src="/fly.svg" alt="" width={28} height={28} className="fly-viewer__fly-slot-icon" aria-hidden />
-                              <span className="fly-viewer__fly-slot-label" style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+                              <span className="fly-viewer__fly-slot-label">
                                 {isEmpty ? 'You have no flies' : `Fly ${i + 1}`}
-                                <span style={{ fontSize: 9, color: '#8a8', fontFamily: 'monospace' }}>0 pts</span>
                               </span>
                               <span className="fly-viewer__fly-slot-buy">{isEmpty ? 'Buy your first fly' : 'Buy Fly'}</span>
                             </button>
@@ -599,10 +599,7 @@ export default function FlyViewer() {
                               }}
                             >
                               <img src="/fly.svg" alt="" width={28} height={28} className="fly-viewer__fly-slot-icon" aria-hidden />
-                              <span className="fly-viewer__fly-slot-label" style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
-                                Fly {i + 1}
-                                <span style={{ fontSize: 9, color: '#8a8', fontFamily: 'monospace' }}>0 pts</span>
-                              </span>
+                              <span className="fly-viewer__fly-slot-label">Fly {i + 1}</span>
                               <span className="fly-viewer__fly-slot-buy">Deploy</span>
                             </button>
                           ) : isDeployed && !hasSimFly ? (

@@ -606,7 +606,7 @@ export default function FlyViewer() {
             <div className="fly-viewer__brain-content">
               <div style={{ color: '#888', marginBottom: 6 }}>Brain activity — Fly {selectedFlyIndex + 1} (viewing)</div>
               <div className="fly-viewer__brain-plot">
-                <BrainOverlay neurons={neuronsWithPositions} activity={activityForSelected} visible={connected} embedded />
+                <BrainOverlay neurons={neuronsWithPositions} activity={activityForSelected} visible={connected} embedded containerVisible={brainPanelOpen} />
               </div>
             </div>
           </div>

@@ -15,6 +15,8 @@ interface BrainOverlayProps {
   visible?: boolean;
   /** When true, overlay fills its container (no absolute positioning). */
   embedded?: boolean;
+  /** When true, container is visible (e.g. panel expanded). Triggers resize after expand. */
+  containerVisible?: boolean;
 }
 
 function hasPosition(n: NeuronWithPosition): n is NeuronWithPosition & { x: number; y: number; z: number } {
@@ -25,7 +27,7 @@ function hasPosition(n: NeuronWithPosition): n is NeuronWithPosition & { x: numb
   );
 }
 
-export function BrainOverlay({ neurons, activity, visible = true, embedded = false }: BrainOverlayProps) {
+export function BrainOverlay({ neurons, activity, visible = true, embedded = false, containerVisible = true }: BrainOverlayProps) {
   const plotRef = useRef<HTMLDivElement>(null);
   const plotReady = useRef(false);
   const idsRef = useRef<string[]>([]);
@@ -174,6 +176,16 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
       clearTimeout(t);
     };
   }, [embedded, visible]);
+
+  // Force resize when panel becomes visible (e.g. after expand from collapsed)
+  useEffect(() => {
+    if (!embedded || !visible || !containerVisible) return;
+    const el = plotRef.current;
+    if (!el) return;
+    const t1 = setTimeout(() => { if (plotReady.current && el) Plotly.Plots?.resize(el); }, 50);
+    const t2 = setTimeout(() => { if (plotReady.current && el) Plotly.Plots?.resize(el); }, 350);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  }, [embedded, visible, containerVisible]);
 
   // Update colors when activity changes; skip while user is interacting (prevents camera snap-back)
   useEffect(() => {

@@ -172,6 +172,10 @@
   outline: none;
 }
 
+.fly-viewer__fly-slot-empty--first .fly-viewer__fly-slot-label {
+  color: rgba(255, 255, 255, 0.85);
+}
+
 .fly-viewer__fly-slot-label {
   font-weight: 600;
   color: #666;

@@ -440,48 +440,61 @@ export default function FlyViewer() {
             </div>
             {fliesTab === 'current' ? (
               <>
-                {[0, 1, 2].map((i) => {
-                  const hasFly = myFlies[i] != null;
-                  const simIdx = deployed[i];
-                  const isDeployed = simIdx != null;
-                  const simFly = isDeployed ? (flies[simIdx] ?? DEFAULT_FLY) : DEFAULT_FLY;
-                  return (
-                    <div key={i} className="fly-viewer__fly-slot">
-                      {!hasFly ? (
-                        <button
-                          type="button"
-                          className="fly-viewer__fly-slot-empty"
-                          onClick={() => setBuyFlySlot(i)}
-                        >
-                          <span className="fly-viewer__fly-slot-label">Fly {i + 1}</span>
-                          <span className="fly-viewer__fly-slot-buy">Buy Fly</span>
-                        </button>
-                      ) : !isDeployed ? (
-                        <button
-                          type="button"
-                          className="fly-viewer__fly-slot-empty"
-                          onClick={async () => {
-                            try {
-                              await deployFly(i);
-                            } catch (e) {
-                              setError(e instanceof Error ? `Deploy failed: ${e.message}` : 'Deploy failed');
-                            }
-                          }}
-                        >
-                          <span className="fly-viewer__fly-slot-label">Fly {i + 1}</span>
-                          <span className="fly-viewer__fly-slot-buy">Deploy</span>
-                        </button>
-                      ) : (
-                        <FlyStatusCard
-                          index={i}
-                          fly={simFly}
-                          selected={i === selectedFlyIndex}
-                          onSelect={() => setSelectedFlyIndex(i)}
-                        />
-                      )}
-                    </div>
-                  );
-                })}
+                {myFlies.length === 0 ? (
+                  <div className="fly-viewer__fly-slot">
+                    <button
+                      type="button"
+                      className="fly-viewer__fly-slot-empty fly-viewer__fly-slot-empty--first"
+                      onClick={() => setBuyFlySlot(0)}
+                    >
+                      <span className="fly-viewer__fly-slot-label">You have no flies</span>
+                      <span className="fly-viewer__fly-slot-buy">Buy your first fly</span>
+                    </button>
+                  </div>
+                ) : (
+                  [0, 1, 2].map((i) => {
+                    const hasFly = myFlies[i] != null;
+                    const simIdx = deployed[i];
+                    const isDeployed = simIdx != null;
+                    const simFly = isDeployed ? (flies[simIdx] ?? DEFAULT_FLY) : DEFAULT_FLY;
+                    return (
+                      <div key={i} className="fly-viewer__fly-slot">
+                        {!hasFly ? (
+                          <button
+                            type="button"
+                            className="fly-viewer__fly-slot-empty"
+                            onClick={() => setBuyFlySlot(i)}
+                          >
+                            <span className="fly-viewer__fly-slot-label">Fly {i + 1}</span>
+                            <span className="fly-viewer__fly-slot-buy">Buy Fly</span>
+                          </button>
+                        ) : !isDeployed ? (
+                          <button
+                            type="button"
+                            className="fly-viewer__fly-slot-empty"
+                            onClick={async () => {
+                              try {
+                                await deployFly(i);
+                              } catch (e) {
+                                setError(e instanceof Error ? `Deploy failed: ${e.message}` : 'Deploy failed');
+                              }
+                            }}
+                          >
+                            <span className="fly-viewer__fly-slot-label">Fly {i + 1}</span>
+                            <span className="fly-viewer__fly-slot-buy">Deploy</span>
+                          </button>
+                        ) : (
+                          <FlyStatusCard
+                            index={i}
+                            fly={simFly}
+                            selected={i === selectedFlyIndex}
+                            onSelect={() => setSelectedFlyIndex(i)}
+                          />
+                        )}
+                      </div>
+                    );
+                  })
+                )}
               </>
             ) : (
               <>

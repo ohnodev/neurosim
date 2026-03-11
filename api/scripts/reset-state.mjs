@@ -27,12 +27,17 @@ function main() {
   if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
   }
-  for (const [filename, content] of Object.entries(FILES)) {
-    const filePath = path.join(DATA_DIR, filename);
-    fs.writeFileSync(filePath, JSON.stringify(content, null, 2) + '\n', 'utf-8');
-    console.log('Reset:', filename);
+  try {
+    for (const [filename, content] of Object.entries(FILES)) {
+      const filePath = path.join(DATA_DIR, filename);
+      fs.writeFileSync(filePath, JSON.stringify(content, null, 2) + '\n', 'utf-8');
+      console.log('Reset:', filename);
+    }
+    console.log('API state reset complete. Restart the API if it is running.');
+  } catch (err) {
+    console.error('reset-state failed:', err?.message ?? String(err));
+    process.exit(1);
   }
-  console.log('API state reset complete. Restart the API if it is running.');
 }
 
 main();

@@ -4,25 +4,10 @@ import { base } from 'viem/chains';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
 import { useNotification } from '../contexts/NotificationContext';
 import { getApiBase } from '../lib/constants';
-import { fetchClaimConfig, fetchBalanceCheck } from '../lib/claimApi';
+import { fetchClaimConfig, fetchBalanceCheck, formatNeuroAmount } from '../lib/claimApi';
 import { parseWalletError } from '../../../shared/lib/parseWalletError';
+import { ERC20_TRANSFER_ABI } from '../../../shared/lib/claimConstants';
 import { BuyFlyModal } from './BuyFlyModal';
-
-const ERC20_ABI = [
-  {
-    inputs: [
-      { internalType: 'address', name: 'to', type: 'address' },
-      { internalType: 'uint256', name: 'amount', type: 'uint256' },
-    ],
-    name: 'transfer',
-    outputs: [{ internalType: 'bool', name: '', type: 'bool' }],
-    stateMutability: 'nonpayable',
-    type: 'function',
-  },
-] as const;
-
-/** 10,000 $NEURO to buy one fly */
-const NEURO_AMOUNT = 10_000n * 10n ** 18n;
 
 interface NeuroFly {
   id: string;
@@ -154,16 +139,18 @@ export function MyNeuroFlies() {
     try {
       const bal = await fetchBalanceCheck(address);
       if (bal && BigInt(bal.neuroBalanceWei) < BigInt(bal.flyNeuroRequiredWei)) {
-        const msg = 'Insufficient $NEURO. You need 10k $NEURO to buy a fly.';
+        const required = bal.flyNeuroRequiredWei ? formatNeuroAmount(bal.flyNeuroRequiredWei) : '10k';
+        const msg = `Insufficient $NEURO. You need ${required} $NEURO to buy a fly.`;
         if (mountedRef.current) setError(msg);
         throw new Error(msg);
       }
+      const amountWei = config.flyNeuroAmountWei ? BigInt(config.flyNeuroAmountWei) : 10_000n * 10n ** 18n;
       submittedHash = await walletClient.writeContract({
         account: address,
         address: config.neuroTokenAddress,
-        abi: ERC20_ABI,
+        abi: ERC20_TRANSFER_ABI,
         functionName: 'transfer',
-        args: [config.claimReceiverAddress, NEURO_AMOUNT],
+        args: [config.claimReceiverAddress, amountWei],
         chain: base,
       });
       notification.show('Transaction sent, pending...', 'info');

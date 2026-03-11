@@ -45,9 +45,6 @@ const TRANSFER_EVENT_ABI = [
   },
 ] as const;
 
-/** 10,000 $NEURO required to buy one fly */
-const REQUIRED_AMOUNT = 10_000n * 10n ** 18n;
-
 function parseAndValidateAddress(raw: unknown): `0x${string}` {
   const s = (typeof raw === 'string' ? raw : '')?.trim().toLowerCase();
   if (!s || !/^0x[a-f0-9]{40}$/.test(s)) {
@@ -247,7 +244,7 @@ router.post('/verify-payment', async (req: Request, res: Response) => {
         return (
           args.from.toLowerCase() === userLower &&
           args.to.toLowerCase() === CLAIM_RECEIVER_ADDRESS.toLowerCase() &&
-          args.value >= REQUIRED_AMOUNT
+          args.value >= FLY_NEURO_AMOUNT
         );
       });
 

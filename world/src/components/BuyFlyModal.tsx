@@ -7,22 +7,7 @@ import { usePrivyWallet } from '../lib/usePrivyWallet';
 import { useNotification } from '../contexts/NotificationContext';
 import { getApiBase } from '../lib/constants';
 import { parseWalletError } from '../../../shared/lib/parseWalletError';
-
-const ERC20_ABI = [
-  {
-    inputs: [
-      { internalType: 'address', name: 'to', type: 'address' },
-      { internalType: 'uint256', name: 'amount', type: 'uint256' },
-    ],
-    name: 'transfer',
-    outputs: [{ internalType: 'bool', name: '', type: 'bool' }],
-    stateMutability: 'nonpayable',
-    type: 'function',
-  },
-] as const;
-
-/** 10,000 $NEURO to buy one fly */
-const NEURO_AMOUNT = 10_000n * 10n ** 18n;
+import { ERC20_TRANSFER_ABI, FLY_NEURO_AMOUNT_FALLBACK, formatNeuroAmount } from '../../../shared/lib/claimConstants';
 const SUPPORT_MESSAGE = 'Please contact support via our Telegram channel for help.';
 
 interface ClaimConfig {
@@ -115,7 +100,12 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
       const balRes = await fetch(`${getApiBase()}/api/claim/balance-check?address=${address.toLowerCase()}`);
       if (balRes.ok) {
         const bal = await balRes.json();
-        const required = BigInt(bal.flyNeuroRequiredWei ?? config.flyNeuroAmountWei ?? NEURO_AMOUNT.toString());
+        const requiredRaw = bal.flyNeuroRequiredWei ?? config.flyNeuroAmountWei ?? FLY_NEURO_AMOUNT_FALLBACK.toString();
+        if (import.meta.env?.DEV) {
+          if (!bal.flyNeuroRequiredWei) console.debug('[BuyFlyModal] using config or fallback for required amount');
+          if (!config.flyNeuroAmountWei && !bal.flyNeuroRequiredWei) console.debug('[BuyFlyModal] using FLY_NEURO_AMOUNT_FALLBACK');
+        }
+        const required = BigInt(requiredRaw);
         if (BigInt(bal.neuroBalanceWei ?? 0) < required) {
           if (mountedRef.current) setError('Insufficient $NEURO. You need 10k $NEURO to buy a fly.');
           return;
@@ -124,9 +114,9 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
       const hash = await walletClient.writeContract({
         account: address,
         address: config.neuroTokenAddress,
-        abi: ERC20_ABI,
+        abi: ERC20_TRANSFER_ABI,
         functionName: 'transfer',
-        args: [config.claimReceiverAddress, NEURO_AMOUNT],
+        args: [config.claimReceiverAddress, BigInt(config.flyNeuroAmountWei ?? FLY_NEURO_AMOUNT_FALLBACK.toString())],
         chain: base,
       });
       notification.show('Transaction sent, pending...', 'info');
@@ -135,10 +125,6 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
       const baseDelay = 1000;
       const verify = async (attempt = 0): Promise<void> => {
         if (!mountedRef.current) return;
-        if (attempt === 0) {
-          await new Promise((r) => setTimeout(r, Math.min(baseDelay, 8000)));
-          if (!mountedRef.current) return;
-        }
         notification.update('Verifying payment...', 'info');
         const res = await fetch(`${apiBase}/api/claim/verify-payment`, {
           method: 'POST',
@@ -204,7 +190,9 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
         <button type="button" className="neurosim-claim__close" onClick={onClose} aria-label="Close">×</button>
         <div className="neurosim-claim__card">
           <h2 id="buy-fly-title" className="neurosim-claim__title">Buy NeuroFly #{slotIndex + 1}</h2>
-          <p className="neurosim-claim__subtitle">Pay with 10k $NEURO to buy a fly</p>
+          <p className="neurosim-claim__subtitle">
+            Pay with {config?.flyNeuroAmountWei ? formatNeuroAmount(config.flyNeuroAmountWei) : '10k'} $NEURO to buy a fly
+          </p>
           {error && <div className="neuroflies__error">{error}</div>}
           {!isOnBaseChain && (
             <div className="neuroflies__error" style={{ marginBottom: 12 }}>
@@ -227,7 +215,7 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
                 onClick={handleBuyNeuro}
                 disabled={!!busy || !walletClient || !address || neuroDisabled}
               >
-                {busy === 'neuro' ? 'Confirming...' : 'Pay with 10k $NEURO'}
+                {busy === 'neuro' ? 'Confirming...' : `Pay with ${config?.flyNeuroAmountWei ? formatNeuroAmount(config.flyNeuroAmountWei) : '10k'} $NEURO`}
               </button>
             )}
           </div>

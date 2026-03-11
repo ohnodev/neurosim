@@ -33,6 +33,10 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
   const idsRef = useRef<string[]>([]);
   const sidesRef = useRef<string[]>([]);
   const interacting = useRef(false);
+  const pendingResizeRef = useRef(false);
+  const pendingRestyleRef = useRef(false);
+  const activityRef = useRef(activity);
+  activityRef.current = activity;
 
   const withPos = neurons.filter(hasPosition);
   const n = withPos.length;
@@ -46,8 +50,17 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
     [neurons]
   );
 
-  // Stable key for plot creation (match landing: only recreate when neuron set changes, not when visible/activity changes)
-  const plotCreationKey = n > 0 ? `${n}-${neuronIdsKey}` : '';
+  // Fingerprint of positions and sides so plot recreates when coordinates/sides change
+  const positionsFingerprint = useMemo(() => {
+    const list = neurons.filter(hasPosition);
+    if (list.length === 0) return '';
+    return list
+      .map((p) => `${p.x},${p.y},${p.z},${(p.side ?? '').toLowerCase()}`)
+      .sort()
+      .join('|');
+  }, [neurons]);
+
+  const plotCreationKey = n > 0 ? `${n}-${neuronIdsKey}-${positionsFingerprint}` : '';
 
   // Initial plot when neuron set (with positions) is available — do NOT depend on visible so we don't purge/recreate on connect toggle
   useEffect(() => {
@@ -135,8 +148,35 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
     };
 
     const el = plotRef.current;
+    const doResize = () => {
+      if (plotReady.current && el) Plotly.Plots?.resize(el);
+    };
+    const doRestyle = () => {
+      if (!plotRef.current || !plotReady.current || idsRef.current.length === 0) return;
+      const sides = sidesRef.current;
+      const act = activityRef.current;
+      const color = idsRef.current.map((id, i) => {
+        const a = act[id] ?? 0;
+        if (a <= 0) return 0;
+        const s = sides[i] ?? '';
+        if (s === 'left') return 0.3 + a * 0.4;
+        if (s === 'right') return 0.7 + a * 0.3;
+        return 0.5 + a * 0.2;
+      });
+      Plotly.restyle(plotRef.current, { 'marker.color': [color] }, [0]);
+    };
     const onDown = () => { interacting.current = true; };
-    const onUp = () => { interacting.current = false; };
+    const onUp = () => {
+      interacting.current = false;
+      if (pendingResizeRef.current) {
+        pendingResizeRef.current = false;
+        doResize();
+      }
+      if (pendingRestyleRef.current) {
+        pendingRestyleRef.current = false;
+        doRestyle();
+      }
+    };
     const touchOpts = { passive: false } as AddEventListenerOptions;
     el.addEventListener('mousedown', onDown);
     el.addEventListener('touchstart', onDown, touchOpts);
@@ -163,13 +203,16 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
     };
   }, [n, plotCreationKey]);
 
-  // Resize Plotly when container changes (e.g. panel expand after minimize) — skip while user is interacting to prevent camera snap-back
+  // Resize Plotly when container changes — skip while interacting; set pending to replay on onUp
   useEffect(() => {
     if (!embedded || !visible) return;
     const el = plotRef.current;
     if (!el) return;
     const resize = () => {
-      if (interacting.current) return;
+      if (interacting.current) {
+        pendingResizeRef.current = true;
+        return;
+      }
       if (plotReady.current && el) Plotly.Plots?.resize(el);
     };
     const ro = new ResizeObserver(resize);
@@ -181,13 +224,16 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
     };
   }, [embedded, visible]);
 
-  // Force resize when panel becomes visible (e.g. after expand from collapsed) — skip while user is interacting
+  // Force resize when panel becomes visible — skip while interacting; set pending to replay on onUp
   useEffect(() => {
     if (!embedded || !visible || !containerVisible) return;
     const el = plotRef.current;
     if (!el) return;
     const resize = () => {
-      if (interacting.current) return;
+      if (interacting.current) {
+        pendingResizeRef.current = true;
+        return;
+      }
       if (plotReady.current && el) Plotly.Plots?.resize(el);
     };
     const t1 = setTimeout(resize, 50);
@@ -195,9 +241,13 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
     return () => { clearTimeout(t1); clearTimeout(t2); };
   }, [embedded, visible, containerVisible]);
 
-  // Update colors when activity changes; skip while user is interacting (prevents camera snap-back)
+  // Update colors when activity changes; skip while interacting, set pending to replay on onUp
   useEffect(() => {
-    if (!plotRef.current || !plotReady.current || !visible || idsRef.current.length === 0 || interacting.current) return;
+    if (!plotRef.current || !plotReady.current || !visible || idsRef.current.length === 0) return;
+    if (interacting.current) {
+      pendingRestyleRef.current = true;
+      return;
+    }
     const sides = sidesRef.current;
     const color = idsRef.current.map((id, i) => {
       const a = activity[id] ?? 0;

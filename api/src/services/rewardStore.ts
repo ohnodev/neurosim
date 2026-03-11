@@ -195,6 +195,18 @@ export function confirmDistributed(recipients: string[], amounts: bigint[], txHa
 }
 
 /**
+ * Drop recipients from in-flight without putting back to pending (e.g. dead-letter).
+ */
+export function dropFromInFlight(recipients: string[], amounts: bigint[]): void {
+  if (recipients.length !== amounts.length) return;
+  for (let i = 0; i < recipients.length; i++) {
+    const addr = recipients[i].toLowerCase();
+    inFlight.delete(addr);
+  }
+  save();
+}
+
+/**
  * Rollback a failed distribution: put amounts back into pending.
  */
 export function rollbackBatch(recipients: string[], amounts: bigint[]): void {

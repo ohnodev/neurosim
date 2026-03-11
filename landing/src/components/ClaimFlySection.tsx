@@ -3,27 +3,15 @@ import { base } from 'viem/chains';
 import { ClaimFlyModal } from './ClaimFlyModal';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
 import { getApiBase } from '../lib/constants';
-
-const ERC20_ABI = [
-  {
-    inputs: [
-      { internalType: 'address', name: 'to', type: 'address' },
-      { internalType: 'uint256', name: 'amount', type: 'uint256' },
-    ],
-    name: 'transfer',
-    outputs: [{ internalType: 'bool', name: '', type: 'bool' }],
-    stateMutability: 'nonpayable',
-    type: 'function',
-  },
-] as const;
-
-const CLAIM_AMOUNT = 10_000n * 10n ** 18n;
+import { formatNeuroAmount } from '../lib/claimApi';
+import { ERC20_TRANSFER_ABI } from '../../../shared/lib/claimConstants';
 
 type EligibilityMethod = 'obelisk' | 'pay' | 'already_claimed' | null;
 
 interface ClaimConfig {
   neuroTokenAddress: `0x${string}`;
   claimReceiverAddress: `0x${string}`;
+  flyNeuroAmountWei?: string;
 }
 
 export function ClaimFlySection() {
@@ -106,15 +94,18 @@ export function ClaimFlySection() {
       setError('Claim not configured');
       return;
     }
+    const claimAmountWei = config.flyNeuroAmountWei
+      ? BigInt(config.flyNeuroAmountWei)
+      : 10_000n * 10n ** 18n;
     setTxState('awaiting');
     setError(null);
     try {
       const hash = await walletClient.writeContract({
         account: address,
         address: config.neuroTokenAddress,
-        abi: ERC20_ABI,
+        abi: ERC20_TRANSFER_ABI,
         functionName: 'transfer',
-        args: [config.claimReceiverAddress, CLAIM_AMOUNT],
+        args: [config.claimReceiverAddress, claimAmountWei],
         chain: base,
       });
       setTxState('confirming');
@@ -201,7 +192,9 @@ export function ClaimFlySection() {
               {txState === 'awaiting' && 'Confirm in wallet...'}
               {txState === 'confirming' && 'Confirming...'}
               {txState === 'done' && 'Claimed!'}
-              {txState === 'idle' && 'Pay 10k $NEURO to Claim'}
+              {txState === 'idle' && (config?.flyNeuroAmountWei
+                  ? `Pay ${formatNeuroAmount(config.flyNeuroAmountWei)} $NEURO to Claim`
+                  : 'Pay 10k $NEURO to Claim')}
             </button>
           )}
           <button className="claim-btn" onClick={() => { setModalSeed(Date.now()); setModalOpen(true); }} style={{ marginTop: 8 }}>

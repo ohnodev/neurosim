@@ -262,9 +262,10 @@ async function fetchMyDeployed(address: string): Promise<Record<number, number>>
 
 async function fetchFlyStats(address: string): Promise<{ stats: { slotIndex: number; feedCount: number }[]; rewardPerPointWei: string }> {
   const r = await fetch(`${getApiBase()}/api/rewards/stats?address=${address.toLowerCase()}`);
-  if (!r.ok) return { stats: [], rewardPerPointWei: '1000000000000' };
+  if (!r.ok) return { stats: [], rewardPerPointWei: (1000n * 10n ** 18n).toString() };
   const data = await r.json();
-  return { stats: data.stats ?? [], rewardPerPointWei: data.rewardPerPointWei ?? '1000000000000' };
+  const fallbackWei = (1000n * 10n ** 18n).toString(); // 1000 $NEURO per point
+  return { stats: data.stats ?? [], rewardPerPointWei: data.rewardPerPointWei ?? fallbackWei };
 }
 
 function getFlyMode(fly: FlyState): string {

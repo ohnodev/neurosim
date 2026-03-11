@@ -31,6 +31,7 @@ const rpc = process.env.BASE_RPC_URL?.trim();
 describe('rewardDistributor integration', () => {
   it.skipIf(!pk || !rpc || NEURO_TOKEN_ADDRESS === '0x0000000000000000000000000000000000000000')(
     'sends 1 $NEURO to self via ERC20 transfer',
+    { timeout: 15_000 },
     async () => {
       const account = privateKeyToAccount(pk! as `0x${string}`);
       const wallet = createWalletClient({
@@ -39,7 +40,7 @@ describe('rewardDistributor integration', () => {
         transport: http(rpc!),
       });
 
-      const hash = await wallet!.sendTransaction({
+      const hash = await wallet.sendTransaction({
         to: NEURO_TOKEN_ADDRESS,
         data: encodeFunctionData({
           abi: ERC20_TRANSFER_ABI,

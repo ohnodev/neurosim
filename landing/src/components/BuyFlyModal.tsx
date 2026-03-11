@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { usePrivy, useWallets } from '@privy-io/react-auth';
 import { base } from 'viem/chains';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
-import { fetchClaimConfig } from '../lib/claimApi';
+import { fetchClaimConfig, formatNeuroAmount } from '../lib/claimApi';
 import { parseWalletError } from '../../../shared/lib/parseWalletError';
 
 interface BuyFlyModalProps {
@@ -166,7 +166,9 @@ export function BuyFlyModal({
           <h2 id="buy-fly-title" className="neurosim-claim__title">
             Buy NeuroFly #{slotIndex + 1}
           </h2>
-          <p className="neurosim-claim__subtitle">Pay with 10k $NEURO to buy a fly</p>
+          <p className="neurosim-claim__subtitle">
+            {config?.flyNeuroAmountWei ? `Pay ${formatNeuroAmount(config.flyNeuroAmountWei)} $NEURO to buy a fly` : 'Pay with $NEURO to buy a fly'}
+          </p>
           {txSentNonRetryable && (
             <div className="neuroflies__error">
               Transaction sent. Do not retry. Please contact support via our Telegram channel for help.
@@ -210,7 +212,7 @@ export function BuyFlyModal({
                   onClick={handleBuyNeuro}
                   disabled={!!busy || !!txSentNonRetryable || !walletClient || !address || neuroDisabled}
                 >
-                  {busy === 'neuro' ? 'Confirming...' : 'Pay with 10k $NEURO'}
+                  {busy === 'neuro' ? 'Confirming...' : (config?.flyNeuroAmountWei ? `Pay with ${formatNeuroAmount(config.flyNeuroAmountWei)} $NEURO` : 'Pay with $NEURO')}
                 </button>
               </>
             )}

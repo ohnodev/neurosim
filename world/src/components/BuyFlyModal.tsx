@@ -181,7 +181,7 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
       <div className="neurosim-claim-modal" onClick={(e) => e.stopPropagation()}>
         <button type="button" className="neurosim-claim__close" onClick={onClose} aria-label="Close">×</button>
         <div className="neurosim-claim__card">
-          <h2 id="buy-fly-title" className="neurosim-claim__title">Buy Fly #{slotIndex + 1}</h2>
+          <h2 id="buy-fly-title" className="neurosim-claim__title">Buy NeuroFly #{slotIndex + 1}</h2>
           <p className="neurosim-claim__subtitle">Choose payment method</p>
           {error && <div className="neuroflies__error">{error}</div>}
           {!isOnBaseChain && (

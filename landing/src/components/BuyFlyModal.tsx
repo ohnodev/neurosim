@@ -186,7 +186,7 @@ export function BuyFlyModal({
         </button>
         <div className="neurosim-claim__card">
           <h2 id="buy-fly-title" className="neurosim-claim__title">
-            Buy Fly #{slotIndex + 1}
+            Buy NeuroFly #{slotIndex + 1}
           </h2>
           <p className="neurosim-claim__subtitle">Choose payment method</p>
           {txSentNonRetryable && (

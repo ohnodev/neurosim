@@ -329,7 +329,7 @@ export function MyNeuroFlies() {
                   <span className="neuroflies__fly-slot-label">
                     {isEmpty ? 'You have no flies' : `Fly ${i + 1}`}
                   </span>
-                  <span className="neuroflies__fly-slot-buy">{isEmpty ? 'Buy your first fly' : 'Buy Fly'}</span>
+                  <span className="neuroflies__fly-slot-buy">Buy NeuroFly</span>
                 </button>
               )}
             </div>

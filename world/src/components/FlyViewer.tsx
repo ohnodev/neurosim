@@ -583,7 +583,7 @@ export default function FlyViewer() {
                               <span className="fly-viewer__fly-slot-label">
                                 {isEmpty ? 'You have no flies' : `Fly ${i + 1}`}
                               </span>
-                              <span className="fly-viewer__fly-slot-buy">{isEmpty ? 'Buy your first fly' : 'Buy Fly'}</span>
+                              <span className="fly-viewer__fly-slot-buy">Buy NeuroFly</span>
                             </button>
                           ) : !isDeployed ? (
                             <button

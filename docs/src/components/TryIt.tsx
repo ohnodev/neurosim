@@ -16,15 +16,16 @@ export default function TryIt({ url }: TryItProps) {
     try {
       const response = await fetch(url);
       const text = await response.text();
+      if (currentId !== requestCounter.current) return;
+      if (!response.ok) {
+        setOutput(`Error ${response.status} ${response.statusText}\n\n${text || "(empty body)"}`);
+        return;
+      }
       try {
         const parsed = JSON.parse(text);
-        if (currentId === requestCounter.current) {
-          setOutput(JSON.stringify(parsed, null, 2));
-        }
+        setOutput(JSON.stringify(parsed, null, 2));
       } catch {
-        if (currentId === requestCounter.current) {
-          setOutput(text);
-        }
+        setOutput(text);
       }
     } catch (error) {
       if (currentId === requestCounter.current) {

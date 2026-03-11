@@ -3,13 +3,13 @@ import type { DocActionsProps } from "../components/DocActions";
 
 const LORE_ARTICLE = "https://theinnermostloop.substack.com/p/the-first-multi-behavior-brain-upload";
 
-export default function PlatformPage(actions: DocActionsProps) {
+export default function PlatformPage(props: DocActionsProps) {
   return (
     <div className="content">
       <section className="section" id="introduction">
         <div className="section-head">
           <h1>NeuroSim Docs</h1>
-          <DocActions {...actions} />
+          <DocActions {...props} />
         </div>
         <p className="lead">
           NeuroSim is a fly-brain simulation where you buy NeuroFlies, release them into the world, and earn $NEURO when they collect food.

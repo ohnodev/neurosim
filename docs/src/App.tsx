@@ -56,7 +56,9 @@ export default function App() {
     const observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
-          if (entry.isIntersecting) setActiveSection(entry.target.id);
+          if (entry.isIntersecting) {
+            void setActiveSection(entry.target.id);
+          }
         });
       },
       { rootMargin: "-20% 0px -65% 0px", threshold: 0 }

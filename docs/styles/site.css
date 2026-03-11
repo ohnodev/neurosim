@@ -617,7 +617,8 @@ li {
   padding: 0;
   margin: -1px;
   overflow: hidden;
-  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  -webkit-clip-path: inset(50%);
   white-space: nowrap;
   border: 0;
 }
@@ -870,7 +871,7 @@ code {
   background: var(--surface-1);
   padding: 10px;
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
 @media (max-width: 900px) {

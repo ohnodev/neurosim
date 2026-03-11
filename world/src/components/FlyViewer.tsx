@@ -34,6 +34,16 @@ function formatEth(wei: bigint, decimals = 6): string {
   return `${whole}.${fracStr}`;
 }
 
+function safeAmountWei(val: string | undefined): bigint {
+  if (val == null || val === "") return 0n;
+  try {
+    const n = BigInt(val);
+    return n >= 0n ? n : 0n;
+  } catch {
+    return 0n;
+  }
+}
+
 function shortAddr(addr: string): string {
   if (!addr || addr.length < 10) return addr;
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
@@ -63,7 +73,7 @@ function RewardsTable({
         {history.slice().reverse().map((entry, i) => (
           <div key={`${entry.address}-${entry.timestamp}-${i}`} className="fly-viewer__rewards-row">
             <span className="fly-viewer__rewards-addr" title={entry.address}>{shortAddr(entry.address)}</span>
-            <span className="fly-viewer__rewards-amount">{formatEth(BigInt(entry.amountWei))}</span>
+            <span className="fly-viewer__rewards-amount">{formatEth(safeAmountWei(entry.amountWei))}</span>
             <span className="fly-viewer__rewards-time" title={entry.timestamp}>
               {new Date(entry.timestamp).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
             </span>

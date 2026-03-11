@@ -2,6 +2,7 @@ import { useRef, useState, useEffect, useMemo, Suspense } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, useGLTF } from '@react-three/drei';
+import { FlyCameraContext, FlyCameraController, type CameraMode } from './FlyCameraController';
 import * as THREE from 'three';
 import type { WorldSource } from '../../../api/src/world';
 import { subscribeSim, type FlyState } from '../lib/simWsClient';
@@ -51,13 +52,13 @@ function FlyModel({ state }: { state: FlyState }) {
     const dx = x - prevRef.current.x, dy = y - prevRef.current.y;
     prevRef.current = { x, y };
     let target = state.heading ?? 0;
-    if (dx * dx + dy * dy > 1e-8) target = Math.atan2(dx, dy);
+    if (dx * dx + dy * dy > 1e-8) target = Math.atan2(dx, dy) + Math.PI / 2;
     if (group.current) {
       headingRef.current += (target - headingRef.current) * 0.85;
       group.current.rotation.y = headingRef.current;
     }
     if (isFlying) {
-      const flap = Math.sin(performance.now() * 0.02) * 0.4;
+      const flap = Math.sin(performance.now() * 0.08) * 0.4;
       for (const wing of wingsRef.current) wing.rotation.x = flap;
     } else {
       for (const wing of wingsRef.current) wing.rotation.x = 0;
@@ -235,6 +236,7 @@ export default function FlyViewer() {
   const [activity, setActivity] = useState<Record<string, number>>({});
   const [activities, setActivities] = useState<(Record<string, number> | undefined)[]>([]);
   const [neuronsWithPositions, setNeuronsWithPositions] = useState<NeuronWithPosition[]>([]);
+  const [cameraMode, setCameraMode] = useState<CameraMode>('god');
   const [fliesPanelOpen, setFliesPanelOpen] = useState(
     () => typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches ? false : true
   );
@@ -359,6 +361,23 @@ export default function FlyViewer() {
 
   const flyMode = getFlyMode(focusedFly);
 
+  const flyCameraContextValue = useMemo(
+    () => ({
+      mode: cameraMode,
+      setMode: setCameraMode,
+      target:
+        effectiveSimIndex != null
+          ? {
+              x: focusedFly.x ?? 0,
+              y: focusedFly.y ?? 0,
+              z: focusedFly.z ?? 0,
+              heading: focusedFly.heading ?? 0,
+            }
+          : null,
+    }),
+    [cameraMode, effectiveSimIndex, focusedFly.x, focusedFly.y, focusedFly.z, focusedFly.heading]
+  );
+
   const deployFly = async (slotIndex: number) => {
     if (!address) return;
     const r = await fetch(`${getApiBase()}/api/deploy`, {
@@ -378,16 +397,19 @@ export default function FlyViewer() {
     <div style={{ width: '100vw', height: '100vh', position: 'relative' }}>
       {/* Canvas layer - must stay behind UI */}
       <div style={{ position: 'absolute', inset: 0, zIndex: 0, isolation: 'isolate' }}>
-        <Canvas camera={{ position: [8, 6, 8], fov: 50 }} gl={{ outputColorSpace: THREE.SRGBColorSpace }}>
-          <ambientLight intensity={0.8} />
-          <directionalLight position={[10, 10, 5]} intensity={1.2} castShadow />
-          <OrbitControls />
-          <Suspense fallback={null}>
+        <FlyCameraContext.Provider value={flyCameraContextValue}>
+          <Canvas camera={{ position: [8, 6, 8], fov: 50 }} gl={{ outputColorSpace: THREE.SRGBColorSpace }}>
+            <ambientLight intensity={0.8} />
+            <directionalLight position={[10, 10, 5]} intensity={1.2} castShadow />
+            <OrbitControls enabled={cameraMode === 'god'} />
+            <FlyCameraController />
+            <Suspense fallback={null}>
             {flies.map((fly, i) => !fly.dead && <FlyModel key={i} state={fly} />)}
           </Suspense>
           <WorldSources sources={sources} />
           <GroundPlane />
         </Canvas>
+        </FlyCameraContext.Provider>
       </div>
       {/* UI layer - always on top, always visible */}
       <div style={{ position: 'fixed', inset: 0, zIndex: 1000, pointerEvents: 'none' }}>
@@ -398,6 +420,26 @@ export default function FlyViewer() {
         )}
         <div style={{ position: 'absolute', top: 12, right: 12, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, pointerEvents: 'auto' }}>
           <ConnectButton />
+          {effectiveSimIndex != null && (
+            <button
+              type="button"
+              onClick={() => setCameraMode((m) => (m === 'god' ? 'fly' : 'god'))}
+              title={cameraMode === 'god' ? 'Follow current fly' : 'Orbit view'}
+              style={{
+                padding: '6px 10px',
+                fontSize: 11,
+                fontFamily: 'var(--font-mono, monospace)',
+                background: cameraMode === 'fly' ? 'rgba(35, 70, 138, 0.6)' : 'rgba(0,0,0,0.85)',
+                color: '#aaf',
+                border: '1px solid rgba(100,100,140,0.3)',
+                borderRadius: 6,
+                cursor: 'pointer',
+                outline: 'none',
+              }}
+            >
+              {cameraMode === 'god' ? 'Fly view' : 'God view'}
+            </button>
+          )}
           {focusedFly.dead && (
             <div style={{ width: 120, padding: '6px 8px', background: '#422', color: '#f88', borderRadius: 4, fontSize: 11, fontWeight: 600 }}>
               Fly died

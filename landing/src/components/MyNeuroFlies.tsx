@@ -253,7 +253,13 @@ export function MyNeuroFlies() {
                 <button
                   type="button"
                   className={`neuroflies__slot-empty ${isEmpty ? 'neuroflies__slot-empty--first' : ''}`}
-                  onClick={() => setBuyFlySlot(i)}
+                  onClick={() => {
+                    if (!isConnected) {
+                      notification.show('Connect your wallet first', 'info');
+                      return;
+                    }
+                    setBuyFlySlot(i);
+                  }}
                 >
                   <img src="/fly.svg" alt="" width={28} height={28} className="neuroflies__fly-icon-img" aria-hidden />
                   <span className="neuroflies__fly-slot-label">
@@ -268,10 +274,6 @@ export function MyNeuroFlies() {
       </div>
 
       {error && <div className="neuroflies__error">{error}</div>}
-
-      {!isConnected && (
-        <p className="neuroflies__hint">Connect wallet to claim or buy NeuroFlies.</p>
-      )}
 
       <BuyFlyModal
         isOpen={buyFlySlot !== null}

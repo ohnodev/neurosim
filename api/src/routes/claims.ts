@@ -47,8 +47,8 @@ const TRANSFER_EVENT_ABI = [
 ] as const;
 
 const REQUIRED_AMOUNT = 1_000_000n * 10n ** 18n;
-/** Approx gas for ERC20 transfer + buffer; ETH send ~21k. ~100k gas @ 0.1 gwei ≈ 0.00001 ETH */
-const GAS_BUFFER_WEI = 50_000_000_000_000n; // ~0.00005 ETH
+/** Approx gas for ERC20 transfer; formula: wei = gas × gasPrice. 50_000_000_000_000 wei = 0.00005 ETH (e.g. ~100k gas @ 0.5 gwei). */
+const GAS_BUFFER_WEI = 50_000_000_000_000n;
 
 function parseAndValidateAddress(raw: unknown): `0x${string}` {
   const s = (typeof raw === 'string' ? raw : '')?.trim().toLowerCase();

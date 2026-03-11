@@ -141,6 +141,11 @@
 
 .dashboard__sidebar {
   overflow-y: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.dashboard__sidebar::-webkit-scrollbar {
+  display: none;
 }
 
 @media (min-width: 1200px) {
@@ -159,7 +164,7 @@
 .hero__brain {
   width: 100%;
   flex: 1;
-  min-height: 200px;
+  min-height: 220px;
   max-height: 380px;
   border-radius: 4px;
   overflow: hidden;
@@ -196,19 +201,26 @@
 .brain-plot {
   width: 100%;
   height: 100%;
+  min-height: 220px;
   position: relative;
+  touch-action: none;
+  -webkit-touch-callout: none;
 }
 
 .brain-plot__gl {
   width: 100%;
   height: 100%;
+  min-height: 220px;
+  position: absolute;
+  inset: 0;
 }
 
 .brain-plot__empty {
+  position: absolute;
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 100%;
   font-family: var(--font-mono);
   font-size: 0.85rem;
   color: rgba(255, 255, 255, 0.5);
@@ -242,23 +254,14 @@
 }
 
 .neuroflies__slot {
-  flex: 1;
-  min-width: 100px;
+  flex: 0 0 140px;
+  width: 140px;
   min-height: 100px;
+  max-height: 100px;
   border-radius: 6px;
   overflow: hidden;
   display: flex;
   flex-direction: column;
-}
-
-@media (max-width: 600px) {
-  .neuroflies__slots {
-    flex-direction: column;
-  }
-
-  .neuroflies__slot {
-    min-width: 0;
-  }
 }
 
 .neuroflies__slot-filled {
@@ -1215,7 +1218,12 @@
 /* Mobile: single breakpoint at 1200px */
 @media (max-width: 1199px) {
   .hero__brain {
-    min-height: 180px;
+    min-height: 220px;
     max-height: 300px;
+  }
+
+  .brain-plot,
+  .brain-plot__gl {
+    min-height: 220px;
   }
 }

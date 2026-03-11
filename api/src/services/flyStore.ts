@@ -1,13 +1,12 @@
 /**
  * In-memory store for NeuroFlies. Users can have up to 3 flies.
- * Persisted to data/flies.json.
+ * Persisted to single data path (see lib/dataPath).
  */
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { dataPath } from '../lib/dataPath.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const fliesPath = path.join(__dirname, '../../data/flies.json');
+const fliesPath = dataPath('flies.json');
 
 export interface NeuroFly {
   id: string;

@@ -1,13 +1,13 @@
 /**
  * Persistent store for deployed flies: address -> slotIndex -> simIndex.
  * Restored on startup; written on each deploy.
+ * Uses single data path (see lib/dataPath).
  */
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { dataPath } from '../lib/dataPath.js';
 
-const _dir = path.dirname(fileURLToPath(import.meta.url));
-const deployPath = path.join(_dir, '../../data/deployments.json');
+const deployPath = dataPath('deployments.json');
 
 /** Persisted format: array of { address, slotIndex, timeDeployed? } in simIndex order */
 export interface DeploymentRecord {

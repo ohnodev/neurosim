@@ -2,18 +2,18 @@
  * In-memory reward store with JSON persistence.
  * Tracks pending rewards per owner, NeuroFly stats, and distributed history.
  * Persistence uses write-to-temp-then-rename for atomic writes (openclaw-style).
+ * Uses single data path (see lib/dataPath).
  */
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import type { NeuroFlyStats, RewardState } from '../types/index.js';
 import { getDeployments } from './deployStore.js';
 import { getFlies } from './flyStore.js';
+import { dataPath } from '../lib/dataPath.js';
 
-const _dir = path.dirname(fileURLToPath(import.meta.url));
-const rewardsPath = path.join(_dir, '../../data/rewards-state.json');
+const rewardsPath = dataPath('rewards-state.json');
 
 /** 0.000001 ETH per food collected */
 export const REWARD_PER_FOOD = 10n ** 12n;

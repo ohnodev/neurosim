@@ -245,7 +245,6 @@ wss.on('connection', (ws) => {
 });
 
 if (process.env.VITEST !== 'true') {
-  restoreDeployFromStore();
   httpServer.listen(PORT, () => {
     startSim();
     console.log('NeuroSim API http://localhost:' + PORT);

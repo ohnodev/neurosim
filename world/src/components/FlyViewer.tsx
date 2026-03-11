@@ -193,20 +193,23 @@ function FlyStatusCard({
         <>
           <div style={{ marginBottom: 4 }}>
             <div style={{ fontSize: 9, color: '#888', marginBottom: 2 }}>Hunger</div>
-            <div style={{ height: 6, background: '#222', borderRadius: 2, overflow: 'hidden' }}>
+            <div style={{ position: 'relative', height: 6, background: '#222', borderRadius: 2, overflow: 'hidden' }}>
               <div style={{ width: `${hunger}%`, height: '100%', background: getHungerColor(hunger), transition: 'width 0.2s' }} />
+              <span style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 8, fontFamily: 'monospace', color: 'rgba(255,255,255,0.9)', textShadow: '0 0 1px #000', pointerEvents: 'none' }}>{Math.round(hunger)}/100</span>
             </div>
           </div>
           <div style={{ marginBottom: 4 }}>
             <div style={{ fontSize: 9, color: '#888', marginBottom: 2 }}>Health</div>
-            <div style={{ height: 6, background: '#222', borderRadius: 2, overflow: 'hidden' }}>
+            <div style={{ position: 'relative', height: 6, background: '#222', borderRadius: 2, overflow: 'hidden' }}>
               <div style={{ width: `${health}%`, height: '100%', background: getHealthColor(health), transition: 'width 0.2s' }} />
+              <span style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 8, fontFamily: 'monospace', color: 'rgba(255,255,255,0.9)', textShadow: '0 0 1px #000', pointerEvents: 'none' }}>{Math.round(health)}/100</span>
             </div>
           </div>
           <div style={{ marginBottom: 0 }}>
             <div style={{ fontSize: 9, color: '#888', marginBottom: 2 }}>Fatigue</div>
-            <div style={{ height: 6, background: '#222', borderRadius: 2, overflow: 'hidden' }}>
+            <div style={{ position: 'relative', height: 6, background: '#222', borderRadius: 2, overflow: 'hidden' }}>
               <div style={{ width: `${fatiguePct}%`, height: '100%', background: '#48a', transition: 'width 0.2s' }} />
+              <span style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 8, fontFamily: 'monospace', color: 'rgba(255,255,255,0.9)', textShadow: '0 0 1px #000', pointerEvents: 'none' }}>{Math.round(fatiguePct)}/100</span>
             </div>
           </div>
         </>
@@ -390,37 +393,11 @@ export default function FlyViewer() {
         )}
         <div style={{ position: 'absolute', top: 12, right: 12, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, pointerEvents: 'auto' }}>
           <ConnectButton />
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {focusedFly.dead && (
-              <div style={{ width: 120, padding: '6px 8px', background: '#422', color: '#f88', borderRadius: 4, fontSize: 11, fontWeight: 600 }}>
-                Fly died
-              </div>
-            )}
-            <div style={{ width: 120, background: '#222', borderRadius: 4, overflow: 'hidden' }}>
-              <div style={{ fontSize: 10, color: '#888', padding: '2px 6px' }}>Hunger</div>
-              <div style={{ height: 8, background: '#333', borderRadius: 2, margin: '0 4px 4px', overflow: 'hidden' }}>
-                <div style={{ width: `${focusedFly.hunger ?? 100}%`, height: '100%', background: getHungerColor(focusedFly.hunger ?? 100), transition: 'width 0.2s' }} />
-              </div>
+          {focusedFly.dead && (
+            <div style={{ width: 120, padding: '6px 8px', background: '#422', color: '#f88', borderRadius: 4, fontSize: 11, fontWeight: 600 }}>
+              Fly died
             </div>
-            <div style={{ width: 120, background: '#222', borderRadius: 4, overflow: 'hidden' }}>
-              <div style={{ fontSize: 10, color: '#888', padding: '2px 6px' }}>Health</div>
-              <div style={{ height: 8, background: '#333', borderRadius: 2, margin: '0 4px 4px', overflow: 'hidden' }}>
-                <div style={{ width: `${focusedFly.health ?? 100}%`, height: '100%', background: getHealthColor(focusedFly.health ?? 100), transition: 'width 0.2s' }} />
-              </div>
-            </div>
-            <div style={{ width: 120, background: '#222', borderRadius: 4, overflow: 'hidden' }}>
-              <div style={{ fontSize: 10, color: '#888', padding: '2px 6px' }}>
-                {focusedFly.restTimeLeft != null && focusedFly.restTimeLeft > 0 ? 'Rest' : 'Fatigue'}
-              </div>
-              <div style={{ height: 8, background: '#333', borderRadius: 2, margin: '0 4px 4px', overflow: 'hidden' }}>
-                {focusedFly.restTimeLeft != null && focusedFly.restTimeLeft > 0 ? (
-                  <div style={{ width: `${Math.max(0, 100 - ((focusedFly.restTimeLeft ?? 0) / (focusedFly.restDuration ?? REST_DURATION_FALLBACK)) * 100)}%`, height: '100%', background: '#6a6', transition: 'width 0.2s' }} />
-                ) : (
-                  <div style={{ width: `${((focusedFly.flyTimeLeft ?? 1) * 100).toFixed(0)}%`, height: '100%', background: '#48a', transition: 'width 0.2s' }} />
-                )}
-              </div>
-            </div>
-          </div>
+          )}
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 11, color: connected ? '#4ade80' : '#888' }}>
             {connected ? 'Sim running' : 'Connecting…'}
             {activeCount > 0 && <span style={{ color: 'rgba(255,255,255,0.6)' }}>Neurons: {activeCount}</span>}

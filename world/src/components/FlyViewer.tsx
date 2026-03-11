@@ -1,7 +1,7 @@
 import { useRef, useState, useEffect, useMemo, Suspense } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { useGLTF } from '@react-three/drei';
+import { useGLTF, useAnimations } from '@react-three/drei';
 import { FlyCameraContext, FlyCameraController, type CameraMode } from './FlyCameraController';
 import * as THREE from 'three';
 import type { WorldSource } from '../../../api/src/world';
@@ -39,9 +39,13 @@ const REST_DURATION_FALLBACK = 4; // fallback when flyState.restDuration not in 
 /** Lerp factor for fly position - matches camera target smoothness so fly and orbit stay in sync. */
 const FLY_POS_SMOOTH = 0.04;
 
+const WING_ANIM_NAMES = ['wing-leftAction', 'wing-rightAction'];
+
 function FlyModel({ state }: { state: FlyState }) {
-  const { scene } = useGLTF('/models/low_poly_fly/scene.gltf');
   const group = useRef<THREE.Group>(null);
+  const sceneRef = useRef<THREE.Group>(null);
+  const { scene, animations } = useGLTF('/models/fly-animated/fly2-animation.glb');
+  const { actions } = useAnimations(animations, sceneRef);
   const prevRef = useRef({ x: state.x ?? 0, y: state.y ?? 0 });
   const headingRef = useRef(state.heading ?? 0);
   const targetHeadingRef = useRef(state.heading ?? 0);
@@ -49,12 +53,24 @@ function FlyModel({ state }: { state: FlyState }) {
   const posInit = useRef(false);
 
   const x = state.x ?? 0, y = state.y ?? 0, z = state.z ?? 0;
+  const isFlying = z > FLY_THRESHOLD;
 
-  /** Only use velocity-based heading when movement is meaningful (avoids jitter from micro-deltas). */
   const MIN_MOVEMENT_SQ = 0.004;
   const HEADING_LERP = 0.52;
 
   const cloned = useMemo(() => scene.clone(true), [scene]);
+
+  useEffect(() => {
+    for (const name of WING_ANIM_NAMES) {
+      const action = actions[name];
+      if (!action) continue;
+      if (isFlying) {
+        action.reset().setLoop(THREE.LoopRepeat, Infinity).play();
+      } else {
+        action.stop();
+      }
+    }
+  }, [actions, isFlying]);
 
   useFrame(() => {
     // Lerp fly position to avoid glitch when sim updates at ~30ms
@@ -86,7 +102,7 @@ function FlyModel({ state }: { state: FlyState }) {
 
   return (
     <group ref={group}>
-      <primitive object={cloned} scale={0.08} rotation={[0, 0, 0]} />
+      <primitive ref={sceneRef} object={cloned} scale={0.08} rotation={[0, 0, 0]} />
     </group>
   );
 }

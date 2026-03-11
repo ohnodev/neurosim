@@ -267,35 +267,15 @@
   padding: 12px;
   overflow-y: auto;
   font-family: monospace;
-  border-top: 1px solid rgba(100, 100, 140, 0.3);
-  border-bottom: 1px solid rgba(100, 100, 140, 0.3);
+  border: 1px solid rgba(100, 100, 140, 0.3);
+  border-left: none;
+  border-radius: 0 8px 8px 0;
   box-shadow: 4px 0 12px rgba(0, 0, 0, 0.4);
 }
 
 .fly-viewer__status-panel--open .fly-viewer__status-content {
   max-height: 100%;
   overflow-y: auto;
-}
-
-/* Status close bar - vertical bar on right (inner) edge */
-.fly-viewer__status-close-bar {
-  width: 24px;
-  min-width: 24px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid rgba(100, 100, 140, 0.3);
-  border-radius: 0 8px 8px 0;
-  background: rgba(0, 0, 0, 0.9);
-  color: rgba(255, 255, 255, 0.8);
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-
-.fly-viewer__status-close-bar:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: #fff;
 }
 
 /* Brain panel - slides left from right edge */
@@ -313,26 +293,6 @@
   width: min(340px, calc(100vw - 80px));
 }
 
-.fly-viewer__brain-close-bar {
-  width: 24px;
-  min-width: 24px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid rgba(100, 100, 140, 0.3);
-  border-radius: 8px 0 0 8px;
-  background: rgba(0, 0, 0, 0.9);
-  color: rgba(255, 255, 255, 0.8);
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-
-.fly-viewer__brain-close-bar:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: #fff;
-}
-
 .fly-viewer__brain-content {
   flex: 1;
   min-width: 0;
@@ -342,9 +302,9 @@
   padding: 12px;
   box-sizing: border-box;
   background: rgba(0, 0, 0, 0.85);
-  border-top: 1px solid rgba(100, 100, 140, 0.3);
-  border-bottom: 1px solid rgba(100, 100, 140, 0.3);
-  border-left: 1px solid rgba(100, 100, 140, 0.3);
+  border: 1px solid rgba(100, 100, 140, 0.3);
+  border-right: none;
+  border-radius: 8px 0 0 8px;
   box-shadow: -4px 0 12px rgba(0, 0, 0, 0.4);
 }
 

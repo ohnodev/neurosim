@@ -580,29 +580,11 @@ export default function FlyViewer() {
                   ))}
                 </div>
             </div>
-            <button
-              type="button"
-              className="fly-viewer__status-close-bar"
-              onClick={() => setStatusPanelOpen(false)}
-              aria-label="Hide status"
-              title="Hide"
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14M12 5l7 7-7 7" /></svg>
-            </button>
           </div>
         </div>
         {/* Right: Brain vertical toggle + panel */}
         <div className="fly-viewer__side-strip fly-viewer__side-strip--right">
           <div className={`fly-viewer__brain-panel ${brainPanelOpen ? 'fly-viewer__brain-panel--open' : ''}`}>
-            <button
-              type="button"
-              className="fly-viewer__brain-close-bar"
-              onClick={() => setBrainPanelOpen(false)}
-              aria-label="Hide brain activity"
-              title="Hide"
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
-            </button>
             <div className="fly-viewer__brain-content">
               <div style={{ color: '#888', marginBottom: 6 }}>Brain activity — Fly {selectedFlyIndex + 1} (viewing)</div>
               <div className="fly-viewer__brain-plot">

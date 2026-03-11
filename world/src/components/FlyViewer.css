@@ -65,6 +65,53 @@
   overflow: auto;
 }
 
+.fly-viewer__flies-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.fly-viewer__flies-tab {
+  flex: 1;
+  padding: 6px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #888;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.fly-viewer__flies-tab:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #ccc;
+}
+
+.fly-viewer__flies-tab--active {
+  background: rgba(99, 102, 241, 0.2);
+  border-color: rgba(99, 102, 241, 0.4);
+  color: #aaf;
+}
+
+.fly-viewer__fly-past-card {
+  width: 100%;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  color: #888;
+}
+
+.fly-viewer__fly-slot--past .fly-viewer__fly-past-card {
+  min-height: 80px;
+}
+
 .fly-viewer__fly-slot {
   min-height: 100px;
   margin-bottom: 8px;
@@ -143,7 +190,8 @@
 .fly-viewer__brain-panel {
   position: absolute;
   bottom: 12px;
-  right: 12px;
+  left: 50%;
+  transform: translateX(-50%);
 }
 
 .fly-viewer__side-panel--open {
@@ -157,11 +205,13 @@
 }
 
 .fly-viewer__brain-panel.fly-viewer__side-panel--open {
-  width: min(480px, calc(100vw - 24px));
-  max-width: 480px;
-  min-width: 320px;
-  height: 280px;
+  width: 240px;
+  height: 240px;
   flex-direction: column;
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+  bottom: 12px;
 }
 
 .fly-viewer__brain-content {

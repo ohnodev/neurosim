@@ -33,15 +33,19 @@ export async function flushRewards(): Promise<void> {
   const wallet = getNeurosimWallet();
   if (!wallet?.account) return;
 
-  const { recipients, amounts } = takeBatchForFlush();
-  if (recipients.length === 0) return;
-
   flushing = true;
-  const totalWei = amounts.reduce((a, b) => a + b, 0n);
-  const recipientAddresses = recipients.map((r) => getAddress(r)) as `0x${string}`[];
+  const { recipients, amounts } = takeBatchForFlush();
+  if (recipients.length === 0) {
+    flushing = false;
+    return;
+  }
 
+  let txHash: `0x${string}` | undefined;
   try {
-    const hash = await wallet.sendTransaction({
+    const recipientAddresses = recipients.map((r) => getAddress(r)) as `0x${string}`[];
+    const totalWei = amounts.reduce((a, b) => a + b, 0n);
+
+    txHash = await wallet.sendTransaction({
       account: wallet.account!,
       chain: base,
       to: CABAL_TOKEN_DISTRIBUTOR,
@@ -54,19 +58,23 @@ export async function flushRewards(): Promise<void> {
     });
 
     const publicClient = getNeurosimPublicClient();
-    const receipt = await publicClient.waitForTransactionReceipt({ hash });
+    const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
 
     if (receipt.status !== 'success') {
-      console.error('[rewardDistributor] tx reverted, rolling back', hash);
+      console.error('[rewardDistributor] tx reverted, rolling back', txHash);
       rollbackBatch(recipients, amounts);
       return;
     }
 
     confirmDistributed(recipients, amounts);
-    console.log('[rewardDistributor] flushed', recipients.length, 'recipients, tx', hash);
+    console.log('[rewardDistributor] flushed', recipients.length, 'recipients, tx', txHash);
   } catch (err) {
     console.error('[rewardDistributor] flush failed:', err);
-    rollbackBatch(recipients, amounts);
+    if (txHash === undefined) {
+      rollbackBatch(recipients, amounts);
+    } else {
+      console.error('[rewardDistributor] tx was broadcast; batch left in-flight for reconciliation', txHash);
+    }
   } finally {
     flushing = false;
   }

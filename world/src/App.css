@@ -51,6 +51,7 @@ html, body, #root { width: 100%; height: 100%; }
 }
 .wallet-btn__svg {
   display: block;
+  transition: color 0.2s ease;
 }
 .wallet-btn:focus,
 .wallet-btn:focus-visible,
@@ -60,7 +61,7 @@ html, body, #root { width: 100%; height: 100%; }
   border: none;
 }
 .wallet-btn--active {
-  color: rgba(255, 255, 255, 0.95);
+  color: #a5b4fc;
 }
 .wallet-btn--loading { opacity: 0.6; cursor: not-allowed; }
 .wallet-btn__dot { width: 8px; height: 8px; border-radius: 50%; background: rgba(255, 255, 255, 0.8); animation: wallet-btn-pulse 1.2s ease-in-out infinite; }

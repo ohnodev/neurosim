@@ -67,9 +67,10 @@ router.get('/balance-check', async (req: Request, res: Response) => {
       res.status(400).json({ error: 'Invalid address' });
       return;
     }
+    const zeroAddr = '0x0000000000000000000000000000000000000000';
     const [ethBalance, neuroBalance] = await Promise.all([
       baseRpcClient.getBalance({ address: addr }),
-      NEURO_TOKEN_ADDRESS !== '0x0000000000000000000000000000000000000000' as `0x${string}`
+      NEURO_TOKEN_ADDRESS.toLowerCase() !== zeroAddr
         ? baseRpcClient.readContract({
             address: NEURO_TOKEN_ADDRESS,
             abi: ERC20_BALANCE_ABI,
@@ -140,7 +141,7 @@ router.get('/eligibility/:address', async (req: Request, res: Response) => {
       address: OBELISK_NFT_ADDRESS,
       abi: ERC721_ABI,
       functionName: 'balanceOf',
-      args: [address as `0x${string}`],
+      args: [address],
     });
 
     const hasObelisk = balance >= 1n;
@@ -177,7 +178,7 @@ router.post('/free', async (req: Request, res: Response) => {
       address: OBELISK_NFT_ADDRESS,
       abi: ERC721_ABI,
       functionName: 'balanceOf',
-      args: [address as `0x${string}`],
+      args: [address],
     });
 
     if (balance < 1n) {

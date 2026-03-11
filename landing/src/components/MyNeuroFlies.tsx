@@ -128,7 +128,7 @@ export function MyNeuroFlies() {
     setError(null);
     try {
       const bal = await fetchBalanceCheck(address);
-      if (bal && BigInt(bal.ethBalanceWei) < BigInt(bal.flyEthRequiredWei)) {
+      if (bal && BigInt(bal.ethBalanceWei) < BigInt(bal.flyEthRequiredWithGasWei)) {
         const msg = 'Insufficient ETH. Add more ETH to your wallet to complete this purchase.';
         if (mountedRef.current) setError(msg);
         throw new Error(msg);
@@ -182,7 +182,7 @@ export function MyNeuroFlies() {
     const zero = '0x0000000000000000000000000000000000000000';
     if (config.neuroTokenAddress === zero || config.claimReceiverAddress === zero) {
       const msg = 'Claim not configured';
-      setError(msg);
+      if (mountedRef.current) setError(msg);
       throw new Error(msg);
     }
     setBusy('neuro');

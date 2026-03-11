@@ -9,7 +9,7 @@ import { getWorld, spawnFood, removeFood, getSources } from './world.js';
 import claimsRouter from './routes/claims.js';
 import { getFlies } from './services/flyStore.js';
 import { getDeployments, addDeployment, clearForTesting } from './services/deployStore.js';
-import { recordFoodCollected, getStatsForAddress, REWARD_PER_FOOD } from './services/rewardStore.js';
+import { recordFoodCollected, getStatsForAddress, getDistributedHistory, REWARD_PER_FOOD } from './services/rewardStore.js';
 import { flushRewards } from './services/rewardDistributor.js';
 
 const PORT = Number(process.env.PORT) || 3001;
@@ -212,6 +212,17 @@ app.get('/api/rewards/stats', (req, res) => {
   } catch (err) {
     console.error('[rewards] stats error:', err);
     res.status(500).json({ error: 'Failed to get stats' });
+  }
+});
+
+app.get('/api/rewards/history', (req, res) => {
+  try {
+    const limit = Math.min(Math.max(1, Number(req.query.limit) || 50), 50);
+    const history = getDistributedHistory(limit);
+    res.json({ history });
+  } catch (err) {
+    console.error('[rewards] history error:', err);
+    res.status(500).json({ error: 'Failed to get reward history' });
   }
 });
 

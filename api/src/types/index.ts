@@ -18,6 +18,8 @@ export interface DistributedEntry {
   address: string;
   amountWei: string;
   timestamp: string;
+  /** Transaction hash on Base (if recorded) */
+  txHash?: string;
 }
 
 /** Full persisted reward state (amounts as string for bigint serialization) */

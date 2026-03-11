@@ -174,8 +174,9 @@ export function takeBatchForFlush(maxCount?: number): { recipients: string[]; am
 
 /**
  * Confirm distribution succeeded. Removes from in-flight, appends to history.
+ * @param txHash - Optional transaction hash for the batch (shared by all entries).
  */
-export function confirmDistributed(recipients: string[], amounts: bigint[]): void {
+export function confirmDistributed(recipients: string[], amounts: bigint[], txHash?: string): void {
   if (recipients.length !== amounts.length) {
     throw new Error(`[rewardStore] confirmDistributed: recipients.length (${recipients.length}) !== amounts.length (${amounts.length})`);
   }
@@ -185,7 +186,7 @@ export function confirmDistributed(recipients: string[], amounts: bigint[]): voi
     const amt = amounts[i];
     if (amt === undefined) throw new Error(`[rewardStore] confirmDistributed: undefined amount at index ${i}`);
     inFlight.delete(addr);
-    distributed.push({ address: addr, amountWei: amt.toString(), timestamp: now });
+    distributed.push({ address: addr, amountWei: amt.toString(), timestamp: now, txHash });
   }
   if (distributed.length > MAX_DISTRIBUTED_HISTORY) {
     distributed = distributed.slice(-MAX_DISTRIBUTED_HISTORY);
@@ -234,6 +235,13 @@ export function getStatsForAddress(address: string): { slotIndex: number; feedCo
     result.push({ slotIndex, feedCount });
   }
   return result;
+}
+
+/** Last N distributed entries (most recent last). Default 50. */
+export function getDistributedHistory(limit = 50): RewardState['distributed'] {
+  const len = distributed.length;
+  if (len <= limit) return [...distributed];
+  return distributed.slice(-limit);
 }
 
 export function clearForTesting(): void {

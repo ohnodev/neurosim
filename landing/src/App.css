@@ -564,6 +564,43 @@
   margin-bottom: 0;
 }
 
+/* Link buttons: one per row with icon */
+.card--links .card__link-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 14px;
+  margin-bottom: 8px;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.9);
+  text-decoration: none;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.card--links .card__link-btn:last-of-type {
+  margin-bottom: 0;
+}
+
+.card--links .card__link-btn:hover {
+  background: rgba(99, 102, 241, 0.15);
+  border-color: rgba(99, 102, 241, 0.35);
+  color: #fff;
+}
+
+.card--links .card__link-btn svg {
+  flex-shrink: 0;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.card--links .card__link-btn:hover svg {
+  color: #a5b4fc;
+}
+
 .card--socials .socials .card__link {
   margin-bottom: 0;
 }

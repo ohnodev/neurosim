@@ -6,6 +6,7 @@ import { base } from 'viem/chains';
 import { CABAL_TOKEN_DISTRIBUTOR } from '../lib/addresses.js';
 import { getNeurosimWallet } from './neurosimWallet.js';
 import { getNeurosimPublicClient } from './neurosimWallet.js';
+import { executeContractTx, type PublicClientLike, type WalletLike } from './transactionFacilitator.js';
 import { takeBatchForFlush, confirmDistributed, rollbackBatch } from './rewardStore.js';
 
 const CABAL_ABI = [
@@ -43,13 +44,13 @@ export async function flushRewards(): Promise<void> {
       const { recipients, amounts } = takeBatchForFlush(MAX_RECIPIENTS_PER_BATCH);
       if (recipients.length === 0) break;
 
-      let txHash: `0x${string}` | undefined;
       try {
         const recipientAddresses = recipients.map((r) => getAddress(r)) as `0x${string}`[];
         const totalWei = amounts.reduce((a, b) => a + b, 0n);
 
-        txHash = await wallet.sendTransaction({
-          account: wallet.account!,
+        const { txHash } = await executeContractTx({
+          wallet: wallet as WalletLike,
+          publicClient: publicClient as PublicClientLike,
           chain: base,
           to: CABAL_TOKEN_DISTRIBUTOR,
           data: encodeFunctionData({
@@ -58,25 +59,15 @@ export async function flushRewards(): Promise<void> {
             args: [recipientAddresses, amounts],
           }),
           value: totalWei,
+          timeoutMs: 60_000,
+          label: 'rewardDistributor',
         });
-
-        const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
-
-        if (receipt.status !== 'success') {
-          console.error('[rewardDistributor] tx reverted, rolling back', txHash);
-          rollbackBatch(recipients, amounts);
-          return;
-        }
 
         confirmDistributed(recipients, amounts);
         console.log('[rewardDistributor] flushed', recipients.length, 'recipients, tx', txHash);
       } catch (err) {
         console.error('[rewardDistributor] flush failed:', err);
-        if (txHash === undefined) {
-          rollbackBatch(recipients, amounts);
-        } else {
-          console.error('[rewardDistributor] tx was broadcast; chunk left in-flight for reconciliation', txHash);
-        }
+        rollbackBatch(recipients, amounts);
         return;
       }
     }

@@ -212,10 +212,10 @@
   color: rgba(255, 255, 255, 0.5);
 }
 
-/* My NeuroFlies - aligned with world page fly slots */
+/* My NeuroFlies - one row on desktop, stacked on mobile */
 .neuroflies {
   padding: 12px 0;
-  width: 180px;
+  width: 100%;
 }
 
 .neuroflies__title {
@@ -228,17 +228,30 @@
 
 .neuroflies__slots {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 12px;
 }
 
 .neuroflies__slot {
+  flex: 1;
+  min-width: 100px;
   min-height: 100px;
   border-radius: 6px;
   overflow: hidden;
   display: flex;
   flex-direction: column;
+}
+
+@media (max-width: 600px) {
+  .neuroflies__slots {
+    flex-direction: column;
+  }
+
+  .neuroflies__slot {
+    min-width: 0;
+  }
 }
 
 .neuroflies__slot-filled {

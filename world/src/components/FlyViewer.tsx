@@ -501,7 +501,7 @@ export default function FlyViewer() {
         {/* Brain activity panel - collapsible, minimized on mobile by default */}
         <div className={`fly-viewer__side-panel fly-viewer__brain-panel ${brainPanelOpen ? 'fly-viewer__side-panel--open' : 'fly-viewer__side-panel--minimized'}`}>
           {brainPanelOpen ? (
-            <>
+            <div className="fly-viewer__brain-content">
               <button
                 type="button"
                 className="fly-viewer__panel-minimize"
@@ -513,10 +513,10 @@ export default function FlyViewer() {
                 <span>Minimize</span>
               </button>
               <div style={{ color: '#888', marginBottom: 6 }}>Brain activity — Fly {selectedFlyIndex + 1} (viewing)</div>
-              <div style={{ width: 320, height: 240, position: 'relative' }}>
+              <div className="fly-viewer__brain-plot">
                 <BrainOverlay neurons={neuronsWithPositions} activity={activityForSelected} visible={connected} embedded />
               </div>
-            </>
+            </div>
           ) : (
             <button
               type="button"

@@ -36,7 +36,9 @@ function formatEth(wei: bigint, decimals = 6): string {
 
 const FLY_THRESHOLD = 1.1; // z above this = flying (wings flap + HUD mode)
 const REST_DURATION_FALLBACK = 4; // fallback when flyState.restDuration not in payload
-const WING_NAMES = ['Object_4', 'Object_5', 'Object_6']; // fly-white, flywings-dark, glass (wing materials)
+/** Wing materials from glTF - fly-white, flywings-dark. Fallback object names if material names not set. */
+const WING_MATERIAL_NAMES = ['fly-white', 'flywings-dark'];
+const WING_OBJECT_NAMES_FALLBACK = ['Object_4', 'Object_5'];
 
 /** Lerp factor for fly position - matches camera target smoothness so fly and orbit stay in sync. */
 const FLY_POS_SMOOTH = 0.04;
@@ -44,7 +46,7 @@ const FLY_POS_SMOOTH = 0.04;
 function FlyModel({ state }: { state: FlyState }) {
   const { scene } = useGLTF('/models/low_poly_fly/scene.gltf');
   const group = useRef<THREE.Group>(null);
-  const wingsRef = useRef<THREE.Object3D[]>([]);
+  const wingsRef = useRef<THREE.Mesh[]>([]);
   const prevRef = useRef({ x: state.x ?? 0, y: state.y ?? 0 });
   const headingRef = useRef(state.heading ?? 0);
   const targetHeadingRef = useRef(state.heading ?? 0);
@@ -62,7 +64,14 @@ function FlyModel({ state }: { state: FlyState }) {
     const c = scene.clone(true);
     wingsRef.current = [];
     c.traverse((obj) => {
-      if (obj.name && WING_NAMES.includes(obj.name)) wingsRef.current.push(obj);
+      if (obj.isMesh) {
+        const mesh = obj as THREE.Mesh;
+        const mat = mesh.material;
+        const matName = (Array.isArray(mat) ? mat[0]?.name : mat?.name) ?? '';
+        const byMat = WING_MATERIAL_NAMES.includes(matName);
+        const byObj = obj.name && WING_OBJECT_NAMES_FALLBACK.includes(obj.name);
+        if (byMat || byObj) wingsRef.current.push(mesh);
+      }
     });
     return c;
   }, [scene]);
@@ -94,10 +103,18 @@ function FlyModel({ state }: { state: FlyState }) {
       group.current.rotation.y = headingRef.current;
     }
     if (isFlying) {
-      const flap = Math.sin(performance.now() * 0.08) * 0.4;
-      for (const wing of wingsRef.current) wing.rotation.x = flap;
+      const t = performance.now() * 0.012;
+      const flapX = Math.sin(t) * 0.85;
+      const flapZ = Math.sin(t) * 0.35;
+      for (const wing of wingsRef.current) {
+        wing.rotation.x = flapX;
+        wing.rotation.z = flapZ;
+      }
     } else {
-      for (const wing of wingsRef.current) wing.rotation.x = 0;
+      for (const wing of wingsRef.current) {
+        wing.rotation.x = 0;
+        wing.rotation.z = 0;
+      }
     }
   });
 

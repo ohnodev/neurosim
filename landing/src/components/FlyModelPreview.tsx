@@ -1,31 +1,43 @@
-import { useRef, useMemo, useEffect } from 'react';
+import { useRef, useMemo } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 
-const WING_NAMES = ['Object_4', 'Object_5', 'Object_6'];
+/** Wing materials from glTF. Fallback object names if material names not set. */
+const WING_MATERIAL_NAMES = ['fly-white', 'flywings-dark'];
+const WING_OBJECT_NAMES_FALLBACK = ['Object_4', 'Object_5'];
 
 function RotatingFly() {
   const group = useRef<THREE.Group>(null);
   const { scene } = useGLTF('/models/low_poly_fly/scene.gltf');
-  const wingsRef = useRef<THREE.Object3D[]>([]);
+  const wingsRef = useRef<THREE.Mesh[]>([]);
 
-  const cloned = useMemo(() => scene.clone(true), [scene]);
-
-  useEffect(() => {
+  const cloned = useMemo(() => {
+    const c = scene.clone(true);
     wingsRef.current = [];
-    cloned.traverse((obj) => {
-      if (obj.name && WING_NAMES.includes(obj.name)) wingsRef.current.push(obj);
+    c.traverse((obj) => {
+      if (obj.isMesh) {
+        const mesh = obj as THREE.Mesh;
+        const mat = mesh.material;
+        const matName = (Array.isArray(mat) ? mat[0]?.name : mat?.name) ?? '';
+        const byMat = WING_MATERIAL_NAMES.includes(matName);
+        const byObj = obj.name && WING_OBJECT_NAMES_FALLBACK.includes(obj.name);
+        if (byMat || byObj) wingsRef.current.push(mesh);
+      }
     });
-  }, [cloned]);
+    return c;
+  }, [scene]);
 
   useFrame((_, delta) => {
     if (group.current) {
       group.current.rotation.y += delta * 0.6;
     }
-    const flap = Math.sin(performance.now() * 0.015) * 0.35;
+    const t = performance.now() * 0.012;
+    const flapX = Math.sin(t) * 0.85;
+    const flapZ = Math.sin(t) * 0.35;
     for (const wing of wingsRef.current) {
-      wing.rotation.x = flap;
+      wing.rotation.x = flapX;
+      wing.rotation.z = flapZ;
     }
   });
 

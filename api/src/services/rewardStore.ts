@@ -94,14 +94,16 @@ function save(): void {
 
 load();
 
-function findStats(address: string, slotIndex: number): NeuroFlyStats | undefined {
+function findStats(address: string, slotIndex: number, flyId: string): NeuroFlyStats | undefined {
   const addr = address.toLowerCase();
-  return neuroflyStats.find((s) => s.address === addr && s.slotIndex === slotIndex);
+  return neuroflyStats.find(
+    (s) => s.address === addr && s.slotIndex === slotIndex && s.flyId === flyId
+  );
 }
 
-function getOrCreateStats(address: string, slotIndex: number): NeuroFlyStats {
+function getOrCreateStats(address: string, slotIndex: number, flyId: string): NeuroFlyStats {
   const addr = address.toLowerCase();
-  const existing = findStats(addr, slotIndex);
+  const existing = findStats(addr, slotIndex, flyId);
   if (existing) return existing;
 
   const flies = getFlies(addr);
@@ -112,6 +114,7 @@ function getOrCreateStats(address: string, slotIndex: number): NeuroFlyStats {
   const stats: NeuroFlyStats = {
     address: addr,
     slotIndex,
+    flyId,
     timeBirthed: fly?.claimedAt ?? new Date().toISOString(),
     timeDeployed: deployRecord?.timeDeployed ?? new Date().toISOString(),
     feedCount: 0,
@@ -121,7 +124,7 @@ function getOrCreateStats(address: string, slotIndex: number): NeuroFlyStats {
 }
 
 /**
- * Record that the fly at simIndex collected food. Resolves owner, adds reward, increments feedCount.
+ * Record that the fly at simIndex collected food. Resolves owner and fly id, adds reward, increments feedCount for that fly.
  */
 export function recordFoodCollected(simIndex: number): void {
   const deployments = getDeployments();
@@ -130,8 +133,9 @@ export function recordFoodCollected(simIndex: number): void {
 
   const { address, slotIndex } = record;
   const addr = address.toLowerCase();
+  const flyId = record.flyId ?? getFlies(addr)[slotIndex]?.id ?? 'legacy';
 
-  const stats = getOrCreateStats(addr, slotIndex);
+  const stats = getOrCreateStats(addr, slotIndex, flyId);
   stats.feedCount += 1;
 
   const current = pending.get(addr) ?? 0n;
@@ -203,23 +207,27 @@ export function rollbackBatch(recipients: string[], amounts: bigint[]): void {
   save();
 }
 
-export function getNeuroFlyStats(address: string, slotIndex: number): NeuroFlyStats | undefined {
-  return findStats(address, slotIndex);
+export function getNeuroFlyStats(
+  address: string,
+  slotIndex: number,
+  flyId: string
+): NeuroFlyStats | undefined {
+  return findStats(address.toLowerCase(), slotIndex, flyId);
 }
 
-/** Stats for all slots of an address: feedCount = points (1 feeding = 1 point). Includes zero-point rows for owned slots. */
+/** Stats per slot for current flies only. New fly in a slot => 0 points until it earns. */
 export function getStatsForAddress(address: string): { slotIndex: number; feedCount: number }[] {
   const addr = address.toLowerCase();
-  const bySlot = new Map<number, number>();
-  for (const s of neuroflyStats) {
-    if (s.address === addr) bySlot.set(s.slotIndex, s.feedCount);
-  }
+  const flies = getFlies(addr);
+  const result: { slotIndex: number; feedCount: number }[] = [];
   for (let slotIndex = 0; slotIndex < 3; slotIndex++) {
-    if (!bySlot.has(slotIndex)) bySlot.set(slotIndex, 0);
+    const fly = flies[slotIndex];
+    const feedCount = fly
+      ? (findStats(addr, slotIndex, fly.id)?.feedCount ?? 0)
+      : 0;
+    result.push({ slotIndex, feedCount });
   }
-  return Array.from(bySlot.entries())
-    .sort((a, b) => a[0] - b[0])
-    .map(([slotIndex, feedCount]) => ({ slotIndex, feedCount }));
+  return result;
 }
 
 export function clearForTesting(): void {

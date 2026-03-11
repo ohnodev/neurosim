@@ -3,10 +3,11 @@
  * All data is kept in memory and persisted to JSON.
  */
 
-/** Per-fly lifetime stats (owner, slot, birth, deploy, feed count) */
+/** Per-fly lifetime stats (keyed by fly id so a new fly in the same slot starts at 0 points). Legacy rows may lack flyId. */
 export interface NeuroFlyStats {
   address: string;
   slotIndex: number;
+  flyId?: string;
   timeBirthed: string;
   timeDeployed: string;
   feedCount: number;

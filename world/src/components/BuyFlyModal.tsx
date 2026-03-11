@@ -1,7 +1,7 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { usePrivy } from '@privy-io/react-auth';
+import { usePrivy, useWallets } from '@privy-io/react-auth';
 import { base } from 'viem/chains';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
 import { useNotification } from '../contexts/NotificationContext';
@@ -37,7 +37,8 @@ interface BuyFlyModalProps {
 
 export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyModalProps) {
   const { ready, authenticated, login, connectWallet } = usePrivy();
-  const { address, walletClient } = usePrivyWallet();
+  const { wallets } = useWallets();
+  const { address, walletClient, chainId } = usePrivyWallet();
   const queryClient = useQueryClient();
   const notification = useNotification();
   const [busy, setBusy] = useState<'eth' | 'neuro' | null>(null);
@@ -65,8 +66,24 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
     return () => document.removeEventListener('keydown', handleKey);
   }, [isOpen, onClose]);
 
+  const isOnBaseChain = chainId === base.id;
+
+  const handleSwitchToBase = useCallback(async () => {
+    if (!ready || !wallets.length) return;
+    const wallet = address
+      ? wallets.find((w) => w.address?.toLowerCase() === address.toLowerCase()) ?? wallets[0]
+      : wallets[0];
+    const w = wallet as { switchChain?: (chainId: number) => Promise<void> };
+    if (!wallet || typeof w.switchChain !== 'function') return;
+    try {
+      await w.switchChain(base.id);
+    } catch {
+      setError('Failed to switch to Base. Please try again.');
+    }
+  }, [ready, wallets, address]);
+
   const handleBuyEth = async () => {
-    if (!walletClient || !address || !config?.flyEthReceiver) return;
+    if (!walletClient || !address || !config?.flyEthReceiver || !isOnBaseChain) return;
     setBusy('eth');
     setError(null);
     try {
@@ -153,15 +170,30 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
           <h2 id="buy-fly-title" className="neurosim-claim__title">Buy Fly #{slotIndex + 1}</h2>
           <p className="neurosim-claim__subtitle">Choose payment method</p>
           {error && <div className="neuroflies__error">{error}</div>}
+          {!isOnBaseChain && (
+            <div className="neuroflies__error" style={{ marginBottom: 12 }}>
+              Wrong network. Switch to Base to pay.
+            </div>
+          )}
           <div className="neurosim-claim__actions">
-            <button
-              type="button"
-              className="neurosim-claim__btn neurosim-claim__btn--primary"
-              onClick={handleBuyEth}
-              disabled={!!busy || !walletClient || !address || !config?.flyEthReceiver}
-            >
-              {busy === 'eth' ? 'Confirming...' : 'Pay with 0.0001 ETH'}
-            </button>
+            {!isOnBaseChain ? (
+              <button
+                type="button"
+                className="neurosim-claim__btn neurosim-claim__btn--primary"
+                onClick={handleSwitchToBase}
+              >
+                Switch to Base
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="neurosim-claim__btn neurosim-claim__btn--primary"
+                onClick={handleBuyEth}
+                disabled={!!busy || !walletClient || !address || !config?.flyEthReceiver}
+              >
+                {busy === 'eth' ? 'Confirming...' : 'Pay with 0.0001 ETH'}
+              </button>
+            )}
             <button
               type="button"
               className="neurosim-claim__btn neurosim-claim__btn--secondary"

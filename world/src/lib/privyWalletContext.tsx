@@ -61,11 +61,16 @@ export function PrivyWalletProvider({ children }: { children: ReactNode }) {
       try {
         const wallet = activeWallet as {
           getEthereumProvider?: () => Promise<unknown>;
+          switchChain?: (id: number) => Promise<void>;
         };
         if (typeof wallet.getEthereumProvider !== 'function') {
           setWalletClient(undefined);
           setLiveChainId(undefined);
           return;
+        }
+        // Switch to Base before creating client so transactions target the correct chain
+        if (typeof wallet.switchChain === 'function') {
+          await wallet.switchChain(base.id);
         }
         const provider = await wallet.getEthereumProvider();
         if (cancelled || !provider) return;

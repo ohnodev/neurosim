@@ -353,7 +353,8 @@
   cursor: pointer;
   font-family: var(--font-mono, monospace);
   font-size: 10px;
-  transition: background 0.15s, color 0.15s;
+  transition: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .fly-viewer__side-toggle:focus {
@@ -380,10 +381,10 @@
   border-radius: 8px 0 0 8px;
 }
 
-.fly-viewer__side-toggle:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: #fff;
-  border-color: rgba(100, 100, 140, 0.3);
+.fly-viewer__side-toggle:hover,
+.fly-viewer__side-toggle:active {
+  background: rgba(0, 0, 0, 0.85);
+  color: rgba(255, 255, 255, 0.85);
 }
 
 .fly-viewer__side-toggle--active {
@@ -392,8 +393,10 @@
   border-color: rgba(100, 100, 140, 0.3);
 }
 
-.fly-viewer__side-toggle--active:hover {
-  border-color: rgba(100, 100, 140, 0.3);
+.fly-viewer__side-toggle--active:hover,
+.fly-viewer__side-toggle--active:active {
+  background: rgba(35, 70, 138, 0.6);
+  color: #aaf;
 }
 
 .fly-viewer__side-toggle-label {
@@ -415,7 +418,7 @@
 }
 
 .fly-viewer__status-panel--open {
-  width: min(360px, calc(100vw - 80px));
+  width: 320px;
 }
 
 .fly-viewer__status-content {
@@ -451,7 +454,7 @@
 }
 
 .fly-viewer__brain-panel--open {
-  width: min(340px, calc(100vw - 80px));
+  width: 300px;
 }
 
 .fly-viewer__brain-content {
@@ -470,10 +473,13 @@
 }
 
 .fly-viewer__brain-plot {
+  width: 276px;
   height: 220px;
+  min-width: 276px;
   min-height: 220px;
   flex-shrink: 0;
   position: relative;
+  contain: layout;
 }
 
 @media (max-width: 768px) {
@@ -487,5 +493,18 @@
   .fly-viewer__flies-toggle {
     left: 8px;
     top: 12px;
+  }
+
+  .fly-viewer__status-panel--open {
+    width: 260px;
+  }
+
+  .fly-viewer__brain-panel--open {
+    width: 260px;
+  }
+
+  .fly-viewer__brain-plot {
+    width: 236px;
+    min-width: 236px;
   }
 }

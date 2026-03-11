@@ -742,7 +742,7 @@ export default function FlyViewer() {
             title={brainPanelOpen ? 'Hide brain activity' : 'Show brain activity'}
           >
             <span className="fly-viewer__side-toggle-label">Brain</span>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d={brainPanelOpen ? 'M19 12H5M12 19l-7-7 7-7' : 'M5 12h14M12 5l7 7-7 7'} /></svg>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d={brainPanelOpen ? 'M5 12h14M12 5l7 7-7 7' : 'M19 12H5M12 19l-7-7 7-7'} /></svg>
           </button>
         </div>
       </div>

@@ -502,6 +502,7 @@ export default function FlyViewer() {
                 className={`fly-viewer__flies-tab ${fliesTab === 'current' ? 'fly-viewer__flies-tab--active' : ''}`}
                 onClick={() => setFliesTab('current')}
               >
+                <img src="/fly.svg" alt="" width={14} height={14} className="fly-viewer__tab-icon" aria-hidden />
                 Current
               </button>
               <button
@@ -509,9 +510,7 @@ export default function FlyViewer() {
                 className={`fly-viewer__flies-tab ${fliesTab === 'graveyard' ? 'fly-viewer__flies-tab--active' : ''}`}
                 onClick={() => setFliesTab('graveyard')}
               >
-                <svg width={14} height={14} viewBox="0 0 24 24" fill="currentColor" aria-hidden>
-                  <path d="M12 2C8 2 6 5 6 8v2H4v2h2v10h12V12h2v-2h-2V8c0-3-2-6-6-6zm0 2c2.2 0 4 2 4 5v2H8V9c0-3 1.8-5 4-5zm-2 10h4v6h-4z" />
-                </svg>
+                <img src="/tombstone.svg" alt="" width={14} height={14} className="fly-viewer__tab-icon fly-viewer__tab-icon--tombstone" aria-hidden />
                 Graveyard
               </button>
             </div>
@@ -524,6 +523,7 @@ export default function FlyViewer() {
                       className="fly-viewer__fly-slot-empty fly-viewer__fly-slot-empty--first"
                       onClick={() => setBuyFlySlot(0)}
                     >
+                      <img src="/fly.svg" alt="" width={32} height={32} className="fly-viewer__fly-slot-icon" aria-hidden />
                       <span className="fly-viewer__fly-slot-label">You have no flies</span>
                       <span className="fly-viewer__fly-slot-buy">Buy your first fly</span>
                     </button>
@@ -545,6 +545,7 @@ export default function FlyViewer() {
                               className="fly-viewer__fly-slot-empty"
                               onClick={() => setBuyFlySlot(i)}
                             >
+                              <img src="/fly.svg" alt="" width={28} height={28} className="fly-viewer__fly-slot-icon" aria-hidden />
                               <span className="fly-viewer__fly-slot-label">Fly {i + 1}</span>
                               <span className="fly-viewer__fly-slot-buy">Buy Fly</span>
                             </button>
@@ -560,6 +561,7 @@ export default function FlyViewer() {
                                 }
                               }}
                             >
+                              <img src="/fly.svg" alt="" width={28} height={28} className="fly-viewer__fly-slot-icon" aria-hidden />
                               <span className="fly-viewer__fly-slot-label">Fly {i + 1}</span>
                               <span className="fly-viewer__fly-slot-buy">Deploy</span>
                             </button>
@@ -598,9 +600,7 @@ export default function FlyViewer() {
                   .filter((i) => graveyardSlots.has(i))
                   .map((i) => (
                     <div key={i} className="fly-viewer__fly-slot fly-viewer__fly-slot--graveyard">
-                      <svg className="fly-viewer__graveyard-icon" width={20} height={20} viewBox="0 0 24 24" fill="currentColor" aria-hidden>
-                        <path d="M12 2C8 2 6 5 6 8v2H4v2h2v10h12V12h2v-2h-2V8c0-3-2-6-6-6zm0 2c2.2 0 4 2 4 5v2H8V9c0-3 1.8-5 4-5zm-2 10h4v6h-4z" />
-                      </svg>
+                      <img src="/tombstone.svg" alt="" width={20} height={20} className="fly-viewer__graveyard-icon" aria-hidden />
                       <span className="fly-viewer__fly-slot-label">Fly {i + 1}</span>
                     </div>
                   ))}

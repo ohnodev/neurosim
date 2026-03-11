@@ -1,13 +1,12 @@
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
+import { dataPath } from '../lib/dataPath.js';
 
 const require = createRequire(import.meta.url);
 const JSONStore = require('json-store') as (path: string) => { get: (k: string) => unknown; set: (k: string, v: unknown) => void };
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const claimsPath = path.join(__dirname, '../../data/claims.json');
+const claimsPath = dataPath('claims.json');
 
 const dataDir = path.dirname(claimsPath);
 fs.mkdirSync(dataDir, { recursive: true });

@@ -33,6 +33,11 @@
   background: rgba(35, 70, 138, 0.88);
 }
 
+.fly-viewer__camera-toggle:focus-visible {
+  outline: 2px solid rgba(168, 85, 247, 0.8);
+  outline-offset: 2px;
+}
+
 .fly-viewer__flies-toggle svg {
   width: 16px;
   height: 16px;
@@ -78,6 +83,10 @@
 
 .fly-viewer__flies-tab {
   flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   padding: 6px 8px;
   font-size: 10px;
   font-weight: 600;
@@ -105,6 +114,21 @@
   color: #aaf;
 }
 
+.fly-viewer__tab-icon {
+  flex-shrink: 0;
+  object-fit: contain;
+}
+
+.fly-viewer__tab-icon--tombstone {
+  filter: invert(1);
+  opacity: 0.85;
+}
+
+.fly-viewer__fly-slot-icon {
+  flex-shrink: 0;
+  object-fit: contain;
+}
+
 .fly-viewer__fly-past-card {
   width: 100%;
   padding: 12px;
@@ -120,6 +144,101 @@
 
 .fly-viewer__fly-slot--past .fly-viewer__fly-past-card {
   min-height: 80px;
+}
+
+.fly-viewer__fly-slot-dead {
+  width: 100%;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  color: #888;
+}
+
+.fly-viewer__fly-slot-graveyard {
+  padding: 8px 10px;
+  font-size: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  background: rgba(80, 60, 80, 0.4);
+  color: #c8a0c8;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.fly-viewer__fly-slot-graveyard:hover {
+  background: rgba(100, 80, 100, 0.5);
+  color: #e0b0e0;
+}
+
+.fly-viewer__fly-slot-graveyard:focus,
+.fly-viewer__fly-slot-graveyard:focus-visible {
+  outline: 2px solid rgba(168, 85, 247, 0.8);
+  outline-offset: 2px;
+}
+.fly-viewer__fly-slot-graveyard:active {
+  outline: 2px solid rgba(168, 85, 247, 0.8);
+  outline-offset: 2px;
+}
+
+.fly-viewer__graveyard-title {
+  font-size: 10px;
+  color: #888;
+  margin-bottom: 8px;
+  padding: 0 4px;
+}
+
+.fly-viewer__fly-slot--graveyard {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  color: #888;
+  margin-bottom: 8px;
+}
+
+.fly-viewer__graveyard-fly-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.fly-viewer__graveyard-stats {
+  font-size: 9px;
+  font-family: monospace;
+  color: #8a8;
+}
+
+.fly-viewer__graveyard-icon {
+  flex-shrink: 0;
+  opacity: 0.7;
+  filter: invert(1);
+}
+
+.fly-viewer__fly-slot--in-graveyard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px;
+  min-height: 100px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px dashed rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  color: #666;
+}
+
+.fly-viewer__fly-slot--graveyard-empty {
+  opacity: 0.5;
 }
 
 .fly-viewer__fly-slot {
@@ -138,6 +257,11 @@
 
 .fly-viewer__fly-slot > button:focus-visible {
   outline: none;
+}
+
+.fly-viewer__fly-slot .fly-viewer__status-card:focus-visible {
+  outline: 2px solid rgba(168, 85, 247, 0.8);
+  outline-offset: 2px;
 }
 
 .fly-viewer__fly-slot-empty {
@@ -170,6 +294,10 @@
 .fly-viewer__fly-slot-empty:focus-visible,
 .fly-viewer__fly-slot-empty:active {
   outline: none;
+}
+
+.fly-viewer__fly-slot-empty--first .fly-viewer__fly-slot-label {
+  color: rgba(255, 255, 255, 0.85);
 }
 
 .fly-viewer__fly-slot-label {
@@ -227,14 +355,22 @@
   transition: background 0.15s, color 0.15s;
 }
 
-.fly-viewer__side-toggle:focus,
-.fly-viewer__side-toggle:focus-visible,
+.fly-viewer__side-toggle:focus {
+  outline: none;
+  border-color: rgba(100, 100, 140, 0.3);
+}
+.fly-viewer__side-toggle:focus-visible {
+  outline: 2px solid rgba(168, 85, 247, 0.8);
+  outline-offset: 2px;
+  border-color: rgba(100, 100, 140, 0.3);
+}
 .fly-viewer__side-toggle:active {
   outline: none;
+  border-color: rgba(100, 100, 140, 0.3);
 }
 
 .fly-viewer__side-strip--left .fly-viewer__side-toggle {
-  border-right: none;
+  border-left: none;
   border-radius: 0 8px 8px 0;
 }
 
@@ -246,11 +382,17 @@
 .fly-viewer__side-toggle:hover {
   background: rgba(255, 255, 255, 0.08);
   color: #fff;
+  border-color: rgba(100, 100, 140, 0.3);
 }
 
 .fly-viewer__side-toggle--active {
   background: rgba(35, 70, 138, 0.6);
   color: #aaf;
+  border-color: rgba(100, 100, 140, 0.3);
+}
+
+.fly-viewer__side-toggle--active:hover {
+  border-color: rgba(100, 100, 140, 0.3);
 }
 
 .fly-viewer__side-toggle-label {
@@ -286,8 +428,8 @@
   overflow-y: auto;
   font-family: monospace;
   border: 1px solid rgba(100, 100, 140, 0.3);
-  border-left: none;
-  border-radius: 0 8px 8px 0;
+  border-right: none;
+  border-radius: 8px 0 0 8px;
   box-shadow: 4px 0 12px rgba(0, 0, 0, 0.4);
 }
 

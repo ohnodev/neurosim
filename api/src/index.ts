@@ -9,7 +9,7 @@ import { getWorld, spawnFood, removeFood, getSources } from './world.js';
 import claimsRouter from './routes/claims.js';
 import { getFlies } from './services/flyStore.js';
 import { getDeployments, addDeployment, clearForTesting } from './services/deployStore.js';
-import { recordFoodCollected } from './services/rewardStore.js';
+import { recordFoodCollected, getStatsForAddress, REWARD_PER_FOOD } from './services/rewardStore.js';
 import { flushRewards } from './services/rewardDistributor.js';
 
 const PORT = Number(process.env.PORT) || 3001;
@@ -191,6 +191,27 @@ app.post('/api/deploy', (req, res) => {
   } catch (err) {
     console.error('[deploy] error:', err);
     res.status(500).json({ error: 'Deploy failed' });
+  }
+});
+
+app.get('/api/rewards/stats', (req, res) => {
+  try {
+    const rawAddress = req.query.address;
+    if (Array.isArray(rawAddress) || typeof rawAddress !== 'string') {
+      res.status(400).json({ error: 'Invalid address' });
+      return;
+    }
+    const address = rawAddress.toLowerCase();
+    if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address)) {
+      res.status(400).json({ error: 'Invalid address' });
+      return;
+    }
+    const stats = getStatsForAddress(address);
+    const rewardPerPointWei = REWARD_PER_FOOD.toString();
+    res.json({ stats, rewardPerPointWei });
+  } catch (err) {
+    console.error('[rewards] stats error:', err);
+    res.status(500).json({ error: 'Failed to get stats' });
   }
 });
 

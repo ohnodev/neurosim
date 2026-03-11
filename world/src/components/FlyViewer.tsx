@@ -1,7 +1,8 @@
 import { useRef, useState, useEffect, useMemo, Suspense } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { OrbitControls, useGLTF } from '@react-three/drei';
+import { useGLTF } from '@react-three/drei';
+import { FlyCameraContext, FlyCameraController, type CameraMode } from './FlyCameraController';
 import * as THREE from 'three';
 import type { WorldSource } from '../../../api/src/world';
 import { subscribeSim, type FlyState } from '../lib/simWsClient';
@@ -24,18 +25,38 @@ function getHealthColor(health: number): string {
   return '#c44';
 }
 
+/** Bigint-safe ETH formatter to avoid precision loss. */
+function formatEth(wei: bigint, decimals = 6): string {
+  const ONE = 10n ** 18n;
+  const whole = wei / ONE;
+  const frac = wei % ONE;
+  const fracStr = frac.toString().padStart(18, '0').slice(0, decimals);
+  return `${whole}.${fracStr}`;
+}
+
 const FLY_THRESHOLD = 1.1; // z above this = flying (wings flap + HUD mode)
 const REST_DURATION_FALLBACK = 4; // fallback when flyState.restDuration not in payload
 const WING_NAMES = ['Object_4', 'Object_5', 'Object_6']; // fly-white, flywings-dark, glass (wing materials)
+
+/** Lerp factor for fly position - matches camera target smoothness so fly and orbit stay in sync. */
+const FLY_POS_SMOOTH = 0.04;
 
 function FlyModel({ state }: { state: FlyState }) {
   const { scene } = useGLTF('/models/low_poly_fly/scene.gltf');
   const group = useRef<THREE.Group>(null);
   const wingsRef = useRef<THREE.Object3D[]>([]);
+  const prevRef = useRef({ x: state.x ?? 0, y: state.y ?? 0 });
+  const headingRef = useRef(state.heading ?? 0);
+  const targetHeadingRef = useRef(state.heading ?? 0);
+  const smoothedPosRef = useRef(new THREE.Vector3(state.x ?? 0, state.z ?? 0, state.y ?? 0));
+  const posInit = useRef(false);
 
   const x = state.x ?? 0, y = state.y ?? 0, z = state.z ?? 0;
-  const heading = state.heading ?? 0;
   const isFlying = z > FLY_THRESHOLD;
+
+  /** Only use velocity-based heading when movement is meaningful (avoids jitter from micro-deltas). */
+  const MIN_MOVEMENT_SQ = 0.004;
+  const HEADING_LERP = 0.52;
 
   const cloned = useMemo(() => {
     const c = scene.clone(true);
@@ -47,20 +68,41 @@ function FlyModel({ state }: { state: FlyState }) {
   }, [scene]);
 
   useFrame(() => {
+    // Lerp fly position to avoid glitch when sim updates at ~30ms
+    const wantX = x, wantZ = z, wantY = y;
+    if (!posInit.current) {
+      smoothedPosRef.current.set(wantX, wantZ, wantY);
+      posInit.current = true;
+    }
+    smoothedPosRef.current.x += (wantX - smoothedPosRef.current.x) * FLY_POS_SMOOTH;
+    smoothedPosRef.current.y += (wantZ - smoothedPosRef.current.y) * FLY_POS_SMOOTH;
+    smoothedPosRef.current.z += (wantY - smoothedPosRef.current.z) * FLY_POS_SMOOTH;
+
+    const dx = x - prevRef.current.x, dy = y - prevRef.current.y;
+    prevRef.current = { x, y };
+    const moveSq = dx * dx + dy * dy;
+    if (moveSq > MIN_MOVEMENT_SQ) {
+      targetHeadingRef.current = Math.atan2(dx, dy) + Math.PI;
+    }
+    const target = targetHeadingRef.current;
+    if (group.current) {
+      group.current.position.copy(smoothedPosRef.current);
+      let d = target - headingRef.current;
+      if (d > Math.PI) d -= 2 * Math.PI;
+      if (d < -Math.PI) d += 2 * Math.PI;
+      headingRef.current += d * HEADING_LERP;
+      group.current.rotation.y = headingRef.current;
+    }
     if (isFlying) {
-      const flap = Math.sin(performance.now() * 0.02) * 0.4;
-      for (const wing of wingsRef.current) {
-        wing.rotation.x = flap;
-      }
+      const flap = Math.sin(performance.now() * 0.08) * 0.4;
+      for (const wing of wingsRef.current) wing.rotation.x = flap;
     } else {
-      for (const wing of wingsRef.current) {
-        wing.rotation.x = 0;
-      }
+      for (const wing of wingsRef.current) wing.rotation.x = 0;
     }
   });
 
   return (
-    <group ref={group} position={[x, z, y]} rotation={[0, heading, 0]}>
+    <group ref={group}>
       <primitive object={cloned} scale={0.08} rotation={[0, 0, 0]} />
     </group>
   );
@@ -142,6 +184,13 @@ async function fetchMyDeployed(address: string): Promise<Record<number, number>>
   return data.deployed ?? {};
 }
 
+async function fetchFlyStats(address: string): Promise<{ stats: { slotIndex: number; feedCount: number }[]; rewardPerPointWei: string }> {
+  const r = await fetch(`${getApiBase()}/api/rewards/stats?address=${address.toLowerCase()}`);
+  if (!r.ok) return { stats: [], rewardPerPointWei: '1000000000000' };
+  const data = await r.json();
+  return { stats: data.stats ?? [], rewardPerPointWei: data.rewardPerPointWei ?? '1000000000000' };
+}
+
 function getFlyMode(fly: FlyState): string {
   if (fly.dead) return 'dead';
   if (fly.feeding) return 'feeding';
@@ -155,11 +204,13 @@ function FlyStatusCard({
   fly,
   selected,
   onSelect,
+  points = 0,
 }: {
   index: number;
   fly: FlyState;
   selected: boolean;
   onSelect: () => void;
+  points?: number;
 }) {
   const hunger = fly.hunger ?? 100;
   const health = fly.health ?? 100;
@@ -170,6 +221,7 @@ function FlyStatusCard({
   return (
     <button
       type="button"
+      className="fly-viewer__status-card"
       onClick={onSelect}
       style={{
         width: '100%',
@@ -181,11 +233,11 @@ function FlyStatusCard({
         cursor: 'pointer',
         color: 'inherit',
         font: 'inherit',
-        outline: 'none',
       }}
     >
-      <div style={{ fontSize: 10, color: selected ? '#aaf' : '#aaa', marginBottom: 6, fontWeight: 600 }}>
-        Fly {index + 1}{selected ? ' (viewing)' : ''}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 10, color: selected ? '#aaf' : '#aaa', marginBottom: 6, fontWeight: 600 }}>
+        <span>Fly {index + 1}{selected ? ' (viewing)' : ''}</span>
+        <span style={{ fontSize: 9, color: '#8a8', fontFamily: 'monospace' }}>{points} pts</span>
       </div>
       {fly.dead ? (
         <div style={{ fontSize: 10, color: '#f88' }}>dead</div>
@@ -230,11 +282,17 @@ export default function FlyViewer() {
   const [activity, setActivity] = useState<Record<string, number>>({});
   const [activities, setActivities] = useState<(Record<string, number> | undefined)[]>([]);
   const [neuronsWithPositions, setNeuronsWithPositions] = useState<NeuronWithPosition[]>([]);
+  const [cameraMode, setCameraMode] = useState<CameraMode>('god');
   const [fliesPanelOpen, setFliesPanelOpen] = useState(
     () => typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches ? false : true
   );
   const [buyFlySlot, setBuyFlySlot] = useState<number | null>(null);
-  const [fliesTab, setFliesTab] = useState<'current' | 'past'>('current');
+  const [fliesTab, setFliesTab] = useState<'current' | 'graveyard'>('current');
+  const [graveyardByWallet, setGraveyardByWallet] = useState<Record<string, Set<number>>>(() => ({}));
+  const graveyardSlots = useMemo(
+    () => graveyardByWallet[address ?? ''] ?? new Set(),
+    [graveyardByWallet, address]
+  );
   const isMobileDefault = () => typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches;
   const [statusPanelOpen, setStatusPanelOpen] = useState(() => !isMobileDefault());
   const [brainPanelOpen, setBrainPanelOpen] = useState(() => !isMobileDefault());
@@ -250,6 +308,18 @@ export default function FlyViewer() {
     queryFn: () => fetchMyDeployed(address!),
     enabled: !!address,
   });
+
+  const { data: flyStatsData } = useQuery({
+    queryKey: ['fly-stats', address ?? ''],
+    queryFn: () => fetchFlyStats(address!),
+    enabled: !!address,
+    refetchInterval: connected ? 5000 : false,
+  });
+  const statsBySlot = useMemo(() => {
+    const m: Record<number, number> = {};
+    for (const s of flyStatsData?.stats ?? []) m[s.slotIndex] = s.feedCount;
+    return m;
+  }, [flyStatsData?.stats]);
 
   useEffect(() => {
     const apiBase = getApiBase();
@@ -352,7 +422,28 @@ export default function FlyViewer() {
     }
   }, [deployedSlotKeys, simIndexForSelected, flies, deployed]);
 
+  useEffect(() => {
+    if (effectiveSimIndex == null && cameraMode === 'fly') setCameraMode('god');
+  }, [effectiveSimIndex, cameraMode]);
+
   const flyMode = getFlyMode(focusedFly);
+
+  const flyCameraContextValue = useMemo(
+    () => ({
+      mode: cameraMode,
+      setMode: setCameraMode,
+      target:
+        effectiveSimIndex != null
+          ? {
+              x: focusedFly.x ?? 0,
+              y: focusedFly.y ?? 0,
+              z: focusedFly.z ?? 0,
+              heading: focusedFly.heading ?? 0,
+            }
+          : null,
+    }),
+    [cameraMode, effectiveSimIndex, focusedFly.x, focusedFly.y, focusedFly.z, focusedFly.heading]
+  );
 
   const deployFly = async (slotIndex: number) => {
     if (!address) return;
@@ -366,6 +457,7 @@ export default function FlyViewer() {
       throw new Error(err.error ?? 'Deploy failed');
     }
     queryClient.invalidateQueries({ queryKey: ['my-deployed', address] });
+    queryClient.invalidateQueries({ queryKey: ['fly-stats', address] });
     refetchDeployed();
   };
 
@@ -373,16 +465,18 @@ export default function FlyViewer() {
     <div style={{ width: '100vw', height: '100vh', position: 'relative' }}>
       {/* Canvas layer - must stay behind UI */}
       <div style={{ position: 'absolute', inset: 0, zIndex: 0, isolation: 'isolate' }}>
-        <Canvas camera={{ position: [8, 6, 8], fov: 50 }} gl={{ outputColorSpace: THREE.SRGBColorSpace }}>
-          <ambientLight intensity={0.8} />
-          <directionalLight position={[10, 10, 5]} intensity={1.2} castShadow />
-          <OrbitControls />
-          <Suspense fallback={null}>
+        <FlyCameraContext.Provider value={flyCameraContextValue}>
+          <Canvas camera={{ position: [8, 6, 8], fov: 50 }} gl={{ outputColorSpace: THREE.SRGBColorSpace }}>
+            <ambientLight intensity={0.8} />
+            <directionalLight position={[10, 10, 5]} intensity={1.2} castShadow />
+            <FlyCameraController />
+            <Suspense fallback={null}>
             {flies.map((fly, i) => !fly.dead && <FlyModel key={i} state={fly} />)}
           </Suspense>
           <WorldSources sources={sources} />
           <GroundPlane />
         </Canvas>
+        </FlyCameraContext.Provider>
       </div>
       {/* UI layer - always on top, always visible */}
       <div style={{ position: 'fixed', inset: 0, zIndex: 1000, pointerEvents: 'none' }}>
@@ -393,6 +487,26 @@ export default function FlyViewer() {
         )}
         <div style={{ position: 'absolute', top: 12, right: 12, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, pointerEvents: 'auto' }}>
           <ConnectButton />
+          {effectiveSimIndex != null && (
+            <button
+              type="button"
+              className="fly-viewer__camera-toggle"
+              onClick={() => setCameraMode((m) => (m === 'god' ? 'fly' : 'god'))}
+              title={cameraMode === 'god' ? 'Follow current fly' : 'Orbit view'}
+              style={{
+                padding: '6px 10px',
+                fontSize: 11,
+                fontFamily: 'var(--font-mono, monospace)',
+                background: cameraMode === 'fly' ? 'rgba(35, 70, 138, 0.6)' : 'rgba(0,0,0,0.85)',
+                color: '#aaf',
+                border: '1px solid rgba(100,100,140,0.3)',
+                borderRadius: 6,
+                cursor: 'pointer',
+              }}
+            >
+              {cameraMode === 'god' ? 'Fly view' : 'God view'}
+            </button>
+          )}
           {focusedFly.dead && (
             <div style={{ width: 120, padding: '6px 8px', background: '#422', color: '#f88', borderRadius: 4, fontSize: 11, fontWeight: 600 }}>
               Fly died
@@ -428,90 +542,145 @@ export default function FlyViewer() {
                 className={`fly-viewer__flies-tab ${fliesTab === 'current' ? 'fly-viewer__flies-tab--active' : ''}`}
                 onClick={() => setFliesTab('current')}
               >
+                <img src="/fly.svg" alt="" width={14} height={14} className="fly-viewer__tab-icon" aria-hidden />
                 Current
               </button>
               <button
                 type="button"
-                className={`fly-viewer__flies-tab ${fliesTab === 'past' ? 'fly-viewer__flies-tab--active' : ''}`}
-                onClick={() => setFliesTab('past')}
+                className={`fly-viewer__flies-tab ${fliesTab === 'graveyard' ? 'fly-viewer__flies-tab--active' : ''}`}
+                onClick={() => setFliesTab('graveyard')}
               >
-                Past
+                <img src="/tombstone.svg" alt="" width={14} height={14} className="fly-viewer__tab-icon fly-viewer__tab-icon--tombstone" aria-hidden />
+                Graveyard
               </button>
             </div>
             {fliesTab === 'current' ? (
               <>
                 {[0, 1, 2].map((i) => {
-                  const hasFly = myFlies[i] != null;
-                  const simIdx = deployed[i];
-                  const isDeployed = simIdx != null;
-                  const simFly = isDeployed ? (flies[simIdx] ?? DEFAULT_FLY) : DEFAULT_FLY;
+                      const inGraveyard = graveyardSlots.has(i);
+                      const hasFly = myFlies[i] != null;
+                      const simIdx = deployed[i];
+                      const isDeployed = simIdx != null;
+                      const hasSimFly = isDeployed && flies[simIdx] != null;
+                      const simFly = hasSimFly ? flies[simIdx]! : DEFAULT_FLY;
+                      const isDead = hasSimFly && simFly.dead;
+                      const isEmpty = myFlies.length === 0 && i === 0;
+                      return (
+                        <div key={i} className="fly-viewer__fly-slot">
+                          {inGraveyard ? (
+                            <div className="fly-viewer__fly-slot-empty fly-viewer__fly-slot--in-graveyard">
+                              <img src="/fly.svg" alt="" width={28} height={28} className="fly-viewer__fly-slot-icon" aria-hidden />
+                              <span className="fly-viewer__fly-slot-label">Fly {i + 1}</span>
+                              <span style={{ fontSize: 9, color: '#666' }}>In graveyard</span>
+                            </div>
+                          ) : !hasFly ? (
+                            <button
+                              type="button"
+                              className={`fly-viewer__fly-slot-empty ${isEmpty ? 'fly-viewer__fly-slot-empty--first' : ''}`}
+                              onClick={() => setBuyFlySlot(i)}
+                            >
+                              <img src="/fly.svg" alt="" width={28} height={28} className="fly-viewer__fly-slot-icon" aria-hidden />
+                              <span className="fly-viewer__fly-slot-label" style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+                                {isEmpty ? 'You have no flies' : `Fly ${i + 1}`}
+                                <span style={{ fontSize: 9, color: '#8a8', fontFamily: 'monospace' }}>0 pts</span>
+                              </span>
+                              <span className="fly-viewer__fly-slot-buy">{isEmpty ? 'Buy your first fly' : 'Buy Fly'}</span>
+                            </button>
+                          ) : !isDeployed ? (
+                            <button
+                              type="button"
+                              className="fly-viewer__fly-slot-empty"
+                              onClick={async () => {
+                                try {
+                                  await deployFly(i);
+                                } catch (e) {
+                                  setError(e instanceof Error ? `Deploy failed: ${e.message}` : 'Deploy failed');
+                                }
+                              }}
+                            >
+                              <img src="/fly.svg" alt="" width={28} height={28} className="fly-viewer__fly-slot-icon" aria-hidden />
+                              <span className="fly-viewer__fly-slot-label" style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+                                Fly {i + 1}
+                                <span style={{ fontSize: 9, color: '#8a8', fontFamily: 'monospace' }}>0 pts</span>
+                              </span>
+                              <span className="fly-viewer__fly-slot-buy">Deploy</span>
+                            </button>
+                          ) : isDeployed && !hasSimFly ? (
+                            <div className="fly-viewer__fly-slot-empty fly-viewer__fly-slot--connecting">
+                              <img src="/fly.svg" alt="" width={28} height={28} className="fly-viewer__fly-slot-icon" aria-hidden />
+                              <span className="fly-viewer__fly-slot-label">Fly {i + 1}</span>
+                              <span style={{ fontSize: 9, color: '#888' }}>Connecting…</span>
+                            </div>
+                          ) : isDead ? (
+                            <div className="fly-viewer__fly-slot-dead">
+                              <span className="fly-viewer__fly-slot-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                Fly {i + 1} (dead)
+                                <span style={{ fontSize: 9, color: '#8a8', fontFamily: 'monospace' }}>{statsBySlot[i] ?? 0} pts</span>
+                              </span>
+                              <button
+                                type="button"
+                                className="fly-viewer__fly-slot-graveyard"
+                                onClick={() => {
+                                  setGraveyardByWallet((prev) => {
+                                    const addr = address ?? '';
+                                    const set = new Set(prev[addr] ?? []);
+                                    set.add(i);
+                                    return { ...prev, [addr]: set };
+                                  });
+                                  const next = [0, 1, 2].find(
+                                    (j) =>
+                                      j !== i &&
+                                      !graveyardSlots.has(j) &&
+                                      deployed[j] != null &&
+                                      flies[deployed[j]!] != null
+                                  );
+                                  if (next != null && selectedFlyIndex === i) setSelectedFlyIndex(next);
+                                }}
+                              >
+                                Send to NeuroFly Graveyard
+                              </button>
+                            </div>
+                          ) : (
+                            <FlyStatusCard
+                              index={i}
+                              fly={simFly}
+                              selected={i === selectedFlyIndex}
+                              onSelect={() => setSelectedFlyIndex(i)}
+                              points={statsBySlot[i] ?? 0}
+                            />
+                          )}
+                        </div>
+                      );
+                    })}
+              </>
+            ) : (
+              <>
+                <div className="fly-viewer__graveyard-title">NeuroFly Graveyard</div>
+                {[0, 1, 2].map((i) => {
+                  const inGraveyard = graveyardSlots.has(i);
+                  const pts = statsBySlot[i] ?? 0;
+                  const wei = flyStatsData?.rewardPerPointWei ? BigInt(flyStatsData.rewardPerPointWei) * BigInt(pts) : 0n;
+                  const ethStr = pts > 0 ? formatEth(wei) : '0';
                   return (
-                    <div key={i} className="fly-viewer__fly-slot">
-                      {!hasFly ? (
-                        <button
-                          type="button"
-                          className="fly-viewer__fly-slot-empty"
-                          onClick={() => setBuyFlySlot(i)}
-                        >
-                          <span className="fly-viewer__fly-slot-label">Fly {i + 1}</span>
-                          <span className="fly-viewer__fly-slot-buy">Buy Fly</span>
-                        </button>
-                      ) : !isDeployed ? (
-                        <button
-                          type="button"
-                          className="fly-viewer__fly-slot-empty"
-                          onClick={async () => {
-                            try {
-                              await deployFly(i);
-                            } catch (e) {
-                              setError(e instanceof Error ? `Deploy failed: ${e.message}` : 'Deploy failed');
-                            }
-                          }}
-                        >
-                          <span className="fly-viewer__fly-slot-label">Fly {i + 1}</span>
-                          <span className="fly-viewer__fly-slot-buy">Deploy</span>
-                        </button>
+                    <div key={i} className={`fly-viewer__fly-slot fly-viewer__fly-slot--graveyard ${!inGraveyard ? 'fly-viewer__fly-slot--graveyard-empty' : ''}`}>
+                      {inGraveyard ? (
+                        <>
+                          <img src="/fly.svg" alt="" width={20} height={20} className="fly-viewer__fly-slot-icon" aria-hidden />
+                          <img src="/tombstone.svg" alt="" width={18} height={18} className="fly-viewer__graveyard-icon" aria-hidden />
+                          <div className="fly-viewer__graveyard-fly-info">
+                            <span className="fly-viewer__fly-slot-label">Fly {i + 1}</span>
+                            <span className="fly-viewer__graveyard-stats">{pts} pts · {ethStr} ETH</span>
+                          </div>
+                        </>
                       ) : (
-                        <FlyStatusCard
-                          index={i}
-                          fly={simFly}
-                          selected={i === selectedFlyIndex}
-                          onSelect={() => setSelectedFlyIndex(i)}
-                        />
+                        <>
+                          <img src="/tombstone.svg" alt="" width={18} height={18} className="fly-viewer__graveyard-icon" aria-hidden />
+                          <span className="fly-viewer__fly-slot-label" style={{ color: '#555' }}>—</span>
+                        </>
                       )}
                     </div>
                   );
                 })}
-              </>
-            ) : (
-              <>
-                {[0, 1, 2]
-                  .filter((i) => {
-                    const hasFly = myFlies[i] != null;
-                    const simIdx = deployed[i];
-                    const isDeployed = simIdx != null;
-                    const simFly = isDeployed ? (flies[simIdx] ?? DEFAULT_FLY) : DEFAULT_FLY;
-                    return hasFly && isDeployed && simFly.dead;
-                  })
-                  .map((i) => {
-                    return (
-                      <div key={i} className="fly-viewer__fly-slot fly-viewer__fly-slot--past">
-                        <div className="fly-viewer__fly-past-card">
-                          <span className="fly-viewer__fly-slot-label">Fly {i + 1}</span>
-                          <span style={{ fontSize: 10, color: '#f88' }}>dead</span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                {[0, 1, 2].filter((i) => {
-                  const hasFly = myFlies[i] != null;
-                  const simIdx = deployed[i];
-                  const isDeployed = simIdx != null;
-                  const simFly = isDeployed ? (flies[simIdx] ?? DEFAULT_FLY) : DEFAULT_FLY;
-                  return hasFly && isDeployed && simFly.dead;
-                }).length === 0 && (
-                  <div style={{ color: '#666', fontSize: 10, padding: 12 }}>No past flies</div>
-                )}
               </>
             )}
           </div>
@@ -526,19 +695,8 @@ export default function FlyViewer() {
             }}
           />
         )}
-        {/* Left: Status vertical toggle + panel */}
+        {/* Left: Status panel + toggle (toggle moves with panel edge, same as Brain on right) */}
         <div className="fly-viewer__side-strip fly-viewer__side-strip--left">
-          <button
-            type="button"
-            className={`fly-viewer__side-toggle fly-viewer__side-toggle--status ${statusPanelOpen ? 'fly-viewer__side-toggle--active' : ''}`}
-            onClick={() => setStatusPanelOpen((o) => !o)}
-            aria-label={statusPanelOpen ? 'Hide status' : 'Show status'}
-            aria-expanded={statusPanelOpen}
-            title={statusPanelOpen ? 'Hide status' : 'Show status'}
-          >
-            <span className="fly-viewer__side-toggle-label">Status</span>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d={statusPanelOpen ? 'M19 12H5M12 19l-7-7 7-7' : 'M5 12h14M12 5l7 7-7 7'} /></svg>
-          </button>
           <div className={`fly-viewer__status-panel ${statusPanelOpen ? 'fly-viewer__status-panel--open' : ''}`}>
             <div className="fly-viewer__status-content">
                 <div style={{ color: '#888', marginBottom: 6 }}>Status</div>
@@ -557,6 +715,17 @@ export default function FlyViewer() {
                 </div>
             </div>
           </div>
+          <button
+            type="button"
+            className={`fly-viewer__side-toggle fly-viewer__side-toggle--status ${statusPanelOpen ? 'fly-viewer__side-toggle--active' : ''}`}
+            onClick={() => setStatusPanelOpen((o) => !o)}
+            aria-label={statusPanelOpen ? 'Hide status' : 'Show status'}
+            aria-expanded={statusPanelOpen}
+            title={statusPanelOpen ? 'Hide status' : 'Show status'}
+          >
+            <span className="fly-viewer__side-toggle-label">Status</span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d={statusPanelOpen ? 'M19 12H5M12 19l-7-7 7-7' : 'M5 12h14M12 5l7 7-7 7'} /></svg>
+          </button>
         </div>
         {/* Right: Brain vertical toggle + panel */}
         <div className="fly-viewer__side-strip fly-viewer__side-strip--right">

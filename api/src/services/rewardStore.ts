@@ -2,18 +2,18 @@
  * In-memory reward store with JSON persistence.
  * Tracks pending rewards per owner, NeuroFly stats, and distributed history.
  * Persistence uses write-to-temp-then-rename for atomic writes (openclaw-style).
+ * Uses single data path (see lib/dataPath).
  */
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import type { NeuroFlyStats, RewardState } from '../types/index.js';
 import { getDeployments } from './deployStore.js';
 import { getFlies } from './flyStore.js';
+import { dataPath } from '../lib/dataPath.js';
 
-const _dir = path.dirname(fileURLToPath(import.meta.url));
-const rewardsPath = path.join(_dir, '../../data/rewards-state.json');
+const rewardsPath = dataPath('rewards-state.json');
 
 /** 0.000001 ETH per food collected */
 export const REWARD_PER_FOOD = 10n ** 12n;
@@ -205,6 +205,21 @@ export function rollbackBatch(recipients: string[], amounts: bigint[]): void {
 
 export function getNeuroFlyStats(address: string, slotIndex: number): NeuroFlyStats | undefined {
   return findStats(address, slotIndex);
+}
+
+/** Stats for all slots of an address: feedCount = points (1 feeding = 1 point). Includes zero-point rows for owned slots. */
+export function getStatsForAddress(address: string): { slotIndex: number; feedCount: number }[] {
+  const addr = address.toLowerCase();
+  const bySlot = new Map<number, number>();
+  for (const s of neuroflyStats) {
+    if (s.address === addr) bySlot.set(s.slotIndex, s.feedCount);
+  }
+  for (let slotIndex = 0; slotIndex < 3; slotIndex++) {
+    if (!bySlot.has(slotIndex)) bySlot.set(slotIndex, 0);
+  }
+  return Array.from(bySlot.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([slotIndex, feedCount]) => ({ slotIndex, feedCount }));
 }
 
 export function clearForTesting(): void {

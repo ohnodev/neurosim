@@ -2,6 +2,7 @@
  * Flushes pending rewards to CabalTokenDistributor on Base.
  */
 import { encodeFunctionData, getAddress } from 'viem';
+import { base } from 'viem/chains';
 import { CABAL_TOKEN_DISTRIBUTOR } from '../lib/addresses.js';
 import { getNeurosimWallet } from './neurosimWallet.js';
 import { getPendingForFlush, markDistributed } from './rewardStore.js';
@@ -35,6 +36,8 @@ export async function flushRewards(): Promise<void> {
 
   try {
     const hash = await wallet.sendTransaction({
+      account: wallet.account!,
+      chain: base,
       to: CABAL_TOKEN_DISTRIBUTOR,
       data: encodeFunctionData({
         abi: CABAL_ABI,

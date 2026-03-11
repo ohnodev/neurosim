@@ -550,52 +550,21 @@ export default function FlyViewer() {
             }}
           />
         )}
-        {/* Brain activity panel - collapsible, minimized on mobile by default */}
-        <div className={`fly-viewer__side-panel fly-viewer__brain-panel ${brainPanelOpen ? 'fly-viewer__side-panel--open' : 'fly-viewer__side-panel--minimized'}`}>
-          {brainPanelOpen ? (
-            <div className="fly-viewer__brain-content">
-              <button
-                type="button"
-                className="fly-viewer__panel-minimize"
-                onClick={() => setBrainPanelOpen(false)}
-                aria-label="Minimize brain activity"
-                title="Minimize"
-              >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
-                <span>Minimize</span>
-              </button>
-              <div style={{ color: '#888', marginBottom: 6 }}>Brain activity — Fly {selectedFlyIndex + 1} (viewing)</div>
-              <div className="fly-viewer__brain-plot">
-                <BrainOverlay neurons={neuronsWithPositions} activity={activityForSelected} visible={connected} embedded />
-              </div>
-            </div>
-          ) : (
-            <button
-              type="button"
-              className="fly-viewer__panel-expand"
-              onClick={() => setBrainPanelOpen(true)}
-              aria-label="Show brain activity"
-              title="Brain activity"
-            >
-              <span className="fly-viewer__panel-expand-label">Brain</span>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14M12 5l7 7-7 7" /></svg>
-            </button>
-          )}
-        </div>
-        {/* Status panel - collapsible, minimized on mobile by default */}
-        <div className={`fly-viewer__side-panel fly-viewer__status-panel ${statusPanelOpen ? 'fly-viewer__side-panel--open' : 'fly-viewer__side-panel--minimized'}`}>
-          {statusPanelOpen ? (
+        {/* Left: Status vertical toggle + panel */}
+        <div className="fly-viewer__side-strip fly-viewer__side-strip--left">
+          <button
+            type="button"
+            className={`fly-viewer__side-toggle fly-viewer__side-toggle--status ${statusPanelOpen ? 'fly-viewer__side-toggle--active' : ''}`}
+            onClick={() => setStatusPanelOpen((o) => !o)}
+            aria-label={statusPanelOpen ? 'Hide status' : 'Show status'}
+            aria-expanded={statusPanelOpen}
+            title={statusPanelOpen ? 'Hide status' : 'Show status'}
+          >
+            <span className="fly-viewer__side-toggle-label">Status</span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d={statusPanelOpen ? 'M19 12H5M12 19l-7-7 7-7' : 'M5 12h14M12 5l7 7-7 7'} /></svg>
+          </button>
+          <div className={`fly-viewer__status-panel ${statusPanelOpen ? 'fly-viewer__status-panel--open' : ''}`}>
             <div className="fly-viewer__status-content">
-              <button
-                type="button"
-                className="fly-viewer__panel-minimize"
-                onClick={() => setStatusPanelOpen(false)}
-                aria-label="Minimize status"
-                title="Minimize"
-              >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
-                <span>Minimize</span>
-              </button>
                 <div style={{ color: '#888', marginBottom: 6 }}>Status</div>
                 <div style={{ marginBottom: 4 }}>Fly {selectedFlyIndex + 1} (viewing) | pos ({(focusedFly.x ?? 0).toFixed(1)}, {(focusedFly.y ?? 0).toFixed(1)}, {(focusedFly.z ?? 0).toFixed(1)})</div>
                 <div style={{ marginBottom: 4 }}>heading {((focusedFly.heading ?? 0) * 180 / Math.PI).toFixed(0)}° | {flyMode}</div>
@@ -611,18 +580,47 @@ export default function FlyViewer() {
                   ))}
                 </div>
             </div>
-          ) : (
             <button
               type="button"
-              className="fly-viewer__panel-expand"
-              onClick={() => setStatusPanelOpen(true)}
-              aria-label="Show status"
-              title="Status"
+              className="fly-viewer__status-close-bar"
+              onClick={() => setStatusPanelOpen(false)}
+              aria-label="Hide status"
+              title="Hide"
             >
-              <span className="fly-viewer__panel-expand-label">Status</span>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14M12 5l7 7-7 7" /></svg>
             </button>
-          )}
+          </div>
+        </div>
+        {/* Right: Brain vertical toggle + panel */}
+        <div className="fly-viewer__side-strip fly-viewer__side-strip--right">
+          <div className={`fly-viewer__brain-panel ${brainPanelOpen ? 'fly-viewer__brain-panel--open' : ''}`}>
+            <button
+              type="button"
+              className="fly-viewer__brain-close-bar"
+              onClick={() => setBrainPanelOpen(false)}
+              aria-label="Hide brain activity"
+              title="Hide"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
+            </button>
+            <div className="fly-viewer__brain-content">
+              <div style={{ color: '#888', marginBottom: 6 }}>Brain activity — Fly {selectedFlyIndex + 1} (viewing)</div>
+              <div className="fly-viewer__brain-plot">
+                <BrainOverlay neurons={neuronsWithPositions} activity={activityForSelected} visible={connected} embedded />
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            className={`fly-viewer__side-toggle fly-viewer__side-toggle--brain ${brainPanelOpen ? 'fly-viewer__side-toggle--active' : ''}`}
+            onClick={() => setBrainPanelOpen((o) => !o)}
+            aria-label={brainPanelOpen ? 'Hide brain activity' : 'Show brain activity'}
+            aria-expanded={brainPanelOpen}
+            title={brainPanelOpen ? 'Hide brain activity' : 'Show brain activity'}
+          >
+            <span className="fly-viewer__side-toggle-label">Brain</span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d={brainPanelOpen ? 'M19 12H5M12 19l-7-7 7-7' : 'M5 12h14M12 5l7 7-7 7'} /></svg>
+          </button>
         </div>
       </div>
     </div>

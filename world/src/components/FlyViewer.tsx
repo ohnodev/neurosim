@@ -279,7 +279,11 @@ export default function FlyViewer() {
   );
   const [buyFlySlot, setBuyFlySlot] = useState<number | null>(null);
   const [fliesTab, setFliesTab] = useState<'current' | 'graveyard'>('current');
-  const [graveyardSlots, setGraveyardSlots] = useState<Set<number>>(() => new Set());
+  const [graveyardByWallet, setGraveyardByWallet] = useState<Record<string, Set<number>>>(() => ({}));
+  const graveyardSlots = useMemo(
+    () => graveyardByWallet[address ?? ''] ?? new Set(),
+    [graveyardByWallet, address]
+  );
   const isMobileDefault = () => typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches;
   const [statusPanelOpen, setStatusPanelOpen] = useState(() => !isMobileDefault());
   const [brainPanelOpen, setBrainPanelOpen] = useState(() => !isMobileDefault());
@@ -473,6 +477,7 @@ export default function FlyViewer() {
           {effectiveSimIndex != null && (
             <button
               type="button"
+              className="fly-viewer__camera-toggle"
               onClick={() => setCameraMode((m) => (m === 'god' ? 'fly' : 'god'))}
               title={cameraMode === 'god' ? 'Follow current fly' : 'Orbit view'}
               style={{
@@ -484,7 +489,6 @@ export default function FlyViewer() {
                 border: '1px solid rgba(100,100,140,0.3)',
                 borderRadius: 6,
                 cursor: 'pointer',
-                outline: 'none',
               }}
             >
               {cameraMode === 'god' ? 'Fly view' : 'God view'}
@@ -597,8 +601,19 @@ export default function FlyViewer() {
                                 type="button"
                                 className="fly-viewer__fly-slot-graveyard"
                                 onClick={() => {
-                                  setGraveyardSlots((prev) => new Set(prev).add(i));
-                                  const next = [0, 1, 2].find((j) => j !== i && !graveyardSlots.has(j) && myFlies[j] != null);
+                                  setGraveyardByWallet((prev) => {
+                                    const addr = address ?? '';
+                                    const set = new Set(prev[addr] ?? []);
+                                    set.add(i);
+                                    return { ...prev, [addr]: set };
+                                  });
+                                  const next = [0, 1, 2].find(
+                                    (j) =>
+                                      j !== i &&
+                                      !graveyardSlots.has(j) &&
+                                      deployed[j] != null &&
+                                      flies[deployed[j]!] != null
+                                  );
                                   if (next != null && selectedFlyIndex === i) setSelectedFlyIndex(next);
                                 }}
                               >

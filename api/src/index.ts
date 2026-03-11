@@ -196,7 +196,12 @@ app.post('/api/deploy', (req, res) => {
 
 app.get('/api/rewards/stats', (req, res) => {
   try {
-    const address = (req.query.address as string)?.toLowerCase();
+    const rawAddress = req.query.address;
+    if (Array.isArray(rawAddress) || typeof rawAddress !== 'string') {
+      res.status(400).json({ error: 'Invalid address' });
+      return;
+    }
+    const address = rawAddress.toLowerCase();
     if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address)) {
       res.status(400).json({ error: 'Invalid address' });
       return;

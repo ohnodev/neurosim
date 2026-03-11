@@ -33,6 +33,11 @@
   background: rgba(35, 70, 138, 0.88);
 }
 
+.fly-viewer__camera-toggle:focus-visible {
+  outline: 2px solid rgba(168, 85, 247, 0.8);
+  outline-offset: 2px;
+}
+
 .fly-viewer__flies-toggle svg {
   width: 16px;
   height: 16px;
@@ -171,9 +176,13 @@
 }
 
 .fly-viewer__fly-slot-graveyard:focus,
-.fly-viewer__fly-slot-graveyard:focus-visible,
+.fly-viewer__fly-slot-graveyard:focus-visible {
+  outline: 2px solid rgba(168, 85, 247, 0.8);
+  outline-offset: 2px;
+}
 .fly-viewer__fly-slot-graveyard:active {
-  outline: none;
+  outline: 2px solid rgba(168, 85, 247, 0.8);
+  outline-offset: 2px;
 }
 
 .fly-viewer__graveyard-title {

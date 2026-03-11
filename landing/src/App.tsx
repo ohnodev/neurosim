@@ -6,11 +6,11 @@ import { ConnectButton } from './components/ConnectButton';
 import './App.css';
 
 const LORE_ARTICLE = 'https://theinnermostloop.substack.com/p/the-first-multi-behavior-brain-upload';
-const X_PLACEHOLDER = 'https://x.com/neurosim';
-const TG_PLACEHOLDER = 'https://t.me/neurosim';
+const X_URL = 'https://x.com/neurosim';
+const TG_URL = 'https://t.me/neurosimportal';
 
 /** Token address - single config to update later. */
-const TOKEN_ADDRESS = '0x0000000000000000000000000000000000000000';
+const TOKEN_ADDRESS = '0x73e0591f7b75cc4D82B415d34Cd353683C896cbf';
 
 function CopyIcon() {
   return (
@@ -137,10 +137,10 @@ function App() {
             <div className="card card--socials">
               <h2 className="card__title">Socials</h2>
               <div className="socials">
-                <a href={X_PLACEHOLDER} target="_blank" rel="noopener noreferrer" className="card__link">
+                <a href={X_URL} target="_blank" rel="noopener noreferrer" className="card__link">
                   X
                 </a>
-                <a href={TG_PLACEHOLDER} target="_blank" rel="noopener noreferrer" className="card__link">
+                <a href={TG_URL} target="_blank" rel="noopener noreferrer" className="card__link">
                   Telegram
                 </a>
               </div>

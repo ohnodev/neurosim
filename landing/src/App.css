@@ -44,6 +44,10 @@
     inset: 0;
     min-height: 100dvh;
     min-height: -webkit-fill-available;
+    background-image:
+      linear-gradient(rgba(30, 58, 175, 0.14), rgba(67, 56, 202, 0.12)),
+      linear-gradient(rgba(0, 0, 0, 0.58), rgba(0, 0, 0, 0.58)),
+      url('/neurosim-bg-v2.jpg');
   }
 }
 

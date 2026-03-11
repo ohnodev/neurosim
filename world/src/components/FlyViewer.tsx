@@ -34,6 +34,83 @@ function formatEth(wei: bigint, decimals = 6): string {
   return `${whole}.${fracStr}`;
 }
 
+function safeAmountWei(val: string | undefined): bigint {
+  if (val == null || val === "") return 0n;
+  try {
+    const n = BigInt(val);
+    return n >= 0n ? n : 0n;
+  } catch {
+    return 0n;
+  }
+}
+
+function shortAddr(addr: string): string {
+  if (!addr || addr.length < 10) return addr;
+  return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
+}
+
+function RewardsTable({
+  history,
+  formatEth,
+}: {
+  history: { address: string; amountWei: string; timestamp: string; txHash?: string }[];
+  formatEth: (wei: bigint) => string;
+}) {
+  const [copiedTx, setCopiedTx] = useState<string | null>(null);
+  const copyTx = async (txHash: string) => {
+    try {
+      await navigator.clipboard.writeText(txHash);
+      setCopiedTx(txHash);
+      setTimeout(() => setCopiedTx(null), 1200);
+    } catch {
+      /* ignore */
+    }
+  };
+  return (
+    <div className="fly-viewer__rewards-table-wrap">
+      <div className="fly-viewer__rewards-table">
+        {history.length === 0 && <div style={{ color: '#666', padding: 8 }}>No rewards sent yet</div>}
+        {history.slice().reverse().map((entry, i) => (
+          <div key={`${entry.address}-${entry.timestamp}-${i}`} className="fly-viewer__rewards-row">
+            <span className="fly-viewer__rewards-addr" title={entry.address}>{shortAddr(entry.address)}</span>
+            <span className="fly-viewer__rewards-amount">{formatEth(safeAmountWei(entry.amountWei))}</span>
+            <span className="fly-viewer__rewards-time" title={entry.timestamp}>
+              {new Date(entry.timestamp).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+            </span>
+            {entry.txHash ? (
+              <span className="fly-viewer__rewards-actions">
+                <button
+                  type="button"
+                  className="fly-viewer__rewards-action"
+                  onClick={() => copyTx(entry.txHash!)}
+                  aria-label="Copy tx"
+                  title="Copy tx hash"
+                >
+                  {copiedTx === entry.txHash ? (
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 6 9 17l-5-5" /></svg>
+                  ) : (
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>
+                  )}
+                </button>
+                <a
+                  href={`https://basescan.org/tx/${entry.txHash}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="fly-viewer__rewards-action"
+                  aria-label="View on BaseScan"
+                  title="View on BaseScan"
+                >
+                  <img src="/basescan-logo.svg" alt="" width={12} height={12} />
+                </a>
+              </span>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 const FLY_THRESHOLD = 1.1; // z above this = flying (HUD mode)
 const REST_DURATION_FALLBACK = 4; // fallback when flyState.restDuration not in payload
 /** Lerp factor for fly position - matches camera target smoothness so fly and orbit stay in sync. */
@@ -294,6 +371,7 @@ export default function FlyViewer() {
   );
   const isMobileDefault = () => typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches;
   const [statusPanelOpen, setStatusPanelOpen] = useState(() => !isMobileDefault());
+  const [statusTab, setStatusTab] = useState<'status' | 'rewards'>('status');
   const [brainPanelOpen, setBrainPanelOpen] = useState(() => !isMobileDefault());
 
   const { data: myFlies = [] } = useQuery({
@@ -306,6 +384,17 @@ export default function FlyViewer() {
     queryKey: ['my-deployed', address ?? ''],
     queryFn: () => fetchMyDeployed(address!),
     enabled: !!address,
+  });
+
+  const { data: rewardsHistory } = useQuery({
+    queryKey: ['rewards-history'],
+    queryFn: async () => {
+      const r = await fetch(getApiBase() + '/api/rewards/history?limit=50');
+      if (!r.ok) throw new Error('Failed to fetch');
+      const j = await r.json();
+      return (j.history ?? []) as { address: string; amountWei: string; timestamp: string; txHash?: string }[];
+    },
+    refetchInterval: connected ? 15_000 : false,
   });
 
   const { data: flyStatsData } = useQuery({
@@ -695,20 +784,42 @@ export default function FlyViewer() {
         <div className="fly-viewer__side-strip fly-viewer__side-strip--left">
           <div className={`fly-viewer__status-panel ${statusPanelOpen ? 'fly-viewer__status-panel--open' : ''}`}>
             <div className="fly-viewer__status-content">
-                <div style={{ color: '#888', marginBottom: 6 }}>Status</div>
-                <div style={{ marginBottom: 4 }}>Fly {selectedFlyIndex + 1} (viewing) | pos ({(focusedFly.x ?? 0).toFixed(1)}, {(focusedFly.y ?? 0).toFixed(1)}, {(focusedFly.z ?? 0).toFixed(1)})</div>
-                <div style={{ marginBottom: 4 }}>heading {((focusedFly.heading ?? 0) * 180 / Math.PI).toFixed(0)}° | {flyMode}</div>
-                <div style={{ marginBottom: 8 }}>t {(focusedFly.t ?? 0).toFixed(1)}s | hunger {Math.round(focusedFly.hunger ?? 0)} | health {Math.round(focusedFly.health ?? 100)}</div>
-                <div style={{ color: '#888', marginBottom: 4 }}>Firing neurons ({activeCount})</div>
-                <div style={{ maxHeight: 120, overflow: 'auto' }}>
-                  {topActivity.length === 0 && <span style={{ color: '#666' }}>—</span>}
-                  {topActivity.map(([id, v]) => (
-                    <div key={id} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, minWidth: 0 }} title={`${neuronLabels[id] || id}\n${id}`}>
-                      <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{neuronLabels[id] || shortId(id)}</span>
-                      <span style={{ color: '#8cf', flexShrink: 0 }}>{(Math.min(v ?? 0, 1)).toFixed(2)}</span>
-                    </div>
-                  ))}
+              <div className="fly-viewer__status-tabs">
+                <button
+                  type="button"
+                  className={`fly-viewer__status-tab ${statusTab === 'status' ? 'fly-viewer__status-tab--active' : ''}`}
+                  onClick={() => setStatusTab('status')}
+                >
+                  Status
+                </button>
+                <button
+                  type="button"
+                  className={`fly-viewer__status-tab ${statusTab === 'rewards' ? 'fly-viewer__status-tab--active' : ''}`}
+                  onClick={() => setStatusTab('rewards')}
+                >
+                  Rewards
+                </button>
+              </div>
+              {statusTab === 'status' ? (
+                <div className="fly-viewer__status-tab-body">
+                  <div style={{ color: '#888', marginBottom: 6 }}>Fly {selectedFlyIndex + 1} (viewing)</div>
+                  <div style={{ marginBottom: 4 }}>pos ({(focusedFly.x ?? 0).toFixed(1)}, {(focusedFly.y ?? 0).toFixed(1)}, {(focusedFly.z ?? 0).toFixed(1)})</div>
+                  <div style={{ marginBottom: 4 }}>heading {((focusedFly.heading ?? 0) * 180 / Math.PI).toFixed(0)}° | {flyMode}</div>
+                  <div style={{ marginBottom: 8 }}>t {(focusedFly.t ?? 0).toFixed(1)}s | hunger {Math.round(focusedFly.hunger ?? 0)} | health {Math.round(focusedFly.health ?? 100)}</div>
+                  <div style={{ color: '#888', marginBottom: 4 }}>Firing neurons ({activeCount})</div>
+                  <div style={{ maxHeight: 120, overflow: 'auto' }}>
+                    {topActivity.length === 0 && <span style={{ color: '#666' }}>—</span>}
+                    {topActivity.map(([id, v]) => (
+                      <div key={id} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, minWidth: 0 }} title={`${neuronLabels[id] || id}\n${id}`}>
+                        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{neuronLabels[id] || shortId(id)}</span>
+                        <span style={{ color: '#8cf', flexShrink: 0 }}>{(Math.min(v ?? 0, 1)).toFixed(2)}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
+              ) : (
+                <RewardsTable history={rewardsHistory ?? []} formatEth={formatEth} />
+              )}
             </div>
           </div>
           <button

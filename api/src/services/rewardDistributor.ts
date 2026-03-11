@@ -63,7 +63,7 @@ export async function flushRewards(): Promise<void> {
           label: 'rewardDistributor',
         });
 
-        confirmDistributed(recipients, amounts);
+        confirmDistributed(recipients, amounts, txHash);
         console.log('[rewardDistributor] flushed', recipients.length, 'recipients, tx', txHash);
       } catch (err) {
         console.error('[rewardDistributor] flush failed:', err);

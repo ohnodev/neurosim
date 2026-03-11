@@ -327,7 +327,7 @@ export function MyNeuroFlies() {
                 >
                   <img src="/fly.svg" alt="" width={28} height={28} className="neuroflies__fly-icon-img" aria-hidden />
                   <span className="neuroflies__fly-slot-label">
-                    {isEmpty ? 'You have no flies' : `Fly ${i + 1}`}
+                    Fly {i + 1}
                   </span>
                   <span className="neuroflies__fly-slot-buy">Buy NeuroFly</span>
                 </button>

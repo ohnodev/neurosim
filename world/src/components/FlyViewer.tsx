@@ -581,7 +581,7 @@ export default function FlyViewer() {
                             >
                               <img src="/fly.svg" alt="" width={28} height={28} className="fly-viewer__fly-slot-icon" aria-hidden />
                               <span className="fly-viewer__fly-slot-label">
-                                {isEmpty ? 'You have no flies' : `Fly ${i + 1}`}
+                                Fly {i + 1}
                               </span>
                               <span className="fly-viewer__fly-slot-buy">Buy NeuroFly</span>
                             </button>

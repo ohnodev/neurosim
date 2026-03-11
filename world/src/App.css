@@ -52,6 +52,16 @@ html, body, #root { width: 100%; height: 100%; }
 .wallet-btn__svg {
   display: block;
 }
+.wallet-btn:focus,
+.wallet-btn:focus-visible,
+.wallet-btn:active {
+  outline: none;
+  box-shadow: none;
+  border: none;
+}
+.wallet-btn--active {
+  color: rgba(255, 255, 255, 0.95);
+}
 .wallet-btn--loading { opacity: 0.6; cursor: not-allowed; }
 .wallet-btn__dot { width: 8px; height: 8px; border-radius: 50%; background: rgba(255, 255, 255, 0.8); animation: wallet-btn-pulse 1.2s ease-in-out infinite; }
 @keyframes wallet-btn-pulse { 0%, 100% { opacity: 0.5; transform: scale(0.9); } 50% { opacity: 1; transform: scale(1); } }

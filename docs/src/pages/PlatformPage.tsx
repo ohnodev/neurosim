@@ -17,22 +17,22 @@ export default function PlatformPage(props: DocActionsProps) {
         </p>
         <div className="feature-grid">
           <article className="feature-card">
-            <img className="feature-icon" src="/fly.svg" alt="Fly" />
+            <img className="feature-icon" src="/fly.svg" alt="" aria-hidden="true" />
             <div className="feature-title">Real Connectome</div>
             <p>FlyWire dataset: real neurons and connections from <em>Drosophila melanogaster</em>.</p>
           </article>
           <article className="feature-card">
-            <img className="feature-icon" src="/fly.svg" alt="Fly" />
+            <img className="feature-icon" src="/fly.svg" alt="" aria-hidden="true" />
             <div className="feature-title">Autonomous Behavior</div>
             <p>Flies navigate, get hungry, seek food, rest, and explore — driven by the brain model.</p>
           </article>
           <article className="feature-card">
-            <img className="feature-icon" src="/fly.svg" alt="Fly" />
+            <img className="feature-icon" src="/fly.svg" alt="" aria-hidden="true" />
             <div className="feature-title">Token Rewards</div>
             <p>Each food item collected rewards ~1,000 $NEURO tokens to the fly owner.</p>
           </article>
           <article className="feature-card">
-            <img className="feature-icon" src="/fly.svg" alt="Fly" />
+            <img className="feature-icon" src="/fly.svg" alt="" aria-hidden="true" />
             <div className="feature-title">3D World</div>
             <p>Watch your NeuroFlies in a shared 3D simulation at world.neurosim.fun.</p>
           </article>

@@ -20,9 +20,41 @@ export default function App() {
   const currentRoute = useMemo<Route>(() => normalizePath(window.location.pathname), []);
   const navSubLinks = useMemo(() => getNavSubLinks(currentRoute), [currentRoute]);
 
-  const pageMarkdown = useMemo(() => {
-    return ["# NeuroSim Docs", "", ...navSubLinks.map((item) => `- ${item.label}`)].join("\n");
-  }, [navSubLinks]);
+  const pageMarkdown = useMemo(
+    () =>
+      [
+        "# NeuroSim Docs",
+        "",
+        "NeuroSim is a fly-brain simulation where you buy NeuroFlies, release them into the world, and earn $NEURO when they collect food. It uses a real *Drosophila* fruit fly connectome (FlyWire).",
+        "",
+        "## Introduction",
+        "",
+        "- **Real Connectome**: FlyWire dataset — real neurons and connections from *Drosophila melanogaster*.",
+        "- **Autonomous Behavior**: Flies navigate, get hungry, seek food, rest, and explore.",
+        "- **Token Rewards**: Each food item collected rewards ~1,000 $NEURO tokens.",
+        "- **3D World**: Watch your NeuroFlies at world.neurosim.fun.",
+        "",
+        "## How It Works",
+        "",
+        "1. Buy a NeuroFly for 1,000,000 $NEURO tokens.",
+        "2. Release it into the simulation (Enter World).",
+        "3. The fly autonomously navigates — seeks food, rests, explores.",
+        "4. Each food collected rewards approximately 1,000 $NEURO.",
+        "",
+        "## The Connectome",
+        "",
+        "Uses the FlyWire dataset — real neurons and synapses from *Drosophila melanogaster*. Neurons drive hunger, exploration, rest, and movement. A toy neural simulation steps the connectome forward in time.",
+        "",
+        "## Lore",
+        "",
+        "Inspired by [The First Multi-Behavior Brain Upload](https://theinnermostloop.substack.com/p/the-first-multi-behavior-brain-upload).",
+        "",
+        "## Pricing",
+        "",
+        "1 NeuroFly = 1,000,000 $NEURO. Each food = ~1,000 $NEURO."
+      ].join("\n"),
+    []
+  );
 
   useEffect(() => {
     const saved = localStorage.getItem("neurosim-docs-theme");
@@ -63,7 +95,9 @@ export default function App() {
       },
       { rootMargin: "-20% 0px -65% 0px", threshold: 0 }
     );
-    nodes.forEach((node) => observer.observe(node));
+    nodes.forEach((node) => {
+      observer.observe(node);
+    });
     return () => observer.disconnect();
   }, [currentRoute]);
 
@@ -73,11 +107,8 @@ export default function App() {
     return () => window.removeEventListener("click", onWindowClick);
   }, []);
 
-  function activeSectionText() {
-    const selected =
-      (activeSection ? document.getElementById(activeSection) : null) ??
-      document.querySelector<HTMLElement>(".section[id]");
-    return selected?.innerText.trim() ?? "";
+  function getFullPageText() {
+    return document.querySelector<HTMLElement>(".main .content")?.innerText?.trim() ?? "";
   }
 
   async function flashDocCopied(text: string) {
@@ -102,7 +133,7 @@ export default function App() {
     onToggle: () => setDocActionsOpen((current) => !current),
     onClose: () => setDocActionsOpen(false),
     onCopyPage: () => {
-      void flashDocCopied(activeSectionText());
+      void flashDocCopied(getFullPageText());
     },
     onCopyMarkdown: () => {
       void flashDocCopied(pageMarkdown);

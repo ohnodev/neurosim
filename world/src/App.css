@@ -53,12 +53,18 @@ html, body, #root { width: 100%; height: 100%; }
   display: block;
   transition: color 0.2s ease;
 }
-.wallet-btn:focus,
-.wallet-btn:focus-visible,
+.wallet-btn:focus {
+  outline: none;
+  box-shadow: none;
+}
+.wallet-btn:focus-visible {
+  outline: 2px solid rgba(168, 85, 247, 0.8);
+  outline-offset: 2px;
+  box-shadow: none;
+}
 .wallet-btn:active {
   outline: none;
   box-shadow: none;
-  border: none;
 }
 .wallet-btn--active {
   color: #a5b4fc;

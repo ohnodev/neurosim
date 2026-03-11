@@ -556,6 +556,7 @@ export default function FlyViewer() {
             </div>
             {fliesTab === 'current' ? (
               <>
+                <div className="fly-viewer__current-title">Current Flies</div>
                 {[0, 1, 2].map((i) => {
                       const inGraveyard = graveyardSlots.has(i);
                       const hasFly = myFlies[i] != null;

@@ -138,19 +138,20 @@ export function MyNeuroFlies() {
     let submittedHash: string | null = null;
     try {
       const bal = await fetchBalanceCheck(address);
-      if (bal && BigInt(bal.neuroBalanceWei) < BigInt(bal.flyNeuroRequiredWei)) {
-        const required = bal.flyNeuroRequiredWei ? formatNeuroAmount(bal.flyNeuroRequiredWei) : '10k';
-        const msg = `Insufficient $NEURO. You need ${required} $NEURO to buy a fly.`;
+      const resolvedAmountWei = BigInt(
+        config.flyNeuroAmountWei ?? bal?.flyNeuroRequiredWei ?? (10_000n * 10n ** 18n).toString()
+      );
+      if (bal && BigInt(bal.neuroBalanceWei ?? 0) < resolvedAmountWei) {
+        const msg = `Insufficient $NEURO. You need ${formatNeuroAmount(resolvedAmountWei.toString())} $NEURO to buy a fly.`;
         if (mountedRef.current) setError(msg);
         throw new Error(msg);
       }
-      const amountWei = config.flyNeuroAmountWei ? BigInt(config.flyNeuroAmountWei) : 10_000n * 10n ** 18n;
       submittedHash = await walletClient.writeContract({
         account: address,
         address: config.neuroTokenAddress,
         abi: ERC20_TRANSFER_ABI,
         functionName: 'transfer',
-        args: [config.claimReceiverAddress, amountWei],
+        args: [config.claimReceiverAddress, resolvedAmountWei],
         chain: base,
       });
       notification.show('Transaction sent, pending...', 'info');

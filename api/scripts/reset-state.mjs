@@ -21,6 +21,7 @@ const FILES = {
     neuroflyStats: [],
   },
   'claims.json': { claims: {} },
+  'dead-letter.json': { entries: [] },
 };
 
 function main() {

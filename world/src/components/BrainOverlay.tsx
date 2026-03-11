@@ -27,6 +27,21 @@ function hasPosition(n: NeuronWithPosition): n is NeuronWithPosition & { x: numb
   );
 }
 
+function computeMarkerColors(
+  ids: string[],
+  activity: Record<string, number>,
+  sides: string[]
+): number[] {
+  return ids.map((id, i) => {
+    const a = activity[id] ?? 0;
+    if (a <= 0) return 0;
+    const s = sides[i] ?? '';
+    if (s === 'left') return 0.3 + a * 0.4;
+    if (s === 'right') return 0.7 + a * 0.3;
+    return 0.5 + a * 0.2;
+  });
+}
+
 export function BrainOverlay({ neurons, activity, visible = true, embedded = false, containerVisible = true }: BrainOverlayProps) {
   const plotRef = useRef<HTMLDivElement>(null);
   const plotReady = useRef(false);
@@ -71,7 +86,8 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
     const z = withPos.map((p) => p.z);
     const ids = withPos.map((p) => p.root_id);
     idsRef.current = ids;
-    sidesRef.current = withPos.map((p) => (p.side ?? '').toLowerCase());
+    const sidesForRef = withPos.map((p) => (p.side ?? '').toLowerCase());
+    sidesRef.current = sidesForRef;
 
     const minX = Math.min(...x);
     const maxX = Math.max(...x);
@@ -87,16 +103,7 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
     const ys = y.map((v) => (v - cy) / scale);
     const zs = z.map((v) => (v - cz) / scale);
 
-    // Inactive = grey; active = colored (left=blue, right=red, center=amber)
-    const act = ids.map((id) => activity[id] ?? 0);
-    const color = ids.map((_, i) => {
-      const a = act[i];
-      if (a <= 0) return 0; // grey
-      const s = (withPos[i]?.side ?? '').toLowerCase();
-      if (s === 'left') return 0.3 + a * 0.4;
-      if (s === 'right') return 0.7 + a * 0.3;
-      return 0.5 + a * 0.2; // center
-    });
+    const color = computeMarkerColors(ids, activity, sidesForRef);
 
     const traces: Plotly.Data[] = [
       {
@@ -123,7 +130,8 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
         hoverinfo: 'text',
         text: ids.map((id, i) => {
           const p = withPos[i];
-          return `ID: ${id.slice(-8)}\n${p.side ?? 'center'} | ${(act[i] * 100).toFixed(0)}%`;
+          const a = activity[id] ?? 0;
+          return `ID: ${id.slice(-8)}\n${p.side ?? 'center'} | ${(a * 100).toFixed(0)}%`;
         }),
       } as Plotly.Data,
     ];
@@ -153,16 +161,11 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
     };
     const doRestyle = () => {
       if (!plotRef.current || !plotReady.current || idsRef.current.length === 0) return;
-      const sides = sidesRef.current;
-      const act = activityRef.current;
-      const color = idsRef.current.map((id, i) => {
-        const a = act[id] ?? 0;
-        if (a <= 0) return 0;
-        const s = sides[i] ?? '';
-        if (s === 'left') return 0.3 + a * 0.4;
-        if (s === 'right') return 0.7 + a * 0.3;
-        return 0.5 + a * 0.2;
-      });
+      const color = computeMarkerColors(
+        idsRef.current,
+        activityRef.current,
+        sidesRef.current
+      );
       Plotly.restyle(plotRef.current, { 'marker.color': [color] }, [0]);
     };
     const onDown = () => { interacting.current = true; };
@@ -201,6 +204,8 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
       Plotly.purge(el);
       plotReady.current = false;
     };
+    /* activity and withPos intentionally omitted: plot recreation is driven by refs/fingerprint (plotCreationKey) */
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [n, plotCreationKey]);
 
   // Resize Plotly when container changes — skip while interacting; set pending to replay on onUp
@@ -248,15 +253,7 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
       pendingRestyleRef.current = true;
       return;
     }
-    const sides = sidesRef.current;
-    const color = idsRef.current.map((id, i) => {
-      const a = activity[id] ?? 0;
-      if (a <= 0) return 0;
-      const s = sides[i] ?? '';
-      if (s === 'left') return 0.3 + a * 0.4;
-      if (s === 'right') return 0.7 + a * 0.3;
-      return 0.5 + a * 0.2;
-    });
+    const color = computeMarkerColors(idsRef.current, activity, sidesRef.current);
     Plotly.restyle(plotRef.current, { 'marker.color': [color] }, [0]);
   }, [activity, visible]);
 

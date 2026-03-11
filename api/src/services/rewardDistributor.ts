@@ -13,20 +13,8 @@ import {
   type PublicClientLike,
   type WalletLike,
 } from './transactionFacilitator.js';
-import { takeBatchForFlush, confirmDistributed, rollbackBatch, dropFromInFlight } from './rewardStore.js';
-
-const ERC20_TRANSFER_ABI = [
-  {
-    inputs: [
-      { name: 'to', type: 'address' },
-      { name: 'amount', type: 'uint256' },
-    ],
-    name: 'transfer',
-    outputs: [{ name: '', type: 'bool' }],
-    stateMutability: 'nonpayable',
-    type: 'function',
-  },
-] as const;
+import { takeBatchForFlush, confirmDistributed, rollbackBatch, dropFromInFlight, persistDeadLetterEntry } from './rewardStore.js';
+import { ERC20_TRANSFER_ABI } from '../lib/claimConstants.js';
 
 const MAX_TRANSIENT_RETRIES = 2;
 
@@ -39,13 +27,12 @@ function errorText(err: unknown): string {
   return `${e.code ?? ''} ${e.shortMessage ?? ''} ${e.message ?? ''}`.toLowerCase();
 }
 
+/** Only recipient-specific validation failures are permanent (invalid address, zero address). */
 function isPermanentError(err: unknown): boolean {
   const text = errorText(err);
   return (
     text.includes('invalid address') ||
     text.includes('invalid address or ENS name') ||
-    text.includes('execution reverted') ||
-    text.includes('insufficient') ||
     text.includes('transfer to the zero address') ||
     text.includes('ERC20: transfer to the zero address')
   );
@@ -121,6 +108,14 @@ export async function flushRewards(): Promise<void> {
             lastErr = err;
             if (isPermanentError(err)) {
               console.error('[rewardDistributor] permanent failure for', r, err);
+              try {
+                persistDeadLetterEntry(r, a, err);
+              } catch (persistErr) {
+                console.error('[rewardDistributor] persistDeadLetter failed, not dropping:', persistErr);
+                toRollback.push(r);
+                toRollbackAmounts.push(a);
+                break;
+              }
               deadLetter.add(r.toLowerCase());
               dropFromInFlight([r], [a]);
               break;

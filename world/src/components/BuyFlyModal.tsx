@@ -98,25 +98,23 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
     setError(null);
     try {
       const balRes = await fetch(`${getApiBase()}/api/claim/balance-check?address=${address.toLowerCase()}`);
-      if (balRes.ok) {
-        const bal = await balRes.json();
-        const requiredRaw = bal.flyNeuroRequiredWei ?? config.flyNeuroAmountWei ?? FLY_NEURO_AMOUNT_FALLBACK.toString();
-        if (import.meta.env?.DEV) {
-          if (!bal.flyNeuroRequiredWei) console.debug('[BuyFlyModal] using config or fallback for required amount');
-          if (!config.flyNeuroAmountWei && !bal.flyNeuroRequiredWei) console.debug('[BuyFlyModal] using FLY_NEURO_AMOUNT_FALLBACK');
-        }
-        const required = BigInt(requiredRaw);
-        if (BigInt(bal.neuroBalanceWei ?? 0) < required) {
-          if (mountedRef.current) setError('Insufficient $NEURO. You need 10k $NEURO to buy a fly.');
-          return;
-        }
+      const bal = balRes.ok ? await balRes.json() : null;
+      const resolvedAmountRaw = bal?.flyNeuroRequiredWei ?? config.flyNeuroAmountWei ?? FLY_NEURO_AMOUNT_FALLBACK.toString();
+      const transferAmount = BigInt(resolvedAmountRaw);
+      if (import.meta.env?.DEV) {
+        if (!bal?.flyNeuroRequiredWei) console.debug('[BuyFlyModal] using config or fallback for required amount');
+        if (!config.flyNeuroAmountWei && !bal?.flyNeuroRequiredWei) console.debug('[BuyFlyModal] using FLY_NEURO_AMOUNT_FALLBACK');
+      }
+      if (bal && BigInt(bal.neuroBalanceWei ?? 0) < transferAmount) {
+        if (mountedRef.current) setError(`Insufficient $NEURO. You need ${formatNeuroAmount(transferAmount.toString())} $NEURO to buy a fly.`);
+        return;
       }
       const hash = await walletClient.writeContract({
         account: address,
         address: config.neuroTokenAddress,
         abi: ERC20_TRANSFER_ABI,
         functionName: 'transfer',
-        args: [config.claimReceiverAddress, BigInt(config.flyNeuroAmountWei ?? FLY_NEURO_AMOUNT_FALLBACK.toString())],
+        args: [config.claimReceiverAddress, transferAmount],
         chain: base,
       });
       notification.show('Transaction sent, pending...', 'info');

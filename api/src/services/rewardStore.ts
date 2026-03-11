@@ -6,7 +6,7 @@
  */
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import path from 'node:path';
 import type { NeuroFlyStats, RewardState } from '../types/index.js';
 import { getDeployments } from './deployStore.js';
@@ -14,6 +14,7 @@ import { getFlies } from './flyStore.js';
 import { dataPath } from '../lib/dataPath.js';
 
 const rewardsPath = dataPath('rewards-state.json');
+const deadLetterPath = dataPath('dead-letter.json');
 
 /** 1,000 $NEURO (18 decimals) per food collected */
 export const REWARD_PER_FOOD = 1_000n * 10n ** 18n;
@@ -98,6 +99,52 @@ function save(): void {
 }
 
 load();
+
+export interface DeadLetterEntry {
+  id: string;
+  address: string;
+  amountWei: string;
+  error: string;
+  timestamp: string;
+}
+
+function loadDeadLetter(): DeadLetterEntry[] {
+  try {
+    const raw = readFileSync(deadLetterPath, 'utf-8');
+    const data = JSON.parse(raw);
+    return Array.isArray(data?.entries) ? data.entries : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Persist a dead-letter entry for audit/replay. Call before dropFromInFlight.
+ */
+export function persistDeadLetterEntry(address: string, amountWei: bigint, error: unknown): void {
+  if (process.env.VITEST === 'true') return;
+  const entries = loadDeadLetter();
+  const id = `dl-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const errMsg = error instanceof Error ? error.message : String(error);
+  entries.push({
+    id,
+    address: address.toLowerCase(),
+    amountWei: amountWei.toString(),
+    error: errMsg,
+    timestamp: new Date().toISOString(),
+  });
+  const dir = path.dirname(deadLetterPath);
+  const tmp = path.join(dir, `${path.basename(deadLetterPath)}.${crypto.randomUUID()}.tmp`);
+  try {
+    const data = `${JSON.stringify({ entries }, null, 2)}\n`;
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    writeFileSync(tmp, data, 'utf-8');
+    renameSync(tmp, deadLetterPath);
+  } catch (err) {
+    console.error('[rewardStore] persistDeadLetterEntry failed:', err);
+    throw err;
+  }
+}
 
 function findStats(address: string, slotIndex: number, flyId: string): NeuroFlyStats | undefined {
   const addr = address.toLowerCase();
@@ -196,9 +243,14 @@ export function confirmDistributed(recipients: string[], amounts: bigint[], txHa
 
 /**
  * Drop recipients from in-flight without putting back to pending (e.g. dead-letter).
+ * Throws if recipients.length !== amounts.length to surface bookkeeping bugs.
  */
 export function dropFromInFlight(recipients: string[], amounts: bigint[]): void {
-  if (recipients.length !== amounts.length) return;
+  if (recipients.length !== amounts.length) {
+    throw new Error(
+      `[rewardStore] dropFromInFlight: recipients.length (${recipients.length}) !== amounts.length (${amounts.length})`
+    );
+  }
   for (let i = 0; i < recipients.length; i++) {
     const addr = recipients[i].toLowerCase();
     inFlight.delete(addr);

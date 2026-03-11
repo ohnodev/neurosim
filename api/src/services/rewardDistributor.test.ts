@@ -9,19 +9,7 @@ import { createWalletClient, createPublicClient, http, encodeFunctionData } from
 import { privateKeyToAccount } from 'viem/accounts';
 import { base } from 'viem/chains';
 import { NEURO_TOKEN_ADDRESS } from '../lib/addresses.js';
-
-const ERC20_TRANSFER_ABI = [
-  {
-    inputs: [
-      { name: 'to', type: 'address' },
-      { name: 'amount', type: 'uint256' },
-    ],
-    name: 'transfer',
-    outputs: [{ name: '', type: 'bool' }],
-    stateMutability: 'nonpayable',
-    type: 'function',
-  },
-] as const;
+import { ERC20_TRANSFER_ABI } from '../lib/claimConstants.js';
 
 const AMOUNT = 1n * 10n ** 18n; // 1 $NEURO
 

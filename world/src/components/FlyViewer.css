@@ -172,11 +172,11 @@
   border: 1px solid rgba(99, 102, 241, 0.4);
 }
 
-/* Status and Brain side strips - basemarket-style: fixed vertical toggle, panel slides in */
+/* Status and Brain side strips - compact vertical buttons, same height when open */
 .fly-viewer__side-strip {
   position: absolute;
-  top: 0;
-  bottom: 0;
+  bottom: 12px;
+  height: 300px;
   z-index: 100;
   pointer-events: auto;
   display: flex;
@@ -186,14 +186,10 @@
 
 .fly-viewer__side-strip--left {
   left: 0;
-  top: 48px;
-  bottom: 12px;
 }
 
 .fly-viewer__side-strip--right {
   right: 0;
-  top: 48px;
-  bottom: 12px;
   flex-direction: row-reverse;
 }
 
@@ -353,8 +349,9 @@
 }
 
 .fly-viewer__brain-plot {
-  flex: 1;
-  min-height: 200px;
+  height: 220px;
+  min-height: 220px;
+  flex-shrink: 0;
   position: relative;
 }
 

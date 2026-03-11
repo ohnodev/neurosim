@@ -77,7 +77,7 @@ export function FlyCameraController() {
   return (
     <OrbitControls
       ref={controlsRef as any}
-      maxDistance={ctx?.mode === 'fly' ? 5 : undefined}
+      maxDistance={ctx?.mode === 'fly' ? 5 : Infinity}
     />
   );
 }

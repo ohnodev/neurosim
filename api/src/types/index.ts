@@ -22,6 +22,8 @@ export interface DistributedEntry {
 /** Full persisted reward state (amounts as string for bigint serialization) */
 export interface RewardState {
   pending: Record<string, string>;
+  /** In-flight batch taken by takeBatchForFlush; restored on load and merged back to pending. */
+  inFlight?: Record<string, string>;
   distributed: DistributedEntry[];
   neuroflyStats: NeuroFlyStats[];
 }

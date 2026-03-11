@@ -34,6 +34,15 @@ function load(): void {
     const raw = readFileSync(rewardsPath, 'utf-8');
     const data = JSON.parse(raw) as RewardState;
     pending = new Map(Object.entries(data?.pending ?? {}).map(([k, v]) => [k, BigInt(v)]));
+    const restoredInFlight = new Map(
+      Object.entries(data?.inFlight ?? {}).map(([k, v]) => [k, BigInt(v)])
+    );
+    // Merge inFlight back into pending so no rewards are lost after a crash (batch may not have been sent).
+    for (const [addr, amt] of restoredInFlight) {
+      const current = pending.get(addr) ?? 0n;
+      pending.set(addr, current + amt);
+    }
+    inFlight = new Map();
     neuroflyStats = Array.isArray(data?.neuroflyStats) ? data.neuroflyStats : [];
     distributed = Array.isArray(data?.distributed) ? data.distributed : [];
   } catch (err) {
@@ -42,6 +51,7 @@ function load(): void {
       console.error('[rewardStore] load error reading', rewardsPath, nodeErr);
     }
     pending = new Map();
+    inFlight = new Map();
     neuroflyStats = [];
     distributed = [];
   }
@@ -51,6 +61,7 @@ async function persist(): Promise<void> {
   if (process.env.VITEST === 'true') return;
   const state: RewardState = {
     pending: Object.fromEntries([...pending].map(([k, v]) => [k, v.toString()])),
+    inFlight: Object.fromEntries([...inFlight].map(([k, v]) => [k, v.toString()])),
     distributed,
     neuroflyStats,
   };
@@ -147,6 +158,7 @@ export function takeBatchForFlush(maxCount?: number): { recipients: string[]; am
       pending.delete(addr);
     }
   }
+  if (recipients.length > 0) save();
   return { recipients, amounts };
 }
 

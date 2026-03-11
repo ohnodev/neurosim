@@ -193,23 +193,23 @@ function FlyStatusCard({
         <>
           <div style={{ marginBottom: 4 }}>
             <div style={{ fontSize: 9, color: '#888', marginBottom: 2 }}>Hunger</div>
-            <div style={{ position: 'relative', height: 6, background: '#222', borderRadius: 2, overflow: 'hidden' }}>
+            <div style={{ position: 'relative', height: 8, background: '#222', borderRadius: 2, overflow: 'hidden' }}>
               <div style={{ width: `${hunger}%`, height: '100%', background: getHungerColor(hunger), transition: 'width 0.2s' }} />
-              <span style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 8, fontFamily: 'monospace', color: 'rgba(255,255,255,0.9)', textShadow: '0 0 1px #000', pointerEvents: 'none' }}>{Math.round(hunger)}/100</span>
+              <span style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 7, fontFamily: 'monospace', color: '#fff', textShadow: '0 0 2px #000, 0 1px 1px #000', pointerEvents: 'none' }}>{Math.round(hunger)}/100</span>
             </div>
           </div>
           <div style={{ marginBottom: 4 }}>
             <div style={{ fontSize: 9, color: '#888', marginBottom: 2 }}>Health</div>
-            <div style={{ position: 'relative', height: 6, background: '#222', borderRadius: 2, overflow: 'hidden' }}>
+            <div style={{ position: 'relative', height: 8, background: '#222', borderRadius: 2, overflow: 'hidden' }}>
               <div style={{ width: `${health}%`, height: '100%', background: getHealthColor(health), transition: 'width 0.2s' }} />
-              <span style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 8, fontFamily: 'monospace', color: 'rgba(255,255,255,0.9)', textShadow: '0 0 1px #000', pointerEvents: 'none' }}>{Math.round(health)}/100</span>
+              <span style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 7, fontFamily: 'monospace', color: '#fff', textShadow: '0 0 2px #000, 0 1px 1px #000', pointerEvents: 'none' }}>{Math.round(health)}/100</span>
             </div>
           </div>
           <div style={{ marginBottom: 0 }}>
             <div style={{ fontSize: 9, color: '#888', marginBottom: 2 }}>Fatigue</div>
-            <div style={{ position: 'relative', height: 6, background: '#222', borderRadius: 2, overflow: 'hidden' }}>
+            <div style={{ position: 'relative', height: 8, background: '#222', borderRadius: 2, overflow: 'hidden' }}>
               <div style={{ width: `${fatiguePct}%`, height: '100%', background: '#48a', transition: 'width 0.2s' }} />
-              <span style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 8, fontFamily: 'monospace', color: 'rgba(255,255,255,0.9)', textShadow: '0 0 1px #000', pointerEvents: 'none' }}>{Math.round(fatiguePct)}/100</span>
+              <span style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 7, fontFamily: 'monospace', color: '#fff', textShadow: '0 0 2px #000, 0 1px 1px #000', pointerEvents: 'none' }}>{Math.round(fatiguePct)}/100</span>
             </div>
           </div>
         </>

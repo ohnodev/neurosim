@@ -1,7 +1,7 @@
 import { useRef, useState, useEffect, useMemo, Suspense } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { OrbitControls, useGLTF } from '@react-three/drei';
+import { useGLTF } from '@react-three/drei';
 import { FlyCameraContext, FlyCameraController, type CameraMode } from './FlyCameraController';
 import * as THREE from 'three';
 import type { WorldSource } from '../../../api/src/world';
@@ -58,7 +58,7 @@ function FlyModel({ state }: { state: FlyState }) {
     prevRef.current = { x, y };
     const moveSq = dx * dx + dy * dy;
     if (moveSq > MIN_MOVEMENT_SQ) {
-      targetHeadingRef.current = Math.atan2(dx, dy) + Math.PI / 2;
+      targetHeadingRef.current = Math.atan2(dx, dy) + Math.PI;
     }
     const target = targetHeadingRef.current;
     if (group.current) {
@@ -412,7 +412,6 @@ export default function FlyViewer() {
           <Canvas camera={{ position: [8, 6, 8], fov: 50 }} gl={{ outputColorSpace: THREE.SRGBColorSpace }}>
             <ambientLight intensity={0.8} />
             <directionalLight position={[10, 10, 5]} intensity={1.2} castShadow />
-            <OrbitControls enabled={cameraMode === 'god'} />
             <FlyCameraController />
             <Suspense fallback={null}>
             {flies.map((fly, i) => !fly.dead && <FlyModel key={i} state={fly} />)}

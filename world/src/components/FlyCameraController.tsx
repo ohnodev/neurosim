@@ -1,9 +1,10 @@
 /**
- * Plugin-style camera: fly view (follow current fly) vs god view (orbit).
- * Consume via useFlyCamera() and render <FlyCameraController /> inside Canvas.
+ * Plugin-style camera: fly view (follow fly + user rotates around it) vs god view (orbit).
+ * In fly view the orbit target follows the fly smoothly; user can rotate the camera around the fly.
  */
 import { createContext, useContext, useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
+import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 
 export type CameraMode = 'god' | 'fly';
@@ -29,36 +30,41 @@ export function useFlyCamera(): FlyCameraContextValue {
   return ctx;
 }
 
-const FOLLOW_DIST = 2.5;
-const FOLLOW_HEIGHT = 1.2;
-const SMOOTH = 0.12;
+/** Smooth follow: orbit target tracks fly; camera moves by same delta to avoid jitter. */
+const TARGET_SMOOTH = 0.08;
 
-export function FlyCameraController({ enabled = true }: { enabled?: boolean }) {
+export function FlyCameraController() {
   const { camera } = useThree();
   const ctx = useContext(FlyCameraContext);
-  const posRef = useRef(new THREE.Vector3(camera.position.x, camera.position.y, camera.position.z));
-  const lookRef = useRef(new THREE.Vector3(0, 0, 0));
+  const controlsRef = useRef<{ target: THREE.Vector3 } | null>(null);
+  const smoothedTargetRef = useRef(new THREE.Vector3(0, 0, 0));
+  const initialized = useRef(false);
 
   useFrame(() => {
-    if (!enabled || !ctx || ctx.mode !== 'fly' || !ctx.target) return;
-    const t = ctx.target;
-    // Game coords: x,y horizontal, z up. Three: position [x, z, y].
-    const tx = t.x, ty = t.z, tz = t.y;
-    const h = t.heading;
-    const back = FOLLOW_DIST;
-    const ex = tx - Math.sin(h) * back;
-    const ey = ty + FOLLOW_HEIGHT;
-    const ez = tz - Math.cos(h) * back;
-    lookRef.current.set(tx, ty, tz);
-    posRef.current.x += (ex - posRef.current.x) * SMOOTH;
-    posRef.current.y += (ey - posRef.current.y) * SMOOTH;
-    posRef.current.z += (ez - posRef.current.z) * SMOOTH;
-    camera.position.copy(posRef.current);
-    camera.lookAt(lookRef.current);
-    camera.updateProjectionMatrix();
-  });
+    const controls = controlsRef.current;
+    if (!controls) return;
 
-  return null;
+    if (ctx?.mode === 'fly' && ctx?.target) {
+      const t = ctx.target;
+      // Game coords: x,y horizontal, z up. Three: position [x, z, y].
+      const tx = t.x, ty = t.z, tz = t.y;
+      const want = new THREE.Vector3(tx, ty, tz);
+      if (!initialized.current) {
+        smoothedTargetRef.current.copy(want);
+        initialized.current = true;
+      }
+      smoothedTargetRef.current.lerp(want, TARGET_SMOOTH);
+      const newTarget = smoothedTargetRef.current;
+      const delta = newTarget.clone().sub(controls.target);
+      controls.target.copy(newTarget);
+      camera.position.add(delta);
+    } else {
+      initialized.current = false;
+    }
+  }, -2);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return <OrbitControls ref={controlsRef as any} />;
 }
 
 export { FlyCameraContext };

@@ -345,6 +345,8 @@
 .fly-viewer__side-toggle:focus-visible,
 .fly-viewer__side-toggle:active {
   outline: none;
+  box-shadow: none;
+  border-color: rgba(100, 100, 140, 0.3);
 }
 
 .fly-viewer__side-strip--left .fly-viewer__side-toggle {
@@ -360,11 +362,17 @@
 .fly-viewer__side-toggle:hover {
   background: rgba(255, 255, 255, 0.08);
   color: #fff;
+  border-color: rgba(100, 100, 140, 0.3);
 }
 
 .fly-viewer__side-toggle--active {
   background: rgba(35, 70, 138, 0.6);
   color: #aaf;
+  border-color: rgba(100, 100, 140, 0.3);
+}
+
+.fly-viewer__side-toggle--active:hover {
+  border-color: rgba(100, 100, 140, 0.3);
 }
 
 .fly-viewer__side-toggle-label {

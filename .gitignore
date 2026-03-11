@@ -11,6 +11,7 @@ data/connectome-subset.json
 api/data/claims.json
 api/data/flies.json
 api/data/deployments.json
+api/data/rewards-state.json
 *.log
 .pm2/
 .venv/

@@ -9,6 +9,8 @@ import { getWorld, spawnFood, removeFood, getSources } from './world.js';
 import claimsRouter from './routes/claims.js';
 import { getFlies } from './services/flyStore.js';
 import { getDeployments, addDeployment, clearForTesting } from './services/deployStore.js';
+import { recordFoodCollected } from './services/rewardStore.js';
+import { flushRewards } from './services/rewardDistributor.js';
 
 const PORT = Number(process.env.PORT) || 3001;
 const connectome = loadConnectome();
@@ -17,6 +19,7 @@ const GROUND_Z = 0.35;
 const INITIAL_SPREAD = 4;
 
 let foodIntervalId: ReturnType<typeof setInterval> | null = null;
+let rewardFlushIntervalId: ReturnType<typeof setInterval> | null = null;
 
 /** Simulation flies; starts empty, users deploy flies. */
 const sims: ReturnType<typeof createBrainSim>[] = [];
@@ -90,6 +93,7 @@ function startSim(): void {
       const state = sims[i].step(dt);
       if (state.eatenFoodId) {
         removeFood(state.eatenFoodId);
+        recordFoodCollected(i);
         console.log('[world] fly', i, 'ate food', state.eatenFoodId);
       }
       flies.push(state.fly);
@@ -104,6 +108,7 @@ function startSim(): void {
       console.log('[sim] t=', t.toFixed(1), 'flies=', flies.length, first ? `first=(${first.x?.toFixed(2)},${first.y?.toFixed(2)})` : '', 'clients=', wsClients.size);
     }
   }, 1000 / 30);
+  rewardFlushIntervalId = setInterval(() => void flushRewards(), 60_000);
   console.log('[sim] started');
 }
 
@@ -111,6 +116,10 @@ function stopSim(): void {
   if (foodIntervalId) {
     clearInterval(foodIntervalId);
     foodIntervalId = null;
+  }
+  if (rewardFlushIntervalId) {
+    clearInterval(rewardFlushIntervalId);
+    rewardFlushIntervalId = null;
   }
   if (!simRunning) return;
   simRunning = false;

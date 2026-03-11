@@ -256,9 +256,8 @@ export function MyNeuroFlies() {
                   onClick={() => setBuyFlySlot(i)}
                 >
                   <img src="/fly.svg" alt="" width={28} height={28} className="neuroflies__fly-icon-img" aria-hidden />
-                  <span className="neuroflies__fly-slot-label" style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+                  <span className="neuroflies__fly-slot-label">
                     {isEmpty ? 'You have no flies' : `Fly ${i + 1}`}
-                    <span className="neuroflies__fly-pts">0 pts</span>
                   </span>
                   <span className="neuroflies__fly-slot-buy">{isEmpty ? 'Buy your first fly' : 'Buy Fly'}</span>
                 </button>

@@ -6,7 +6,7 @@ import { ConnectButton } from './components/ConnectButton';
 import './App.css';
 
 const LORE_ARTICLE = 'https://theinnermostloop.substack.com/p/the-first-multi-behavior-brain-upload';
-const X_PLACEHOLDER = 'https://x.com/neurosim';
+const X_URL = 'https://x.com/neurosim';
 const TG_URL = 'https://t.me/neurosimportal';
 
 /** Token address - single config to update later. */
@@ -137,7 +137,7 @@ function App() {
             <div className="card card--socials">
               <h2 className="card__title">Socials</h2>
               <div className="socials">
-                <a href={X_PLACEHOLDER} target="_blank" rel="noopener noreferrer" className="card__link">
+                <a href={X_URL} target="_blank" rel="noopener noreferrer" className="card__link">
                   X
                 </a>
                 <a href={TG_URL} target="_blank" rel="noopener noreferrer" className="card__link">

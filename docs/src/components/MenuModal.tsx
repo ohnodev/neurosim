@@ -50,7 +50,7 @@ export default function MenuModal({ isOpen, activeSection, navSubLinks, onClose 
 
           <div className="menu-label">On This Page</div>
           {navSubLinks.map((item) => (
-            <a key={item.id} className={`menu-sub-link ${activeSection === item.id ? "active" : ""}`} href={`#${item.id}`}>
+            <a key={item.id} className={`menu-sub-link ${activeSection === item.id ? "active" : ""}`} href={`#${item.id}`} onClick={onClose}>
               {item.label}
             </a>
           ))}

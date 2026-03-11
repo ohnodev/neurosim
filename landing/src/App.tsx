@@ -7,7 +7,7 @@ import './App.css';
 
 const LORE_ARTICLE = 'https://theinnermostloop.substack.com/p/the-first-multi-behavior-brain-upload';
 const X_PLACEHOLDER = 'https://x.com/neurosim';
-const TG_PLACEHOLDER = 'https://t.me/neurosim';
+const TG_URL = 'https://t.me/neurosimportal';
 
 /** Token address - single config to update later. */
 const TOKEN_ADDRESS = '0x0000000000000000000000000000000000000000';
@@ -140,7 +140,7 @@ function App() {
                 <a href={X_PLACEHOLDER} target="_blank" rel="noopener noreferrer" className="card__link">
                   X
                 </a>
-                <a href={TG_PLACEHOLDER} target="_blank" rel="noopener noreferrer" className="card__link">
+                <a href={TG_URL} target="_blank" rel="noopener noreferrer" className="card__link">
                   Telegram
                 </a>
               </div>

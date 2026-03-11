@@ -5,10 +5,10 @@
  */
 import 'dotenv/config';
 import { describe, it, expect } from 'vitest';
-import { createWalletClient, http, encodeFunctionData, getAddress } from 'viem';
+import { createWalletClient, createPublicClient, http, encodeFunctionData, getAddress } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { base } from 'viem/chains';
-import { CABAL_TOKEN_DISTRIBUTOR, FLY_ETH_RECEIVER } from '../lib/addresses.js';
+import { CABAL_TOKEN_DISTRIBUTOR } from '../lib/addresses.js';
 
 const CABAL_ABI = [
   {
@@ -25,23 +25,19 @@ const CABAL_ABI = [
 
 const AMOUNT = 10n ** 12n; // 0.000001 ETH
 
-describe('rewardDistributor integration', () => {
-  it('distributes ETH to self via CabalTokenDistributor', async () => {
-    const pk = process.env.NEUROSIM_PRIVATE_KEY?.trim();
-    const rpc = process.env.BASE_RPC_URL?.trim();
-    if (!pk || !rpc) {
-      console.log('[rewardDistributor] skipping: NEUROSIM_PRIVATE_KEY or BASE_RPC_URL not set');
-      return;
-    }
+const pk = process.env.NEUROSIM_PRIVATE_KEY?.trim();
+const rpc = process.env.BASE_RPC_URL?.trim();
 
-    const account = privateKeyToAccount(pk as `0x${string}`);
+describe('rewardDistributor integration', () => {
+  it.skipIf(!pk || !rpc)('distributes ETH to self via CabalTokenDistributor', async () => {
+    const account = privateKeyToAccount(pk! as `0x${string}`);
     const wallet = createWalletClient({
       account,
       chain: base,
-      transport: http(rpc),
+      transport: http(rpc!),
     });
 
-    const recipients = [getAddress(FLY_ETH_RECEIVER)] as `0x${string}`[];
+    const recipients = [getAddress(account.address)] as `0x${string}`[];
     const amounts = [AMOUNT];
 
     const hash = await wallet!.sendTransaction({
@@ -58,8 +54,6 @@ describe('rewardDistributor integration', () => {
     expect(typeof hash).toBe('string');
     expect(hash).toMatch(/^0x[a-fA-F0-9]{64}$/);
 
-    // Wait for receipt
-    const { createPublicClient } = await import('viem');
     const publicClient = createPublicClient({
       chain: base,
       transport: http(rpc),

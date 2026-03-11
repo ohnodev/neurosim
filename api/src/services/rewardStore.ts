@@ -2,7 +2,8 @@
  * In-memory reward store with JSON persistence.
  * Tracks pending rewards per owner, NeuroFly stats, and distributed history.
  */
-import fs from 'fs';
+import fs from 'fs/promises';
+import { readFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import type { NeuroFlyStats, RewardState } from '../types/index.js';
@@ -15,37 +16,56 @@ const rewardsPath = path.join(_dir, '../../data/rewards-state.json');
 /** 0.000001 ETH per food collected */
 export const REWARD_PER_FOOD = 10n ** 12n;
 
+/** Max distributed history entries to keep in memory */
+const MAX_DISTRIBUTED_HISTORY = 10_000;
+
 let pending = new Map<string, bigint>();
+let inFlight = new Map<string, bigint>();
 let neuroflyStats: NeuroFlyStats[] = [];
 let distributed: RewardState['distributed'] = [];
 
+let saveScheduled: ReturnType<typeof setTimeout> | null = null;
+const SAVE_DEBOUNCE_MS = 500;
+
 function load(): void {
   try {
-    const raw = fs.readFileSync(rewardsPath, 'utf-8');
+    const raw = readFileSync(rewardsPath, 'utf-8');
     const data = JSON.parse(raw) as RewardState;
     pending = new Map(Object.entries(data?.pending ?? {}).map(([k, v]) => [k, BigInt(v)]));
     neuroflyStats = Array.isArray(data?.neuroflyStats) ? data.neuroflyStats : [];
     distributed = Array.isArray(data?.distributed) ? data.distributed : [];
-  } catch {
+  } catch (err) {
+    const nodeErr = err as NodeJS.ErrnoException;
+    if (nodeErr?.code !== 'ENOENT') {
+      console.error('[rewardStore] load error reading', rewardsPath, nodeErr);
+    }
     pending = new Map();
     neuroflyStats = [];
     distributed = [];
   }
 }
 
+function persist(): void {
+  if (process.env.VITEST === 'true') return;
+  const state: RewardState = {
+    pending: Object.fromEntries([...pending].map(([k, v]) => [k, v.toString()])),
+    distributed,
+    neuroflyStats,
+  };
+  const data = JSON.stringify(state, null, 2);
+  const dir = path.dirname(rewardsPath);
+  fs.mkdir(dir, { recursive: true })
+    .then(() => fs.writeFile(rewardsPath, data))
+    .catch((err) => console.error('[rewardStore] save error:', err));
+}
+
 function save(): void {
   if (process.env.VITEST === 'true') return;
-  try {
-    fs.mkdirSync(path.dirname(rewardsPath), { recursive: true });
-    const state: RewardState = {
-      pending: Object.fromEntries([...pending].map(([k, v]) => [k, v.toString()])),
-      distributed,
-      neuroflyStats,
-    };
-    fs.writeFileSync(rewardsPath, JSON.stringify(state, null, 2));
-  } catch (err) {
-    console.error('[rewardStore] save error:', err);
-  }
+  if (saveScheduled) clearTimeout(saveScheduled);
+  saveScheduled = setTimeout(() => {
+    saveScheduled = null;
+    persist();
+  }, SAVE_DEBOUNCE_MS);
 }
 
 load();
@@ -97,30 +117,60 @@ export function recordFoodCollected(simIndex: number): void {
 }
 
 /**
- * Get pending rewards for flush. Returns recipients and amounts (non-zero only).
+ * Atomically move pending rewards to in-flight and return the batch.
+ * Call confirmDistributed on success, rollbackBatch on failure.
  */
-export function getPendingForFlush(): { recipients: string[]; amounts: bigint[] } {
+export function takeBatchForFlush(): { recipients: string[]; amounts: bigint[] } {
   const recipients: string[] = [];
   const amounts: bigint[] = [];
   for (const [addr, amt] of pending) {
     if (amt > 0n) {
       recipients.push(addr);
       amounts.push(amt);
+      inFlight.set(addr, amt);
+      pending.delete(addr);
     }
   }
   return { recipients, amounts };
 }
 
 /**
- * Mark rewards as distributed. Clears pending for those addresses and appends to history.
+ * Confirm distribution succeeded. Removes from in-flight, appends to history.
  */
-export function markDistributed(recipients: string[], amounts: bigint[]): void {
+export function confirmDistributed(recipients: string[], amounts: bigint[]): void {
+  if (recipients.length !== amounts.length) {
+    throw new Error(`[rewardStore] confirmDistributed: recipients.length (${recipients.length}) !== amounts.length (${amounts.length})`);
+  }
   const now = new Date().toISOString();
   for (let i = 0; i < recipients.length; i++) {
     const addr = recipients[i].toLowerCase();
     const amt = amounts[i];
-    pending.set(addr, 0n);
+    if (amt === undefined) throw new Error(`[rewardStore] confirmDistributed: undefined amount at index ${i}`);
+    inFlight.delete(addr);
     distributed.push({ address: addr, amountWei: amt.toString(), timestamp: now });
+  }
+  if (distributed.length > MAX_DISTRIBUTED_HISTORY) {
+    distributed = distributed.slice(-MAX_DISTRIBUTED_HISTORY);
+  }
+  save();
+}
+
+/**
+ * Rollback a failed distribution: put amounts back into pending.
+ */
+export function rollbackBatch(recipients: string[], amounts: bigint[]): void {
+  if (recipients.length !== amounts.length) {
+    console.error('[rewardStore] rollbackBatch: length mismatch, skipping rollback');
+    return;
+  }
+  for (let i = 0; i < recipients.length; i++) {
+    const addr = recipients[i].toLowerCase();
+    const amt = amounts[i];
+    if (amt !== undefined) {
+      inFlight.delete(addr);
+      const current = pending.get(addr) ?? 0n;
+      pending.set(addr, current + amt);
+    }
   }
   save();
 }
@@ -131,6 +181,7 @@ export function getNeuroFlyStats(address: string, slotIndex: number): NeuroFlySt
 
 export function clearForTesting(): void {
   pending.clear();
+  inFlight.clear();
   neuroflyStats = [];
   distributed = [];
   save();

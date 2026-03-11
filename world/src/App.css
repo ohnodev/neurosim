@@ -175,6 +175,13 @@ html, body, #root { width: 100%; height: 100%; }
   justify-content: center;
   padding: 24px;
   pointer-events: auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.neurosim-claim-overlay::-webkit-scrollbar {
+  display: none;
 }
 .neurosim-claim-modal {
   position: relative;

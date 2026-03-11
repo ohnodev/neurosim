@@ -11,6 +11,23 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* Hide scrollbars globally - page still scrolls */
+html, body, #root,
+.fly-viewer__flies-panel,
+.fly-viewer__status-content,
+.fly-viewer__brain-content {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+html::-webkit-scrollbar,
+body::-webkit-scrollbar,
+#root::-webkit-scrollbar,
+.fly-viewer__flies-panel::-webkit-scrollbar,
+.fly-viewer__status-content::-webkit-scrollbar,
+.fly-viewer__brain-content::-webkit-scrollbar {
+  display: none;
+}
+
 a {
   font-weight: 500;
   color: #646cff;

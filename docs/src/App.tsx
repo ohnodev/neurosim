@@ -8,7 +8,7 @@ import "prismjs/components/prism-rust";
 import MenuModal from "./components/MenuModal";
 import Topbar from "./components/Topbar";
 import { DOCS_HOST_LABEL, getNavSubLinks, normalizePath } from "./lib/docs";
-import PlatformPage from "./pages/PlatformPage";
+import PlatformPage, { docContentMarkdown } from "./pages/PlatformPage";
 import type { Route } from "./types/docs";
 
 export default function App() {
@@ -19,42 +19,6 @@ export default function App() {
   const [docCopied, setDocCopied] = useState(false);
   const currentRoute = useMemo<Route>(() => normalizePath(window.location.pathname), []);
   const navSubLinks = useMemo(() => getNavSubLinks(currentRoute), [currentRoute]);
-
-  const pageMarkdown = useMemo(
-    () =>
-      [
-        "# NeuroSim Docs",
-        "",
-        "NeuroSim is a fly-brain simulation where you buy NeuroFlies, release them into the world, and earn $NEURO when they collect food. It uses a real *Drosophila* fruit fly connectome (FlyWire).",
-        "",
-        "## Introduction",
-        "",
-        "- **Real Connectome**: FlyWire dataset — real neurons and connections from *Drosophila melanogaster*.",
-        "- **Autonomous Behavior**: Flies navigate, get hungry, seek food, rest, and explore.",
-        "- **Token Rewards**: Each food item collected rewards ~1,000 $NEURO tokens.",
-        "- **3D World**: Watch your NeuroFlies at world.neurosim.fun.",
-        "",
-        "## How It Works",
-        "",
-        "1. Buy a NeuroFly for 1,000,000 $NEURO tokens.",
-        "2. Release it into the simulation (Enter World).",
-        "3. The fly autonomously navigates — seeks food, rests, explores.",
-        "4. Each food collected rewards approximately 1,000 $NEURO.",
-        "",
-        "## The Connectome",
-        "",
-        "Uses the FlyWire dataset — real neurons and synapses from *Drosophila melanogaster*. Neurons drive hunger, exploration, rest, and movement. A toy neural simulation steps the connectome forward in time.",
-        "",
-        "## Lore",
-        "",
-        "Inspired by [The First Multi-Behavior Brain Upload](https://theinnermostloop.substack.com/p/the-first-multi-behavior-brain-upload).",
-        "",
-        "## Pricing",
-        "",
-        "1 NeuroFly = 1,000,000 $NEURO. Each food = ~1,000 $NEURO."
-      ].join("\n"),
-    []
-  );
 
   useEffect(() => {
     const saved = localStorage.getItem("neurosim-docs-theme");
@@ -108,7 +72,11 @@ export default function App() {
   }, []);
 
   function getFullPageText() {
-    return document.querySelector<HTMLElement>(".main .content")?.innerText?.trim() ?? "";
+    const el = document.querySelector<HTMLElement>(".main .content");
+    if (!el) return "";
+    const clone = el.cloneNode(true) as HTMLElement;
+    clone.querySelectorAll(".doc-actions").forEach((n) => n.remove());
+    return clone.innerText?.trim() ?? "";
   }
 
   async function flashDocCopied(text: string) {
@@ -123,7 +91,7 @@ export default function App() {
   }
 
   function openAssistant(url: string) {
-    const prompt = encodeURIComponent(pageMarkdown);
+    const prompt = encodeURIComponent(docContentMarkdown);
     window.open(`${url}${prompt}`, "_blank", "noopener,noreferrer");
   }
 
@@ -136,7 +104,7 @@ export default function App() {
       void flashDocCopied(getFullPageText());
     },
     onCopyMarkdown: () => {
-      void flashDocCopied(pageMarkdown);
+      void flashDocCopied(docContentMarkdown);
     },
     onOpenClaude: () => openAssistant("https://claude.ai/new?q="),
     onOpenChatgpt: () => openAssistant("https://chatgpt.com/?q=")

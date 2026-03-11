@@ -3,6 +3,39 @@ import type { DocActionsProps } from "../components/DocActions";
 
 const LORE_ARTICLE = "https://theinnermostloop.substack.com/p/the-first-multi-behavior-brain-upload";
 
+/** Canonical docs content as markdown for Copy Markdown / LLM export. */
+export const docContentMarkdown = [
+  "# NeuroSim Docs",
+  "",
+  "NeuroSim is a fly-brain simulation where you buy NeuroFlies, release them into the world, and earn $NEURO when they collect food. It uses a real *Drosophila* fruit fly connectome (FlyWire).",
+  "",
+  "## Introduction",
+  "",
+  "- **Real Connectome**: FlyWire dataset — real neurons and connections from *Drosophila melanogaster*.",
+  "- **Autonomous Behavior**: Flies navigate, get hungry, seek food, rest, and explore.",
+  "- **Token Rewards**: Each food item collected rewards ~1,000 $NEURO tokens.",
+  "- **3D World**: Watch your NeuroFlies at world.neurosim.fun.",
+  "",
+  "## How It Works",
+  "",
+  "1. Buy a NeuroFly for 1,000,000 $NEURO tokens.",
+  "2. Release it into the simulation (Enter World).",
+  "3. The fly autonomously navigates — seeks food, rests, explores.",
+  "4. Each food collected rewards approximately 1,000 $NEURO.",
+  "",
+  "## The Connectome",
+  "",
+  "Uses the FlyWire dataset — real neurons and synapses from *Drosophila melanogaster*. Neurons drive hunger, exploration, rest, and movement. A toy neural simulation steps the connectome forward in time.",
+  "",
+  "## Lore",
+  "",
+  `Inspired by [The First Multi-Behavior Brain Upload](${LORE_ARTICLE}).`,
+  "",
+  "## Pricing",
+  "",
+  "1 NeuroFly = 1,000,000 $NEURO. Each food = ~1,000 $NEURO."
+].join("\n");
+
 export default function PlatformPage(props: DocActionsProps) {
   return (
     <div className="content">

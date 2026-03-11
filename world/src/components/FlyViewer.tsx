@@ -175,6 +175,13 @@ async function fetchMyDeployed(address: string): Promise<Record<number, number>>
   return data.deployed ?? {};
 }
 
+async function fetchFlyStats(address: string): Promise<{ stats: { slotIndex: number; feedCount: number }[]; rewardPerPointWei: string }> {
+  const r = await fetch(`${getApiBase()}/api/rewards/stats?address=${address.toLowerCase()}`);
+  if (!r.ok) return { stats: [], rewardPerPointWei: '1000000000000' };
+  const data = await r.json();
+  return { stats: data.stats ?? [], rewardPerPointWei: data.rewardPerPointWei ?? '1000000000000' };
+}
+
 function getFlyMode(fly: FlyState): string {
   if (fly.dead) return 'dead';
   if (fly.feeding) return 'feeding';
@@ -188,11 +195,13 @@ function FlyStatusCard({
   fly,
   selected,
   onSelect,
+  points = 0,
 }: {
   index: number;
   fly: FlyState;
   selected: boolean;
   onSelect: () => void;
+  points?: number;
 }) {
   const hunger = fly.hunger ?? 100;
   const health = fly.health ?? 100;
@@ -217,8 +226,9 @@ function FlyStatusCard({
         outline: 'none',
       }}
     >
-      <div style={{ fontSize: 10, color: selected ? '#aaf' : '#aaa', marginBottom: 6, fontWeight: 600 }}>
-        Fly {index + 1}{selected ? ' (viewing)' : ''}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 10, color: selected ? '#aaf' : '#aaa', marginBottom: 6, fontWeight: 600 }}>
+        <span>Fly {index + 1}{selected ? ' (viewing)' : ''}</span>
+        <span style={{ fontSize: 9, color: '#8a8', fontFamily: 'monospace' }}>{points} pts</span>
       </div>
       {fly.dead ? (
         <div style={{ fontSize: 10, color: '#f88' }}>dead</div>
@@ -285,6 +295,18 @@ export default function FlyViewer() {
     queryFn: () => fetchMyDeployed(address!),
     enabled: !!address,
   });
+
+  const { data: flyStatsData } = useQuery({
+    queryKey: ['fly-stats', address ?? ''],
+    queryFn: () => fetchFlyStats(address!),
+    enabled: !!address,
+    refetchInterval: connected ? 5000 : false,
+  });
+  const statsBySlot = useMemo(() => {
+    const m: Record<number, number> = {};
+    for (const s of flyStatsData?.stats ?? []) m[s.slotIndex] = s.feedCount;
+    return m;
+  }, [flyStatsData?.stats]);
 
   useEffect(() => {
     const apiBase = getApiBase();
@@ -418,6 +440,7 @@ export default function FlyViewer() {
       throw new Error(err.error ?? 'Deploy failed');
     }
     queryClient.invalidateQueries({ queryKey: ['my-deployed', address] });
+    queryClient.invalidateQueries({ queryKey: ['fly-stats', address] });
     refetchDeployed();
   };
 
@@ -546,7 +569,10 @@ export default function FlyViewer() {
                               onClick={() => setBuyFlySlot(i)}
                             >
                               <img src="/fly.svg" alt="" width={28} height={28} className="fly-viewer__fly-slot-icon" aria-hidden />
-                              <span className="fly-viewer__fly-slot-label">Fly {i + 1}</span>
+                              <span className="fly-viewer__fly-slot-label" style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+                                Fly {i + 1}
+                                <span style={{ fontSize: 9, color: '#8a8', fontFamily: 'monospace' }}>{statsBySlot[i] ?? 0} pts</span>
+                              </span>
                               <span className="fly-viewer__fly-slot-buy">Buy Fly</span>
                             </button>
                           ) : !isDeployed ? (
@@ -562,12 +588,18 @@ export default function FlyViewer() {
                               }}
                             >
                               <img src="/fly.svg" alt="" width={28} height={28} className="fly-viewer__fly-slot-icon" aria-hidden />
-                              <span className="fly-viewer__fly-slot-label">Fly {i + 1}</span>
+                              <span className="fly-viewer__fly-slot-label" style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+                                Fly {i + 1}
+                                <span style={{ fontSize: 9, color: '#8a8', fontFamily: 'monospace' }}>{statsBySlot[i] ?? 0} pts</span>
+                              </span>
                               <span className="fly-viewer__fly-slot-buy">Deploy</span>
                             </button>
                           ) : isDead ? (
                             <div className="fly-viewer__fly-slot-dead">
-                              <span className="fly-viewer__fly-slot-label">Fly {i + 1} (dead)</span>
+                              <span className="fly-viewer__fly-slot-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                Fly {i + 1} (dead)
+                                <span style={{ fontSize: 9, color: '#8a8', fontFamily: 'monospace' }}>{statsBySlot[i] ?? 0} pts</span>
+                              </span>
                               <button
                                 type="button"
                                 className="fly-viewer__fly-slot-graveyard"
@@ -586,6 +618,7 @@ export default function FlyViewer() {
                               fly={simFly}
                               selected={i === selectedFlyIndex}
                               onSelect={() => setSelectedFlyIndex(i)}
+                              points={statsBySlot[i] ?? 0}
                             />
                           )}
                         </div>
@@ -598,12 +631,21 @@ export default function FlyViewer() {
                 <div className="fly-viewer__graveyard-title">NeuroFly Graveyard</div>
                 {[0, 1, 2]
                   .filter((i) => graveyardSlots.has(i))
-                  .map((i) => (
-                    <div key={i} className="fly-viewer__fly-slot fly-viewer__fly-slot--graveyard">
-                      <img src="/tombstone.svg" alt="" width={20} height={20} className="fly-viewer__graveyard-icon" aria-hidden />
-                      <span className="fly-viewer__fly-slot-label">Fly {i + 1}</span>
-                    </div>
-                  ))}
+                  .map((i) => {
+                    const pts = statsBySlot[i] ?? 0;
+                    const wei = flyStatsData?.rewardPerPointWei ? BigInt(flyStatsData.rewardPerPointWei) * BigInt(pts) : 0n;
+                    const ethStr = pts > 0 ? (Number(wei) / 1e18).toFixed(6) : '0';
+                    return (
+                      <div key={i} className="fly-viewer__fly-slot fly-viewer__fly-slot--graveyard">
+                        <img src="/fly.svg" alt="" width={20} height={20} className="fly-viewer__fly-slot-icon" aria-hidden />
+                        <img src="/tombstone.svg" alt="" width={18} height={18} className="fly-viewer__graveyard-icon" aria-hidden />
+                        <div className="fly-viewer__graveyard-fly-info">
+                          <span className="fly-viewer__fly-slot-label">Fly {i + 1}</span>
+                          <span className="fly-viewer__graveyard-stats">{pts} pts · {ethStr} ETH</span>
+                        </div>
+                      </div>
+                    );
+                  })}
                 {graveyardSlots.size === 0 && (
                   <div style={{ color: '#666', fontSize: 10, padding: 12 }}>No flies in graveyard</div>
                 )}

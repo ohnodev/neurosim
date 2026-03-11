@@ -195,6 +195,19 @@
   margin-bottom: 8px;
 }
 
+.fly-viewer__graveyard-fly-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.fly-viewer__graveyard-stats {
+  font-size: 9px;
+  font-family: monospace;
+  color: #8a8;
+}
+
 .fly-viewer__graveyard-icon {
   flex-shrink: 0;
   opacity: 0.7;

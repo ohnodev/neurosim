@@ -207,6 +207,14 @@ export function getNeuroFlyStats(address: string, slotIndex: number): NeuroFlySt
   return findStats(address, slotIndex);
 }
 
+/** Stats for all slots of an address: feedCount = points (1 feeding = 1 point) */
+export function getStatsForAddress(address: string): { slotIndex: number; feedCount: number }[] {
+  const addr = address.toLowerCase();
+  return neuroflyStats
+    .filter((s) => s.address === addr)
+    .map((s) => ({ slotIndex: s.slotIndex, feedCount: s.feedCount }));
+}
+
 export function clearForTesting(): void {
   pending.clear();
   inFlight.clear();

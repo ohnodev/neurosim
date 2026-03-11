@@ -26,7 +26,7 @@
   background-image:
     linear-gradient(rgba(30, 58, 175, 0.18), rgba(67, 56, 202, 0.15)),
     linear-gradient(rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0.45)),
-    url('/neurosim-bg.jpg');
+    url('/neurosim-bg-v2.jpg');
   background-size: cover;
   background-position: center;
 }

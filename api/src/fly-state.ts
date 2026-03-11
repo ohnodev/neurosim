@@ -1,4 +1,4 @@
-/** Canonical fly state; shared by brain-sim and web simWsClient. */
+/** Canonical fly state; shared by brain-sim and world simWsClient. */
 export interface FlyState {
   x: number;
   y: number;

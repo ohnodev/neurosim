@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useMemo } from 'react';
 import Plotly from 'plotly.js-dist-min';
 
 export interface NeuronWithPosition {
@@ -13,6 +13,10 @@ interface BrainOverlayProps {
   neurons: NeuronWithPosition[];
   activity: Record<string, number>;
   visible?: boolean;
+  /** When true, overlay fills its container (no absolute positioning). */
+  embedded?: boolean;
+  /** When true, container is visible (e.g. panel expanded). Triggers resize after expand. */
+  containerVisible?: boolean;
 }
 
 function hasPosition(n: NeuronWithPosition): n is NeuronWithPosition & { x: number; y: number; z: number } {
@@ -23,7 +27,7 @@ function hasPosition(n: NeuronWithPosition): n is NeuronWithPosition & { x: numb
   );
 }
 
-export function BrainOverlay({ neurons, activity, visible = true }: BrainOverlayProps) {
+export function BrainOverlay({ neurons, activity, visible = true, embedded = false, containerVisible = true }: BrainOverlayProps) {
   const plotRef = useRef<HTMLDivElement>(null);
   const plotReady = useRef(false);
   const idsRef = useRef<string[]>([]);
@@ -32,6 +36,15 @@ export function BrainOverlay({ neurons, activity, visible = true }: BrainOverlay
 
   const withPos = neurons.filter(hasPosition);
   const n = withPos.length;
+  const neuronIdsKey = useMemo(
+    () =>
+      neurons
+        .filter(hasPosition)
+        .map((p) => p.root_id)
+        .sort()
+        .join(','),
+    [neurons]
+  );
 
   // Initial plot when neuron set (with positions) is available
   useEffect(() => {
@@ -145,7 +158,34 @@ export function BrainOverlay({ neurons, activity, visible = true }: BrainOverlay
       Plotly.purge(el);
       plotReady.current = false;
     };
-  }, [visible, n, withPos[0]?.root_id ?? '']); // Rebuild when neuron set changes
+  }, [visible, n, neuronIdsKey]);
+
+  // Resize Plotly when container changes (e.g. panel expand after minimize)
+  useEffect(() => {
+    if (!embedded || !visible) return;
+    const el = plotRef.current;
+    if (!el) return;
+    const resize = () => {
+      if (plotReady.current && el) Plotly.Plots?.resize(el);
+    };
+    const ro = new ResizeObserver(resize);
+    ro.observe(el);
+    const t = setTimeout(resize, 300);
+    return () => {
+      ro.disconnect();
+      clearTimeout(t);
+    };
+  }, [embedded, visible]);
+
+  // Force resize when panel becomes visible (e.g. after expand from collapsed)
+  useEffect(() => {
+    if (!embedded || !visible || !containerVisible) return;
+    const el = plotRef.current;
+    if (!el) return;
+    const t1 = setTimeout(() => { if (plotReady.current && el) Plotly.Plots?.resize(el); }, 50);
+    const t2 = setTimeout(() => { if (plotReady.current && el) Plotly.Plots?.resize(el); }, 350);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  }, [embedded, visible, containerVisible]);
 
   // Update colors when activity changes; skip while user is interacting (prevents camera snap-back)
   useEffect(() => {
@@ -164,24 +204,35 @@ export function BrainOverlay({ neurons, activity, visible = true }: BrainOverlay
 
   if (!visible) return null;
 
-  return (
-    <div
-      className="brain-overlay"
-      style={{
-        position: 'absolute',
+  const containerStyle = embedded
+    ? {
+        position: 'relative' as const,
+        width: '100%',
+        height: '100%',
+        borderRadius: 8,
+        overflow: 'hidden' as const,
+        border: '1px solid rgba(100,100,140,0.3)',
+        boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+        background: 'rgba(10,10,18,0.9)',
+        pointerEvents: 'auto' as const,
+      }
+    : {
+        position: 'absolute' as const,
         bottom: 12,
         right: 12,
         width: 320,
         height: 240,
         borderRadius: 8,
-        overflow: 'hidden',
+        overflow: 'hidden' as const,
         border: '1px solid rgba(100,100,140,0.3)',
         boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
         background: 'rgba(10,10,18,0.9)',
         zIndex: 100,
-        pointerEvents: 'auto',
-      }}
-    >
+        pointerEvents: 'auto' as const,
+      };
+
+  return (
+    <div className="brain-overlay" style={containerStyle}>
       <div style={{ position: 'absolute', top: 4, left: 8, fontSize: 10, color: '#888', zIndex: 1 }}>
         Brain activity
       </div>
@@ -192,7 +243,15 @@ export function BrainOverlay({ neurons, activity, visible = true }: BrainOverlay
           Run process-connectome with coordinates.csv.
         </div>
       ) : (
-        <div ref={plotRef} style={{ width: '100%', height: '100%' }} />
+        <div
+          ref={plotRef}
+          style={{
+            position: 'absolute',
+            inset: 0,
+            minWidth: 1,
+            minHeight: 1,
+          }}
+        />
       )}
     </div>
   );

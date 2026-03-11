@@ -1,0 +1,348 @@
+/* Left flies panel - collapsible, basemarket-style */
+
+.fly-viewer__flies-toggle {
+  position: absolute;
+  left: 8px;
+  top: 12px;
+  z-index: 10;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px solid rgba(100, 100, 140, 0.46);
+  background: rgba(13, 22, 42, 0.9);
+  color: #d5e2fe;
+  padding: 0;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  pointer-events: auto;
+}
+
+.fly-viewer__flies-toggle:focus,
+.fly-viewer__flies-toggle:focus-visible {
+  outline: none;
+}
+
+.fly-viewer__flies-toggle:hover {
+  background: rgba(25, 40, 80, 0.95);
+}
+
+.fly-viewer__flies-toggle--active {
+  background: rgba(35, 70, 138, 0.88);
+}
+
+.fly-viewer__flies-toggle svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.fly-viewer__flies-overlay {
+  position: absolute;
+  left: 12px;
+  top: 48px; /* below toggle button (12px + 30px height + 6px gap) */
+  width: min(180px, calc(100% - 24px));
+  max-height: calc(100% - 56px);
+  overflow: hidden;
+  z-index: 8;
+  display: flex;
+  transform: translateX(calc(-100% - 14px));
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+
+.fly-viewer__flies-overlay--open {
+  transform: translateX(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.fly-viewer__flies-panel {
+  width: 180px;
+  max-height: 50vh;
+  overflow: auto;
+}
+
+.fly-viewer__flies-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.fly-viewer__flies-tab {
+  flex: 1;
+  padding: 6px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #888;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.fly-viewer__flies-tab:focus,
+.fly-viewer__flies-tab:focus-visible,
+.fly-viewer__flies-tab:active {
+  outline: none;
+}
+
+.fly-viewer__flies-tab:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #ccc;
+}
+
+.fly-viewer__flies-tab--active {
+  background: rgba(99, 102, 241, 0.2);
+  color: #aaf;
+}
+
+.fly-viewer__fly-past-card {
+  width: 100%;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  color: #888;
+}
+
+.fly-viewer__fly-slot--past .fly-viewer__fly-past-card {
+  min-height: 80px;
+}
+
+.fly-viewer__fly-slot {
+  min-height: 100px;
+  margin-bottom: 8px;
+  border-radius: 6px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.fly-viewer__fly-slot > button:first-child {
+  flex: 1;
+  min-height: 100px;
+}
+
+.fly-viewer__fly-slot > button:focus-visible {
+  outline: none;
+}
+
+.fly-viewer__fly-slot-empty {
+  flex: 1;
+  min-height: 100px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #888;
+  font-size: 11px;
+  font-family: monospace;
+  cursor: pointer;
+  text-align: center;
+  transition: background 0.15s, color 0.15s;
+}
+
+.fly-viewer__fly-slot-empty:hover {
+  background: rgba(99, 102, 241, 0.15);
+  color: #a5b4fc;
+}
+
+.fly-viewer__fly-slot-empty:focus,
+.fly-viewer__fly-slot-empty:focus-visible,
+.fly-viewer__fly-slot-empty:active {
+  outline: none;
+}
+
+.fly-viewer__fly-slot-label {
+  font-weight: 600;
+  color: #666;
+}
+
+.fly-viewer__fly-slot-buy {
+  font-size: 10px;
+  padding: 4px 12px;
+  border-radius: 4px;
+  background: rgba(99, 102, 241, 0.25);
+  color: #a5b4fc;
+  border: 1px solid rgba(99, 102, 241, 0.4);
+}
+
+/* Status and Brain side strips - compact vertical buttons, same height when open */
+.fly-viewer__side-strip {
+  position: absolute;
+  bottom: 12px;
+  height: 300px;
+  z-index: 100;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+}
+
+.fly-viewer__side-strip--left {
+  left: 0;
+}
+
+.fly-viewer__side-strip--right {
+  right: 0;
+  flex-direction: row-reverse;
+}
+
+/* Vertical toggle - always in same place */
+.fly-viewer__side-toggle {
+  width: 28px;
+  min-width: 28px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px 4px;
+  border: 1px solid rgba(100, 100, 140, 0.3);
+  background: rgba(0, 0, 0, 0.85);
+  color: rgba(255, 255, 255, 0.85);
+  cursor: pointer;
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.fly-viewer__side-toggle:focus,
+.fly-viewer__side-toggle:focus-visible,
+.fly-viewer__side-toggle:active {
+  outline: none;
+}
+
+.fly-viewer__side-strip--left .fly-viewer__side-toggle {
+  border-right: none;
+  border-radius: 0 8px 8px 0;
+}
+
+.fly-viewer__side-strip--right .fly-viewer__side-toggle {
+  border-left: none;
+  border-radius: 8px 0 0 8px;
+}
+
+.fly-viewer__side-toggle:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.fly-viewer__side-toggle--active {
+  background: rgba(35, 70, 138, 0.6);
+  color: #aaf;
+}
+
+.fly-viewer__side-toggle-label {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  transform: rotate(180deg);
+  letter-spacing: 0.5px;
+}
+
+/* Status panel - slides right from left edge */
+.fly-viewer__status-panel {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  width: 0;
+  height: 100%;
+  overflow: hidden;
+  transition: width 0.2s ease;
+}
+
+.fly-viewer__status-panel--open {
+  width: min(360px, calc(100vw - 80px));
+}
+
+.fly-viewer__status-content {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  background: rgba(0, 0, 0, 0.85);
+  color: #ccc;
+  font-size: 11px;
+  padding: 12px;
+  overflow-y: auto;
+  font-family: monospace;
+  border: 1px solid rgba(100, 100, 140, 0.3);
+  border-left: none;
+  border-radius: 0 8px 8px 0;
+  box-shadow: 4px 0 12px rgba(0, 0, 0, 0.4);
+}
+
+.fly-viewer__status-panel--open .fly-viewer__status-content {
+  max-height: 100%;
+  overflow-y: auto;
+}
+
+/* Brain panel - slides left from right edge */
+.fly-viewer__brain-panel {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  width: 0;
+  height: 100%;
+  overflow: hidden;
+  transition: width 0.2s ease;
+}
+
+.fly-viewer__brain-panel--open {
+  width: min(340px, calc(100vw - 80px));
+}
+
+.fly-viewer__brain-content {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  box-sizing: border-box;
+  background: rgba(0, 0, 0, 0.85);
+  border: 1px solid rgba(100, 100, 140, 0.3);
+  border-right: none;
+  border-radius: 8px 0 0 8px;
+  box-shadow: -4px 0 12px rgba(0, 0, 0, 0.4);
+}
+
+.fly-viewer__brain-plot {
+  height: 220px;
+  min-height: 220px;
+  flex-shrink: 0;
+  position: relative;
+}
+
+@media (max-width: 768px) {
+  .fly-viewer__flies-overlay {
+    left: 8px;
+    top: 54px;
+    width: min(180px, calc(100% - 16px));
+    max-height: calc(100% - 64px);
+  }
+
+  .fly-viewer__flies-toggle {
+    left: 8px;
+    top: 12px;
+  }
+}

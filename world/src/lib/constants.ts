@@ -1,8 +1,14 @@
-export const WORLD_URL = 'https://world.neurosim.fun';
-
+/** Dev-only fallback; production must set VITE_PRIVY_APP_ID. */
+const DEV_PRIVY_APP_ID = 'cmmkr8zge00b00eky502lv0kn';
+const isProduction =
+  typeof import.meta !== 'undefined' &&
+  (import.meta as { env?: { MODE?: string } }).env?.MODE === 'production';
 export const PRIVY_APP_ID =
-  (typeof import.meta !== 'undefined' && (import.meta as { env?: { VITE_PRIVY_APP_ID?: string } }).env?.VITE_PRIVY_APP_ID) ||
-  'cmmkr8zge00b00eky502lv0kn';
+  (typeof import.meta !== 'undefined' &&
+    (import.meta as { env?: { VITE_PRIVY_APP_ID?: string } }).env?.VITE_PRIVY_APP_ID?.trim()) ||
+  (isProduction ? 'DEV_PRIVY_APP_ID_PLACEHOLDER' : DEV_PRIVY_APP_ID);
+
+export const LANDING_URL = 'https://neurosim.fun';
 
 export function getApiBase(): string {
   const envBase =

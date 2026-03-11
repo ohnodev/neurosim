@@ -4,14 +4,21 @@
  */
 import { getWsUrl } from "./wsUrl";
 import type { FlyState } from "../../../api/src/fly-state";
+import type { WorldSource } from "../../../api/src/world";
 
 export type { FlyState };
 
 export interface SimPayload {
   t?: number;
+  /** Multi-fly: array of fly states */
+  flies?: FlyState[];
+  /** Legacy: single fly (prefer flies when present) */
   fly?: FlyState;
   activity?: Record<string, number>;
+  /** Per-fly brain activity (index = sim index) */
+  activities?: (Record<string, number> | undefined)[];
   simRunning?: boolean;
+  sources?: WorldSource[];
   error?: string;
 }
 
@@ -156,13 +163,6 @@ export function sendStart(): void {
 export function sendStop(): void {
   if (ws?.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: "stop" }));
-  }
-}
-
-/** Send stimulate message. No-op if not connected. */
-export function sendStimulate(neurons: string[], strength: number): void {
-  if (ws?.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: "stimulate", neurons, strength }));
   }
 }
 

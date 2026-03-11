@@ -37,7 +37,7 @@ export function ConnectButton() {
         className={`wallet-btn ${!ready ? 'wallet-btn--loading' : ''} ${modalOpen ? 'wallet-btn--active' : ''}`}
         onClick={handleClick}
         disabled={!ready}
-        aria-label={!ready ? 'Loading' : modalOpen ? 'Close wallet menu' : isConnected ? 'Open wallet menu' : 'Connect wallet'}
+        aria-label={!ready ? 'Loading' : isConnected ? 'Open wallet menu' : 'Connect wallet'}
         aria-expanded={modalOpen}
         aria-haspopup="dialog"
       >

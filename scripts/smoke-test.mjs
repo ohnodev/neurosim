@@ -39,7 +39,7 @@ async function main() {
   }
 
   // 2. Vite build
-  const vite = spawnSync('npm', ['run', 'build'], { cwd: 'web', stdio: 'pipe', encoding: 'utf-8' });
+  const vite = spawnSync('npm', ['run', 'build'], { cwd: 'world', stdio: 'pipe', encoding: 'utf-8' });
   if (vite.status === 0) {
     console.log('✓ Vite build OK');
     ok++;

@@ -2,7 +2,7 @@
 
 Fly brain emulation: FlyWire connectome + toy neural sim + 3D viewer.
 
-**Flow**: Stimuli → neurons → brain sim → motor output → 3D fly. Click "Stimulate" in the UI to inject activity; the fly responds via connectome propagation.
+**Flow**: Stimuli → neurons → brain sim → motor output → 3D fly. Run the World UI, connect your wallet, deploy a fly, and click "Start" to begin the simulation.
 
 ## Data Setup
 
@@ -28,8 +28,9 @@ npm run process-connectome
 # API
 cd api && npm install && npm run dev
 
-# Web (separate terminal)
-cd web && npm install && npm run dev
+# World (separate terminal)
+cd world && npm install && npm run dev
+# Then open the local URL shown (e.g. http://localhost:5173), connect wallet, deploy a fly, and click Start.
 ```
 
 ## PM2 (production)

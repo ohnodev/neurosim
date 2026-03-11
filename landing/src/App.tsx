@@ -10,7 +10,7 @@ const X_URL = 'https://x.com/neurosim';
 const TG_URL = 'https://t.me/neurosimportal';
 
 /** Token address - single config to update later. */
-const TOKEN_ADDRESS = '0x0000000000000000000000000000000000000000';
+const TOKEN_ADDRESS = '0x73e0591f7b75cc4D82B415d34Cd353683C896cbf';
 
 function CopyIcon() {
   return (

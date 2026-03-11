@@ -30,8 +30,10 @@ export function useFlyCamera(): FlyCameraContextValue {
   return ctx;
 }
 
-/** Smooth follow: orbit target tracks fly; camera moves by same delta to avoid jitter. */
-const TARGET_SMOOTH = 0.08;
+/** Lerp follow: slower = smoother, avoids blur from snapping to fly every 30ms. */
+const TARGET_SMOOTH = 0.035;
+/** Default distance from fly in fly view (a bit closer). */
+const FLY_VIEW_DISTANCE = 3;
 
 export function FlyCameraController() {
   const { camera } = useThree();
@@ -58,13 +60,26 @@ export function FlyCameraController() {
       const delta = newTarget.clone().sub(controls.target);
       controls.target.copy(newTarget);
       camera.position.add(delta);
+
+      // Gently pull closer when far (fly view default)
+      const dist = camera.position.distanceTo(controls.target);
+      if (dist > FLY_VIEW_DISTANCE) {
+        const dir = camera.position.clone().sub(controls.target).normalize();
+        const desired = controls.target.clone().add(dir.multiplyScalar(FLY_VIEW_DISTANCE));
+        camera.position.lerp(desired, 0.035);
+      }
     } else {
       initialized.current = false;
     }
   }, -2);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return <OrbitControls ref={controlsRef as any} />;
+  return (
+    <OrbitControls
+      ref={controlsRef as any}
+      maxDistance={ctx?.mode === 'fly' ? 5 : undefined}
+    />
+  );
 }
 
 export { FlyCameraContext };

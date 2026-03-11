@@ -174,13 +174,14 @@ function FlyStatusCard({
       style={{
         width: '100%',
         textAlign: 'left',
-        border: selected ? '1px solid rgba(99,102,241,0.5)' : '1px solid transparent',
+        border: '1px solid rgba(255,255,255,0.08)',
         background: selected ? 'rgba(99,102,241,0.2)' : 'rgba(255,255,255,0.04)',
         borderRadius: 6,
         padding: 8,
         cursor: 'pointer',
         color: 'inherit',
         font: 'inherit',
+        outline: 'none',
       }}
     >
       <div style={{ fontSize: 10, color: selected ? '#aaf' : '#aaa', marginBottom: 6, fontWeight: 600 }}>
@@ -467,8 +468,6 @@ export default function FlyViewer() {
                   const simIdx = deployed[i];
                   const isDeployed = simIdx != null;
                   const simFly = isDeployed ? (flies[simIdx] ?? DEFAULT_FLY) : DEFAULT_FLY;
-                  const isDead = isDeployed && simFly.dead;
-                  if (isDead) return null;
                   return (
                     <div key={i} className="fly-viewer__fly-slot">
                       {!hasFly ? (

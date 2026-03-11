@@ -1226,4 +1226,27 @@
   .brain-plot__gl {
     min-height: 220px;
   }
+
+  /* My NeuroFlies: remove purple container, keep 3 slots horizontal */
+  .hero__neuroflies .neuroflies {
+    background: none;
+    border: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    padding: 0;
+  }
+
+  .hero__neuroflies .neuroflies__slots {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .hero__neuroflies .neuroflies__slot {
+    flex: 1;
+    min-width: 0;
+    width: auto;
+  }
 }

@@ -43,7 +43,9 @@ function load(): void {
       pending.set(addr, current + amt);
     }
     inFlight = new Map();
-    neuroflyStats = Array.isArray(data?.neuroflyStats) ? data.neuroflyStats : [];
+    neuroflyStats = (Array.isArray(data?.neuroflyStats) ? data.neuroflyStats : []).filter(
+      (s): s is NeuroFlyStats => typeof (s as NeuroFlyStats).flyId === 'string'
+    );
     distributed = Array.isArray(data?.distributed) ? data.distributed : [];
   } catch (err) {
     const nodeErr = err as NodeJS.ErrnoException;
@@ -133,7 +135,8 @@ export function recordFoodCollected(simIndex: number): void {
 
   const { address, slotIndex } = record;
   const addr = address.toLowerCase();
-  const flyId = record.flyId ?? getFlies(addr)[slotIndex]?.id ?? 'legacy';
+  const flyId = record.flyId ?? getFlies(addr)[slotIndex]?.id;
+  if (!flyId) return;
 
   const stats = getOrCreateStats(addr, slotIndex, flyId);
   stats.feedCount += 1;

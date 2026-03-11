@@ -9,10 +9,11 @@ import { fileURLToPath } from 'url';
 const _dir = path.dirname(fileURLToPath(import.meta.url));
 const deployPath = path.join(_dir, '../../data/deployments.json');
 
-/** Persisted format: array of { address, slotIndex } in simIndex order */
-interface DeploymentRecord {
+/** Persisted format: array of { address, slotIndex, timeDeployed? } in simIndex order */
+export interface DeploymentRecord {
   address: string;
   slotIndex: number;
+  timeDeployed?: string;
 }
 
 let deployments: DeploymentRecord[] = [];
@@ -21,7 +22,12 @@ function load(): void {
   try {
     const raw = fs.readFileSync(deployPath, 'utf-8');
     const data = JSON.parse(raw);
-    deployments = Array.isArray(data?.deployments) ? data.deployments : [];
+    const arr = Array.isArray(data?.deployments) ? data.deployments : [];
+    deployments = arr.map((d: { address: string; slotIndex: number; timeDeployed?: string }) => ({
+      address: d.address?.toLowerCase() ?? d.address,
+      slotIndex: d.slotIndex,
+      timeDeployed: d.timeDeployed,
+    }));
   } catch {
     deployments = [];
   }
@@ -46,7 +52,11 @@ export function getDeployments(): DeploymentRecord[] {
 export function addDeployment(address: string, slotIndex: number): void {
   const addr = address.toLowerCase();
   if (deployments.some((d) => d.address === addr && d.slotIndex === slotIndex)) return;
-  deployments.push({ address: addr, slotIndex });
+  deployments.push({
+    address: addr,
+    slotIndex,
+    timeDeployed: new Date().toISOString(),
+  });
   save();
 }
 

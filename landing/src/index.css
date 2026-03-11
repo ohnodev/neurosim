@@ -37,6 +37,7 @@ html, body, #root {
   html, body, #root {
     min-height: 100dvh;
     overflow-y: auto;
+    overscroll-behavior-y: contain;
     scrollbar-width: none;
     -ms-overflow-style: none;
   }

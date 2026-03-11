@@ -12,6 +12,10 @@
 }
 
 /* Hide scrollbars globally - page still scrolls */
+html {
+  overscroll-behavior-y: contain;
+}
+
 html, body, #root,
 .fly-viewer__flies-panel,
 .fly-viewer__status-content,

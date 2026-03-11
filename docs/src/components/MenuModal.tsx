@@ -47,10 +47,10 @@ export default function MenuModal({ isOpen, activeSection, navSubLinks, onClose 
 
           <div className="menu-footer">
             <a href="https://t.me/neurosim" target="_blank" rel="noopener noreferrer" aria-label="Telegram">
-              Telegram
+              <img src="/icons/telegram-logo.svg" alt="Telegram" />
             </a>
             <a href="https://x.com/neurosim" target="_blank" rel="noopener noreferrer" aria-label="X">
-              X
+              <img src="/icons/x-logo.svg" alt="X" />
             </a>
           </div>
         </div>

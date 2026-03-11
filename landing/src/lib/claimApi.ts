@@ -11,3 +11,18 @@ export async function fetchClaimConfig(): Promise<ClaimConfig | null> {
   if (!r.ok) return null;
   return r.json();
 }
+
+export interface BalanceCheck {
+  ethBalanceWei: string;
+  neuroBalanceWei: string;
+  flyEthRequiredWei: string;
+  flyNeuroRequiredWei: string;
+  flyEthRequiredWithGasWei: string;
+  flyNeuroEthRequiredWithGasWei: string;
+}
+
+export async function fetchBalanceCheck(address: string): Promise<BalanceCheck | null> {
+  const r = await fetch(`${getApiBase()}/api/claim/balance-check?address=${address.toLowerCase()}`);
+  if (!r.ok) return null;
+  return r.json();
+}

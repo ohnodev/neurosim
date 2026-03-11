@@ -5,6 +5,7 @@ import { usePrivy, useWallets } from '@privy-io/react-auth';
 import { base } from 'viem/chains';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
 import { fetchClaimConfig } from '../lib/claimApi';
+import { parseWalletError } from '../../../shared/lib/parseWalletError';
 
 interface BuyFlyModalProps {
   isOpen: boolean;
@@ -34,6 +35,8 @@ export function BuyFlyModal({
   const { address, walletClient, chainId } = usePrivyWallet();
   const mountedRef = useRef(true);
   const [error, setError] = useState<string | null>(null);
+  const [txSentNonRetryable, setTxSentNonRetryable] = useState(false);
+  const [submittedTxHash, setSubmittedTxHash] = useState<string | null>(null);
 
   const { data: config } = useQuery({
     queryKey: ['claim-config'],
@@ -50,7 +53,11 @@ export function BuyFlyModal({
   }, []);
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      setTxSentNonRetryable(false);
+      setSubmittedTxHash(null);
+      return;
+    }
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
     };
@@ -79,34 +86,49 @@ export function BuyFlyModal({
     try {
       await onClaimFree();
       onSuccess();
+      onClose();
     } catch (err) {
       if (mountedRef.current) setError(err instanceof Error ? err.message : 'Claim failed');
-    } finally {
-      onClose();
     }
   };
 
   const handleBuyEth = async () => {
     setError(null);
+    setTxSentNonRetryable(false);
+    setSubmittedTxHash(null);
     try {
       await onBuyEth();
       onSuccess();
-    } catch (err) {
-      if (mountedRef.current) setError(err instanceof Error ? err.message : 'Transaction failed');
-    } finally {
       onClose();
+    } catch (err) {
+      const e = err as { txSentNonRetryable?: boolean; submittedTxHash?: string };
+      if (e?.txSentNonRetryable && e?.submittedTxHash && mountedRef.current) {
+        setTxSentNonRetryable(true);
+        setSubmittedTxHash(e.submittedTxHash);
+        setError(null);
+      } else if (mountedRef.current) {
+        setError(parseWalletError(err));
+      }
     }
   };
 
   const handleBuyNeuro = async () => {
     setError(null);
+    setTxSentNonRetryable(false);
+    setSubmittedTxHash(null);
     try {
       await onBuyNeuro();
       onSuccess();
-    } catch (err) {
-      if (mountedRef.current) setError(err instanceof Error ? err.message : 'Transaction failed');
-    } finally {
       onClose();
+    } catch (err) {
+      const e = err as { txSentNonRetryable?: boolean; submittedTxHash?: string };
+      if (e?.txSentNonRetryable && e?.submittedTxHash && mountedRef.current) {
+        setTxSentNonRetryable(true);
+        setSubmittedTxHash(e.submittedTxHash);
+        setError(null);
+      } else if (mountedRef.current) {
+        setError(parseWalletError(err));
+      }
     }
   };
 
@@ -164,10 +186,20 @@ export function BuyFlyModal({
         </button>
         <div className="neurosim-claim__card">
           <h2 id="buy-fly-title" className="neurosim-claim__title">
-            Buy Fly #{slotIndex + 1}
+            Buy NeuroFly #{slotIndex + 1}
           </h2>
           <p className="neurosim-claim__subtitle">Choose payment method</p>
-          {error && <div className="neuroflies__error">{error}</div>}
+          {txSentNonRetryable && (
+            <div className="neuroflies__error">
+              Transaction sent. Do not retry. Please contact support via our Telegram channel for help.
+              {submittedTxHash && (
+                <span style={{ display: 'block', fontSize: 10, marginTop: 4, wordBreak: 'break-all' }}>
+                  Tx: {submittedTxHash}
+                </span>
+              )}
+            </div>
+          )}
+          {error && !txSentNonRetryable && <div className="neuroflies__error">{error}</div>}
           {!isOnBaseChain && (
             <div className="neuroflies__error" style={{ marginBottom: 12 }}>
               Wrong network. Switch to Base to pay.
@@ -189,7 +221,7 @@ export function BuyFlyModal({
                     type="button"
                     className="neurosim-claim__btn neurosim-claim__btn--primary"
                     onClick={handleClaimFree}
-                    disabled={!!busy || eligibility.loading}
+                    disabled={!!busy || !!txSentNonRetryable || eligibility.loading}
                   >
                     {busy === 'obelisk' ? 'Claiming...' : 'Claim free (Obelisk)'}
                   </button>
@@ -198,7 +230,7 @@ export function BuyFlyModal({
                   type="button"
                   className="neurosim-claim__btn neurosim-claim__btn--primary"
                   onClick={handleBuyEth}
-                  disabled={!!busy || !walletClient || !address || !config?.flyEthReceiver}
+                  disabled={!!busy || !!txSentNonRetryable || !walletClient || !address || !config?.flyEthReceiver}
                 >
                   {busy === 'eth' ? 'Confirming...' : 'Pay with 0.0001 ETH'}
                 </button>
@@ -206,7 +238,7 @@ export function BuyFlyModal({
                   type="button"
                   className="neurosim-claim__btn neurosim-claim__btn--secondary"
                   onClick={handleBuyNeuro}
-                  disabled={!!busy || neuroDisabled}
+                  disabled={!!busy || !!txSentNonRetryable || neuroDisabled}
                 >
                   {busy === 'neuro' ? 'Confirming...' : 'Pay with 1M $NEURO'}
                 </button>

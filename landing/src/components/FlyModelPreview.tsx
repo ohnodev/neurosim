@@ -1,31 +1,16 @@
-import { useRef, useMemo, useEffect } from 'react';
+import { useRef, useMemo } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 
-const WING_NAMES = ['Object_4', 'Object_5', 'Object_6'];
-
 function RotatingFly() {
   const group = useRef<THREE.Group>(null);
   const { scene } = useGLTF('/models/low_poly_fly/scene.gltf');
-  const wingsRef = useRef<THREE.Object3D[]>([]);
-
   const cloned = useMemo(() => scene.clone(true), [scene]);
-
-  useEffect(() => {
-    wingsRef.current = [];
-    cloned.traverse((obj) => {
-      if (obj.name && WING_NAMES.includes(obj.name)) wingsRef.current.push(obj);
-    });
-  }, [cloned]);
 
   useFrame((_, delta) => {
     if (group.current) {
       group.current.rotation.y += delta * 0.6;
-    }
-    const flap = Math.sin(performance.now() * 0.015) * 0.35;
-    for (const wing of wingsRef.current) {
-      wing.rotation.x = flap;
     }
   });
 

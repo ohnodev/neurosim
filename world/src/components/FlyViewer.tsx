@@ -1,7 +1,7 @@
 import { useRef, useState, useEffect, useMemo, Suspense } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { useGLTF } from '@react-three/drei';
+import { useGLTF, useAnimations } from '@react-three/drei';
 import { FlyCameraContext, FlyCameraController, type CameraMode } from './FlyCameraController';
 import * as THREE from 'three';
 import type { WorldSource } from '../../../api/src/world';
@@ -34,17 +34,18 @@ function formatEth(wei: bigint, decimals = 6): string {
   return `${whole}.${fracStr}`;
 }
 
-const FLY_THRESHOLD = 1.1; // z above this = flying (wings flap + HUD mode)
+const FLY_THRESHOLD = 1.1; // z above this = flying (HUD mode)
 const REST_DURATION_FALLBACK = 4; // fallback when flyState.restDuration not in payload
-const WING_NAMES = ['Object_4', 'Object_5', 'Object_6']; // fly-white, flywings-dark, glass (wing materials)
-
 /** Lerp factor for fly position - matches camera target smoothness so fly and orbit stay in sync. */
 const FLY_POS_SMOOTH = 0.04;
 
+const WING_ANIM_NAMES = ['wing-leftAction', 'wing-rightAction'];
+
 function FlyModel({ state }: { state: FlyState }) {
-  const { scene } = useGLTF('/models/low_poly_fly/scene.gltf');
   const group = useRef<THREE.Group>(null);
-  const wingsRef = useRef<THREE.Object3D[]>([]);
+  const sceneRef = useRef<THREE.Group>(null);
+  const { scene, animations } = useGLTF('/models/fly-animated/fly2-animation.glb');
+  const { actions } = useAnimations(animations, sceneRef);
   const prevRef = useRef({ x: state.x ?? 0, y: state.y ?? 0 });
   const headingRef = useRef(state.heading ?? 0);
   const targetHeadingRef = useRef(state.heading ?? 0);
@@ -54,18 +55,22 @@ function FlyModel({ state }: { state: FlyState }) {
   const x = state.x ?? 0, y = state.y ?? 0, z = state.z ?? 0;
   const isFlying = z > FLY_THRESHOLD;
 
-  /** Only use velocity-based heading when movement is meaningful (avoids jitter from micro-deltas). */
   const MIN_MOVEMENT_SQ = 0.004;
   const HEADING_LERP = 0.52;
 
-  const cloned = useMemo(() => {
-    const c = scene.clone(true);
-    wingsRef.current = [];
-    c.traverse((obj) => {
-      if (obj.name && WING_NAMES.includes(obj.name)) wingsRef.current.push(obj);
-    });
-    return c;
-  }, [scene]);
+  const cloned = useMemo(() => scene.clone(true), [scene]);
+
+  useEffect(() => {
+    for (const name of WING_ANIM_NAMES) {
+      const action = actions[name];
+      if (!action) continue;
+      if (isFlying) {
+        action.reset().setLoop(THREE.LoopRepeat, Infinity).setEffectiveTimeScale(2).play();
+      } else {
+        action.stop();
+      }
+    }
+  }, [actions, isFlying]);
 
   useFrame(() => {
     // Lerp fly position to avoid glitch when sim updates at ~30ms
@@ -93,17 +98,11 @@ function FlyModel({ state }: { state: FlyState }) {
       headingRef.current += d * HEADING_LERP;
       group.current.rotation.y = headingRef.current;
     }
-    if (isFlying) {
-      const flap = Math.sin(performance.now() * 0.08) * 0.4;
-      for (const wing of wingsRef.current) wing.rotation.x = flap;
-    } else {
-      for (const wing of wingsRef.current) wing.rotation.x = 0;
-    }
   });
 
   return (
     <group ref={group}>
-      <primitive object={cloned} scale={0.08} rotation={[0, 0, 0]} />
+      <primitive ref={sceneRef} object={cloned} scale={0.08} rotation={[0, 0, 0]} />
     </group>
   );
 }
@@ -582,9 +581,9 @@ export default function FlyViewer() {
                             >
                               <img src="/fly.svg" alt="" width={28} height={28} className="fly-viewer__fly-slot-icon" aria-hidden />
                               <span className="fly-viewer__fly-slot-label">
-                                {isEmpty ? 'You have no flies' : `Fly ${i + 1}`}
+                                Fly {i + 1}
                               </span>
-                              <span className="fly-viewer__fly-slot-buy">{isEmpty ? 'Buy your first fly' : 'Buy Fly'}</span>
+                              <span className="fly-viewer__fly-slot-buy">Buy NeuroFly</span>
                             </button>
                           ) : !isDeployed ? (
                             <button
@@ -743,7 +742,7 @@ export default function FlyViewer() {
             title={brainPanelOpen ? 'Hide brain activity' : 'Show brain activity'}
           >
             <span className="fly-viewer__side-toggle-label">Brain</span>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d={brainPanelOpen ? 'M19 12H5M12 19l-7-7 7-7' : 'M5 12h14M12 5l7 7-7 7'} /></svg>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d={brainPanelOpen ? 'M5 12h14M12 5l7 7-7 7' : 'M19 12H5M12 19l-7-7 7-7'} /></svg>
           </button>
         </div>
       </div>

@@ -23,6 +23,13 @@ html, body, #root {
   html, body, #root {
     height: 100dvh;
     overflow: hidden;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  html::-webkit-scrollbar,
+  body::-webkit-scrollbar,
+  #root::-webkit-scrollbar {
+    display: none;
   }
 }
 
@@ -30,6 +37,14 @@ html, body, #root {
   html, body, #root {
     min-height: 100dvh;
     overflow-y: auto;
+    overscroll-behavior-y: contain;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  html::-webkit-scrollbar,
+  body::-webkit-scrollbar,
+  #root::-webkit-scrollbar {
+    display: none;
   }
 }
 

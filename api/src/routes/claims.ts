@@ -11,6 +11,16 @@ import {
   FLY_ETH_AMOUNT,
 } from '../lib/addresses.js';
 
+const ERC20_BALANCE_ABI = [
+  {
+    inputs: [{ internalType: 'address', name: 'account', type: 'address' }],
+    name: 'balanceOf',
+    outputs: [{ internalType: 'uint256', name: '', type: 'uint256' }],
+    stateMutability: 'view',
+    type: 'function',
+  },
+] as const;
+
 const router = Router();
 
 const ERC721_ABI = [
@@ -37,6 +47,53 @@ const TRANSFER_EVENT_ABI = [
 ] as const;
 
 const REQUIRED_AMOUNT = 1_000_000n * 10n ** 18n;
+/** Approx gas for ERC20 transfer; formula: wei = gas × gasPrice. 50_000_000_000_000 wei = 0.00005 ETH (e.g. ~100k gas @ 0.5 gwei). */
+const GAS_BUFFER_WEI = 50_000_000_000_000n;
+
+function parseAndValidateAddress(raw: unknown): `0x${string}` {
+  const s = (typeof raw === 'string' ? raw : '')?.trim().toLowerCase();
+  if (!s || !/^0x[a-f0-9]{40}$/.test(s)) {
+    throw new Error('Invalid address');
+  }
+  return s as `0x${string}`;
+}
+
+router.get('/balance-check', async (req: Request, res: Response) => {
+  try {
+    let addr: `0x${string}`;
+    try {
+      addr = parseAndValidateAddress(req.query.address);
+    } catch {
+      res.status(400).json({ error: 'Invalid address' });
+      return;
+    }
+    const zeroAddr = '0x0000000000000000000000000000000000000000';
+    const [ethBalance, neuroBalance] = await Promise.all([
+      baseRpcClient.getBalance({ address: addr }),
+      NEURO_TOKEN_ADDRESS.toLowerCase() !== zeroAddr
+        ? baseRpcClient.readContract({
+            address: NEURO_TOKEN_ADDRESS,
+            abi: ERC20_BALANCE_ABI,
+            functionName: 'balanceOf',
+            args: [addr],
+          })
+        : 0n,
+    ]);
+    const flyEthWithGas = FLY_ETH_AMOUNT + GAS_BUFFER_WEI;
+    const flyNeuroEthGasWei = GAS_BUFFER_WEI;
+    res.json({
+      ethBalanceWei: ethBalance.toString(),
+      neuroBalanceWei: neuroBalance.toString(),
+      flyEthRequiredWei: FLY_ETH_AMOUNT.toString(),
+      flyNeuroRequiredWei: REQUIRED_AMOUNT.toString(),
+      flyEthRequiredWithGasWei: flyEthWithGas.toString(),
+      flyNeuroEthRequiredWithGasWei: flyNeuroEthGasWei.toString(),
+    });
+  } catch (err) {
+    console.error('[claims] balance-check error:', err);
+    res.status(500).json({ error: 'Failed to check balance' });
+  }
+});
 
 router.get('/config', (_req: Request, res: Response) => {
   res.json({
@@ -49,8 +106,10 @@ router.get('/config', (_req: Request, res: Response) => {
 
 router.get('/my-flies', (req: Request, res: Response) => {
   try {
-    const address = (req.query.address as string)?.toLowerCase();
-    if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address)) {
+    let address: `0x${string}`;
+    try {
+      address = parseAndValidateAddress(req.query.address);
+    } catch {
       res.status(400).json({ error: 'Invalid address' });
       return;
     }
@@ -64,8 +123,10 @@ router.get('/my-flies', (req: Request, res: Response) => {
 
 router.get('/eligibility/:address', async (req: Request, res: Response) => {
   try {
-    const address = (req.params.address as string)?.toLowerCase();
-    if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address)) {
+    let address: `0x${string}`;
+    try {
+      address = parseAndValidateAddress(req.params.address);
+    } catch {
       res.status(400).json({ error: 'Invalid address' });
       return;
     }
@@ -80,7 +141,7 @@ router.get('/eligibility/:address', async (req: Request, res: Response) => {
       address: OBELISK_NFT_ADDRESS,
       abi: ERC721_ABI,
       functionName: 'balanceOf',
-      args: [address as `0x${string}`],
+      args: [address],
     });
 
     const hasObelisk = balance >= 1n;
@@ -100,8 +161,10 @@ router.get('/eligibility/:address', async (req: Request, res: Response) => {
 
 router.post('/free', async (req: Request, res: Response) => {
   try {
-    const address = (req.body?.address as string)?.toLowerCase();
-    if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address)) {
+    let address: `0x${string}`;
+    try {
+      address = parseAndValidateAddress(req.body?.address);
+    } catch {
       res.status(400).json({ error: 'Invalid address' });
       return;
     }
@@ -115,7 +178,7 @@ router.post('/free', async (req: Request, res: Response) => {
       address: OBELISK_NFT_ADDRESS,
       abi: ERC721_ABI,
       functionName: 'balanceOf',
-      args: [address as `0x${string}`],
+      args: [address],
     });
 
     if (balance < 1n) {

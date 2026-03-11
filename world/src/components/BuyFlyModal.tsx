@@ -6,6 +6,7 @@ import { base } from 'viem/chains';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
 import { useNotification } from '../contexts/NotificationContext';
 import { getApiBase } from '../lib/constants';
+import { parseWalletError } from '../../../shared/lib/parseWalletError';
 
 const ETH_AMOUNT = 100000000000000n; // 0.0001 ETH
 const SUPPORT_MESSAGE = 'Please contact support via our Telegram channel for help.';
@@ -59,11 +60,16 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
 
   useEffect(() => {
     if (!isOpen) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
     };
     document.addEventListener('keydown', handleKey);
-    return () => document.removeEventListener('keydown', handleKey);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      document.removeEventListener('keydown', handleKey);
+    };
   }, [isOpen, onClose]);
 
   const isOnBaseChain = chainId === base.id;
@@ -87,6 +93,14 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
     setBusy('eth');
     setError(null);
     try {
+      const balRes = await fetch(`${getApiBase()}/api/claim/balance-check?address=${address.toLowerCase()}`);
+      if (balRes.ok) {
+        const bal = await balRes.json();
+        if (BigInt(bal.ethBalanceWei ?? 0) < BigInt(bal.flyEthRequiredWei ?? ETH_AMOUNT.toString())) {
+          if (mountedRef.current) setError('Insufficient ETH. Add more ETH to your wallet to complete this purchase.');
+          return;
+        }
+      }
       const hash = await walletClient.sendTransaction({
         account: address,
         to: config.flyEthReceiver,
@@ -130,7 +144,7 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
       };
       await verify();
     } catch (err) {
-      if (mountedRef.current) setError(err instanceof Error ? err.message : 'Transaction failed');
+      if (mountedRef.current) setError(parseWalletError(err));
     } finally {
       if (mountedRef.current) setBusy(null);
     }
@@ -167,7 +181,7 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
       <div className="neurosim-claim-modal" onClick={(e) => e.stopPropagation()}>
         <button type="button" className="neurosim-claim__close" onClick={onClose} aria-label="Close">×</button>
         <div className="neurosim-claim__card">
-          <h2 id="buy-fly-title" className="neurosim-claim__title">Buy Fly #{slotIndex + 1}</h2>
+          <h2 id="buy-fly-title" className="neurosim-claim__title">Buy NeuroFly #{slotIndex + 1}</h2>
           <p className="neurosim-claim__subtitle">Choose payment method</p>
           {error && <div className="neuroflies__error">{error}</div>}
           {!isOnBaseChain && (

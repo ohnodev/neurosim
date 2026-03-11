@@ -4,7 +4,8 @@ import { base } from 'viem/chains';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
 import { useNotification } from '../contexts/NotificationContext';
 import { getApiBase } from '../lib/constants';
-import { fetchClaimConfig } from '../lib/claimApi';
+import { fetchClaimConfig, fetchBalanceCheck } from '../lib/claimApi';
+import { parseWalletError } from '../../../shared/lib/parseWalletError';
 import { BuyFlyModal } from './BuyFlyModal';
 
 const ERC20_ABI = [
@@ -101,7 +102,11 @@ export function MyNeuroFlies() {
   };
 
   const handleClaimFree = async () => {
-    if (!address) return;
+    if (!address) {
+      const msg = 'Address missing';
+      if (mountedRef.current) setError(msg);
+      throw new Error(msg);
+    }
     setBusy('obelisk');
     setError(null);
     try {
@@ -115,17 +120,39 @@ export function MyNeuroFlies() {
       invalidateMyFlies();
     } catch (err) {
       if (mountedRef.current) setError(err instanceof Error ? err.message : 'Claim failed');
+      throw err;
     } finally {
       if (mountedRef.current) setBusy(null);
     }
   };
 
   const handleBuyEth = async () => {
-    if (!walletClient || !address || !config?.flyEthReceiver) return;
+    if (!walletClient) {
+      const msg = 'Wallet client missing';
+      if (mountedRef.current) setError(msg);
+      throw new Error(msg);
+    }
+    if (!address) {
+      const msg = 'Address missing';
+      if (mountedRef.current) setError(msg);
+      throw new Error(msg);
+    }
+    if (!config?.flyEthReceiver) {
+      const msg = 'Fly ETH receiver config missing';
+      if (mountedRef.current) setError(msg);
+      throw new Error(msg);
+    }
     setBusy('eth');
     setError(null);
+    let submittedHash: string | null = null;
     try {
-      const hash = await walletClient.sendTransaction({
+      const bal = await fetchBalanceCheck(address);
+      if (bal && BigInt(bal.ethBalanceWei) < BigInt(bal.flyEthRequiredWithGasWei)) {
+        const msg = 'Insufficient ETH. Add more ETH to your wallet to complete this purchase.';
+        if (mountedRef.current) setError(msg);
+        throw new Error(msg);
+      }
+      submittedHash = await walletClient.sendTransaction({
         account: address,
         to: config.flyEthReceiver,
         value: ETH_AMOUNT,
@@ -141,7 +168,7 @@ export function MyNeuroFlies() {
         const res = await fetch(`${apiBase}/api/claim/verify-eth`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ txHash: hash, userAddress: address.toLowerCase() }),
+          body: JSON.stringify({ txHash: submittedHash, userAddress: address.toLowerCase() }),
         });
         const data = await res.json().catch(() => ({}));
         if (res.ok) {
@@ -162,23 +189,60 @@ export function MyNeuroFlies() {
       };
       await verify();
     } catch (err) {
-      if (mountedRef.current) setError(err instanceof Error ? err.message : 'Transaction failed');
+      if (submittedHash) {
+        const e = new Error(SUPPORT_MESSAGE) as Error & { txSentNonRetryable?: boolean; submittedTxHash?: string };
+        e.txSentNonRetryable = true;
+        e.submittedTxHash = submittedHash;
+        throw e;
+      }
+      if (mountedRef.current) setError(parseWalletError(err));
+      throw err;
     } finally {
       if (mountedRef.current) setBusy(null);
     }
   };
 
   const handleBuyNeuro = async () => {
-    if (!walletClient || !address || !config?.neuroTokenAddress || !config?.claimReceiverAddress) return;
+    if (!walletClient) {
+      const msg = 'Wallet client missing';
+      if (mountedRef.current) setError(msg);
+      throw new Error(msg);
+    }
+    if (!address) {
+      const msg = 'Address missing';
+      if (mountedRef.current) setError(msg);
+      throw new Error(msg);
+    }
+    if (!config?.neuroTokenAddress || !config?.claimReceiverAddress) {
+      const msg = 'Claim receiver config missing';
+      if (mountedRef.current) setError(msg);
+      throw new Error(msg);
+    }
     const zero = '0x0000000000000000000000000000000000000000';
     if (config.neuroTokenAddress === zero || config.claimReceiverAddress === zero) {
-      setError('Claim not configured');
-      return;
+      const msg = 'Claim not configured';
+      if (mountedRef.current) setError(msg);
+      throw new Error(msg);
     }
     setBusy('neuro');
     setError(null);
+    let submittedHash: string | null = null;
     try {
-      const hash = await walletClient.writeContract({
+      const bal = await fetchBalanceCheck(address);
+      if (bal) {
+        if (BigInt(bal.neuroBalanceWei) < BigInt(bal.flyNeuroRequiredWei)) {
+          const msg = 'Insufficient $NEURO. You need 1M $NEURO to buy a fly.';
+          if (mountedRef.current) setError(msg);
+          throw new Error(msg);
+        }
+        const minGasWei = BigInt(bal.flyNeuroEthRequiredWithGasWei);
+        if (minGasWei > 0n && BigInt(bal.ethBalanceWei) < minGasWei) {
+          const msg = 'Insufficient ETH for gas. Add more ETH to your wallet to complete this purchase.';
+          if (mountedRef.current) setError(msg);
+          throw new Error(msg);
+        }
+      }
+      submittedHash = await walletClient.writeContract({
         account: address,
         address: config.neuroTokenAddress,
         abi: ERC20_ABI,
@@ -196,7 +260,7 @@ export function MyNeuroFlies() {
         const res = await fetch(`${apiBase}/api/claim/verify-payment`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ txHash: hash, userAddress: address.toLowerCase() }),
+          body: JSON.stringify({ txHash: submittedHash, userAddress: address.toLowerCase() }),
         });
         const data = await res.json().catch(() => ({}));
         if (res.ok) {
@@ -217,7 +281,14 @@ export function MyNeuroFlies() {
       };
       await verify();
     } catch (err) {
-      if (mountedRef.current) setError(err instanceof Error ? err.message : 'Transaction failed');
+      if (submittedHash) {
+        const e = new Error(SUPPORT_MESSAGE) as Error & { txSentNonRetryable?: boolean; submittedTxHash?: string };
+        e.txSentNonRetryable = true;
+        e.submittedTxHash = submittedHash;
+        throw e;
+      }
+      if (mountedRef.current) setError(parseWalletError(err));
+      throw err;
     } finally {
       if (mountedRef.current) setBusy(null);
     }
@@ -256,9 +327,9 @@ export function MyNeuroFlies() {
                 >
                   <img src="/fly.svg" alt="" width={28} height={28} className="neuroflies__fly-icon-img" aria-hidden />
                   <span className="neuroflies__fly-slot-label">
-                    {isEmpty ? 'You have no flies' : `Fly ${i + 1}`}
+                    Fly {i + 1}
                   </span>
-                  <span className="neuroflies__fly-slot-buy">{isEmpty ? 'Buy your first fly' : 'Buy Fly'}</span>
+                  <span className="neuroflies__fly-slot-buy">Buy NeuroFly</span>
                 </button>
               )}
             </div>

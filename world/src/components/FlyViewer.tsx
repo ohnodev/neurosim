@@ -29,6 +29,9 @@ const FLY_THRESHOLD = 1.1; // z above this = flying (wings flap + HUD mode)
 const REST_DURATION_FALLBACK = 4; // fallback when flyState.restDuration not in payload
 const WING_NAMES = ['Object_4', 'Object_5', 'Object_6']; // fly-white, flywings-dark, glass (wing materials)
 
+/** Lerp factor for fly position - matches camera target smoothness so fly and orbit stay in sync. */
+const FLY_POS_SMOOTH = 0.04;
+
 function FlyModel({ state }: { state: FlyState }) {
   const { scene } = useGLTF('/models/low_poly_fly/scene.gltf');
   const group = useRef<THREE.Group>(null);
@@ -36,6 +39,8 @@ function FlyModel({ state }: { state: FlyState }) {
   const prevRef = useRef({ x: state.x ?? 0, y: state.y ?? 0 });
   const headingRef = useRef(state.heading ?? 0);
   const targetHeadingRef = useRef(state.heading ?? 0);
+  const smoothedPosRef = useRef(new THREE.Vector3(state.x ?? 0, state.z ?? 0, state.y ?? 0));
+  const posInit = useRef(false);
 
   const x = state.x ?? 0, y = state.y ?? 0, z = state.z ?? 0;
   const isFlying = z > FLY_THRESHOLD;
@@ -54,6 +59,16 @@ function FlyModel({ state }: { state: FlyState }) {
   }, [scene]);
 
   useFrame(() => {
+    // Lerp fly position to avoid glitch when sim updates at ~30ms
+    const wantX = x, wantZ = z, wantY = y;
+    if (!posInit.current) {
+      smoothedPosRef.current.set(wantX, wantZ, wantY);
+      posInit.current = true;
+    }
+    smoothedPosRef.current.x += (wantX - smoothedPosRef.current.x) * FLY_POS_SMOOTH;
+    smoothedPosRef.current.y += (wantZ - smoothedPosRef.current.y) * FLY_POS_SMOOTH;
+    smoothedPosRef.current.z += (wantY - smoothedPosRef.current.z) * FLY_POS_SMOOTH;
+
     const dx = x - prevRef.current.x, dy = y - prevRef.current.y;
     prevRef.current = { x, y };
     const moveSq = dx * dx + dy * dy;
@@ -62,6 +77,7 @@ function FlyModel({ state }: { state: FlyState }) {
     }
     const target = targetHeadingRef.current;
     if (group.current) {
+      group.current.position.copy(smoothedPosRef.current);
       let d = target - headingRef.current;
       if (d > Math.PI) d -= 2 * Math.PI;
       if (d < -Math.PI) d += 2 * Math.PI;
@@ -77,7 +93,7 @@ function FlyModel({ state }: { state: FlyState }) {
   });
 
   return (
-    <group ref={group} position={[x, z, y]}>
+    <group ref={group}>
       <primitive object={cloned} scale={0.08} rotation={[0, 0, 0]} />
     </group>
   );

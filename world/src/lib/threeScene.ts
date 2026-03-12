@@ -44,6 +44,8 @@ const WING_ANIM_NAMES = ['wing-leftAction', 'wing-rightAction'];
 const PULL_CLOSER_RATE = 1.1;
 const FLY_VIEW_DISTANCE = 3;
 const FLY_SCALE = 0.08;
+/** Sim ground level (z=0.35); map to Three.js y=0 so fly rests on ground */
+const GROUND_Z = 0.35;
 
 export function initThreeScene(
   container: HTMLElement | null,
@@ -273,7 +275,8 @@ export function initThreeScene(
         inst.initialized = true;
       }
 
-      inst.group.position.set(x, z, y);
+      const visualZ = Math.max(0, z - GROUND_Z);
+      inst.group.position.set(x, visualZ, y);
 
       const headingAlpha = Math.min(1, 1 - Math.exp(-HEADING_LERP_RATE * Math.min(cappedDelta, 0.05)));
       let d = inst.targetHeading - inst.heading;
@@ -301,11 +304,13 @@ export function initThreeScene(
       const fly = refs.interpolatedBySimRef.current[idx] as { x?: number; y?: number; z?: number } | undefined;
       let want: THREE.Vector3;
       if (fly && typeof fly.x === 'number' && typeof fly.y === 'number' && typeof fly.z === 'number') {
-        want = new THREE.Vector3(fly.x, fly.z, fly.y);
+        const vz = Math.max(0, (fly.z ?? 0) - GROUND_Z);
+        want = new THREE.Vector3(fly.x, vz, fly.y);
       } else {
         const t = refs.targetRef.current;
         if (t) {
-          want = new THREE.Vector3(t.x, t.z, t.y);
+          const vz = Math.max(0, (t.z ?? 0) - GROUND_Z);
+          want = new THREE.Vector3(t.x, vz, t.y);
         } else {
           want = controls.target;
         }

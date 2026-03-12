@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { lerpFlyState } from './flyInterpolation';
+import type { Snapshot } from './flyInterpolation';
 import type { FlyState } from './simWsClient';
 import type { WorldSource } from '../../../api/src/world';
 
@@ -27,6 +28,7 @@ export interface ThreeSceneRefs {
   cameraModeRef: { current: CameraMode };
   followSimIndexRef: { current: number | undefined };
   sourcesRef: { current: WorldSource[] };
+  snapshotBufferRef: { current: Snapshot[] };
   targetRef: { current: { x: number; y: number; z: number; heading: number } | null };
 }
 
@@ -215,12 +217,6 @@ export function initThreeScene(
     smoothDeltaRef.current += (rawCapped - smoothDeltaRef.current) * 0.1;
     const cappedDelta = smoothDeltaRef.current;
 
-    const sources = refs.sourcesRef.current;
-    if (sources !== lastSources) {
-      lastSources = sources;
-      updateWorldSources(sources);
-    }
-
     const target = refs.latestFliesRef.current;
     if (target.length > 0) {
       const alpha = Math.min(1, 1 - Math.exp(-LERP_RATE * cappedDelta));
@@ -236,14 +232,35 @@ export function initThreeScene(
       flyStates = result;
       refs.interpolatedBySimRef.current = result;
 
+      const tDisplay = result[0]?.t ?? 0;
+      const buf = refs.snapshotBufferRef.current;
+      let sources: WorldSource[] = refs.sourcesRef.current;
+      for (let i = buf.length - 1; i >= 0; i--) {
+        const snap = buf[i]!;
+        if (snap.t <= tDisplay && snap.sources != null) {
+          sources = snap.sources;
+          break;
+        }
+      }
+      if (sources !== lastSources) {
+        lastSources = sources;
+        updateWorldSources(sources);
+      }
+
       refs.debugStatsRef.current = {
           fps: rawDelta > 0 ? 1 / rawDelta : 0,
-          bufferLen: 0,
-          tDisplay: result[0]?.t ?? 0,
+          bufferLen: buf.length,
+          tDisplay,
           speed: 1,
-          rangeStart: 0,
-          rangeEnd: 0,
+          rangeStart: buf[0]?.t ?? 0,
+          rangeEnd: buf[buf.length - 1]?.t ?? 0,
         };
+    } else {
+      const fallbackSources = refs.sourcesRef.current;
+      if (fallbackSources !== lastSources) {
+        lastSources = fallbackSources;
+        updateWorldSources(fallbackSources);
+      }
     }
 
     ensureFlyCount(flyStates.length);

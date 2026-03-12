@@ -1,10 +1,12 @@
 import type { FlyState } from './simWsClient';
+import type { WorldSource } from '../../../api/src/world';
 
 export interface Snapshot {
   t: number;
   flies: FlyState[];
   activities?: (Record<string, number> | undefined)[];
   activity?: Record<string, number>;
+  sources?: WorldSource[];
 }
 
 export const REST_DURATION_FALLBACK = 4;

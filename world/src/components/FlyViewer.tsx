@@ -356,7 +356,7 @@ export default function FlyViewer() {
         sources?: WorldSource[];
       };
       if (data.error) setError(data.error);
-      if (data.sources && Array.isArray(data.sources)) setSources(data.sources);
+      if (data.sources && Array.isArray(data.sources) && !(Array.isArray(data.frames) && data.frames.length > 0)) setSources(data.sources);
       if (!data.error) {
         const buf = snapshotBufferRef.current;
         if (Array.isArray(data.frames) && data.frames.length > 0) {
@@ -366,6 +366,7 @@ export default function FlyViewer() {
               flies: f.flies,
               activities: f.activities ?? [],
               activity: f.activity ?? f.activities?.[0],
+              sources: f.sources,
             });
           }
           const maxT = buf[buf.length - 1]?.t ?? 0;
@@ -481,6 +482,7 @@ export default function FlyViewer() {
       cameraModeRef,
       followSimIndexRef,
       sourcesRef,
+      snapshotBufferRef,
       targetRef: cameraTargetRef,
     });
     return dispose;

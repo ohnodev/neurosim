@@ -105,7 +105,7 @@ function startSim(): void {
         activities.push(state.activity);
         t = state.t;
       }
-      frames.push({ t, flies, activities, activity: activities[0] });
+      frames.push({ t, flies, activities, activity: activities[0], sources: getSources() });
     }
     broadcast({ frames, simRunning: true, sources: getSources() });
     connectionStep += 1;

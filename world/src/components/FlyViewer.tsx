@@ -1010,14 +1010,16 @@ export default function FlyViewer() {
                   Rewards
                 </button>
               </div>
-              {statusTab === 'status' ? (
-                <StatusPanelStatusContent
-                  deployed={deployed}
-                  selectedFlyIndex={selectedFlyIndex}
-                  neuronLabels={neuronLabels}
-                />
-              ) : (
-                <RewardsTable history={rewardsHistoryForTable} />
+              {statusPanelOpen && (
+                statusTab === 'status' ? (
+                  <StatusPanelStatusContent
+                    deployed={deployed}
+                    selectedFlyIndex={selectedFlyIndex}
+                    neuronLabels={neuronLabels}
+                  />
+                ) : (
+                  <RewardsTable history={rewardsHistoryForTable} />
+                )
               )}
             </div>
           </div>

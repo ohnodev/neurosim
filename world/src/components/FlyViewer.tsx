@@ -117,7 +117,7 @@ function FlyStatusCard({
         lastRef.current = next;
         setData(next);
       }
-    }, 100);
+    }, 200);
     return () => clearInterval(id);
   }, [index, getFlyData]);
 
@@ -840,6 +840,14 @@ export default function FlyViewer() {
     []
   );
 
+  const setDeployError = useCallback<React.Dispatch<React.SetStateAction<string | null>>>((value) => {
+    setError((prev) => {
+      const next = typeof value === 'function' ? value(prev) : value;
+      if (next === null) return typeof prev === 'string' && prev.startsWith('Deploy failed') ? null : prev;
+      return next.startsWith('Deploy failed') ? next : prev;
+    });
+  }, []);
+
   const deployFly = useCallback(
     async (slotIndex: number) => {
       if (!address) return;
@@ -937,7 +945,7 @@ export default function FlyViewer() {
                 address={address}
                 onSelectSlot={onSelectFlySlot}
                 setGraveyardByWallet={setGraveyardByWallet}
-                setError={setError}
+                setError={setDeployError}
                 deployFly={deployFly}
                 setBuyFlySlot={setBuyFlySlot}
                 getFlyCardData={getFlyCardData}

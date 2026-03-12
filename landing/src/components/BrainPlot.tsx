@@ -23,8 +23,6 @@ function hasPosition(
   );
 }
 
-const UPDATE_INTERVAL_MS = 150;
-
 export function BrainPlot() {
   const plotRef = useRef<HTMLDivElement>(null);
   const managerRef = useRef<ReturnType<typeof createBrainPlotManager> | null>(null);
@@ -144,17 +142,11 @@ export function BrainPlot() {
     const ids = withPos.map((p) => p.root_id);
     const sides = withPos.map((p) => (p.side ?? '').toLowerCase());
 
-    const getActivity = () => activityRef.current;
-    const manager = createBrainPlotManager(getActivity);
+    const manager = createBrainPlotManager(() => activityRef.current);
     managerRef.current = manager;
     manager.mount(plotRef.current, ids, sides, xs, ys, zs);
 
-    const intervalId = setInterval(() => {
-      manager.update();
-    }, UPDATE_INTERVAL_MS);
-
     return () => {
-      clearInterval(intervalId);
       manager.destroy();
       managerRef.current = null;
     };

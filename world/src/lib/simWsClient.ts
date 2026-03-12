@@ -1,6 +1,7 @@
 /**
- * Robust WebSocket client for sim stream.
- * Single global connection with exponential backoff retry, matching basemarket pattern.
+ * Single global WebSocket for sim stream (basemarket-style).
+ * Pushes every payload to listeners; no client-side queue. Smooth animation
+ * is done by the consumer with a time-based buffer and display delay.
  */
 import { getWsUrl } from "./wsUrl";
 import type { FlyState } from "../../../api/src/fly-state";
@@ -10,12 +11,9 @@ export type { FlyState };
 
 export interface SimPayload {
   t?: number;
-  /** Multi-fly: array of fly states */
   flies?: FlyState[];
-  /** Legacy: single fly (prefer flies when present) */
   fly?: FlyState;
   activity?: Record<string, number>;
-  /** Per-fly brain activity (index = sim index) */
   activities?: (Record<string, number> | undefined)[];
   simRunning?: boolean;
   sources?: WorldSource[];
@@ -79,7 +77,6 @@ function scheduleRestart(): void {
 
 function connect(): void {
   if (disposed || ws?.readyState === WebSocket.OPEN) return;
-  // Don't abandon a handshaking socket; wait for it to finish (open/close) first
   if (ws?.readyState === WebSocket.CONNECTING) return;
   clearConnection();
   const url = getWsUrl();
@@ -100,11 +97,12 @@ function connect(): void {
       const data = JSON.parse(e.data as string) as SimPayload;
       if (data.error) {
         lastError = data.error;
-      } else {
-        lastPayload = data;
-        lastError = null;
+        for (const fn of listeners) fn(data as SimPayload);
+        return;
       }
-      for (const fn of listeners) fn(data as SimPayload);
+      lastError = null;
+      lastPayload = data;
+      for (const fn of listeners) fn(data);
     } catch (err) {
       if (import.meta.env?.DEV) {
         console.warn("[simWsClient] parse error", err);
@@ -152,14 +150,12 @@ export function subscribeSim(listener: Listener): () => void {
   };
 }
 
-/** Send start message to start the sim. No-op if not connected. */
 export function sendStart(): void {
   if (ws?.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: "start" }));
   }
 }
 
-/** Send stop message to stop the sim. No-op if not connected. */
 export function sendStop(): void {
   if (ws?.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: "stop" }));

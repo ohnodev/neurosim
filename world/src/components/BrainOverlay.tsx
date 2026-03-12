@@ -1,6 +1,17 @@
-import { useEffect, useRef, useMemo } from 'react';
+import { useCallback, useEffect, useRef, useMemo } from 'react';
 import Plotly from 'plotly.js-dist-min';
-
+import {
+  getSceneCamera,
+  getDefaultCamera,
+  cameraFromRelayout,
+  type SceneCamera,
+  UIREVISION,
+} from '../../../shared/lib/plotlySceneCamera';
+import {
+  computeMarkerColors,
+  computeHoverTexts,
+  BRAIN_PLOT_COLORSCALE,
+} from '../../../shared/lib/brainPlotColors';
 export interface NeuronWithPosition {
   root_id: string;
   side?: string;
@@ -27,33 +38,6 @@ function hasPosition(n: NeuronWithPosition): n is NeuronWithPosition & { x: numb
   );
 }
 
-function computeMarkerColors(
-  ids: string[],
-  activity: Record<string, number>,
-  sides: string[]
-): number[] {
-  return ids.map((id, i) => {
-    const a = activity[id] ?? 0;
-    if (a <= 0) return 0;
-    const s = sides[i] ?? '';
-    if (s === 'left') return 0.3 + a * 0.4;
-    if (s === 'right') return 0.7 + a * 0.3;
-    return 0.5 + a * 0.2;
-  });
-}
-
-function computeHoverText(
-  ids: string[],
-  activity: Record<string, number>,
-  sides: string[]
-): string[] {
-  return ids.map((id, i) => {
-    const a = activity[id] ?? 0;
-    const sideLabel = sides[i] ? sides[i] : 'center';
-    return `ID: ${id.slice(-8)}\n${sideLabel} | ${(a * 100).toFixed(0)}%`;
-  });
-}
-
 export function BrainOverlay({ neurons, activity, visible = true, embedded = false, containerVisible = true }: BrainOverlayProps) {
   const plotRef = useRef<HTMLDivElement>(null);
   const plotReady = useRef(false);
@@ -64,6 +48,7 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
   const pendingRestyleRef = useRef(false);
   const plotKeyRef = useRef<string>('');
   const activityRef = useRef(activity);
+  const cameraRef = useRef<SceneCamera>(getDefaultCamera());
   activityRef.current = activity;
 
   const withPos = neurons.filter(hasPosition);
@@ -89,6 +74,26 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
   }, [neurons]);
 
   const plotCreationKey = n > 0 ? `${n}-${neuronIdsKey}-${positionsFingerprint}` : '';
+
+  const preserveCameraRestyle = useCallback(
+    (activityData: Record<string, number>) => {
+      const el = plotRef.current;
+      if (!el || !plotReady.current || idsRef.current.length === 0) return;
+      const live = getSceneCamera(el);
+      if (live) cameraRef.current = live;
+      const ids = idsRef.current;
+      const sides = sidesRef.current;
+      const color = computeMarkerColors(ids, activityData, sides);
+      const text = computeHoverTexts(ids, activityData, sides);
+      Plotly.restyle(el, { 'marker.color': [color], text: [text] }, [0]);
+      Plotly.relayout(el, {
+        'scene.camera': cameraRef.current,
+        'scene.uirevision': UIREVISION,
+        uirevision: UIREVISION,
+      } as Record<string, unknown>);
+    },
+    []
+  );
 
   // Initial plot when neuron set (with positions) is available — do NOT depend on visible so we don't purge/recreate on connect toggle
   useEffect(() => {
@@ -118,7 +123,7 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
     const zs = z.map((v) => (v - cz) / scale);
 
     const color = computeMarkerColors(ids, activity, sidesForRef);
-    const text = computeHoverText(ids, activity, sidesForRef);
+    const text = computeHoverTexts(ids, activity, sidesForRef);
 
     const traces: Plotly.Data[] = [
       {
@@ -130,13 +135,7 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
         marker: {
           size: 3,
           color,
-          colorscale: [
-            [0, '#888888'],
-            [0.3, '#4a7de8'],
-            [0.5, '#e8b84a'],
-            [0.7, '#e85a4a'],
-            [1, '#ff8c7a'],
-          ],
+          colorscale: BRAIN_PLOT_COLORSCALE,
           cmin: 0,
           cmax: 1,
           showscale: false,
@@ -154,67 +153,74 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
       plot_bgcolor: 'rgba(10,10,18,0.9)',
       font: { color: '#aaa', size: 10 },
       showlegend: false,
-      uirevision: 'brain-activity',
+      uirevision: UIREVISION,
       scene: {
         xaxis: { visible: false, range: [-1.2, 1.2] },
         yaxis: { visible: false, range: [-1.2, 1.2] },
         zaxis: { visible: false, range: [-1.2, 1.2] },
         bgcolor: 'rgba(10,10,18,0)',
-        camera: { eye: { x: 0.2, y: -0.2, z: 0.5 } },
+        camera: cameraRef.current,
+        uirevision: UIREVISION,
         aspectmode: 'cube',
         dragmode: 'orbit',
       },
     };
 
     const el = plotRef.current;
-    const doResize = () => {
-      if (plotReady.current && el) Plotly.Plots?.resize(el);
-    };
-    const doRestyle = () => {
-      if (!plotRef.current || !plotReady.current || idsRef.current.length === 0) return;
-      const ids = idsRef.current;
-      const act = activityRef.current;
-      const sides = sidesRef.current;
-      const color = computeMarkerColors(ids, act, sides);
-      const text = computeHoverText(ids, act, sides);
-      Plotly.restyle(plotRef.current, { 'marker.color': [color], text: [text] }, [0]);
-    };
     const onDown = () => { interacting.current = true; };
     const onUp = () => {
       interacting.current = false;
-      if (pendingResizeRef.current) {
-        pendingResizeRef.current = false;
-        doResize();
-      }
+      if (pendingResizeRef.current) pendingResizeRef.current = false;
       if (pendingRestyleRef.current) {
         pendingRestyleRef.current = false;
-        doRestyle();
+        setTimeout(() => preserveCameraRestyle(activityRef.current), 0);
       }
+    };
+    const onDblClick = (e: Event) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if ('stopImmediatePropagation' in e) e.stopImmediatePropagation();
     };
     const touchOpts = { passive: false } as AddEventListenerOptions;
     const keyForThisRun = plotCreationKey;
     el.addEventListener('mousedown', onDown);
     el.addEventListener('touchstart', onDown, touchOpts);
     el.addEventListener('touchcancel', onUp, touchOpts);
+    el.addEventListener('dblclick', onDblClick, { capture: true });
     window.addEventListener('mouseup', onUp);
     window.addEventListener('touchend', onUp, touchOpts);
     window.addEventListener('blur', onUp);
 
+    const onRelayout = (ev: Record<string, unknown>) => {
+      const next = cameraFromRelayout(ev, cameraRef.current);
+      if (next) cameraRef.current = next;
+    };
+
     Plotly.newPlot(el, traces, layout, {
-      responsive: true,
+      responsive: false,
       displayModeBar: true,
       displaylogo: false,
       modeBarButtonsToRemove: ['lasso2d', 'select2d'],
       staticPlot: false,
-    } as Record<string, unknown>).then(() => {
-      if (plotKeyRef.current === keyForThisRun) plotReady.current = true;
-    });
+    } as Record<string, unknown>)
+      .then(() => {
+        if (plotKeyRef.current === keyForThisRun) {
+          plotReady.current = true;
+          (el as unknown as { on?: (e: string, fn: (ev: Record<string, unknown>) => void) => void }).on?.('plotly_relayout', onRelayout);
+        }
+      })
+      .catch((err: unknown) => {
+        if (import.meta.env?.DEV) {
+          console.error('[BrainOverlay] Plotly.newPlot failed:', err);
+        }
+      });
 
     return () => {
       plotKeyRef.current = '';
       el.removeEventListener('mousedown', onDown);
       el.removeEventListener('touchstart', onDown, touchOpts);
       el.removeEventListener('touchcancel', onUp, touchOpts);
+      el.removeEventListener('dblclick', onDblClick, { capture: true });
       window.removeEventListener('mouseup', onUp);
       window.removeEventListener('touchend', onUp, touchOpts);
       window.removeEventListener('blur', onUp);
@@ -263,19 +269,15 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
     return () => { clearTimeout(t1); clearTimeout(t2); };
   }, [embedded, visible, containerVisible]);
 
-  // Update colors and hover text when activity changes; skip while interacting, set pending to replay on onUp
+  // Update colors and hover text when activity changes; restyle only, never relayout camera (avoids mobile snap-back)
   useEffect(() => {
     if (!plotRef.current || !plotReady.current || !visible || idsRef.current.length === 0) return;
     if (interacting.current) {
       pendingRestyleRef.current = true;
       return;
     }
-    const ids = idsRef.current;
-    const sides = sidesRef.current;
-    const color = computeMarkerColors(ids, activity, sides);
-    const text = computeHoverText(ids, activity, sides);
-    Plotly.restyle(plotRef.current, { 'marker.color': [color], text: [text] }, [0]);
-  }, [activity, visible]);
+    preserveCameraRestyle(activity);
+  }, [activity, visible, preserveCameraRestyle]);
 
   const containerStyle = embedded
     ? {

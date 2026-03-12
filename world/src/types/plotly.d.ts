@@ -28,6 +28,7 @@ declare module 'plotly.js-dist-min' {
       layout: Partial<PlotlyLayout>,
       options?: Record<string, unknown>,
     ) => Promise<void>;
+    relayout: (el: HTMLElement, update: Record<string, unknown>) => Promise<void>;
     restyle: (
       el: HTMLElement,
       update: Record<string, unknown>,

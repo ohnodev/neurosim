@@ -389,6 +389,14 @@
   color: #f87171;
   margin-bottom: 10px;
 }
+.neuroflies__cabal-link {
+  font-size: 0.8rem;
+  color: #a5b4fc;
+  text-decoration: underline;
+}
+.neuroflies__cabal-link:hover {
+  color: #c7d2fe;
+}
 
 .neuroflies__hint {
   font-family: var(--font-mono);

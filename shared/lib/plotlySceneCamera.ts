@@ -3,13 +3,17 @@
  * Used by landing (brainPlotManager) and world (BrainOverlay) to preserve
  * camera after restyle on mobile.
  */
-export type SceneCamera = Record<string, { x: number; y: number; z: number }>;
+export interface SceneCamera {
+  eye: { x: number; y: number; z: number };
+  center: { x: number; y: number; z: number };
+  up: { x: number; y: number; z: number };
+}
 
 /**
  * Copy current scene camera from Plotly internal layout (preserve after restyle on mobile).
  */
 export function getSceneCamera(gd: HTMLDivElement): SceneCamera | null {
-  const fullLayout = (gd as unknown as { _fullLayout?: { scene?: { camera?: Record<string, { x: number; y: number; z: number }> } } })._fullLayout;
+  const fullLayout = (gd as unknown as { _fullLayout?: { scene?: { camera?: { eye?: { x: number; y: number; z: number }; center?: { x: number; y: number; z: number }; up?: { x: number; y: number; z: number } } } } })._fullLayout;
   const cam = fullLayout?.scene?.camera;
   if (!cam?.eye || !cam?.center || !cam?.up) return null;
   return {

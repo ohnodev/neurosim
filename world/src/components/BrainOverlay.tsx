@@ -1,4 +1,4 @@
-import { useEffect, useRef, useMemo } from 'react';
+import { useCallback, useEffect, useRef, useMemo } from 'react';
 import Plotly from 'plotly.js-dist-min';
 import { getSceneCamera } from '../../../shared/lib/plotlySceneCamera';
 
@@ -91,6 +91,23 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
 
   const plotCreationKey = n > 0 ? `${n}-${neuronIdsKey}-${positionsFingerprint}` : '';
 
+  const preserveCameraRestyle = useCallback(
+    (restoreCamera: boolean, activityData: Record<string, number>) => {
+      const el = plotRef.current;
+      if (!el || !plotReady.current || idsRef.current.length === 0) return;
+      const savedCamera = restoreCamera ? getSceneCamera(el) : null;
+      const ids = idsRef.current;
+      const sides = sidesRef.current;
+      const color = computeMarkerColors(ids, activityData, sides);
+      const text = computeHoverText(ids, activityData, sides);
+      Plotly.restyle(el, { 'marker.color': [color], text: [text] }, [0]);
+      if (savedCamera) {
+        Plotly.relayout(el, { 'scene.camera': savedCamera } as Record<string, unknown>);
+      }
+    },
+    []
+  );
+
   // Initial plot when neuron set (with positions) is available — do NOT depend on visible so we don't purge/recreate on connect toggle
   useEffect(() => {
     if (!plotRef.current || n === 0 || !plotCreationKey) return;
@@ -171,19 +188,8 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
     const doResize = () => {
       if (plotReady.current && el) Plotly.Plots?.resize(el);
     };
-    const doRestyle = () => {
-      const el = plotRef.current;
-      if (!el || !plotReady.current || idsRef.current.length === 0) return;
-      const savedCamera = getSceneCamera(el);
-      const ids = idsRef.current;
-      const act = activityRef.current;
-      const sides = sidesRef.current;
-      const color = computeMarkerColors(ids, act, sides);
-      const text = computeHoverText(ids, act, sides);
-      Plotly.restyle(el, { 'marker.color': [color], text: [text] }, [0]);
-      if (savedCamera) {
-        Plotly.relayout(el, { 'scene.camera': savedCamera } as Record<string, unknown>);
-      }
+    const doRestyle = (restoreCamera = true) => {
+      preserveCameraRestyle(restoreCamera, activityRef.current);
     };
     const onDown = () => { interacting.current = true; };
     const onUp = () => {
@@ -194,7 +200,7 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
       }
       if (pendingRestyleRef.current) {
         pendingRestyleRef.current = false;
-        doRestyle();
+        doRestyle(false);
       }
     };
     const onDblClick = (e: Event) => {
@@ -276,24 +282,15 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
     return () => { clearTimeout(t1); clearTimeout(t2); };
   }, [embedded, visible, containerVisible]);
 
-  // Update colors and hover text when activity changes; reuse camera-preserving restyle (same as doRestyle) so view is not reset on mobile
+  // Update colors and hover text when activity changes; reuse camera-preserving restyle so view is not reset on mobile
   useEffect(() => {
-    const el = plotRef.current;
-    if (!el || !plotReady.current || !visible || idsRef.current.length === 0) return;
+    if (!plotRef.current || !plotReady.current || !visible || idsRef.current.length === 0) return;
     if (interacting.current) {
       pendingRestyleRef.current = true;
       return;
     }
-    const savedCamera = getSceneCamera(el);
-    const ids = idsRef.current;
-    const sides = sidesRef.current;
-    const color = computeMarkerColors(ids, activity, sides);
-    const text = computeHoverText(ids, activity, sides);
-    Plotly.restyle(el, { 'marker.color': [color], text: [text] }, [0]);
-    if (savedCamera) {
-      Plotly.relayout(el, { 'scene.camera': savedCamera } as Record<string, unknown>);
-    }
-  }, [activity, visible]);
+    preserveCameraRestyle(true, activity);
+  }, [activity, visible, preserveCameraRestyle]);
 
   const containerStyle = embedded
     ? {

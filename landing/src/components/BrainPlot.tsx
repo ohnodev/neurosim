@@ -112,8 +112,12 @@ export function BrainPlot() {
   const withPos = neurons.filter(hasPosition);
   const n = withPos.length;
   const dataFingerprint = useMemo(
-    () => withPos.map((p) => `${p.root_id}:${p.x},${p.y},${p.z}:${p.side ?? ''}`).join('|'),
-    [withPos]
+    () =>
+      neurons
+        .filter(hasPosition)
+        .map((p) => `${p.root_id}:${p.x},${p.y},${p.z}:${p.side ?? ''}`)
+        .join('|'),
+    [neurons]
   );
 
   // Manager owns all Plotly calls; we only mount once when we have a container and data, then push updates via timer (not React effects on activity).

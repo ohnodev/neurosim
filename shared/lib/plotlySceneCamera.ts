@@ -11,7 +11,7 @@ export interface SceneCamera {
 export const UIREVISION = 'brain-plot-v1';
 
 const DEFAULT_CAMERA: SceneCamera = {
-  eye: { x: 1.5, y: 1.5, z: 1.2 },
+  eye: { x: 0.2, y: -0.2, z: 0.5 },
   center: { x: 0, y: 0, z: 0 },
   up: { x: 0, y: 0, z: 1 },
 };

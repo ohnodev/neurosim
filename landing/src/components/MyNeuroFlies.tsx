@@ -6,7 +6,7 @@ import { useNotification } from '../contexts/NotificationContext';
 import { getApiBase } from '../lib/constants';
 import { fetchClaimConfig, fetchBalanceCheck, formatNeuroAmount } from '../lib/claimApi';
 import { parseWalletError } from '../../../shared/lib/parseWalletError';
-import { ERC20_TRANSFER_ABI } from '../../../shared/lib/claimConstants';
+import { CABAL_BUY_NEURO_URL, ERC20_TRANSFER_ABI } from '../../../shared/lib/claimConstants';
 import { BuyFlyModal } from './BuyFlyModal';
 
 interface NeuroFly {
@@ -16,9 +16,6 @@ interface NeuroFly {
 }
 
 const SUPPORT_MESSAGE = 'Please contact support via our Telegram channel for help.';
-
-/** Link to buy $NEURO on The Cabal (Base). */
-const CABAL_BUY_NEURO_URL = 'https://thecabal.app/base/0x73e0591f7b75cc4d82b415d34cd353683c896cbf';
 
 /** Default fly price in wei when API does not provide it (10k $NEURO, 18 decimals). */
 const DEFAULT_FLY_NEURO_WEI = 10_000n * 10n ** 18n;

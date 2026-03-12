@@ -29,18 +29,38 @@ function getHealthColor(health: number): string {
 const DISPLAY_DELAY_SEC = 1;
 /** Keep ~6s of snapshots at 250ms rate. */
 const SNAPSHOT_BUFFER_MAX = 24;
+/** Throttle React state updates from RAF (ms); refs updated every frame for smooth interpolation. */
+const THROTTLE_MS = 33;
+
+const TWO_PI = 2 * Math.PI;
 
 function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
 }
 
+/** Normalize angle delta to [-π, π] for shortest path. */
+function shortestAngleDelta(from: number, to: number): number {
+  let d = to - from;
+  while (d > Math.PI) d -= TWO_PI;
+  while (d < -Math.PI) d += TWO_PI;
+  return d;
+}
+
+/** Normalize angle to [0, 2π). */
+function normalizeAngle(a: number): number {
+  a = a % TWO_PI;
+  return a < 0 ? a + TWO_PI : a;
+}
+
 function lerpFlyState(from: FlyState, to: FlyState, t: number): FlyState {
+  const delta = shortestAngleDelta(from.heading, to.heading);
+  const heading = normalizeAngle(from.heading + delta * t);
   return {
     ...to,
     x: lerp(from.x, to.x, t),
     y: lerp(from.y, to.y, t),
     z: lerp(from.z, to.z, t),
-    heading: lerp(from.heading, to.heading, t),
+    heading,
   };
 }
 
@@ -412,6 +432,12 @@ export default function FlyViewer() {
 
   /** Time-indexed snapshot buffer for display delay + smooth interpolation (basemarket-style). */
   const snapshotBufferRef = useRef<{ t: number; flies: FlyState[]; activities: (Record<string, number> | undefined)[]; activity: Record<string, number> }[]>([]);
+  /** Last time we pushed interpolated state to React (throttle). */
+  const lastUpdateTimeRef = useRef(0);
+  /** Latest interpolated display data (updated every frame); UI can read from state (throttled) or refs. */
+  const displayFliesRef = useRef<FlyState[]>([]);
+  const displayActivitiesRef = useRef<(Record<string, number> | undefined)[]>([]);
+  const displayActivityRef = useRef<Record<string, number>>({});
 
   const { data: myFlies = [] } = useQuery({
     queryKey: ['my-flies', address ?? ''],
@@ -545,12 +571,20 @@ export default function FlyViewer() {
       for (let i = n; i < to.flies.length; i++) {
         lerpedFlies.push(to.flies[i]!);
       }
-      setFlies(lerpedFlies);
       const lerpedActivities: (Record<string, number> | undefined)[] = to.activities.length
         ? to.activities.map((_, i) => lerpActivity(from.activities[i], to.activities[i], alpha))
         : [];
-      setActivities(lerpedActivities);
-      setActivity(lerpActivity(from.activity, to.activity, alpha));
+      const lerpedActivity = lerpActivity(from.activity, to.activity, alpha);
+      displayFliesRef.current = lerpedFlies;
+      displayActivitiesRef.current = lerpedActivities;
+      displayActivityRef.current = lerpedActivity;
+      const now = Date.now();
+      if (now - lastUpdateTimeRef.current >= THROTTLE_MS) {
+        lastUpdateTimeRef.current = now;
+        setFlies(lerpedFlies);
+        setActivities(lerpedActivities);
+        setActivity(lerpedActivity);
+      }
     };
     rafId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafId);

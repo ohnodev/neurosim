@@ -4,6 +4,7 @@
  * responsive: false + debounced resize to avoid viewport-driven relayout on mobile.
  */
 import Plotly from 'plotly.js-dist-min';
+import { getSceneCamera } from '../../../shared/lib/plotlySceneCamera';
 
 function computeColor(activity: Record<string, number>, id: string, side: string): number {
   const a = activity[id] ?? 0;
@@ -20,18 +21,6 @@ function computeHoverText(id: string, side: string, activity: Record<string, num
   return `ID: ${id.slice(-8)}\n${sideLabel} | ${(a * 100).toFixed(0)}%`;
 }
 
-/** Copy current scene camera from Plotly internal layout (preserve after restyle on mobile). */
-function getSceneCamera(gd: HTMLDivElement): Record<string, { x: number; y: number; z: number }> | null {
-  const fullLayout = (gd as unknown as { _fullLayout?: { scene?: { camera?: Record<string, { x: number; y: number; z: number }> } } })._fullLayout;
-  const cam = fullLayout?.scene?.camera;
-  if (!cam?.eye || !cam?.center || !cam?.up) return null;
-  return {
-    eye: { x: cam.eye.x, y: cam.eye.y, z: cam.eye.z },
-    center: { x: cam.center.x, y: cam.center.y, z: cam.center.z },
-    up: { x: cam.up.x, y: cam.up.y, z: cam.up.z },
-  };
-}
-
 export type GetActivity = () => Record<string, number>;
 
 const RESIZE_DEBOUNCE_MS = 400;
@@ -45,7 +34,7 @@ export function createBrainPlotManager(getActivity: GetActivity) {
   let pendingRestyle = false;
   let resizeTimeoutId: ReturnType<typeof setTimeout> | null = null;
   let resizeObserver: ResizeObserver | null = null;
-  const touchOpts: AddEventListenerOptions = { passive: false };
+  const touchOpts: AddEventListenerOptions = { passive: true };
 
   function doRestyle(): void {
     if (!el || !plotReady || ids.length === 0) return;
@@ -74,6 +63,8 @@ export function createBrainPlotManager(getActivity: GetActivity) {
 
   function onDblClick(e: Event): void {
     e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
   }
 
   function update(): void {
@@ -93,7 +84,12 @@ export function createBrainPlotManager(getActivity: GetActivity) {
     ys: number[],
     zs: number[],
   ): void {
-    if (el !== null) return;
+    if (el !== null) {
+      if (import.meta.env?.DEV) {
+        console.warn('[brainPlotManager] mount called but already mounted; call destroy() first.');
+      }
+      return;
+    }
     el = container;
     ids = neuronIds;
     sides = sideLabels;

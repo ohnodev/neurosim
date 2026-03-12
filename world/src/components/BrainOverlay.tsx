@@ -1,5 +1,6 @@
 import { useEffect, useRef, useMemo } from 'react';
 import Plotly from 'plotly.js-dist-min';
+import { getSceneCamera } from '../../../shared/lib/plotlySceneCamera';
 
 export interface NeuronWithPosition {
   root_id: string;
@@ -52,18 +53,6 @@ function computeHoverText(
     const sideLabel = sides[i] ? sides[i] : 'center';
     return `ID: ${id.slice(-8)}\n${sideLabel} | ${(a * 100).toFixed(0)}%`;
   });
-}
-
-/** Copy current scene camera from Plotly (preserve after restyle on mobile). */
-function getSceneCamera(gd: HTMLDivElement): Record<string, { x: number; y: number; z: number }> | null {
-  const fullLayout = (gd as unknown as { _fullLayout?: { scene?: { camera?: Record<string, { x: number; y: number; z: number }> } } })._fullLayout;
-  const cam = fullLayout?.scene?.camera;
-  if (!cam?.eye || !cam?.center || !cam?.up) return null;
-  return {
-    eye: { x: cam.eye.x, y: cam.eye.y, z: cam.eye.z },
-    center: { x: cam.center.x, y: cam.center.y, z: cam.center.z },
-    up: { x: cam.up.x, y: cam.up.y, z: cam.up.z },
-  };
 }
 
 export function BrainOverlay({ neurons, activity, visible = true, embedded = false, containerVisible = true }: BrainOverlayProps) {
@@ -208,7 +197,11 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
         doRestyle();
       }
     };
-    const onDblClick = (e: Event) => e.preventDefault();
+    const onDblClick = (e: Event) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if ('stopImmediatePropagation' in e) e.stopImmediatePropagation();
+    };
     const touchOpts = { passive: false } as AddEventListenerOptions;
     const keyForThisRun = plotCreationKey;
     el.addEventListener('mousedown', onDown);
@@ -283,18 +276,23 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
     return () => { clearTimeout(t1); clearTimeout(t2); };
   }, [embedded, visible, containerVisible]);
 
-  // Update colors and hover text when activity changes; skip while interacting, set pending to replay on onUp
+  // Update colors and hover text when activity changes; reuse camera-preserving restyle (same as doRestyle) so view is not reset on mobile
   useEffect(() => {
-    if (!plotRef.current || !plotReady.current || !visible || idsRef.current.length === 0) return;
+    const el = plotRef.current;
+    if (!el || !plotReady.current || !visible || idsRef.current.length === 0) return;
     if (interacting.current) {
       pendingRestyleRef.current = true;
       return;
     }
+    const savedCamera = getSceneCamera(el);
     const ids = idsRef.current;
     const sides = sidesRef.current;
     const color = computeMarkerColors(ids, activity, sides);
     const text = computeHoverText(ids, activity, sides);
-    Plotly.restyle(plotRef.current, { 'marker.color': [color], text: [text] }, [0]);
+    Plotly.restyle(el, { 'marker.color': [color], text: [text] }, [0]);
+    if (savedCamera) {
+      Plotly.relayout(el, { 'scene.camera': savedCamera } as Record<string, unknown>);
+    }
   }, [activity, visible]);
 
   const containerStyle = embedded

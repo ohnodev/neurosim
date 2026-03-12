@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { getApiBase } from '../lib/constants';
 import { createBrainPlotManager } from '../lib/brainPlotManager';
 
@@ -111,6 +111,10 @@ export function BrainPlot() {
 
   const withPos = neurons.filter(hasPosition);
   const n = withPos.length;
+  const dataFingerprint = useMemo(
+    () => withPos.map((p) => `${p.root_id}:${p.x},${p.y},${p.z}:${p.side ?? ''}`).join('|'),
+    [withPos]
+  );
 
   // Manager owns all Plotly calls; we only mount once when we have a container and data, then push updates via timer (not React effects on activity).
   useEffect(() => {
@@ -150,7 +154,7 @@ export function BrainPlot() {
       manager.destroy();
       managerRef.current = null;
     };
-  }, [n, withPos[0]?.root_id ?? '']);
+  }, [n, dataFingerprint]);
 
   return (
     <div className="brain-plot">

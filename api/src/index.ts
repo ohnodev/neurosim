@@ -109,9 +109,10 @@ function startSim(): void {
     }
   }, 1000 / 30);
   broadcastIntervalId = setInterval(() => {
-    const flies = sims.map((s) => s.getState().fly);
-    const activities = sims.map((s) => s.getState().activity);
-    const t = sims[0]?.getState().t ?? 0;
+    const states = sims.map((s) => s.getState());
+    const flies = states.map((st) => st.fly);
+    const activities = states.map((st) => st.activity);
+    const t = states[0]?.t ?? 0;
     const activity = activities[0];
     broadcast({ t, flies, activities, activity: activity ?? undefined, simRunning: true, sources: getSources() });
   }, BROADCAST_MS);

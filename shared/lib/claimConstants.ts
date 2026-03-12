@@ -12,6 +12,9 @@ export const ERC20_TRANSFER_ABI = [
   },
 ] as const;
 
+/** Link to buy $NEURO on The Cabal (shared by landing and world). */
+export const CABAL_BUY_NEURO_URL = 'https://thecabal.app/base/0x73e0591f7b75cc4d82b415d34cd353683c896cbf';
+
 /** Fallback: 10,000 $NEURO (18 decimals) to buy one fly. Prefer API config when available. */
 export const FLY_NEURO_AMOUNT_FALLBACK = 10_000n * 10n ** 18n;
 

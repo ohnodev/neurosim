@@ -6,9 +6,7 @@ import { base } from 'viem/chains';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
 import { fetchClaimConfig, formatNeuroAmount } from '../lib/claimApi';
 import { parseWalletError } from '../../../shared/lib/parseWalletError';
-
-/** Link to buy $NEURO on The Cabal (Base). */
-const CABAL_BUY_NEURO_URL = 'https://thecabal.app/base/0x73e0591f7b75cc4d82b415d34cd353683c896cbf';
+import { CABAL_BUY_NEURO_URL } from '../../../shared/lib/claimConstants';
 
 interface BuyFlyModalProps {
   isOpen: boolean;

@@ -52,8 +52,12 @@ export function initBrainPlot(
     if (disposed) return;
     if ('_event' in event) {
       if (event._event === 'open') {
-        activityRef.current = {};
-        activitiesRef.current = [];
+        const hasSeeded =
+          (activitiesRef.current?.length ?? 0) > 0 || Object.keys(activityRef.current).length > 0;
+        if (!hasSeeded) {
+          activityRef.current = {};
+          activitiesRef.current = [];
+        }
       }
       return;
     }

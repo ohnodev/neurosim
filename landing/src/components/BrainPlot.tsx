@@ -30,15 +30,16 @@ export function BrainPlot() {
   }, [activity]);
 
   useEffect(() => {
-    const controller = new AbortController();
+    const mainController = new AbortController();
     const fetchNeurons = async () => {
-      const timeoutId = setTimeout(() => controller.abort(), 4000);
+      const apiController = new AbortController();
+      const timeoutId = setTimeout(() => apiController.abort(), 4000);
       try {
         const res = await fetch(`${getApiBase()}/api/neurons`, {
-          signal: controller.signal,
+          signal: apiController.signal,
         });
         clearTimeout(timeoutId);
-        if (controller.signal.aborted) return;
+        if (mainController.signal.aborted) return;
         if (res.ok) {
           const data = await res.json();
           const list = Array.isArray(data.neurons) ? data.neurons : data;
@@ -54,16 +55,16 @@ export function BrainPlot() {
           return;
         }
       } catch (e) {
-        if (controller.signal.aborted) return;
-        if (typeof AbortSignal !== 'undefined' && e instanceof Error && e.name === 'AbortError') {
-          /* timeout, fall through to fallback */
+        if (mainController.signal.aborted) return;
+        if (apiController.signal.aborted) {
+          /* timeout on API, fall through to fallback */
         }
         /* fallback */
       }
       try {
-        const res = await fetch('/neurons.json', { signal: controller.signal });
+        const res = await fetch('/neurons.json', { signal: mainController.signal });
         const data = await res.json();
-        if (controller.signal.aborted) return;
+        if (mainController.signal.aborted) return;
         const list = Array.isArray(data) ? data : data.neurons ?? [];
         setNeurons(
           list.map((n: NeuronWithPosition) => ({
@@ -75,11 +76,11 @@ export function BrainPlot() {
           })),
         );
       } catch {
-        if (!controller.signal.aborted) setNeurons([]);
+        if (!mainController.signal.aborted) setNeurons([]);
       }
     };
     fetchNeurons();
-    return () => controller.abort();
+    return () => mainController.abort();
   }, []);
 
   useEffect(() => {

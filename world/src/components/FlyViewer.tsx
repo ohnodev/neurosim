@@ -9,7 +9,7 @@ import { SimRefsProvider, useSimDisplayData, useSimDisplayDataSelector, useSimDi
 import { ConnectButton } from './ConnectButton';
 import { BuyFlyModal } from './BuyFlyModal';
 import { initThreeScene, type InterpolationDebugStats, type CameraMode, type SimStatusRefs } from '../lib/threeScene';
-import { DebugOverlay } from './DebugOverlay';
+// import { DebugOverlay } from './DebugOverlay';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
 import { formatEth, getHealthColor, getHungerColor } from '../lib/utils';
 import { RewardsTable } from './RewardsTable';
@@ -235,6 +235,7 @@ const FlySlotDeploy = React.memo(function FlySlotDeploy({
         setIsDeploying(true);
         try {
           await deployFly(index);
+          setError(null);
         } catch (e) {
           setError(e instanceof Error ? `Deploy failed: ${e.message}` : 'Deploy failed');
         } finally {
@@ -676,10 +677,7 @@ export default function FlyViewer() {
         if (event._event === 'open') {
           setConnected(true);
           setError(null);
-          snapshotBufferRef.current = [];
-          latestFliesRef.current = [];
-          activityRef.current = {};
-          activitiesRef.current = [];
+          /* preserve replay state: do not clear snapshotBufferRef, latestFliesRef, activityRef, activitiesRef */
         } else if (event._event === 'closed') {
           setConnected(false);
         }

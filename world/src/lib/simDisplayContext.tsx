@@ -129,16 +129,22 @@ export function useSimDisplayDataSelector<T extends Record<string, unknown>>(
   );
 
   useEffect(() => {
+    const next = selectorRef.current({
+      flies: latestFliesRef.current,
+      activity: activityRef.current,
+      activities: activitiesRef.current,
+    });
+    setData((prev) => (shallowEqual(prev, next) ? prev : next));
     const id = setInterval(() => {
-      const next = selectorRef.current({
+      const n = selectorRef.current({
         flies: latestFliesRef.current,
         activity: activityRef.current,
         activities: activitiesRef.current,
       });
-      setData((prev) => (shallowEqual(prev, next) ? prev : next));
+      setData((prev) => (shallowEqual(prev, n) ? prev : n));
     }, UI_UPDATE_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [latestFliesRef, activityRef, activitiesRef]);
+  }, [latestFliesRef, activityRef, activitiesRef, selector]);
 
   return data;
 }

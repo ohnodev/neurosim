@@ -21,6 +21,15 @@ export interface InterpolationDebugStats {
 
 export type CameraMode = 'god' | 'fly';
 
+export interface SimStatusRefs {
+  latestFliesRef: { current: FlyState[] };
+  activityRef: { current: Record<string, number> };
+  activitiesRef: { current: (Record<string, number> | undefined)[] };
+  deployedRef: { current: Record<number, number> };
+  selectedFlyIndexRef: { current: number };
+  connectedRef: { current: boolean };
+}
+
 export interface ThreeSceneRefs {
   latestFliesRef: { current: FlyState[] };
   interpolatedBySimRef: { current: FlyState[] };
@@ -50,6 +59,65 @@ const FLY_SCALE = 0.08;
 /** Sim ground level (z=0.35); map to Three.js y=0 so fly rests on ground */
 const GROUND_Z = 0.35;
 
+const DEFAULT_FLY: FlyState = { x: 0, y: 0, z: 0.35, heading: 0, t: 0, hunger: 100 };
+
+function createSimStatusBar(
+  slot: HTMLElement,
+  refs: SimStatusRefs,
+  intervalMs: number = 500
+): () => void {
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'display:flex;gap:8px;align-items:center;font-family:var(--font-mono,monospace);font-size:11px';
+  slot.appendChild(wrap);
+  const statusEl = document.createElement('div');
+  statusEl.style.cssText = 'color:#888';
+  wrap.appendChild(statusEl);
+  const flyDeadEl = document.createElement('div');
+  flyDeadEl.style.cssText =
+    'width:120px;padding:6px 8px;background:#422;color:#f88;border-radius:4px;font-size:11px;font-weight:600';
+  flyDeadEl.textContent = 'Fly died';
+  const update = () => {
+    const { latestFliesRef, activityRef, activitiesRef, deployedRef, selectedFlyIndexRef, connectedRef } = refs;
+    const flies = latestFliesRef.current;
+    const deployed = deployedRef.current;
+    const sel = selectedFlyIndexRef.current;
+    const connected = connectedRef.current;
+    const keys = Object.keys(deployed)
+      .map((k) => parseInt(k, 10))
+      .filter((n) => !Number.isNaN(n) && deployed[n] != null)
+      .sort((a, b) => a - b);
+    const firstValid = keys.find((i) => deployed[i] != null && flies[deployed[i]!] != null);
+    const simIdx =
+      deployed[sel] != null && flies[deployed[sel]!] != null ? deployed[sel]! : firstValid != null ? deployed[firstValid]! : undefined;
+    const focused = simIdx != null && flies[simIdx] ? flies[simIdx]! : DEFAULT_FLY;
+    const acts = simIdx != null && Array.isArray(activitiesRef.current)
+      ? (activitiesRef.current[simIdx] ?? {})
+      : activityRef.current;
+    const activeCount = Math.round(Object.keys(acts).length / 25) * 25;
+    const flyDead = !!focused.dead;
+    if (flyDead) {
+      if (!wrap.contains(flyDeadEl)) wrap.insertBefore(flyDeadEl, statusEl);
+    } else {
+      flyDeadEl.remove();
+    }
+    statusEl.style.color = connected ? '#4ade80' : '#888';
+    statusEl.textContent = '';
+    statusEl.append(connected ? 'Sim running' : 'Connecting…');
+    if (activeCount > 0) {
+      const span = document.createElement('span');
+      span.style.cssText = 'color:rgba(255,255,255,0.6)';
+      span.textContent = ` Neurons: ${activeCount}`;
+      statusEl.appendChild(span);
+    }
+  };
+  const id = setInterval(update, intervalMs);
+  update();
+  return () => {
+    clearInterval(id);
+    wrap.remove();
+  };
+}
+
 function createCameraButton(
   slot: HTMLElement,
   cameraModeRef: { current: CameraMode }
@@ -77,14 +145,20 @@ function createCameraButton(
 export function initThreeScene(
   container: HTMLElement | null,
   refs: ThreeSceneRefs,
-  buttonSlot: HTMLElement | null
+  buttonSlot: HTMLElement | null,
+  statusSlot: HTMLElement | null,
+  simStatusRefs: SimStatusRefs | null
 ): { dispose: () => void; updateButton: (mode: CameraMode) => void } {
   const noop = () => {};
   if (!container) return { dispose: noop, updateButton: noop };
 
   let cameraButton: { el: HTMLButtonElement; update: (mode: CameraMode) => void } | null = null;
+  let disposeStatus: (() => void) | null = null;
   if (buttonSlot) {
     cameraButton = createCameraButton(buttonSlot, refs.cameraModeRef);
+  }
+  if (statusSlot && simStatusRefs) {
+    disposeStatus = createSimStatusBar(statusSlot, simStatusRefs, 500);
   }
   const updateButton = (mode: CameraMode) => {
     if (cameraButton) {
@@ -425,9 +499,8 @@ export function initThreeScene(
     groundGeom.dispose();
     groundMat.dispose();
     container.removeChild(renderer.domElement);
-    if (cameraButton) {
-      cameraButton.el.remove();
-    }
+    if (cameraButton) cameraButton.el.remove();
+    if (disposeStatus) disposeStatus();
     for (const inst of flyInstances) {
       disposeObject3D(inst.group);
     }

@@ -224,8 +224,10 @@ export function BrainPlot() {
     const touchOpts = { passive: false } as AddEventListenerOptions;
     el.addEventListener('mousedown', onDown);
     el.addEventListener('touchstart', onDown, touchOpts);
+    el.addEventListener('touchcancel', onUp, touchOpts);
     window.addEventListener('mouseup', onUp);
     window.addEventListener('touchend', onUp, touchOpts);
+    window.addEventListener('blur', onUp);
 
     Plotly.newPlot(el, traces, layout, {
       responsive: true,
@@ -240,8 +242,10 @@ export function BrainPlot() {
     return () => {
       el.removeEventListener('mousedown', onDown);
       el.removeEventListener('touchstart', onDown, touchOpts);
+      el.removeEventListener('touchcancel', onUp, touchOpts);
       window.removeEventListener('mouseup', onUp);
       window.removeEventListener('touchend', onUp, touchOpts);
+      window.removeEventListener('blur', onUp);
       Plotly.purge(el);
       plotReady.current = false;
     };

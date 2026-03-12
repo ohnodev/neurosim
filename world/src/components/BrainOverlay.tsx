@@ -329,6 +329,7 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
             inset: 0,
             minWidth: 1,
             minHeight: 1,
+            touchAction: 'none',
           }}
         />
       )}

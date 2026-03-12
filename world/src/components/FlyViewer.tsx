@@ -29,6 +29,8 @@ function getHealthColor(health: number): string {
 const DISPLAY_DELAY_SEC = 1;
 /** Keep ~6s of snapshots at 250ms rate. */
 const SNAPSHOT_BUFFER_MAX = 24;
+/** Fixed wall-clock ms per segment for constant speed (basemarket-style). */
+const SEGMENT_DURATION_MS = 250;
 /** Throttle React state updates from RAF (ms); refs updated every frame for smooth interpolation. */
 const THROTTLE_MS = 33;
 
@@ -434,6 +436,9 @@ export default function FlyViewer() {
   const snapshotBufferRef = useRef<{ t: number; flies: FlyState[]; activities: (Record<string, number> | undefined)[]; activity: Record<string, number> }[]>([]);
   /** Last time we pushed interpolated state to React (throttle). */
   const lastUpdateTimeRef = useRef(0);
+  /** Segment key (lo-hi) and wall-clock start for constant-speed interpolation. */
+  const segmentKeyRef = useRef('');
+  const segmentStartWallRef = useRef(0);
   /** Latest interpolated display data (updated every frame); UI can read from state (throttled) or refs. */
   const displayFliesRef = useRef<FlyState[]>([]);
   const displayActivitiesRef = useRef<(Record<string, number> | undefined)[]>([]);
@@ -557,9 +562,15 @@ export default function FlyViewer() {
       }
       const snapLo = buf[lo]!;
       const snapHi = buf[lo + 1];
+      const segmentKey = snapHi ? `${lo}-${lo + 1}` : `${lo}-`;
+      if (segmentKey !== segmentKeyRef.current) {
+        segmentKeyRef.current = segmentKey;
+        segmentStartWallRef.current = Date.now();
+      }
       let alpha = 1;
       if (snapHi && snapHi.t > snapLo.t) {
-        alpha = Math.max(0, Math.min(1, (T_display - snapLo.t) / (snapHi.t - snapLo.t)));
+        const elapsed = Date.now() - segmentStartWallRef.current;
+        alpha = Math.max(0, Math.min(1, elapsed / SEGMENT_DURATION_MS));
       }
       const from = snapLo;
       const to = snapHi ?? snapLo;

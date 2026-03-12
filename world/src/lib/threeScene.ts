@@ -130,7 +130,7 @@ export function initThreeScene(
   let flyStates: FlyState[] = [];
   let lastSources: WorldSource[] = [];
   const smoothDeltaRef = { current: 0.016 };
-  const clock = new THREE.Clock();
+  const timer = new THREE.Timer();
   let rafId = 0;
   let disposed = false;
 
@@ -221,11 +221,12 @@ export function initThreeScene(
     }
   }
 
-  function loop() {
+  function loop(timestamp?: number) {
     if (disposed) return;
     rafId = requestAnimationFrame(loop);
 
-    const rawDelta = clock.getDelta();
+    timer.update(timestamp);
+    const rawDelta = timer.getDelta();
     const rawCapped = Math.min(rawDelta, MAX_DELTA);
     smoothDeltaRef.current += (rawCapped - smoothDeltaRef.current) * 0.1;
     const cappedDelta = smoothDeltaRef.current;

@@ -3,7 +3,7 @@
  * call useSimDisplayData() and re-render on the hook's interval; FlyViewer stays
  * static and only re-renders on user actions.
  */
-import React, { createContext, useContext, useSyncExternalStore } from 'react';
+import React, { createContext, useContext, useState, useEffect } from 'react';
 import type { FlyState } from './simWsClient';
 
 export interface SimRefs {
@@ -42,28 +42,22 @@ export function useSimDisplayData(): {
   activities: (Record<string, number> | undefined)[];
 } {
   const { latestFliesRef, activityRef, activitiesRef } = useSimRefs();
+  const [data, setData] = useState(() => ({
+    flies: latestFliesRef.current,
+    activity: activityRef.current,
+    activities: activitiesRef.current,
+  }));
 
-  const subscribe = React.useCallback(
-    (onStoreChange: () => void) => {
-      const id = setInterval(() => {
-        onStoreChange();
-      }, UI_UPDATE_INTERVAL_MS);
-      return () => clearInterval(id);
-    },
-    []
-  );
-
-  const getSnapshot = React.useCallback(() => {
-    return {
-      flies: latestFliesRef.current,
-      activity: activityRef.current,
-      activities: activitiesRef.current,
-    };
+  useEffect(() => {
+    const id = setInterval(() => {
+      setData({
+        flies: latestFliesRef.current,
+        activity: activityRef.current,
+        activities: activitiesRef.current,
+      });
+    }, UI_UPDATE_INTERVAL_MS);
+    return () => clearInterval(id);
   }, [latestFliesRef, activityRef, activitiesRef]);
-
-  const getServerSnapshot = getSnapshot;
-
-  const data = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 
   return data;
 }

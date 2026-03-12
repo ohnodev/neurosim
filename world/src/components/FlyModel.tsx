@@ -4,7 +4,9 @@ import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { FlyState } from '../lib/simWsClient';
 
-const FLY_THRESHOLD = 1.1;
+/** Hysteresis: start flying above 1.15, land below 1.0 to avoid wing flicker. */
+const FLY_THRESHOLD_UP = 1.15;
+const FLY_THRESHOLD_DOWN = 1.0;
 const WING_ANIM_NAMES = ['wing-leftAction', 'wing-rightAction'];
 const MIN_MOVEMENT_SQ = 0.001;
 /** Frame-rate independent: alpha = 1-exp(-k*delta), k≈14.5 gives ~0.38 at 30fps */
@@ -21,7 +23,7 @@ export function FlyModel({
   const group = useRef<THREE.Group>(null);
   const sceneRef = useRef<THREE.Group>(null);
   const { scene, animations } = useGLTF('/models/fly-animated/fly2-animation.glb');
-  const { actions } = useAnimations(animations, sceneRef);
+  const { actions, mixer } = useAnimations(animations, sceneRef);
   const cloned = useMemo(() => scene.clone(true), [scene]);
   const prevPosRef = useRef({ x: 0, y: 0 });
   const headingRef = useRef(0);
@@ -30,13 +32,15 @@ export function FlyModel({
   const initializedRef = useRef(false);
 
   useFrame((_, delta) => {
+    mixer?.update(delta);
     const state = statesRef.current[index];
     if (!state || !group.current) return;
 
     const x = state.x ?? 0;
     const y = state.y ?? 0;
     const z = state.z ?? 0;
-    const isFlying = z > FLY_THRESHOLD;
+    const wasFlying = wasFlyingRef.current;
+    const isFlying = wasFlying ? z > FLY_THRESHOLD_DOWN : z > FLY_THRESHOLD_UP;
 
     const dx = x - prevPosRef.current.x;
     const dy = y - prevPosRef.current.y;
@@ -63,7 +67,7 @@ export function FlyModel({
     headingRef.current += d * alpha;
     group.current.rotation.y = headingRef.current;
 
-    if (isFlying !== wasFlyingRef.current) {
+    if (isFlying !== wasFlying) {
       wasFlyingRef.current = isFlying;
       for (const name of WING_ANIM_NAMES) {
         const action = actions[name];

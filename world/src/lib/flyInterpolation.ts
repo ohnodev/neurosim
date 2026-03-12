@@ -23,11 +23,13 @@ function lerpAngle(a: number, b: number, alpha: number): number {
   return a + d * alpha;
 }
 
-export function lerpFlyState(a: FlyState, b: FlyState, alpha: number): FlyState {
+/** When zAlpha provided, use it for z (e.g. faster descent when landing). */
+export function lerpFlyState(a: FlyState, b: FlyState, alpha: number, zAlpha?: number): FlyState {
+  const az = zAlpha ?? alpha;
   return {
     x: lerp(a.x ?? 0, b.x ?? 0, alpha),
     y: lerp(a.y ?? 0, b.y ?? 0, alpha),
-    z: lerp(a.z ?? 0, b.z ?? 0, alpha),
+    z: lerp(a.z ?? 0, b.z ?? 0, az),
     heading: lerpAngle(a.heading ?? 0, b.heading ?? 0, alpha),
     t: lerp(a.t ?? 0, b.t ?? 0, alpha),
     hunger: lerp(a.hunger ?? 100, b.hunger ?? 100, alpha),

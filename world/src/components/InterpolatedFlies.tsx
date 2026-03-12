@@ -4,8 +4,11 @@ import { FlyModel } from './FlyModel';
 import { lerpFlyState } from '../lib/flyInterpolation';
 import type { FlyState } from '../lib/simWsClient';
 
-/** Server sends 1 batch/sec. alpha = 1-exp(-k*delta), k=0.45 → ~63% in 2.2s, smooth without catch-up-and-wait. */
+/** Server sends 1 batch/sec. alpha = 1-exp(-k*delta), k=0.45 → ~63% in 2.2s. */
 const LERP_RATE = 0.45;
+/** When target z < this (landing), use 2x alpha for z so fly reaches ground. */
+const LANDING_Z_THRESHOLD = 1.0;
+const LANDING_Z_BOOST = 2;
 
 export interface InterpolationDebugStats {
   fps: number;
@@ -41,7 +44,9 @@ export function InterpolatedFlies({
     for (let i = 0; i < target.length; i++) {
       const t = target[i]!;
       const s = cur[i];
-      result.push(s ? lerpFlyState(s, t, alpha) : t);
+      const tz = t.z ?? 1;
+      const zAlpha = tz < LANDING_Z_THRESHOLD ? Math.min(1, alpha * LANDING_Z_BOOST) : undefined;
+      result.push(s ? lerpFlyState(s, t, alpha, zAlpha) : t);
     }
 
     const alive = result.filter((f) => !f.dead);

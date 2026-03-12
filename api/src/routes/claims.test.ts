@@ -13,10 +13,15 @@ describe('claims API', () => {
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty('neuroTokenAddress');
     expect(res.body).toHaveProperty('claimReceiverAddress');
-    expect(res.body).toHaveProperty('flyEthReceiver');
-    expect(res.body).toHaveProperty('flyEthAmountWei');
-    expect(typeof res.body.flyEthAmountWei).toBe('string');
-    expect(/^0x[a-fA-F0-9]{40}$/.test(res.body.flyEthReceiver)).toBe(true);
+    expect(res.body).toHaveProperty('flyNeuroAmountWei');
+    expect(typeof res.body.flyNeuroAmountWei).toBe('string');
+    const zero = '0x0000000000000000000000000000000000000000';
+    expect(res.body.neuroTokenAddress).not.toBe(zero);
+    expect(res.body.claimReceiverAddress).not.toBe(zero);
+    expect(/^0x[a-fA-F0-9]{40}$/.test(res.body.neuroTokenAddress)).toBe(true);
+    expect(/^0x[a-fA-F0-9]{40}$/.test(res.body.claimReceiverAddress)).toBe(true);
+    const wei = BigInt(res.body.flyNeuroAmountWei);
+    expect(wei > 0n).toBe(true);
   });
 
   it('GET /api/claim/my-flies returns flies array for valid address', async () => {

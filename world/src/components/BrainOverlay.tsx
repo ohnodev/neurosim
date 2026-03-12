@@ -27,12 +27,44 @@ function hasPosition(n: NeuronWithPosition): n is NeuronWithPosition & { x: numb
   );
 }
 
+function computeMarkerColors(
+  ids: string[],
+  activity: Record<string, number>,
+  sides: string[]
+): number[] {
+  return ids.map((id, i) => {
+    const a = activity[id] ?? 0;
+    if (a <= 0) return 0;
+    const s = sides[i] ?? '';
+    if (s === 'left') return 0.3 + a * 0.4;
+    if (s === 'right') return 0.7 + a * 0.3;
+    return 0.5 + a * 0.2;
+  });
+}
+
+function computeHoverText(
+  ids: string[],
+  activity: Record<string, number>,
+  sides: string[]
+): string[] {
+  return ids.map((id, i) => {
+    const a = activity[id] ?? 0;
+    const sideLabel = sides[i] ? sides[i] : 'center';
+    return `ID: ${id.slice(-8)}\n${sideLabel} | ${(a * 100).toFixed(0)}%`;
+  });
+}
+
 export function BrainOverlay({ neurons, activity, visible = true, embedded = false, containerVisible = true }: BrainOverlayProps) {
   const plotRef = useRef<HTMLDivElement>(null);
   const plotReady = useRef(false);
   const idsRef = useRef<string[]>([]);
   const sidesRef = useRef<string[]>([]);
   const interacting = useRef(false);
+  const pendingResizeRef = useRef(false);
+  const pendingRestyleRef = useRef(false);
+  const plotKeyRef = useRef<string>('');
+  const activityRef = useRef(activity);
+  activityRef.current = activity;
 
   const withPos = neurons.filter(hasPosition);
   const n = withPos.length;
@@ -46,16 +78,30 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
     [neurons]
   );
 
-  // Initial plot when neuron set (with positions) is available
-  useEffect(() => {
-    if (!plotRef.current || !visible || n === 0) return;
+  // Fingerprint of root_id + positions and sides so plot recreates when identity or coordinates/sides change
+  const positionsFingerprint = useMemo(() => {
+    const list = neurons.filter(hasPosition);
+    if (list.length === 0) return '';
+    return list
+      .map((p) => `${p.root_id},${p.x},${p.y},${p.z},${(p.side ?? '').toLowerCase()}`)
+      .sort()
+      .join('|');
+  }, [neurons]);
 
+  const plotCreationKey = n > 0 ? `${n}-${neuronIdsKey}-${positionsFingerprint}` : '';
+
+  // Initial plot when neuron set (with positions) is available — do NOT depend on visible so we don't purge/recreate on connect toggle
+  useEffect(() => {
+    if (!plotRef.current || n === 0 || !plotCreationKey) return;
+
+    plotKeyRef.current = plotCreationKey;
     const x = withPos.map((p) => p.x);
     const y = withPos.map((p) => p.y);
     const z = withPos.map((p) => p.z);
     const ids = withPos.map((p) => p.root_id);
     idsRef.current = ids;
-    sidesRef.current = withPos.map((p) => (p.side ?? '').toLowerCase());
+    const sidesForRef = withPos.map((p) => (p.side ?? '').toLowerCase());
+    sidesRef.current = sidesForRef;
 
     const minX = Math.min(...x);
     const maxX = Math.max(...x);
@@ -71,16 +117,8 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
     const ys = y.map((v) => (v - cy) / scale);
     const zs = z.map((v) => (v - cz) / scale);
 
-    // Inactive = grey; active = colored (left=blue, right=red, center=amber)
-    const act = ids.map((id) => activity[id] ?? 0);
-    const color = ids.map((_, i) => {
-      const a = act[i];
-      if (a <= 0) return 0; // grey
-      const s = (withPos[i]?.side ?? '').toLowerCase();
-      if (s === 'left') return 0.3 + a * 0.4;
-      if (s === 'right') return 0.7 + a * 0.3;
-      return 0.5 + a * 0.2; // center
-    });
+    const color = computeMarkerColors(ids, activity, sidesForRef);
+    const text = computeHoverText(ids, activity, sidesForRef);
 
     const traces: Plotly.Data[] = [
       {
@@ -105,10 +143,7 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
           line: { width: 0 },
         },
         hoverinfo: 'text',
-        text: ids.map((id, i) => {
-          const p = withPos[i];
-          return `ID: ${id.slice(-8)}\n${p.side ?? 'center'} | ${(act[i] * 100).toFixed(0)}%`;
-        }),
+        text,
       } as Plotly.Data,
     ];
 
@@ -132,13 +167,38 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
     };
 
     const el = plotRef.current;
+    const doResize = () => {
+      if (plotReady.current && el) Plotly.Plots?.resize(el);
+    };
+    const doRestyle = () => {
+      if (!plotRef.current || !plotReady.current || idsRef.current.length === 0) return;
+      const ids = idsRef.current;
+      const act = activityRef.current;
+      const sides = sidesRef.current;
+      const color = computeMarkerColors(ids, act, sides);
+      const text = computeHoverText(ids, act, sides);
+      Plotly.restyle(plotRef.current, { 'marker.color': [color], text: [text] }, [0]);
+    };
     const onDown = () => { interacting.current = true; };
-    const onUp = () => { interacting.current = false; };
+    const onUp = () => {
+      interacting.current = false;
+      if (pendingResizeRef.current) {
+        pendingResizeRef.current = false;
+        doResize();
+      }
+      if (pendingRestyleRef.current) {
+        pendingRestyleRef.current = false;
+        doRestyle();
+      }
+    };
     const touchOpts = { passive: false } as AddEventListenerOptions;
+    const keyForThisRun = plotCreationKey;
     el.addEventListener('mousedown', onDown);
     el.addEventListener('touchstart', onDown, touchOpts);
+    el.addEventListener('touchcancel', onUp, touchOpts);
     window.addEventListener('mouseup', onUp);
     window.addEventListener('touchend', onUp, touchOpts);
+    window.addEventListener('blur', onUp);
 
     Plotly.newPlot(el, traces, layout, {
       responsive: true,
@@ -147,25 +207,34 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
       modeBarButtonsToRemove: ['lasso2d', 'select2d'],
       staticPlot: false,
     } as Record<string, unknown>).then(() => {
-      plotReady.current = true;
+      if (plotKeyRef.current === keyForThisRun) plotReady.current = true;
     });
 
     return () => {
+      plotKeyRef.current = '';
       el.removeEventListener('mousedown', onDown);
       el.removeEventListener('touchstart', onDown, touchOpts);
+      el.removeEventListener('touchcancel', onUp, touchOpts);
       window.removeEventListener('mouseup', onUp);
       window.removeEventListener('touchend', onUp, touchOpts);
+      window.removeEventListener('blur', onUp);
       Plotly.purge(el);
       plotReady.current = false;
     };
-  }, [visible, n, neuronIdsKey]);
+    /* activity and withPos intentionally omitted: plot recreation is driven by refs/fingerprint (plotCreationKey) */
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [n, plotCreationKey]);
 
-  // Resize Plotly when container changes (e.g. panel expand after minimize)
+  // Resize Plotly when container changes — skip while interacting; set pending to replay on onUp
   useEffect(() => {
     if (!embedded || !visible) return;
     const el = plotRef.current;
     if (!el) return;
     const resize = () => {
+      if (interacting.current) {
+        pendingResizeRef.current = true;
+        return;
+      }
       if (plotReady.current && el) Plotly.Plots?.resize(el);
     };
     const ro = new ResizeObserver(resize);
@@ -177,32 +246,36 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
     };
   }, [embedded, visible]);
 
-  // Force resize when panel becomes visible (e.g. after expand from collapsed)
+  // Force resize when panel becomes visible — skip while interacting; set pending to replay on onUp
   useEffect(() => {
     if (!embedded || !visible || !containerVisible) return;
     const el = plotRef.current;
     if (!el) return;
-    const t1 = setTimeout(() => { if (plotReady.current && el) Plotly.Plots?.resize(el); }, 50);
-    const t2 = setTimeout(() => { if (plotReady.current && el) Plotly.Plots?.resize(el); }, 350);
+    const resize = () => {
+      if (interacting.current) {
+        pendingResizeRef.current = true;
+        return;
+      }
+      if (plotReady.current && el) Plotly.Plots?.resize(el);
+    };
+    const t1 = setTimeout(resize, 50);
+    const t2 = setTimeout(resize, 350);
     return () => { clearTimeout(t1); clearTimeout(t2); };
   }, [embedded, visible, containerVisible]);
 
-  // Update colors when activity changes; skip while user is interacting (prevents camera snap-back)
+  // Update colors and hover text when activity changes; skip while interacting, set pending to replay on onUp
   useEffect(() => {
-    if (!plotRef.current || !plotReady.current || !visible || idsRef.current.length === 0 || interacting.current) return;
+    if (!plotRef.current || !plotReady.current || !visible || idsRef.current.length === 0) return;
+    if (interacting.current) {
+      pendingRestyleRef.current = true;
+      return;
+    }
+    const ids = idsRef.current;
     const sides = sidesRef.current;
-    const color = idsRef.current.map((id, i) => {
-      const a = activity[id] ?? 0;
-      if (a <= 0) return 0;
-      const s = sides[i] ?? '';
-      if (s === 'left') return 0.3 + a * 0.4;
-      if (s === 'right') return 0.7 + a * 0.3;
-      return 0.5 + a * 0.2;
-    });
-    Plotly.restyle(plotRef.current, { 'marker.color': [color] }, [0]);
+    const color = computeMarkerColors(ids, activity, sides);
+    const text = computeHoverText(ids, activity, sides);
+    Plotly.restyle(plotRef.current, { 'marker.color': [color], text: [text] }, [0]);
   }, [activity, visible]);
-
-  if (!visible) return null;
 
   const containerStyle = embedded
     ? {
@@ -232,7 +305,13 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
       };
 
   return (
-    <div className="brain-overlay" style={containerStyle}>
+    <div
+      className="brain-overlay"
+      style={{
+        ...containerStyle,
+        ...(!visible ? { visibility: 'hidden' as const, pointerEvents: 'none' as const } : {}),
+      }}
+    >
       <div style={{ position: 'absolute', top: 4, left: 8, fontSize: 10, color: '#888', zIndex: 1 }}>
         Brain activity
       </div>
@@ -250,6 +329,7 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
             inset: 0,
             minWidth: 1,
             minHeight: 1,
+            touchAction: 'none',
           }}
         />
       )}

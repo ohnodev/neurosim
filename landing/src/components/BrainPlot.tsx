@@ -29,8 +29,11 @@ export function BrainPlot() {
   const idsRef = useRef<string[]>([]);
   const sidesRef = useRef<string[]>([]);
   const interacting = useRef(false);
+  const pendingRestyleRef = useRef(false);
   const [neurons, setNeurons] = useState<NeuronWithPosition[]>([]);
   const [activity, setActivity] = useState<Record<string, number>>({});
+  const activityRef = useRef(activity);
+  activityRef.current = activity;
 
   useEffect(() => {
     const fetchNeurons = async () => {
@@ -195,13 +198,36 @@ export function BrainPlot() {
     };
 
     const el = plotRef.current;
+    const doRestyle = () => {
+      if (!plotRef.current || !plotReady.current || idsRef.current.length === 0) return;
+      const ids = idsRef.current;
+      const sides = sidesRef.current;
+      const act = activityRef.current;
+      const color = ids.map((id, i) => {
+        const a = act[id] ?? 0;
+        if (a <= 0) return 0;
+        const s = sides[i] ?? '';
+        if (s === 'left') return 0.3 + a * 0.4;
+        if (s === 'right') return 0.7 + a * 0.3;
+        return 0.5 + a * 0.2;
+      });
+      Plotly.restyle(plotRef.current, { 'marker.color': [color] }, [0]);
+    };
     const onDown = () => { interacting.current = true; };
-    const onUp = () => { interacting.current = false; };
+    const onUp = () => {
+      interacting.current = false;
+      if (pendingRestyleRef.current) {
+        pendingRestyleRef.current = false;
+        doRestyle();
+      }
+    };
     const touchOpts = { passive: false } as AddEventListenerOptions;
     el.addEventListener('mousedown', onDown);
     el.addEventListener('touchstart', onDown, touchOpts);
+    el.addEventListener('touchcancel', onUp, touchOpts);
     window.addEventListener('mouseup', onUp);
     window.addEventListener('touchend', onUp, touchOpts);
+    window.addEventListener('blur', onUp);
 
     Plotly.newPlot(el, traces, layout, {
       responsive: true,
@@ -216,15 +242,21 @@ export function BrainPlot() {
     return () => {
       el.removeEventListener('mousedown', onDown);
       el.removeEventListener('touchstart', onDown, touchOpts);
+      el.removeEventListener('touchcancel', onUp, touchOpts);
       window.removeEventListener('mouseup', onUp);
       window.removeEventListener('touchend', onUp, touchOpts);
+      window.removeEventListener('blur', onUp);
       Plotly.purge(el);
       plotReady.current = false;
     };
   }, [n, withPos[0]?.root_id ?? '']);
 
   useEffect(() => {
-    if (!plotRef.current || !plotReady.current || idsRef.current.length === 0 || interacting.current) return;
+    if (!plotRef.current || !plotReady.current || idsRef.current.length === 0) return;
+    if (interacting.current) {
+      pendingRestyleRef.current = true;
+      return;
+    }
     const sides = sidesRef.current;
     const color = idsRef.current.map((id, i) => {
       const a = activity[id] ?? 0;

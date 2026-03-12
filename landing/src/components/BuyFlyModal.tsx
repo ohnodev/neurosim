@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { usePrivy, useWallets } from '@privy-io/react-auth';
 import { base } from 'viem/chains';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
-import { fetchClaimConfig } from '../lib/claimApi';
+import { fetchClaimConfig, formatNeuroAmount } from '../lib/claimApi';
 import { parseWalletError } from '../../../shared/lib/parseWalletError';
 
 interface BuyFlyModalProps {
@@ -14,9 +14,8 @@ interface BuyFlyModalProps {
   onSuccess: () => void;
   eligibility: { method: 'obelisk' | 'pay' | 'full'; loading: boolean };
   onClaimFree: () => Promise<void>;
-  onBuyEth: () => Promise<void>;
   onBuyNeuro: () => Promise<void>;
-  busy: 'obelisk' | 'eth' | 'neuro' | null;
+  busy: 'obelisk' | 'neuro' | null;
 }
 
 export function BuyFlyModal({
@@ -26,7 +25,6 @@ export function BuyFlyModal({
   onSuccess,
   eligibility,
   onClaimFree,
-  onBuyEth,
   onBuyNeuro,
   busy,
 }: BuyFlyModalProps) {
@@ -89,26 +87,6 @@ export function BuyFlyModal({
       onClose();
     } catch (err) {
       if (mountedRef.current) setError(err instanceof Error ? err.message : 'Claim failed');
-    }
-  };
-
-  const handleBuyEth = async () => {
-    setError(null);
-    setTxSentNonRetryable(false);
-    setSubmittedTxHash(null);
-    try {
-      await onBuyEth();
-      onSuccess();
-      onClose();
-    } catch (err) {
-      const e = err as { txSentNonRetryable?: boolean; submittedTxHash?: string };
-      if (e?.txSentNonRetryable && e?.submittedTxHash && mountedRef.current) {
-        setTxSentNonRetryable(true);
-        setSubmittedTxHash(e.submittedTxHash);
-        setError(null);
-      } else if (mountedRef.current) {
-        setError(parseWalletError(err));
-      }
     }
   };
 
@@ -188,7 +166,9 @@ export function BuyFlyModal({
           <h2 id="buy-fly-title" className="neurosim-claim__title">
             Buy NeuroFly #{slotIndex + 1}
           </h2>
-          <p className="neurosim-claim__subtitle">Choose payment method</p>
+          <p className="neurosim-claim__subtitle">
+            {config?.flyNeuroAmountWei ? `Pay ${formatNeuroAmount(config.flyNeuroAmountWei)} $NEURO to buy a fly` : 'Pay with $NEURO to buy a fly'}
+          </p>
           {txSentNonRetryable && (
             <div className="neuroflies__error">
               Transaction sent. Do not retry. Please contact support via our Telegram channel for help.
@@ -229,18 +209,10 @@ export function BuyFlyModal({
                 <button
                   type="button"
                   className="neurosim-claim__btn neurosim-claim__btn--primary"
-                  onClick={handleBuyEth}
-                  disabled={!!busy || !!txSentNonRetryable || !walletClient || !address || !config?.flyEthReceiver}
-                >
-                  {busy === 'eth' ? 'Confirming...' : 'Pay with 0.0001 ETH'}
-                </button>
-                <button
-                  type="button"
-                  className="neurosim-claim__btn neurosim-claim__btn--secondary"
                   onClick={handleBuyNeuro}
-                  disabled={!!busy || !!txSentNonRetryable || neuroDisabled}
+                  disabled={!!busy || !!txSentNonRetryable || !walletClient || !address || neuroDisabled}
                 >
-                  {busy === 'neuro' ? 'Confirming...' : 'Pay with 1M $NEURO'}
+                  {busy === 'neuro' ? 'Confirming...' : (config?.flyNeuroAmountWei ? `Pay with ${formatNeuroAmount(config.flyNeuroAmountWei)} $NEURO` : 'Pay with $NEURO')}
                 </button>
               </>
             )}

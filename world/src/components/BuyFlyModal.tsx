@@ -7,14 +7,31 @@ import { usePrivyWallet } from '../lib/usePrivyWallet';
 import { useNotification } from '../contexts/NotificationContext';
 import { getApiBase } from '../lib/constants';
 import { parseWalletError } from '../../../shared/lib/parseWalletError';
-
-const ETH_AMOUNT = 100000000000000n; // 0.0001 ETH
+import { ERC20_TRANSFER_ABI, FLY_NEURO_AMOUNT_FALLBACK, formatNeuroAmount } from '../../../shared/lib/claimConstants';
 const SUPPORT_MESSAGE = 'Please contact support via our Telegram channel for help.';
 
 interface ClaimConfig {
   neuroTokenAddress: `0x${string}`;
   claimReceiverAddress: `0x${string}`;
-  flyEthReceiver: `0x${string}`;
+  flyNeuroAmountWei: string;
+}
+
+interface BalanceCheck {
+  flyNeuroRequiredWei?: string;
+  neuroBalanceWei?: string;
+}
+
+/** Parse raw wei string to positive BigInt; returns null for empty, whitespace, "0", or invalid. */
+function parsePositiveWei(raw: string | undefined): bigint | null {
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  if (s === '' || s === '0') return null;
+  try {
+    const n = BigInt(s);
+    return n > 0n ? n : null;
+  } catch {
+    return null;
+  }
 }
 
 async function fetchConfig(): Promise<ClaimConfig> {
@@ -42,7 +59,7 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
   const { address, walletClient, chainId } = usePrivyWallet();
   const queryClient = useQueryClient();
   const notification = useNotification();
-  const [busy, setBusy] = useState<'eth' | 'neuro' | null>(null);
+  const [busy, setBusy] = useState<'neuro' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const mountedRef = useRef(true);
 
@@ -51,6 +68,17 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
     queryFn: fetchConfig,
     staleTime: 60_000,
     enabled: isOpen,
+  });
+
+  const { data: balanceCheck } = useQuery({
+    queryKey: ['claim-balance-check', address],
+    queryFn: async (): Promise<BalanceCheck> => {
+      const r = await fetch(`${getApiBase()}/api/claim/balance-check?address=${address?.toLowerCase()}`);
+      if (!r.ok) return {};
+      return (await r.json()) as BalanceCheck;
+    },
+    staleTime: 30_000,
+    enabled: isOpen && !!address && chainId === base.id,
   });
 
   useEffect(() => {
@@ -74,6 +102,14 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
 
   const isOnBaseChain = chainId === base.id;
 
+  const displayAmountWei =
+    balanceCheck?.flyNeuroRequiredWei != null && parsePositiveWei(balanceCheck.flyNeuroRequiredWei) !== null
+      ? balanceCheck.flyNeuroRequiredWei
+      : config?.flyNeuroAmountWei != null && parsePositiveWei(config.flyNeuroAmountWei) !== null
+        ? config.flyNeuroAmountWei
+        : FLY_NEURO_AMOUNT_FALLBACK.toString();
+  const displayAmountLabel = formatNeuroAmount(displayAmountWei);
+
   const handleSwitchToBase = useCallback(async () => {
     if (!ready || !wallets.length) return;
     const wallet = address
@@ -88,23 +124,51 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
     }
   }, [ready, wallets, address]);
 
-  const handleBuyEth = async () => {
-    if (!walletClient || !address || !config?.flyEthReceiver || !isOnBaseChain) return;
-    setBusy('eth');
+  const handleBuyNeuro = useCallback(async () => {
+    if (!walletClient || !address || !config?.neuroTokenAddress || !config?.claimReceiverAddress || !isOnBaseChain) return;
+    const zero = '0x0000000000000000000000000000000000000000';
+    if (config.neuroTokenAddress === zero || config.claimReceiverAddress === zero) {
+      setError('Claim not configured');
+      return;
+    }
+    setBusy('neuro');
     setError(null);
     try {
       const balRes = await fetch(`${getApiBase()}/api/claim/balance-check?address=${address.toLowerCase()}`);
+      let bal: BalanceCheck | null = null;
       if (balRes.ok) {
-        const bal = await balRes.json();
-        if (BigInt(bal.ethBalanceWei ?? 0) < BigInt(bal.flyEthRequiredWei ?? ETH_AMOUNT.toString())) {
-          if (mountedRef.current) setError('Insufficient ETH. Add more ETH to your wallet to complete this purchase.');
-          return;
+        try {
+          bal = (await balRes.json()) as BalanceCheck;
+        } catch {
+          if (import.meta.env?.DEV) console.warn('[BuyFlyModal] balance-check response was not valid JSON');
         }
       }
-      const hash = await walletClient.sendTransaction({
+      const transferAmount =
+        parsePositiveWei(bal?.flyNeuroRequiredWei) ??
+        parsePositiveWei(config.flyNeuroAmountWei) ??
+        FLY_NEURO_AMOUNT_FALLBACK;
+      if (transferAmount <= 0n) {
+        const msg = 'Invalid fly price from API';
+        if (import.meta.env?.DEV) console.debug('[BuyFlyModal] no valid amount from balance-check, config, or fallback');
+        if (mountedRef.current) setError(msg);
+        throw new Error(msg);
+      }
+      if (import.meta.env?.DEV) {
+        if (parsePositiveWei(bal?.flyNeuroRequiredWei) !== null) console.debug('[BuyFlyModal] amount source: balance-check');
+        else if (parsePositiveWei(config.flyNeuroAmountWei) !== null) console.debug('[BuyFlyModal] amount source: config (balance-check missing or invalid)');
+        else console.debug('[BuyFlyModal] amount source: FLY_NEURO_AMOUNT_FALLBACK');
+      }
+      const balanceWei = parsePositiveWei(bal?.neuroBalanceWei) ?? 0n;
+      if (balanceWei < transferAmount) {
+        if (mountedRef.current) setError(`Insufficient $NEURO. You need ${formatNeuroAmount(transferAmount.toString())} $NEURO to buy a fly.`);
+        return;
+      }
+      const hash = await walletClient.writeContract({
         account: address,
-        to: config.flyEthReceiver,
-        value: ETH_AMOUNT,
+        address: config.neuroTokenAddress,
+        abi: ERC20_TRANSFER_ABI,
+        functionName: 'transfer',
+        args: [config.claimReceiverAddress, transferAmount],
         chain: base,
       });
       notification.show('Transaction sent, pending...', 'info');
@@ -113,12 +177,8 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
       const baseDelay = 1000;
       const verify = async (attempt = 0): Promise<void> => {
         if (!mountedRef.current) return;
-        if (attempt === 0) {
-          await new Promise((r) => setTimeout(r, Math.min(baseDelay, 8000)));
-          if (!mountedRef.current) return;
-        }
         notification.update('Verifying payment...', 'info');
-        const res = await fetch(`${apiBase}/api/claim/verify-eth`, {
+        const res = await fetch(`${apiBase}/api/claim/verify-payment`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ txHash: hash, userAddress: address.toLowerCase() }),
@@ -148,15 +208,15 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
     } finally {
       if (mountedRef.current) setBusy(null);
     }
-  };
-
-  const handleBuyNeuro = () => {
-    notification.show('$NEURO payment coming soon. Use ETH for now.', 'info');
-  };
+  }, [walletClient, address, config, isOnBaseChain, queryClient, notification, onSuccess, onClose]);
 
   if (!isOpen) return null;
 
-  const neuroDisabled = !config?.neuroTokenAddress || config.neuroTokenAddress === '0x0000000000000000000000000000000000000000';
+  const neuroDisabled =
+    !config?.neuroTokenAddress ||
+    config.neuroTokenAddress === '0x0000000000000000000000000000000000000000' ||
+    !config?.claimReceiverAddress ||
+    config.claimReceiverAddress === '0x0000000000000000000000000000000000000000';
 
   const modalContent = !address ? (
     <div className="neurosim-claim-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="connect-wallet-title">
@@ -182,7 +242,9 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
         <button type="button" className="neurosim-claim__close" onClick={onClose} aria-label="Close">×</button>
         <div className="neurosim-claim__card">
           <h2 id="buy-fly-title" className="neurosim-claim__title">Buy NeuroFly #{slotIndex + 1}</h2>
-          <p className="neurosim-claim__subtitle">Choose payment method</p>
+          <p className="neurosim-claim__subtitle">
+            Pay with {displayAmountLabel} $NEURO to buy a fly
+          </p>
           {error && <div className="neuroflies__error">{error}</div>}
           {!isOnBaseChain && (
             <div className="neuroflies__error" style={{ marginBottom: 12 }}>
@@ -202,20 +264,12 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
               <button
                 type="button"
                 className="neurosim-claim__btn neurosim-claim__btn--primary"
-                onClick={handleBuyEth}
-                disabled={!!busy || !walletClient || !address || !config?.flyEthReceiver}
+                onClick={handleBuyNeuro}
+                disabled={!!busy || !walletClient || !address || neuroDisabled}
               >
-                {busy === 'eth' ? 'Confirming...' : 'Pay with 0.0001 ETH'}
+                {busy === 'neuro' ? 'Confirming...' : `Pay with ${displayAmountLabel} $NEURO`}
               </button>
             )}
-            <button
-              type="button"
-              className="neurosim-claim__btn neurosim-claim__btn--secondary"
-              onClick={handleBuyNeuro}
-              disabled={!!busy || neuroDisabled}
-            >
-              {busy === 'neuro' ? 'Confirming...' : 'Pay with $NEURO (coming soon)'}
-            </button>
           </div>
         </div>
       </div>

@@ -12,6 +12,7 @@ api/data/claims.json
 api/data/flies.json
 api/data/deployments.json
 api/data/rewards-state.json
+api/data/dead-letter.json
 *.log
 .pm2/
 .venv/

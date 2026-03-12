@@ -30,10 +30,10 @@ export function BrainPlot() {
   const sidesRef = useRef<string[]>([]);
   const interacting = useRef(false);
   const pendingRestyleRef = useRef(false);
-  const activityRef = useRef(activity);
-  activityRef.current = activity;
   const [neurons, setNeurons] = useState<NeuronWithPosition[]>([]);
   const [activity, setActivity] = useState<Record<string, number>>({});
+  const activityRef = useRef(activity);
+  activityRef.current = activity;
 
   useEffect(() => {
     const fetchNeurons = async () => {

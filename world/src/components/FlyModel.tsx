@@ -6,7 +6,9 @@ import type { FlyState } from '../lib/simWsClient';
 
 const FLY_THRESHOLD = 1.1;
 const WING_ANIM_NAMES = ['wing-leftAction', 'wing-rightAction'];
-const HEADING_LERP = 0.18;
+const MIN_MOVEMENT_SQ = 0.001;
+const HEADING_LERP = 0.38;
+const HEADING_DEAD_ZONE = 0.15;
 
 export function FlyModel({
   statesRef,
@@ -20,7 +22,9 @@ export function FlyModel({
   const { scene, animations } = useGLTF('/models/fly-animated/fly2-animation.glb');
   const { actions } = useAnimations(animations, sceneRef);
   const cloned = useMemo(() => scene.clone(true), [scene]);
+  const prevPosRef = useRef({ x: 0, y: 0 });
   const headingRef = useRef(0);
+  const targetHeadingRef = useRef(0);
   const wasFlyingRef = useRef(false);
   const initializedRef = useRef(false);
 
@@ -31,17 +35,27 @@ export function FlyModel({
     const x = state.x ?? 0;
     const y = state.y ?? 0;
     const z = state.z ?? 0;
-    const heading = state.heading ?? 0;
     const isFlying = z > FLY_THRESHOLD;
 
+    const dx = x - prevPosRef.current.x;
+    const dy = y - prevPosRef.current.y;
+    prevPosRef.current = { x, y };
+    const moveSq = dx * dx + dy * dy;
+    if (moveSq > MIN_MOVEMENT_SQ) {
+      const newTarget = Math.atan2(dx, dy) + Math.PI;
+      let diff = newTarget - targetHeadingRef.current;
+      if (diff > Math.PI) diff -= 2 * Math.PI;
+      if (diff < -Math.PI) diff += 2 * Math.PI;
+      if (Math.abs(diff) > HEADING_DEAD_ZONE) targetHeadingRef.current = newTarget;
+    }
     if (!initializedRef.current) {
-      headingRef.current = heading;
+      headingRef.current = targetHeadingRef.current;
       initializedRef.current = true;
     }
 
     group.current.position.set(x, z, y);
 
-    let d = heading - headingRef.current;
+    let d = targetHeadingRef.current - headingRef.current;
     if (d > Math.PI) d -= 2 * Math.PI;
     if (d < -Math.PI) d += 2 * Math.PI;
     headingRef.current += d * HEADING_LERP;

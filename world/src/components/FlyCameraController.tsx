@@ -1,6 +1,6 @@
 /**
  * Plugin-style camera: fly view (follow fly + user rotates around it) vs god view (orbit).
- * In fly view the orbit target follows the fly smoothly; user can rotate the camera around the fly.
+ * In fly view the orbit target follows the interpolated fly position for smooth tracking.
  */
 import { createContext, useContext, useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
@@ -19,19 +19,24 @@ export type FlyCameraTarget = {
 type FlyCameraContextValue = {
   mode: CameraMode;
   setMode: (m: CameraMode) => void;
-  target: FlyCameraTarget | null;
+  /** Fallback target ref (updated by parent, no re-renders) */
+  targetRef: React.MutableRefObject<FlyCameraTarget | null>;
+  /** Interpolated fly states by sim index; camera follows this for smooth tracking */
+  interpolatedBySimRef: React.MutableRefObject<unknown[]> | null;
+  /** Sim index of the fly to follow */
+  followSimIndex: number | undefined;
 };
 
 const FlyCameraContext = createContext<FlyCameraContextValue | null>(null);
 
 export function useFlyCamera(): FlyCameraContextValue {
   const ctx = useContext(FlyCameraContext);
-  if (!ctx) return { mode: 'god', setMode: () => {}, target: null };
+  if (!ctx) return { mode: 'god', setMode: () => {}, targetRef: { current: null }, interpolatedBySimRef: null, followSimIndex: undefined };
   return ctx;
 }
 
-/** Lerp follow: slower = smoother, avoids blur from snapping to fly every 30ms. */
-const TARGET_SMOOTH = 0.035;
+/** Lerp follow; target is interpolated so no jumps - higher value = snappier follow */
+const TARGET_SMOOTH = 0.12;
 /** Default distance from fly in fly view (a bit closer). */
 const FLY_VIEW_DISTANCE = 3;
 
@@ -46,11 +51,18 @@ export function FlyCameraController() {
     const controls = controlsRef.current;
     if (!controls) return;
 
-    if (ctx?.mode === 'fly' && ctx?.target) {
-      const t = ctx.target;
-      // Game coords: x,y horizontal, z up. Three: position [x, z, y].
-      const tx = t.x, ty = t.z, tz = t.y;
-      const want = new THREE.Vector3(tx, ty, tz);
+    if (ctx?.mode === 'fly') {
+      // Prefer interpolated position (smooth) over raw target (jumps on WS updates)
+      let want: THREE.Vector3;
+      const fly = ctx.interpolatedBySimRef?.current?.[ctx.followSimIndex ?? -1] as { x?: number; y?: number; z?: number } | undefined;
+      if (fly && typeof fly.x === 'number' && typeof fly.y === 'number' && typeof fly.z === 'number') {
+        // Game coords: x,y horizontal, z up. Three: position [x, z, y].
+        want = new THREE.Vector3(fly.x, fly.z, fly.y);
+      } else {
+        const t = ctx.targetRef?.current;
+        if (!t) return;
+        want = new THREE.Vector3(t.x, t.z, t.y);
+      }
       if (!initialized.current) {
         smoothedTargetRef.current.copy(want);
         initialized.current = true;

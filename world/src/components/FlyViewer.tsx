@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect, useMemo, Suspense } from 'react';
+import { useRef, useState, useEffect, useMemo, memo, Suspense } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Canvas } from '@react-three/fiber';
 import { useGLTF } from '@react-three/drei';
@@ -13,6 +13,7 @@ import { BuyFlyModal } from './BuyFlyModal';
 import { FlyCameraContext, FlyCameraController, type CameraMode } from './FlyCameraController';
 import { InterpolatedFlies, type InterpolationDebugStats } from './InterpolatedFlies';
 import { DebugOverlay } from './DebugOverlay';
+import { FpsLimiter } from './FpsLimiter';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
 import './FlyViewer.css';
 
@@ -166,6 +167,38 @@ function WorldSources({ sources }: { sources: WorldSource[] }) {
   );
 }
 
+const WorldCanvasScene = memo(function WorldCanvasScene({
+  contextValue,
+  bufferRef,
+  latestFliesRef,
+  debugStatsRef,
+  interpolatedBySimRef,
+  sources,
+}: {
+  contextValue: React.ComponentProps<typeof FlyCameraContext.Provider>['value'];
+  bufferRef: React.MutableRefObject<Snapshot[]>;
+  latestFliesRef: React.MutableRefObject<FlyState[]>;
+  debugStatsRef: React.MutableRefObject<InterpolationDebugStats | null>;
+  interpolatedBySimRef: React.MutableRefObject<FlyState[]>;
+  sources: WorldSource[];
+}) {
+  return (
+    <FlyCameraContext.Provider value={contextValue!}>
+      <Canvas camera={{ position: [8, 6, 8], fov: 50 }} gl={{ outputColorSpace: THREE.SRGBColorSpace }} frameloop="demand">
+        <FpsLimiter />
+        <ambientLight intensity={0.8} />
+        <directionalLight position={[10, 10, 5]} intensity={1.2} castShadow />
+        <FlyCameraController />
+        <Suspense fallback={null}>
+          <InterpolatedFlies bufferRef={bufferRef} latestFliesRef={latestFliesRef} debugStatsRef={debugStatsRef} interpolatedBySimRef={interpolatedBySimRef} />
+        </Suspense>
+        <WorldSources sources={sources} />
+        <GroundPlane />
+      </Canvas>
+    </FlyCameraContext.Provider>
+  );
+});
+
 function shortId(id: string): string {
   if (id.length <= 12) return id;
   return id.slice(-8);
@@ -309,7 +342,9 @@ export default function FlyViewer() {
   const [brainPanelOpen, setBrainPanelOpen] = useState(() => !isMobileDefault());
 
   const snapshotBufferRef = useRef<Snapshot[]>([]);
+  const latestFliesRef = useRef<FlyState[]>([]);
   const debugStatsRef = useRef<InterpolationDebugStats | null>(null);
+  const interpolatedBySimRef = useRef<FlyState[]>([]);
 
   const { data: myFlies = [] } = useQuery({
     queryKey: ['my-flies', address ?? ''],
@@ -426,11 +461,17 @@ export default function FlyViewer() {
         }
         const last = buf[buf.length - 1];
         if (last) {
+          latestFliesRef.current = last.flies;
           setFlies(last.flies);
           setActivities(last.activities ?? []);
           setActivity(last.activity ?? last.activities?.[0] ?? {});
-        } else if (Array.isArray(data.flies)) setFlies(data.flies);
-        else if (data.fly) setFlies([data.fly]);
+        } else if (Array.isArray(data.flies)) {
+          latestFliesRef.current = data.flies;
+          setFlies(data.flies);
+        } else if (data.fly) {
+          latestFliesRef.current = [data.fly];
+          setFlies([data.fly]);
+        }
         if (data.activity != null) setActivity(data.activity);
         else if (Array.isArray(data.activities) && data.activities[0] != null) setActivity(data.activities[0] ?? {});
       }
@@ -487,21 +528,29 @@ export default function FlyViewer() {
 
   const flyMode = getFlyMode(focusedFly);
 
+  const cameraTargetRef = useRef<{ x: number; y: number; z: number; heading: number } | null>(null);
+  useEffect(() => {
+    if (effectiveSimIndex != null) {
+      cameraTargetRef.current = {
+        x: focusedFly.x ?? 0,
+        y: focusedFly.y ?? 0,
+        z: focusedFly.z ?? 0,
+        heading: focusedFly.heading ?? 0,
+      };
+    } else {
+      cameraTargetRef.current = null;
+    }
+  }, [effectiveSimIndex, focusedFly.x, focusedFly.y, focusedFly.z, focusedFly.heading]);
+
   const flyCameraContextValue = useMemo(
     () => ({
       mode: cameraMode,
       setMode: setCameraMode,
-      target:
-        effectiveSimIndex != null
-          ? {
-              x: focusedFly.x ?? 0,
-              y: focusedFly.y ?? 0,
-              z: focusedFly.z ?? 0,
-              heading: focusedFly.heading ?? 0,
-            }
-          : null,
+      targetRef: cameraTargetRef,
+      interpolatedBySimRef,
+      followSimIndex: effectiveSimIndex,
     }),
-    [cameraMode, effectiveSimIndex, focusedFly.x, focusedFly.y, focusedFly.z, focusedFly.heading]
+    [cameraMode, effectiveSimIndex]
   );
 
   const deployFly = async (slotIndex: number) => {
@@ -522,20 +571,16 @@ export default function FlyViewer() {
 
   return (
     <div style={{ width: '100vw', height: '100vh', position: 'relative' }}>
-      {/* Canvas layer - must stay behind UI */}
+      {/* Canvas layer - memoized so WS updates (setFlies) don't re-render the 3D scene */}
       <div style={{ position: 'absolute', inset: 0, zIndex: 0, isolation: 'isolate' }}>
-        <FlyCameraContext.Provider value={flyCameraContextValue}>
-          <Canvas camera={{ position: [8, 6, 8], fov: 50 }} gl={{ outputColorSpace: THREE.SRGBColorSpace }}>
-            <ambientLight intensity={0.8} />
-            <directionalLight position={[10, 10, 5]} intensity={1.2} castShadow />
-            <FlyCameraController />
-            <Suspense fallback={null}>
-              <InterpolatedFlies bufferRef={snapshotBufferRef} latestFlies={flies} debugStatsRef={debugStatsRef} />
-            </Suspense>
-          <WorldSources sources={sources} />
-          <GroundPlane />
-        </Canvas>
-        </FlyCameraContext.Provider>
+        <WorldCanvasScene
+          contextValue={flyCameraContextValue}
+          bufferRef={snapshotBufferRef}
+          latestFliesRef={latestFliesRef}
+          debugStatsRef={debugStatsRef}
+          interpolatedBySimRef={interpolatedBySimRef}
+          sources={sources}
+        />
       </div>
       {/* UI layer - always on top, always visible */}
       <div style={{ position: 'fixed', inset: 0, zIndex: 1000, pointerEvents: 'none' }}>

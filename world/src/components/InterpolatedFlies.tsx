@@ -25,12 +25,15 @@ export interface InterpolationDebugStats {
 
 export function InterpolatedFlies({
   bufferRef,
-  latestFlies,
+  latestFliesRef,
   debugStatsRef,
+  interpolatedBySimRef,
 }: {
   bufferRef: React.MutableRefObject<Snapshot[]>;
-  latestFlies: FlyState[];
+  latestFliesRef: React.MutableRefObject<FlyState[]>;
   debugStatsRef?: React.MutableRefObject<InterpolationDebugStats | null>;
+  /** Interpolated fly states by sim index; camera reads this for smooth follow */
+  interpolatedBySimRef?: React.MutableRefObject<FlyState[]>;
 }) {
   const flyStatesRef = useRef<FlyState[]>([]);
   const [flyCount, setFlyCount] = useState(0);
@@ -42,9 +45,11 @@ export function InterpolatedFlies({
     const buf = bufferRef.current;
 
     if (buf.length === 0) {
-      const alive = latestFlies.filter((f) => !f.dead);
+      const latest = latestFliesRef.current;
+      const alive = latest.filter((f) => !f.dead);
       flyStatesRef.current = alive;
       if (alive.length !== flyCount) setFlyCount(alive.length);
+      if (interpolatedBySimRef) interpolatedBySimRef.current = latest;
       if (debugStatsRef) {
         debugStatsRef.current = { fps: delta > 0 ? 1 / delta : 0, bufferLen: 0, tDisplay: 0, speed: 1, rangeStart: 0, rangeEnd: 0 };
       }
@@ -57,6 +62,7 @@ export function InterpolatedFlies({
       const alive = last.flies.filter((f) => !f.dead);
       flyStatesRef.current = alive;
       if (alive.length !== flyCount) setFlyCount(alive.length);
+      if (interpolatedBySimRef) interpolatedBySimRef.current = last.flies;
       if (debugStatsRef) {
         debugStatsRef.current = { fps: delta > 0 ? 1 / delta : 0, bufferLen: buf.length, tDisplay: last.t, speed: 1, rangeStart: buf[0]!.t, rangeEnd: last.t };
       }
@@ -146,6 +152,7 @@ export function InterpolatedFlies({
     const alive = lerped.filter((f) => !f.dead);
     flyStatesRef.current = alive;
     if (alive.length !== flyCount) setFlyCount(alive.length);
+    if (interpolatedBySimRef) interpolatedBySimRef.current = lerped;
 
     if (debugStatsRef) {
       const first = buf[0]!;

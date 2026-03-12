@@ -6,7 +6,15 @@ import { PRIVY_APP_ID } from '../lib/constants';
 import { PrivyWalletProvider } from '../lib/privyWalletContext';
 import { NotificationProvider } from '../contexts/NotificationContext';
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 30_000,
+      retry: 1,
+      refetchOnWindowFocus: false,
+    },
+  },
+});
 
 const privyConfig = {
   loginMethods: ['wallet'] as ('wallet')[],

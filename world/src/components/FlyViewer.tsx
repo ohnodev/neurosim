@@ -4,6 +4,16 @@ import type { WorldSource } from '../../../api/src/world';
 import { subscribeSim, type FlyState } from '../lib/simWsClient';
 import { type Snapshot, REST_DURATION_FALLBACK } from '../lib/flyInterpolation';
 import { getApiBase } from '../lib/constants';
+import {
+  apiKeys,
+  fetchWorld,
+  fetchNeurons,
+  fetchMyFlies,
+  fetchMyDeployed,
+  fetchFlyStats,
+  type ClaimedFly,
+  type NeuronRaw,
+} from '../lib/api';
 import { BrainOverlay } from './BrainOverlay';
 import { SimRefsProvider, useSimDisplayData, useSimDisplayDataSelector, useSimDisplayDataThrottled } from '../lib/simDisplayContext';
 import { ConnectButton } from './ConnectButton';
@@ -45,34 +55,6 @@ function resolveEffectiveSimIndex(
     : firstValidSlot != null
       ? deployed[firstValidSlot]!
       : undefined;
-}
-
-interface ClaimedFly {
-  id: string;
-  method: string;
-  claimedAt: string;
-}
-
-async function fetchMyFlies(address: string) {
-  const r = await fetch(`${getApiBase()}/api/claim/my-flies?address=${address.toLowerCase()}`);
-  if (!r.ok) return [];
-  const data = await r.json();
-  return (data.flies ?? []) as ClaimedFly[];
-}
-
-async function fetchMyDeployed(address: string): Promise<Record<number, number>> {
-  const r = await fetch(`${getApiBase()}/api/deploy/my-deployed?address=${address.toLowerCase()}`);
-  if (!r.ok) return {};
-  const data = await r.json();
-  return data.deployed ?? {};
-}
-
-async function fetchFlyStats(address: string): Promise<{ stats: { slotIndex: number; feedCount: number }[]; rewardPerPointWei: string }> {
-  const r = await fetch(`${getApiBase()}/api/rewards/stats?address=${address.toLowerCase()}`);
-  if (!r.ok) return { stats: [], rewardPerPointWei: (1000n * 10n ** 18n).toString() };
-  const data = await r.json();
-  const fallbackWei = (1000n * 10n ** 18n).toString(); // 1000 $NEURO per point
-  return { stats: data.stats ?? [], rewardPerPointWei: data.rewardPerPointWei ?? fallbackWei };
 }
 
 function getFlyMode(fly: FlyState): string {
@@ -565,8 +547,6 @@ export default function FlyViewer() {
   const { address } = usePrivyWallet();
   const queryClient = useQueryClient();
   const [selectedFlyIndex, setSelectedFlyIndex] = useState(0);
-  const [sources, setSources] = useState<WorldSource[]>([]);
-  const [neuronLabels, setNeuronLabels] = useState<Record<string, string>>({});
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fliesPanelOpen, setFliesPanelOpen] = useState(
@@ -601,20 +581,45 @@ export default function FlyViewer() {
   const sourcesRef = useRef<WorldSource[]>([]);
   const flyCardDataRef = useRef<Map<number, { fly: FlyState; points: number }>>(new Map());
 
+  const { data: worldData, isError: worldError } = useQuery({
+    queryKey: apiKeys.world(),
+    queryFn: fetchWorld,
+  });
+  const sources = worldData?.sources ?? [];
+
+  const { data: neuronsData, isError: neuronsError } = useQuery({
+    queryKey: apiKeys.neurons(),
+    queryFn: fetchNeurons,
+  });
+  const neuronLabels = useMemo(() => {
+    const list = neuronsData?.neurons ?? [];
+    const labels: Record<string, string> = {};
+    for (const n of list as NeuronRaw[]) {
+      const full = [n.cell_type, n.role].filter(Boolean).join(' ') || n.root_id;
+      labels[n.root_id] = full;
+    }
+    return labels;
+  }, [neuronsData?.neurons]);
+
+  useEffect(() => {
+    if (worldError) setError((prev) => prev ?? 'Failed to load world');
+    else if (neuronsError) setError((prev) => prev ?? 'Failed to load neurons');
+  }, [worldError, neuronsError]);
+
   const { data: myFlies = [] } = useQuery({
-    queryKey: ['my-flies', address ?? ''],
+    queryKey: apiKeys.myFlies(address ?? ''),
     queryFn: () => fetchMyFlies(address!),
     enabled: !!address,
   });
 
   const { data: deployed = {}, refetch: refetchDeployed } = useQuery({
-    queryKey: ['my-deployed', address ?? ''],
+    queryKey: apiKeys.myDeployed(address ?? ''),
     queryFn: () => fetchMyDeployed(address!),
     enabled: !!address,
   });
 
   const { data: rewardsHistory } = useQuery({
-    queryKey: ['rewards-history'],
+    queryKey: apiKeys.rewardsHistory(),
     queryFn: async () => {
       const r = await fetch(getApiBase() + '/api/rewards/history?limit=50');
       if (!r.ok) throw new Error('Failed to fetch');
@@ -630,7 +635,7 @@ export default function FlyViewer() {
   );
 
   const { data: flyStatsData } = useQuery({
-    queryKey: ['fly-stats', address ?? ''],
+    queryKey: apiKeys.flyStats(address ?? ''),
     queryFn: () => fetchFlyStats(address!),
     enabled: !!address,
     refetchInterval: connected ? 5000 : false,
@@ -640,36 +645,6 @@ export default function FlyViewer() {
     for (const s of flyStatsData?.stats ?? []) m[s.slotIndex] = s.feedCount;
     return m;
   }, [flyStatsData?.stats]);
-
-  useEffect(() => {
-    const apiBase = getApiBase();
-    fetch(apiBase + '/api/world')
-      .then((r) => r.ok ? r.json() : Promise.reject(new Error(r.statusText)))
-      .then((d) => {
-        if (!Array.isArray(d.sources)) throw new Error('Invalid /api/world response');
-        setSources(d.sources);
-      })
-      .catch((err) => {
-        console.error('[FlyViewer] /api/world:', err);
-        setError('Failed to load world');
-      });
-    fetch(apiBase + '/api/neurons')
-      .then((r) => r.ok ? r.json() : Promise.reject(new Error(r.statusText)))
-      .then((d) => {
-        if (!Array.isArray(d.neurons)) throw new Error('Invalid /api/neurons response');
-        const list = d.neurons as { root_id: string; role?: string; cell_type?: string; x?: number; y?: number; z?: number }[];
-        const labels: Record<string, string> = {};
-        for (const n of list) {
-          const full = [n.cell_type, n.role].filter(Boolean).join(' ') || n.root_id;
-          labels[n.root_id] = full;
-        }
-        setNeuronLabels(labels);
-      })
-      .catch((err) => {
-        console.error('[FlyViewer] /api/neurons:', err);
-        setError('Failed to load neurons');
-      });
-  }, []);
 
   useEffect(() => {
     const unsub = subscribeSim((event) => {
@@ -695,7 +670,9 @@ export default function FlyViewer() {
         sources?: WorldSource[];
       };
       /* omit data.error - sim status shows connection state; transient errors are misleading */
-      if (data.sources && Array.isArray(data.sources) && !(Array.isArray(data.frames) && data.frames.length > 0)) setSources(data.sources);
+      if (data.sources && Array.isArray(data.sources) && !(Array.isArray(data.frames) && data.frames.length > 0)) {
+        queryClient.setQueryData(apiKeys.world(), { sources: data.sources });
+      }
       if (!data.error) {
         const buf = snapshotBufferRef.current;
         const lastT = buf.length > 0 ? (buf[buf.length - 1]?.t ?? 0) : -Infinity;
@@ -860,8 +837,8 @@ export default function FlyViewer() {
         const err = await r.json().catch(() => ({}));
         throw new Error(err.error ?? 'Deploy failed');
       }
-      queryClient.invalidateQueries({ queryKey: ['my-deployed', address] });
-      queryClient.invalidateQueries({ queryKey: ['fly-stats', address] });
+      queryClient.invalidateQueries({ queryKey: apiKeys.myDeployed(address!) });
+      queryClient.invalidateQueries({ queryKey: apiKeys.flyStats(address!) });
       refetchDeployed();
     },
     [address, queryClient, refetchDeployed]
@@ -989,7 +966,7 @@ export default function FlyViewer() {
             onClose={() => setBuyFlySlot(null)}
             slotIndex={buyFlySlot}
             onSuccess={() => {
-              if (address) queryClient.invalidateQueries({ queryKey: ['my-flies', address] });
+              if (address) queryClient.invalidateQueries({ queryKey: apiKeys.myFlies(address) });
             }}
           />
         )}

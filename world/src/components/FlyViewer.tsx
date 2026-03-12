@@ -220,34 +220,41 @@ const FlySlotDeploy = React.memo(function FlySlotDeploy({
   );
 });
 
-const CameraToggleButton = React.memo(function CameraToggleButton({
-  cameraMode,
-  setCameraMode,
-}: {
-  cameraMode: CameraMode;
-  setCameraMode: (fn: (m: CameraMode) => CameraMode) => void;
-}) {
-  return (
-    <button
-      type="button"
-      className="fly-viewer__camera-toggle"
-      onClick={() => setCameraMode((m) => (m === 'god' ? 'fly' : 'god'))}
-      title={cameraMode === 'god' ? 'Follow current fly' : 'Orbit view'}
-      style={{
-        padding: '6px 10px',
-        fontSize: 11,
-        fontFamily: 'var(--font-mono, monospace)',
-        background: cameraMode === 'fly' ? 'rgba(35, 70, 138, 0.6)' : 'rgba(0,0,0,0.85)',
-        color: '#aaf',
-        border: '1px solid rgba(100,100,140,0.3)',
-        borderRadius: 6,
-        cursor: 'pointer',
-      }}
-    >
-      {cameraMode === 'god' ? 'Fly view' : 'God view'}
-    </button>
-  );
-});
+/** Imperative camera toggle slot - button is created by initThreeScene, appended here. */
+const CameraToggleSlot = React.memo(
+  React.forwardRef<
+    HTMLDivElement,
+    { deployed: Record<number, number>; selectedFlyIndex: number }
+  >(function CameraToggleSlot({ deployed, selectedFlyIndex }, ref) {
+    const { effectiveSimIndex } = useSimDisplayDataSelector(
+      useCallback(
+        (data: { flies: FlyState[] }) => {
+          const flies = data.flies;
+          const simIndexForSelected = deployed[selectedFlyIndex];
+          const firstValidSlot = Object.keys(deployed)
+            .map((k) => parseInt(k, 10))
+            .filter((n) => !Number.isNaN(n) && deployed[n] != null)
+            .sort((a, b) => a - b)
+            .find((slotIdx) => deployed[slotIdx] != null && flies[deployed[slotIdx]!] != null);
+          const eff =
+            simIndexForSelected != null && flies[simIndexForSelected] != null
+              ? simIndexForSelected
+              : firstValidSlot != null
+                ? deployed[firstValidSlot]!
+                : undefined;
+          return { effectiveSimIndex: eff };
+        },
+        [deployed, selectedFlyIndex]
+      )
+    );
+    return (
+      <div
+        ref={ref}
+        style={{ display: effectiveSimIndex == null ? 'none' : undefined }}
+      />
+    );
+  })
+);
 
 const FlySlotConnecting = React.memo(function FlySlotConnecting({ index }: { index: number }) {
   return (
@@ -319,8 +326,8 @@ function SimStateSync({
   deployedSlotKeys,
   selectedFlyIndex,
   setSelectedFlyIndex,
-  cameraMode,
-  setCameraMode,
+  cameraModeRef,
+  updateCameraButtonRef,
   cameraTargetRef,
   followSimIndexRef,
 }: {
@@ -328,8 +335,8 @@ function SimStateSync({
   deployedSlotKeys: number[];
   selectedFlyIndex: number;
   setSelectedFlyIndex: (v: number) => void;
-  cameraMode: CameraMode;
-  setCameraMode: (fn: (m: CameraMode) => CameraMode) => void;
+  cameraModeRef: React.MutableRefObject<CameraMode>;
+  updateCameraButtonRef: React.MutableRefObject<((mode: CameraMode) => void) | null>;
   cameraTargetRef: React.MutableRefObject<{ x: number; y: number; z: number; heading: number } | null>;
   followSimIndexRef: React.MutableRefObject<number | undefined>;
 }) {
@@ -354,8 +361,11 @@ function SimStateSync({
   }, [effectiveSimIndex, followSimIndexRef]);
 
   useEffect(() => {
-    if (effectiveSimIndex == null && cameraMode === 'fly') setCameraMode(() => 'god');
-  }, [effectiveSimIndex, cameraMode, setCameraMode]);
+    if (effectiveSimIndex == null && cameraModeRef.current === 'fly') {
+      cameraModeRef.current = 'god';
+      updateCameraButtonRef.current?.('god');
+    }
+  }, [effectiveSimIndex, cameraModeRef, updateCameraButtonRef]);
 
   useEffect(() => {
     if (deployedSlotKeys.length === 0) return;
@@ -382,43 +392,6 @@ function SimStateSync({
   }, [effectiveSimIndex, focusedFly.x, focusedFly.y, focusedFly.z, focusedFly.heading, cameraTargetRef]);
 
   return null;
-}
-
-/** Camera toggle only. Subscribes to effectiveSimIndex only so it never re-renders when neuron count changes. */
-function TopBarCameraToggle({
-  deployed,
-  selectedFlyIndex,
-  cameraMode,
-  setCameraMode,
-}: {
-  deployed: Record<number, number>;
-  selectedFlyIndex: number;
-  cameraMode: CameraMode;
-  setCameraMode: (fn: (m: CameraMode) => CameraMode) => void;
-}) {
-  const { effectiveSimIndex } = useSimDisplayDataSelector(
-    useCallback(
-      (data: { flies: FlyState[] }) => {
-        const flies = data.flies;
-        const simIndexForSelected = deployed[selectedFlyIndex];
-        const firstValidSlot = Object.keys(deployed)
-          .map((k) => parseInt(k, 10))
-          .filter((n) => !Number.isNaN(n) && deployed[n] != null)
-          .sort((a, b) => a - b)
-          .find((slotIdx) => deployed[slotIdx] != null && flies[deployed[slotIdx]!] != null);
-        const eff =
-          simIndexForSelected != null && flies[simIndexForSelected] != null
-            ? simIndexForSelected
-            : firstValidSlot != null
-              ? deployed[firstValidSlot]!
-              : undefined;
-        return { effectiveSimIndex: eff };
-      },
-      [deployed, selectedFlyIndex]
-    )
-  );
-  if (effectiveSimIndex == null) return null;
-  return <CameraToggleButton cameraMode={cameraMode} setCameraMode={setCameraMode} />;
 }
 
 /** Top bar sim status (fly died, neuron count). Selector excludes effectiveSimIndex so camera toggle is isolated. */
@@ -647,7 +620,6 @@ export default function FlyViewer() {
   const [neuronLabels, setNeuronLabels] = useState<Record<string, string>>({});
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [cameraMode, setCameraMode] = useState<CameraMode>('god');
   const [fliesPanelOpen, setFliesPanelOpen] = useState(
     () => typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches ? false : true
   );
@@ -670,6 +642,8 @@ export default function FlyViewer() {
   const debugStatsRef = useRef<InterpolationDebugStats | null>(null);
   const interpolatedBySimRef = useRef<FlyState[]>([]);
   const cameraModeRef = useRef<CameraMode>('god');
+  const cameraToggleSlotRef = useRef<HTMLDivElement>(null);
+  const updateCameraButtonRef = useRef<((mode: CameraMode) => void) | null>(null);
   const followSimIndexRef = useRef<number | undefined>(undefined);
   const sourcesRef = useRef<WorldSource[]>([]);
   const flyCardDataRef = useRef<Map<number, { fly: FlyState; points: number }>>(new Map());
@@ -857,16 +831,15 @@ export default function FlyViewer() {
   const cameraTargetRef = useRef<{ x: number; y: number; z: number; heading: number } | null>(null);
 
   useEffect(() => {
-    cameraModeRef.current = cameraMode;
     sourcesRef.current = sources;
-  }, [cameraMode, sources]);
+  }, [sources]);
 
   useEffect(() => {
     const container = document.createElement('div');
     container.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;z-index:0';
     document.body.insertBefore(container, document.body.firstChild);
 
-    const dispose = initThreeScene(container, {
+    const { dispose, updateButton } = initThreeScene(container, {
       latestFliesRef,
       interpolatedBySimRef,
       debugStatsRef,
@@ -875,8 +848,10 @@ export default function FlyViewer() {
       sourcesRef,
       snapshotBufferRef,
       targetRef: cameraTargetRef,
-    });
+    }, cameraToggleSlotRef.current);
+    updateCameraButtonRef.current = updateButton;
     return () => {
+      updateCameraButtonRef.current = null;
       dispose();
       container.remove();
     };
@@ -917,8 +892,8 @@ export default function FlyViewer() {
         deployedSlotKeys={deployedSlotKeys}
         selectedFlyIndex={selectedFlyIndex}
         setSelectedFlyIndex={setSelectedFlyIndex}
-        cameraMode={cameraMode}
-        setCameraMode={setCameraMode}
+        cameraModeRef={cameraModeRef}
+        updateCameraButtonRef={updateCameraButtonRef}
         cameraTargetRef={cameraTargetRef}
         followSimIndexRef={followSimIndexRef}
       />
@@ -934,11 +909,10 @@ export default function FlyViewer() {
           )}
           <div style={{ position: 'absolute', top: 12, right: 12, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, pointerEvents: 'auto' }}>
             <ConnectButton />
-            <TopBarCameraToggle
+            <CameraToggleSlot
+              ref={cameraToggleSlotRef}
               deployed={deployed}
               selectedFlyIndex={selectedFlyIndex}
-              cameraMode={cameraMode}
-              setCameraMode={setCameraMode}
             />
             <TopBarSimStatus
               deployed={deployed}

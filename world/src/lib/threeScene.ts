@@ -50,11 +50,47 @@ const FLY_SCALE = 0.08;
 /** Sim ground level (z=0.35); map to Three.js y=0 so fly rests on ground */
 const GROUND_Z = 0.35;
 
+function createCameraButton(
+  slot: HTMLElement,
+  cameraModeRef: { current: CameraMode }
+): { el: HTMLButtonElement; update: (mode: CameraMode) => void } {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'fly-viewer__camera-toggle';
+  btn.title = 'Follow current fly';
+  btn.style.cssText =
+    'padding:6px 10px;font-size:11px;font-family:var(--font-mono,monospace);background:rgba(0,0,0,0.85);color:#aaf;border:1px solid rgba(100,100,140,0.3);border-radius:6px;cursor:pointer';
+  const update = (mode: CameraMode) => {
+    cameraModeRef.current = mode;
+    btn.textContent = mode === 'god' ? 'Fly view' : 'God view';
+    btn.title = mode === 'god' ? 'Follow current fly' : 'Orbit view';
+    btn.style.background = mode === 'fly' ? 'rgba(35, 70, 138, 0.6)' : 'rgba(0,0,0,0.85)';
+  };
+  btn.addEventListener('click', () => {
+    update(cameraModeRef.current === 'god' ? 'fly' : 'god');
+  });
+  update('god');
+  slot.appendChild(btn);
+  return { el: btn, update };
+}
+
 export function initThreeScene(
   container: HTMLElement | null,
-  refs: ThreeSceneRefs
-): () => void {
-  if (!container) return () => {};
+  refs: ThreeSceneRefs,
+  buttonSlot: HTMLElement | null
+): { dispose: () => void; updateButton: (mode: CameraMode) => void } {
+  const noop = () => {};
+  if (!container) return { dispose: noop, updateButton: noop };
+
+  let cameraButton: { el: HTMLButtonElement; update: (mode: CameraMode) => void } | null = null;
+  if (buttonSlot) {
+    cameraButton = createCameraButton(buttonSlot, refs.cameraModeRef);
+  }
+  const updateButton = (mode: CameraMode) => {
+    if (cameraButton) {
+      cameraButton.update(mode);
+    }
+  };
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(50, container.clientWidth / container.clientHeight, 0.1, 1000);
@@ -380,7 +416,7 @@ export function initThreeScene(
   updateWorldSources(refs.sourcesRef.current);
   rafId = requestAnimationFrame(loop);
 
-  return () => {
+  const dispose = () => {
     disposed = true;
     cancelAnimationFrame(rafId);
     resizeObserver.disconnect();
@@ -389,6 +425,9 @@ export function initThreeScene(
     groundGeom.dispose();
     groundMat.dispose();
     container.removeChild(renderer.domElement);
+    if (cameraButton) {
+      cameraButton.el.remove();
+    }
     for (const inst of flyInstances) {
       disposeObject3D(inst.group);
     }
@@ -399,4 +438,5 @@ export function initThreeScene(
     if (flyTemplate) disposeObject3D(flyTemplate);
     if (appleTemplate) disposeObject3D(appleTemplate);
   };
+  return { dispose, updateButton };
 }

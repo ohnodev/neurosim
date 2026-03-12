@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import { usePrivy } from '@privy-io/react-auth';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
 import { WalletMenuModal } from './WalletMenuModal';
@@ -7,11 +7,12 @@ function WalletIcon() {
   return <span className="wallet-btn__svg" aria-hidden />;
 }
 
-export function ConnectButton() {
+function ConnectButtonInner() {
   const [modalOpen, setModalOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const { ready } = usePrivy();
   const { isConnected } = usePrivyWallet();
+  const onClose = useCallback(() => setModalOpen(false), []);
 
   const handleClick = () => {
     if (!ready) return;
@@ -36,9 +37,11 @@ export function ConnectButton() {
       </button>
       <WalletMenuModal
         isOpen={modalOpen}
-        onClose={() => setModalOpen(false)}
+        onClose={onClose}
         anchorRef={buttonRef}
       />
     </>
   );
 }
+
+export const ConnectButton = React.memo(ConnectButtonInner);

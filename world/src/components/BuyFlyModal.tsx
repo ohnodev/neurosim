@@ -16,6 +16,24 @@ interface ClaimConfig {
   flyNeuroAmountWei: string;
 }
 
+interface BalanceCheck {
+  flyNeuroRequiredWei?: string;
+  neuroBalanceWei?: string;
+}
+
+/** Parse raw wei string to positive BigInt; returns null for empty, whitespace, "0", or invalid. */
+function parsePositiveWei(raw: string | undefined): bigint | null {
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  if (s === '' || s === '0') return null;
+  try {
+    const n = BigInt(s);
+    return n > 0n ? n : null;
+  } catch {
+    return null;
+  }
+}
+
 async function fetchConfig(): Promise<ClaimConfig> {
   const r = await fetch(`${getApiBase()}/api/claim/config`);
   if (!r.ok) {
@@ -52,6 +70,17 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
     enabled: isOpen,
   });
 
+  const { data: balanceCheck } = useQuery({
+    queryKey: ['claim-balance-check', address],
+    queryFn: async (): Promise<BalanceCheck> => {
+      const r = await fetch(`${getApiBase()}/api/claim/balance-check?address=${address?.toLowerCase()}`);
+      if (!r.ok) return {};
+      return (await r.json()) as BalanceCheck;
+    },
+    staleTime: 30_000,
+    enabled: isOpen && !!address && chainId === base.id,
+  });
+
   useEffect(() => {
     mountedRef.current = true;
     return () => { mountedRef.current = false; };
@@ -72,6 +101,14 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
   }, [isOpen, onClose]);
 
   const isOnBaseChain = chainId === base.id;
+
+  const displayAmountWei =
+    balanceCheck?.flyNeuroRequiredWei != null && parsePositiveWei(balanceCheck.flyNeuroRequiredWei) !== null
+      ? balanceCheck.flyNeuroRequiredWei
+      : config?.flyNeuroAmountWei != null && parsePositiveWei(config.flyNeuroAmountWei) !== null
+        ? config.flyNeuroAmountWei
+        : FLY_NEURO_AMOUNT_FALLBACK.toString();
+  const displayAmountLabel = formatNeuroAmount(displayAmountWei);
 
   const handleSwitchToBase = useCallback(async () => {
     if (!ready || !wallets.length) return;
@@ -99,11 +136,20 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
     try {
       const balRes = await fetch(`${getApiBase()}/api/claim/balance-check?address=${address.toLowerCase()}`);
       const bal = balRes.ok ? await balRes.json() : null;
-      const resolvedAmountRaw = bal?.flyNeuroRequiredWei ?? config.flyNeuroAmountWei ?? FLY_NEURO_AMOUNT_FALLBACK.toString();
-      const transferAmount = BigInt(resolvedAmountRaw);
+      const transferAmount =
+        parsePositiveWei(bal?.flyNeuroRequiredWei) ??
+        parsePositiveWei(config.flyNeuroAmountWei) ??
+        FLY_NEURO_AMOUNT_FALLBACK;
+      if (transferAmount <= 0n) {
+        const msg = 'Invalid fly price from API';
+        if (import.meta.env?.DEV) console.debug('[BuyFlyModal] no valid amount from balance-check, config, or fallback');
+        if (mountedRef.current) setError(msg);
+        throw new Error(msg);
+      }
       if (import.meta.env?.DEV) {
-        if (!bal?.flyNeuroRequiredWei) console.debug('[BuyFlyModal] using config or fallback for required amount');
-        if (!config.flyNeuroAmountWei && !bal?.flyNeuroRequiredWei) console.debug('[BuyFlyModal] using FLY_NEURO_AMOUNT_FALLBACK');
+        if (parsePositiveWei(bal?.flyNeuroRequiredWei) !== null) console.debug('[BuyFlyModal] amount source: balance-check');
+        else if (parsePositiveWei(config.flyNeuroAmountWei) !== null) console.debug('[BuyFlyModal] amount source: config (balance-check missing or invalid)');
+        else console.debug('[BuyFlyModal] amount source: FLY_NEURO_AMOUNT_FALLBACK');
       }
       if (bal && BigInt(bal.neuroBalanceWei ?? 0) < transferAmount) {
         if (mountedRef.current) setError(`Insufficient $NEURO. You need ${formatNeuroAmount(transferAmount.toString())} $NEURO to buy a fly.`);
@@ -189,7 +235,7 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
         <div className="neurosim-claim__card">
           <h2 id="buy-fly-title" className="neurosim-claim__title">Buy NeuroFly #{slotIndex + 1}</h2>
           <p className="neurosim-claim__subtitle">
-            Pay with {config?.flyNeuroAmountWei ? formatNeuroAmount(config.flyNeuroAmountWei) : '10k'} $NEURO to buy a fly
+            Pay with {displayAmountLabel} $NEURO to buy a fly
           </p>
           {error && <div className="neuroflies__error">{error}</div>}
           {!isOnBaseChain && (
@@ -213,7 +259,7 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
                 onClick={handleBuyNeuro}
                 disabled={!!busy || !walletClient || !address || neuroDisabled}
               >
-                {busy === 'neuro' ? 'Confirming...' : `Pay with ${config?.flyNeuroAmountWei ? formatNeuroAmount(config.flyNeuroAmountWei) : '10k'} $NEURO`}
+                {busy === 'neuro' ? 'Confirming...' : `Pay with ${displayAmountLabel} $NEURO`}
               </button>
             )}
           </div>

@@ -6,7 +6,7 @@
  */
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
-import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, renameSync, chmodSync } from 'node:fs';
 import path from 'node:path';
 import type { NeuroFlyStats, RewardState } from '../types/index.js';
 import { getDeployments } from './deployStore.js';
@@ -139,6 +139,7 @@ export function persistDeadLetterEntry(address: string, amountWei: bigint, error
     const data = `${JSON.stringify({ entries }, null, 2)}\n`;
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     writeFileSync(tmp, data, 'utf-8');
+    chmodSync(tmp, 0o600);
     renameSync(tmp, deadLetterPath);
   } catch (err) {
     console.error('[rewardStore] persistDeadLetterEntry failed:', err);

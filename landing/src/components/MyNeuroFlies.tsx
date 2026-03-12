@@ -138,10 +138,15 @@ export function MyNeuroFlies() {
     let submittedHash: string | null = null;
     try {
       const bal = await fetchBalanceCheck(address);
+      if (!bal) {
+        const msg = 'Unable to verify balance';
+        if (mountedRef.current) setError(msg);
+        throw new Error(msg);
+      }
       const resolvedAmountWei = BigInt(
         config.flyNeuroAmountWei ?? bal?.flyNeuroRequiredWei ?? (10_000n * 10n ** 18n).toString()
       );
-      if (bal && BigInt(bal.neuroBalanceWei ?? 0) < resolvedAmountWei) {
+      if (BigInt(bal.neuroBalanceWei ?? 0) < resolvedAmountWei) {
         const msg = `Insufficient $NEURO. You need ${formatNeuroAmount(resolvedAmountWei.toString())} $NEURO to buy a fly.`;
         if (mountedRef.current) setError(msg);
         throw new Error(msg);

@@ -1,4 +1,7 @@
-/** ERC20 transfer ABI - single source for API (matches shared/lib/claimConstants) */
+/**
+ * ERC20 transfer ABI for API use. Duplicated from shared/lib/claimConstants so the API
+ * remains deployable without depending on the frontend shared package.
+ */
 export const ERC20_TRANSFER_ABI = [
   {
     inputs: [

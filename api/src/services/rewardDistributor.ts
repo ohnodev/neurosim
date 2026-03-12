@@ -34,7 +34,7 @@ function isPermanentError(err: unknown): boolean {
     text.includes('invalid address') ||
     text.includes('invalid address or ENS name') ||
     text.includes('transfer to the zero address') ||
-    text.includes('ERC20: transfer to the zero address')
+    text.includes('erc20: transfer to the zero address')
   );
 }
 

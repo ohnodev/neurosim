@@ -42,6 +42,18 @@ function computeMarkerColors(
   });
 }
 
+function computeHoverText(
+  ids: string[],
+  activity: Record<string, number>,
+  sides: string[]
+): string[] {
+  return ids.map((id, i) => {
+    const a = activity[id] ?? 0;
+    const sideLabel = sides[i] ? sides[i] : 'center';
+    return `ID: ${id.slice(-8)}\n${sideLabel} | ${(a * 100).toFixed(0)}%`;
+  });
+}
+
 export function BrainOverlay({ neurons, activity, visible = true, embedded = false, containerVisible = true }: BrainOverlayProps) {
   const plotRef = useRef<HTMLDivElement>(null);
   const plotReady = useRef(false);
@@ -65,12 +77,12 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
     [neurons]
   );
 
-  // Fingerprint of positions and sides so plot recreates when coordinates/sides change
+  // Fingerprint of root_id + positions and sides so plot recreates when identity or coordinates/sides change
   const positionsFingerprint = useMemo(() => {
     const list = neurons.filter(hasPosition);
     if (list.length === 0) return '';
     return list
-      .map((p) => `${p.x},${p.y},${p.z},${(p.side ?? '').toLowerCase()}`)
+      .map((p) => `${p.root_id},${p.x},${p.y},${p.z},${(p.side ?? '').toLowerCase()}`)
       .sort()
       .join('|');
   }, [neurons]);
@@ -104,6 +116,7 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
     const zs = z.map((v) => (v - cz) / scale);
 
     const color = computeMarkerColors(ids, activity, sidesForRef);
+    const text = computeHoverText(ids, activity, sidesForRef);
 
     const traces: Plotly.Data[] = [
       {
@@ -128,11 +141,7 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
           line: { width: 0 },
         },
         hoverinfo: 'text',
-        text: ids.map((id, i) => {
-          const p = withPos[i];
-          const a = activity[id] ?? 0;
-          return `ID: ${id.slice(-8)}\n${p.side ?? 'center'} | ${(a * 100).toFixed(0)}%`;
-        }),
+        text,
       } as Plotly.Data,
     ];
 
@@ -161,12 +170,12 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
     };
     const doRestyle = () => {
       if (!plotRef.current || !plotReady.current || idsRef.current.length === 0) return;
-      const color = computeMarkerColors(
-        idsRef.current,
-        activityRef.current,
-        sidesRef.current
-      );
-      Plotly.restyle(plotRef.current, { 'marker.color': [color] }, [0]);
+      const ids = idsRef.current;
+      const act = activityRef.current;
+      const sides = sidesRef.current;
+      const color = computeMarkerColors(ids, act, sides);
+      const text = computeHoverText(ids, act, sides);
+      Plotly.restyle(plotRef.current, { 'marker.color': [color], text: [text] }, [0]);
     };
     const onDown = () => { interacting.current = true; };
     const onUp = () => {
@@ -246,15 +255,18 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
     return () => { clearTimeout(t1); clearTimeout(t2); };
   }, [embedded, visible, containerVisible]);
 
-  // Update colors when activity changes; skip while interacting, set pending to replay on onUp
+  // Update colors and hover text when activity changes; skip while interacting, set pending to replay on onUp
   useEffect(() => {
     if (!plotRef.current || !plotReady.current || !visible || idsRef.current.length === 0) return;
     if (interacting.current) {
       pendingRestyleRef.current = true;
       return;
     }
-    const color = computeMarkerColors(idsRef.current, activity, sidesRef.current);
-    Plotly.restyle(plotRef.current, { 'marker.color': [color] }, [0]);
+    const ids = idsRef.current;
+    const sides = sidesRef.current;
+    const color = computeMarkerColors(ids, activity, sides);
+    const text = computeHoverText(ids, activity, sides);
+    Plotly.restyle(plotRef.current, { 'marker.color': [color], text: [text] }, [0]);
   }, [activity, visible]);
 
   const containerStyle = embedded

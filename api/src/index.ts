@@ -5,7 +5,7 @@ import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { loadConnectome } from './connectome.js';
 import { createBrainSim } from './brain-sim.js';
-import { getWorld, spawnFood, removeFood, getSources } from './world.js';
+import { getWorld, spawnFood, removeFood, getSources, type WorldSource } from './world.js';
 import claimsRouter from './routes/claims.js';
 import { getFlies } from './services/flyStore.js';
 import { getDeployments, addDeployment, clearForTesting } from './services/deployStore.js';
@@ -89,7 +89,7 @@ function startSim(): void {
   }, 10_000);
   simIntervalId = setInterval(() => {
     const dt = 1 / 30;
-    const frames: { t: number; flies: ReturnType<typeof sims[0]['getState']>['fly'][]; activities: (Record<string, number> | undefined)[]; activity?: Record<string, number> }[] = [];
+    const frames: { t: number; flies: ReturnType<typeof sims[0]['getState']>['fly'][]; activities: (Record<string, number> | undefined)[]; activity?: Record<string, number>; sources: WorldSource[] }[] = [];
     for (let i = 0; i < FRAMES_PER_BATCH; i++) {
       const flies: ReturnType<typeof sims[0]['getState']>['fly'][] = [];
       const activities: (Record<string, number> | undefined)[] = [];

@@ -54,6 +54,18 @@ function computeHoverText(
   });
 }
 
+/** Copy current scene camera from Plotly (preserve after restyle on mobile). */
+function getSceneCamera(gd: HTMLDivElement): Record<string, { x: number; y: number; z: number }> | null {
+  const fullLayout = (gd as unknown as { _fullLayout?: { scene?: { camera?: Record<string, { x: number; y: number; z: number }> } } })._fullLayout;
+  const cam = fullLayout?.scene?.camera;
+  if (!cam?.eye || !cam?.center || !cam?.up) return null;
+  return {
+    eye: { x: cam.eye.x, y: cam.eye.y, z: cam.eye.z },
+    center: { x: cam.center.x, y: cam.center.y, z: cam.center.z },
+    up: { x: cam.up.x, y: cam.up.y, z: cam.up.z },
+  };
+}
+
 export function BrainOverlay({ neurons, activity, visible = true, embedded = false, containerVisible = true }: BrainOverlayProps) {
   const plotRef = useRef<HTMLDivElement>(null);
   const plotReady = useRef(false);
@@ -171,13 +183,18 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
       if (plotReady.current && el) Plotly.Plots?.resize(el);
     };
     const doRestyle = () => {
-      if (!plotRef.current || !plotReady.current || idsRef.current.length === 0) return;
+      const el = plotRef.current;
+      if (!el || !plotReady.current || idsRef.current.length === 0) return;
+      const savedCamera = getSceneCamera(el);
       const ids = idsRef.current;
       const act = activityRef.current;
       const sides = sidesRef.current;
       const color = computeMarkerColors(ids, act, sides);
       const text = computeHoverText(ids, act, sides);
-      Plotly.restyle(plotRef.current, { 'marker.color': [color], text: [text] }, [0]);
+      Plotly.restyle(el, { 'marker.color': [color], text: [text] }, [0]);
+      if (savedCamera) {
+        Plotly.relayout(el, { 'scene.camera': savedCamera } as Record<string, unknown>);
+      }
     };
     const onDown = () => { interacting.current = true; };
     const onUp = () => {
@@ -191,17 +208,19 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
         doRestyle();
       }
     };
+    const onDblClick = (e: Event) => e.preventDefault();
     const touchOpts = { passive: false } as AddEventListenerOptions;
     const keyForThisRun = plotCreationKey;
     el.addEventListener('mousedown', onDown);
     el.addEventListener('touchstart', onDown, touchOpts);
     el.addEventListener('touchcancel', onUp, touchOpts);
+    el.addEventListener('dblclick', onDblClick, { capture: true });
     window.addEventListener('mouseup', onUp);
     window.addEventListener('touchend', onUp, touchOpts);
     window.addEventListener('blur', onUp);
 
     Plotly.newPlot(el, traces, layout, {
-      responsive: true,
+      responsive: false,
       displayModeBar: true,
       displaylogo: false,
       modeBarButtonsToRemove: ['lasso2d', 'select2d'],
@@ -215,6 +234,7 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
       el.removeEventListener('mousedown', onDown);
       el.removeEventListener('touchstart', onDown, touchOpts);
       el.removeEventListener('touchcancel', onUp, touchOpts);
+      el.removeEventListener('dblclick', onDblClick, { capture: true });
       window.removeEventListener('mouseup', onUp);
       window.removeEventListener('touchend', onUp, touchOpts);
       window.removeEventListener('blur', onUp);

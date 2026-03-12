@@ -29,6 +29,7 @@ declare module 'plotly.js-dist-min' {
     relayout: (el: HTMLElement, update: Record<string, unknown>) => Promise<void>;
     restyle: (el: HTMLElement, update: Record<string, unknown>, indices?: number[]) => void;
     purge: (el: HTMLElement) => void;
+    Plots?: { resize: (el: HTMLElement) => void };
   };
   namespace Plotly {
     type Data = PlotlyData;

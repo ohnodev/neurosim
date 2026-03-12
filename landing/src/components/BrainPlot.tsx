@@ -1,6 +1,7 @@
+import 'plotly-cabal';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { getApiBase } from '../lib/constants';
-import { createBrainPlotManager } from '../lib/brainPlotManager';
+import { createBrainPlotManager } from '../../../shared/lib/brainPlotManager';
 
 export interface NeuronWithPosition {
   root_id: string;
@@ -155,7 +156,7 @@ export function BrainPlot() {
       manager.destroy();
       managerRef.current = null;
     };
-  }, [n, dataFingerprint]);
+  }, [neurons, n, dataFingerprint]);
 
   return (
     <div className="brain-plot">

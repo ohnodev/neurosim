@@ -1,15 +1,14 @@
-import { useRef, useState, useEffect, useMemo, Suspense } from 'react';
+import { useRef, useState, useEffect, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Canvas, useFrame } from '@react-three/fiber';
-import { useGLTF, useAnimations } from '@react-three/drei';
-import { FlyCameraContext, FlyCameraController, type CameraMode } from './FlyCameraController';
-import * as THREE from 'three';
 import type { WorldSource } from '../../../api/src/world';
 import { subscribeSim, type FlyState } from '../lib/simWsClient';
+import { type Snapshot, REST_DURATION_FALLBACK } from '../lib/flyInterpolation';
 import { getApiBase } from '../lib/constants';
 import { BrainOverlay, type NeuronWithPosition } from './BrainOverlay';
 import { ConnectButton } from './ConnectButton';
 import { BuyFlyModal } from './BuyFlyModal';
+import { initThreeScene, type InterpolationDebugStats, type CameraMode } from '../lib/threeScene';
+import { DebugOverlay } from './DebugOverlay';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
 import './FlyViewer.css';
 
@@ -23,63 +22,6 @@ function getHealthColor(health: number): string {
   if (health > 50) return '#48a';
   if (health > 20) return '#c95';
   return '#c44';
-}
-
-/** Display 1s behind real time – buffer for smooth animation (basemarket-style). */
-const DISPLAY_DELAY_SEC = 1;
-/** Keep ~6s of snapshots at 250ms rate. */
-const SNAPSHOT_BUFFER_MAX = 24;
-/** Fixed wall-clock ms per segment for constant speed (basemarket-style). */
-const SEGMENT_DURATION_MS = 250;
-/** Throttle React state updates from RAF (ms); refs updated every frame for smooth interpolation. */
-const THROTTLE_MS = 33;
-
-const TWO_PI = 2 * Math.PI;
-
-function lerp(a: number, b: number, t: number): number {
-  return a + (b - a) * t;
-}
-
-/** Normalize angle delta to [-π, π] for shortest path. */
-function shortestAngleDelta(from: number, to: number): number {
-  let d = to - from;
-  while (d > Math.PI) d -= TWO_PI;
-  while (d < -Math.PI) d += TWO_PI;
-  return d;
-}
-
-/** Normalize angle to [0, 2π). */
-function normalizeAngle(a: number): number {
-  a = a % TWO_PI;
-  return a < 0 ? a + TWO_PI : a;
-}
-
-function lerpFlyState(from: FlyState, to: FlyState, t: number): FlyState {
-  const delta = shortestAngleDelta(from.heading, to.heading);
-  const heading = normalizeAngle(from.heading + delta * t);
-  return {
-    ...to,
-    x: lerp(from.x, to.x, t),
-    y: lerp(from.y, to.y, t),
-    z: lerp(from.z, to.z, t),
-    heading,
-  };
-}
-
-function lerpActivity(
-  from: Record<string, number> | undefined,
-  to: Record<string, number> | undefined,
-  t: number
-): Record<string, number> {
-  if (!to) return from ?? {};
-  if (!from) return to;
-  const out: Record<string, number> = {};
-  for (const k of Object.keys(to)) {
-    const b = to[k];
-    const a = from[k];
-    out[k] = typeof a === 'number' ? lerp(a, b, t) : b;
-  }
-  return out;
 }
 
 /** Bigint-safe ETH formatter to avoid precision loss. */
@@ -168,127 +110,7 @@ function RewardsTable({
   );
 }
 
-const FLY_THRESHOLD = 1.1; // z above this = flying (HUD mode)
-const REST_DURATION_FALLBACK = 4; // fallback when flyState.restDuration not in payload
-/** Lerp factor for fly position - matches camera target smoothness so fly and orbit stay in sync. */
-const FLY_POS_SMOOTH = 0.04;
-
-const WING_ANIM_NAMES = ['wing-leftAction', 'wing-rightAction'];
-
-function FlyModel({ state }: { state: FlyState }) {
-  const group = useRef<THREE.Group>(null);
-  const sceneRef = useRef<THREE.Group>(null);
-  const { scene, animations } = useGLTF('/models/fly-animated/fly2-animation.glb');
-  const { actions } = useAnimations(animations, sceneRef);
-  const prevRef = useRef({ x: state.x ?? 0, y: state.y ?? 0 });
-  const headingRef = useRef(state.heading ?? 0);
-  const targetHeadingRef = useRef(state.heading ?? 0);
-  const smoothedPosRef = useRef(new THREE.Vector3(state.x ?? 0, state.z ?? 0, state.y ?? 0));
-  const posInit = useRef(false);
-
-  const x = state.x ?? 0, y = state.y ?? 0, z = state.z ?? 0;
-  const isFlying = z > FLY_THRESHOLD;
-
-  const MIN_MOVEMENT_SQ = 0.004;
-  const HEADING_LERP = 0.52;
-
-  const cloned = useMemo(() => scene.clone(true), [scene]);
-
-  useEffect(() => {
-    for (const name of WING_ANIM_NAMES) {
-      const action = actions[name];
-      if (!action) continue;
-      if (isFlying) {
-        action.reset().setLoop(THREE.LoopRepeat, Infinity).setEffectiveTimeScale(2).play();
-      } else {
-        action.stop();
-      }
-    }
-  }, [actions, isFlying]);
-
-  useFrame(() => {
-    // Lerp fly position to avoid glitch when sim updates at ~30ms
-    const wantX = x, wantZ = z, wantY = y;
-    if (!posInit.current) {
-      smoothedPosRef.current.set(wantX, wantZ, wantY);
-      posInit.current = true;
-    }
-    smoothedPosRef.current.x += (wantX - smoothedPosRef.current.x) * FLY_POS_SMOOTH;
-    smoothedPosRef.current.y += (wantZ - smoothedPosRef.current.y) * FLY_POS_SMOOTH;
-    smoothedPosRef.current.z += (wantY - smoothedPosRef.current.z) * FLY_POS_SMOOTH;
-
-    const dx = x - prevRef.current.x, dy = y - prevRef.current.y;
-    prevRef.current = { x, y };
-    const moveSq = dx * dx + dy * dy;
-    if (moveSq > MIN_MOVEMENT_SQ) {
-      targetHeadingRef.current = Math.atan2(dx, dy) + Math.PI;
-    }
-    const target = targetHeadingRef.current;
-    if (group.current) {
-      group.current.position.copy(smoothedPosRef.current);
-      let d = target - headingRef.current;
-      if (d > Math.PI) d -= 2 * Math.PI;
-      if (d < -Math.PI) d += 2 * Math.PI;
-      headingRef.current += d * HEADING_LERP;
-      group.current.rotation.y = headingRef.current;
-    }
-  });
-
-  return (
-    <group ref={group}>
-      <primitive ref={sceneRef} object={cloned} scale={0.08} rotation={[0, 0, 0]} />
-    </group>
-  );
-}
-
-const ARENA_SIZE = 48; // matches brain-sim ARENA (24) * 2 for fly world bounds
-
-function GroundPlane() {
-  return (
-    <mesh position={[0, 0, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
-      <planeGeometry args={[ARENA_SIZE, ARENA_SIZE]} />
-      <meshStandardMaterial color="#2d5a27" roughness={0.9} metalness={0.05} />
-    </mesh>
-  );
-}
-
-function FoodModel() {
-  const { scene } = useGLTF('/models/low-poly_apple/scene.gltf');
-  const cloned = useMemo(() => scene.clone(true), [scene]);
-  return (
-    <primitive object={cloned} scale={1.2} rotation={[0, 0, 0]} />
-  );
-}
-
-function WorldSources({ sources }: { sources: WorldSource[] }) {
-  return (
-    <>
-      {sources.map((s) => (
-        <group key={s.id} position={[s.x, s.z, s.y]}>
-          {s.type === 'food' ? (
-            <Suspense fallback={
-              <mesh>
-                <sphereGeometry args={[0.8, 24, 24]} />
-                <meshStandardMaterial color="#e8a838" />
-              </mesh>
-            }>
-              <FoodModel />
-            </Suspense>
-          ) : (
-            <mesh>
-              <sphereGeometry args={[0.8, 24, 24]} />
-              <meshStandardMaterial
-                color="#88ccff"
-                emissive="#4488ff"
-                emissiveIntensity={0.6}
-              />
-            </mesh>
-          )}
-        </group>
-      ))}
-    </>
-  );
-}
+const FLY_THRESHOLD = 1.1;
 
 function shortId(id: string): string {
   if (id.length <= 12) return id;
@@ -432,17 +254,15 @@ export default function FlyViewer() {
   const [statusTab, setStatusTab] = useState<'status' | 'rewards'>('status');
   const [brainPanelOpen, setBrainPanelOpen] = useState(() => !isMobileDefault());
 
-  /** Time-indexed snapshot buffer for display delay + smooth interpolation (basemarket-style). */
-  const snapshotBufferRef = useRef<{ t: number; flies: FlyState[]; activities: (Record<string, number> | undefined)[]; activity: Record<string, number> }[]>([]);
-  /** Last time we pushed interpolated state to React (throttle). */
-  const lastUpdateTimeRef = useRef(0);
-  /** Segment key (lo-hi) and wall-clock start for constant-speed interpolation. */
-  const segmentKeyRef = useRef('');
-  const segmentStartWallRef = useRef(0);
-  /** Latest interpolated display data (updated every frame); UI can read from state (throttled) or refs. */
-  const displayFliesRef = useRef<FlyState[]>([]);
-  const displayActivitiesRef = useRef<(Record<string, number> | undefined)[]>([]);
-  const displayActivityRef = useRef<Record<string, number>>({});
+  const snapshotBufferRef = useRef<Snapshot[]>([]);
+  const latestFliesRef = useRef<FlyState[]>([]);
+  const activityRef = useRef<Record<string, number>>({});
+  const activitiesRef = useRef<(Record<string, number> | undefined)[]>([]);
+  const debugStatsRef = useRef<InterpolationDebugStats | null>(null);
+  const interpolatedBySimRef = useRef<FlyState[]>([]);
+  const cameraModeRef = useRef<CameraMode>('god');
+  const followSimIndexRef = useRef<number | undefined>(undefined);
+  const sourcesRef = useRef<WorldSource[]>([]);
 
   const { data: myFlies = [] } = useQuery({
     queryKey: ['my-flies', address ?? ''],
@@ -516,6 +336,10 @@ export default function FlyViewer() {
         if (event._event === 'open') {
           setConnected(true);
           setError(null);
+          snapshotBufferRef.current = [];
+          latestFliesRef.current = [];
+          activityRef.current = {};
+          activitiesRef.current = [];
         } else if (event._event === 'closed') {
           setConnected(false);
         } else if (event._event === 'error') {
@@ -523,82 +347,79 @@ export default function FlyViewer() {
         }
         return;
       }
-      const data = event as { t?: number; flies?: FlyState[]; fly?: FlyState; activity?: Record<string, number>; activities?: (Record<string, number> | undefined)[]; error?: string; sources?: WorldSource[] };
+      const data = event as {
+        t?: number;
+        flies?: FlyState[];
+        fly?: FlyState;
+        frames?: Snapshot[];
+        activity?: Record<string, number>;
+        activities?: (Record<string, number> | undefined)[];
+        error?: string;
+        sources?: WorldSource[];
+      };
       if (data.error) setError(data.error);
-      if (data.sources && Array.isArray(data.sources)) setSources(data.sources);
+      if (data.sources && Array.isArray(data.sources) && !(Array.isArray(data.frames) && data.frames.length > 0)) setSources(data.sources);
       if (!data.error) {
-        const fliesArr = Array.isArray(data.flies) ? data.flies : data.fly ? [data.fly] : null;
-        const activitiesArr = Array.isArray(data.activities) ? data.activities : null;
-        const act = data.activity ?? (activitiesArr?.[0]) ?? {};
-        if (fliesArr) {
-          const buf = snapshotBufferRef.current;
-          buf.push({
-            t: data.t ?? 0,
-            flies: fliesArr,
-            activities: activitiesArr ?? [],
-            activity: act,
-          });
-          if (buf.length > SNAPSHOT_BUFFER_MAX) buf.shift();
+        const buf = snapshotBufferRef.current;
+        const lastT = buf.length > 0 ? (buf[buf.length - 1]?.t ?? 0) : -Infinity;
+        if (Array.isArray(data.frames) && data.frames.length > 0) {
+          const firstNewT = data.frames[0]?.t ?? 0;
+          if (firstNewT < lastT) buf.length = 0;
+          for (const f of data.frames) {
+            buf.push({
+              t: f.t,
+              flies: f.flies,
+              activities: f.activities ?? [],
+              activity: f.activity ?? f.activities?.[0],
+              sources: f.sources,
+            });
+          }
+          const maxT = buf[buf.length - 1]?.t ?? 0;
+          while (buf.length > 1 && (buf[0]?.t ?? 0) < maxT - 1) buf.shift();
+        } else {
+          const fliesArr = Array.isArray(data.flies) ? data.flies : data.fly ? [data.fly] : null;
+          if (fliesArr) {
+            const newT = data.t ?? 0;
+            if (newT < lastT) buf.length = 0;
+            buf.push({
+              t: newT,
+              flies: fliesArr,
+              activities: Array.isArray(data.activities) ? data.activities : [],
+              activity: data.activity ?? data.activities?.[0],
+            });
+            const maxT = buf[buf.length - 1]?.t ?? 0;
+            while (buf.length > 1 && (buf[0]?.t ?? 0) < maxT - 1) buf.shift();
+          }
         }
+        const last = buf[buf.length - 1];
+        if (last) {
+          latestFliesRef.current = last.flies;
+          activityRef.current = last.activity ?? last.activities?.[0] ?? {};
+          activitiesRef.current = last.activities ?? [];
+        } else if (Array.isArray(data.flies)) {
+          latestFliesRef.current = data.flies;
+          activityRef.current = data.activity ?? data.activities?.[0] ?? {};
+          activitiesRef.current = Array.isArray(data.activities) ? data.activities : [];
+        } else if (data.fly) {
+          latestFliesRef.current = [data.fly];
+          activityRef.current = data.activity ?? data.activities?.[0] ?? {};
+          activitiesRef.current = Array.isArray(data.activities) ? data.activities : [];
+        }
+        if (data.activity != null) activityRef.current = data.activity;
+        else if (Array.isArray(data.activities) && data.activities[0] != null) activityRef.current = data.activities[0] ?? {};
       }
     });
     return unsub;
   }, []);
 
   useEffect(() => {
-    let rafId: number;
-    const tick = () => {
-      rafId = requestAnimationFrame(tick);
-      const buf = snapshotBufferRef.current;
-      if (buf.length === 0) return;
-      const latest = buf[buf.length - 1]!;
-      const T_display = latest.t - DISPLAY_DELAY_SEC;
-      let lo = 0;
-      for (let i = buf.length - 1; i >= 0; i--) {
-        if (buf[i]!.t <= T_display) {
-          lo = i;
-          break;
-        }
-      }
-      const snapLo = buf[lo]!;
-      const snapHi = buf[lo + 1];
-      const segmentKey = snapHi ? `${lo}-${lo + 1}` : `${lo}-`;
-      if (segmentKey !== segmentKeyRef.current) {
-        segmentKeyRef.current = segmentKey;
-        segmentStartWallRef.current = Date.now();
-      }
-      let alpha = 1;
-      if (snapHi && snapHi.t > snapLo.t) {
-        const elapsed = Date.now() - segmentStartWallRef.current;
-        alpha = Math.max(0, Math.min(1, elapsed / SEGMENT_DURATION_MS));
-      }
-      const from = snapLo;
-      const to = snapHi ?? snapLo;
-      const n = Math.min(from.flies.length, to.flies.length);
-      const lerpedFlies: FlyState[] = [];
-      for (let i = 0; i < n; i++) {
-        lerpedFlies.push(lerpFlyState(from.flies[i]!, to.flies[i]!, alpha));
-      }
-      for (let i = n; i < to.flies.length; i++) {
-        lerpedFlies.push(to.flies[i]!);
-      }
-      const lerpedActivities: (Record<string, number> | undefined)[] = to.activities.length
-        ? to.activities.map((_, i) => lerpActivity(from.activities[i], to.activities[i], alpha))
-        : [];
-      const lerpedActivity = lerpActivity(from.activity, to.activity, alpha);
-      displayFliesRef.current = lerpedFlies;
-      displayActivitiesRef.current = lerpedActivities;
-      displayActivityRef.current = lerpedActivity;
-      const now = Date.now();
-      if (now - lastUpdateTimeRef.current >= THROTTLE_MS) {
-        lastUpdateTimeRef.current = now;
-        setFlies(lerpedFlies);
-        setActivities(lerpedActivities);
-        setActivity(lerpedActivity);
-      }
-    };
-    rafId = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(rafId);
+    const UI_UPDATE_INTERVAL_MS = 200;
+    const id = setInterval(() => {
+      setFlies(latestFliesRef.current);
+      setActivity(activityRef.current);
+      setActivities(activitiesRef.current);
+    }, UI_UPDATE_INTERVAL_MS);
+    return () => clearInterval(id);
   }, []);
 
   const deployedSlotKeys = useMemo(
@@ -650,22 +471,46 @@ export default function FlyViewer() {
 
   const flyMode = getFlyMode(focusedFly);
 
-  const flyCameraContextValue = useMemo(
-    () => ({
-      mode: cameraMode,
-      setMode: setCameraMode,
-      target:
-        effectiveSimIndex != null
-          ? {
-              x: focusedFly.x ?? 0,
-              y: focusedFly.y ?? 0,
-              z: focusedFly.z ?? 0,
-              heading: focusedFly.heading ?? 0,
-            }
-          : null,
-    }),
-    [cameraMode, effectiveSimIndex, focusedFly.x, focusedFly.y, focusedFly.z, focusedFly.heading]
-  );
+  const cameraTargetRef = useRef<{ x: number; y: number; z: number; heading: number } | null>(null);
+  useEffect(() => {
+    if (effectiveSimIndex != null) {
+      cameraTargetRef.current = {
+        x: focusedFly.x ?? 0,
+        y: focusedFly.y ?? 0,
+        z: focusedFly.z ?? 0,
+        heading: focusedFly.heading ?? 0,
+      };
+    } else {
+      cameraTargetRef.current = null;
+    }
+  }, [effectiveSimIndex, focusedFly.x, focusedFly.y, focusedFly.z, focusedFly.heading]);
+
+  useEffect(() => {
+    cameraModeRef.current = cameraMode;
+    followSimIndexRef.current = effectiveSimIndex;
+    sourcesRef.current = sources;
+  }, [cameraMode, effectiveSimIndex, sources]);
+
+  useEffect(() => {
+    const container = document.createElement('div');
+    container.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;z-index:0';
+    document.body.insertBefore(container, document.body.firstChild);
+
+    const dispose = initThreeScene(container, {
+      latestFliesRef,
+      interpolatedBySimRef,
+      debugStatsRef,
+      cameraModeRef,
+      followSimIndexRef,
+      sourcesRef,
+      snapshotBufferRef,
+      targetRef: cameraTargetRef,
+    });
+    return () => {
+      dispose();
+      container.remove();
+    };
+  }, []);
 
   const deployFly = async (slotIndex: number) => {
     if (!address) return;
@@ -684,24 +529,11 @@ export default function FlyViewer() {
   };
 
   return (
-    <div style={{ width: '100vw', height: '100vh', position: 'relative' }}>
-      {/* Canvas layer - must stay behind UI */}
-      <div style={{ position: 'absolute', inset: 0, zIndex: 0, isolation: 'isolate' }}>
-        <FlyCameraContext.Provider value={flyCameraContextValue}>
-          <Canvas camera={{ position: [8, 6, 8], fov: 50 }} gl={{ outputColorSpace: THREE.SRGBColorSpace }}>
-            <ambientLight intensity={0.8} />
-            <directionalLight position={[10, 10, 5]} intensity={1.2} castShadow />
-            <FlyCameraController />
-            <Suspense fallback={null}>
-            {flies.map((fly, i) => !fly.dead && <FlyModel key={i} state={fly} />)}
-          </Suspense>
-          <WorldSources sources={sources} />
-          <GroundPlane />
-        </Canvas>
-        </FlyCameraContext.Provider>
-      </div>
+    <div style={{ width: '100vw', height: '100vh', position: 'relative', pointerEvents: 'none' }}>
+      {/* Canvas lives outside React (appended to body in useEffect) - no React re-renders */}
       {/* UI layer - always on top, always visible */}
       <div style={{ position: 'fixed', inset: 0, zIndex: 1000, pointerEvents: 'none' }}>
+        <DebugOverlay debugStatsRef={debugStatsRef} connected={connected} />
         {error && (
           <div style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', background: '#333', color: '#f88', padding: '8px 16px', borderRadius: 8, pointerEvents: 'auto' }}>
             {error}
@@ -974,7 +806,7 @@ export default function FlyViewer() {
             <div className="fly-viewer__brain-content">
               <div style={{ color: '#888', marginBottom: 6 }}>Brain activity — Fly {selectedFlyIndex + 1} (viewing)</div>
               <div className="fly-viewer__brain-plot">
-                <BrainOverlay neurons={neuronsWithPositions} activity={activityForSelected} visible={connected} embedded containerVisible={brainPanelOpen} />
+                <BrainOverlay neurons={neuronsWithPositions} activity={activityForSelected} visible={connected} embedded />
               </div>
             </div>
           </div>

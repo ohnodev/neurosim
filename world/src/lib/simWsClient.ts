@@ -1,7 +1,6 @@
 /**
- * Single global WebSocket for sim stream (basemarket-style).
- * Pushes every payload to listeners; no client-side queue. Smooth animation
- * is done by the consumer with a time-based buffer and display delay.
+ * Robust WebSocket client for sim stream.
+ * Single global connection with exponential backoff retry, matching basemarket pattern.
  */
 import { getWsUrl } from "./wsUrl";
 import type { FlyState } from "../../../api/src/fly-state";
@@ -11,9 +10,14 @@ export type { FlyState };
 
 export interface SimPayload {
   t?: number;
+  /** Multi-fly: array of fly states */
   flies?: FlyState[];
+  /** Legacy: single fly (prefer flies when present) */
   fly?: FlyState;
+  /** Batched frames: server sends 8 frames every 250ms, each with sources for time-aligned food */
+  frames?: { t: number; flies: FlyState[]; activities?: (Record<string, number> | undefined)[]; activity?: Record<string, number>; sources?: WorldSource[] }[];
   activity?: Record<string, number>;
+  /** Per-fly brain activity (index = sim index) */
   activities?: (Record<string, number> | undefined)[];
   simRunning?: boolean;
   sources?: WorldSource[];
@@ -31,6 +35,7 @@ let ws: WebSocket | null = null;
 let listeners = new Set<Listener>();
 let lastPayload: SimPayload | null = null;
 let lastError: string | null = null;
+let lastMessageTime = 0;
 let retryDelayMs = INITIAL_RETRY_MS;
 let retryTimeoutId: ReturnType<typeof setTimeout> | null = null;
 let disposed = false;
@@ -77,6 +82,7 @@ function scheduleRestart(): void {
 
 function connect(): void {
   if (disposed || ws?.readyState === WebSocket.OPEN) return;
+  // Don't abandon a handshaking socket; wait for it to finish (open/close) first
   if (ws?.readyState === WebSocket.CONNECTING) return;
   clearConnection();
   const url = getWsUrl();
@@ -97,12 +103,12 @@ function connect(): void {
       const data = JSON.parse(e.data as string) as SimPayload;
       if (data.error) {
         lastError = data.error;
-        for (const fn of listeners) fn(data as SimPayload);
-        return;
+      } else {
+        lastPayload = data;
+        lastError = null;
+        lastMessageTime = Date.now();
       }
-      lastError = null;
-      lastPayload = data;
-      for (const fn of listeners) fn(data);
+      for (const fn of listeners) fn(data as SimPayload);
     } catch (err) {
       if (import.meta.env?.DEV) {
         console.warn("[simWsClient] parse error", err);
@@ -150,12 +156,14 @@ export function subscribeSim(listener: Listener): () => void {
   };
 }
 
+/** Send start message to start the sim. No-op if not connected. */
 export function sendStart(): void {
   if (ws?.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: "start" }));
   }
 }
 
+/** Send stop message to stop the sim. No-op if not connected. */
 export function sendStop(): void {
   if (ws?.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: "stop" }));
@@ -178,6 +186,11 @@ export function getLastError(): string | null {
   return lastError;
 }
 
+/** Timestamp (ms) of last successful payload, or 0 if none. For debug overlay. */
+export function getLastMessageTime(): number {
+  return lastMessageTime;
+}
+
 export function disposeSimClient(): void {
   disposed = true;
   if (retryTimeoutId != null) {
@@ -188,5 +201,6 @@ export function disposeSimClient(): void {
   listeners = new Set();
   lastPayload = null;
   lastError = null;
+  lastMessageTime = 0;
   retryDelayMs = INITIAL_RETRY_MS;
 }

@@ -5,7 +5,7 @@ import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { loadConnectome } from './connectome.js';
 import { createBrainSim } from './brain-sim.js';
-import { getWorld, spawnFood, removeFood, getSources } from './world.js';
+import { getWorld, spawnFood, removeFood, getSources, type WorldSource } from './world.js';
 import claimsRouter from './routes/claims.js';
 import { getFlies } from './services/flyStore.js';
 import { getDeployments, addDeployment, clearForTesting } from './services/deployStore.js';
@@ -60,9 +60,10 @@ function restoreDeployFromStore(): void {
 }
 let simRunning = false;
 let simIntervalId: ReturnType<typeof setInterval> | null = null;
-let broadcastIntervalId: ReturnType<typeof setInterval> | null = null;
-const STEP_LOG_INTERVAL = 150;
-const BROADCAST_MS = 250;
+/** 250ms interval; client keeps 1s buffer for smooth interpolation */
+const SIM_FPS = 30;
+const BATCH_MS = 250;
+const FRAMES_PER_BATCH = Math.round(SIM_FPS * BATCH_MS / 1000);
 let connectionStep = 0;
 
 const wsClients = new Set<import('ws').WebSocket>();
@@ -87,35 +88,33 @@ function startSim(): void {
     }
   }, 10_000);
   simIntervalId = setInterval(() => {
-    const dt = 1 / 30;
-    const flies: ReturnType<typeof sims[0]['getState']>['fly'][] = [];
-    const activities: (Record<string, number> | undefined)[] = [];
-    let t = 0;
-    for (let i = 0; i < sims.length; i++) {
-      const state = sims[i].step(dt);
-      if (state.eatenFoodId) {
-        removeFood(state.eatenFoodId);
-        recordFoodCollected(i);
-        console.log('[world] fly', i, 'ate food', state.eatenFoodId);
+    const dt = 1 / SIM_FPS;
+    const frames: { t: number; flies: ReturnType<typeof sims[0]['getState']>['fly'][]; activities: (Record<string, number> | undefined)[]; activity?: Record<string, number>; sources: WorldSource[] }[] = [];
+    for (let i = 0; i < FRAMES_PER_BATCH; i++) {
+      const flies: ReturnType<typeof sims[0]['getState']>['fly'][] = [];
+      const activities: (Record<string, number> | undefined)[] = [];
+      let t = 0;
+      for (let j = 0; j < sims.length; j++) {
+        const state = sims[j].step(dt);
+        if (state.eatenFoodId) {
+          removeFood(state.eatenFoodId);
+          recordFoodCollected(j);
+          console.log('[world] fly', j, 'ate food', state.eatenFoodId);
+        }
+        flies.push(state.fly);
+        activities.push(state.activity);
+        t = state.t;
       }
-      flies.push(state.fly);
-      activities.push(state.activity);
-      t = state.t;
+      frames.push({ t, flies, activities, activity: activities[0], sources: getSources() });
     }
+    broadcast({ frames, simRunning: true, sources: getSources() });
     connectionStep += 1;
-    if (connectionStep % STEP_LOG_INTERVAL === 0) {
-      const first = flies[0];
-      console.log('[sim] t=', t.toFixed(1), 'flies=', flies.length, first ? `first=(${first.x?.toFixed(2)},${first.y?.toFixed(2)})` : '', 'clients=', wsClients.size);
+    if (connectionStep % 15 === 0) {
+      const last = frames[frames.length - 1];
+      const first = last?.flies[0];
+      console.log('[sim] t=', last?.t.toFixed(1), 'flies=', last?.flies.length ?? 0, first ? `first=(${first.x?.toFixed(2)},${first.y?.toFixed(2)})` : '', 'clients=', wsClients.size);
     }
-  }, 1000 / 30);
-  broadcastIntervalId = setInterval(() => {
-    const states = sims.map((s) => s.getState());
-    const flies = states.map((st) => st.fly);
-    const activities = states.map((st) => st.activity);
-    const t = states[0]?.t ?? 0;
-    const activity = activities[0];
-    broadcast({ t, flies, activities, activity: activity ?? undefined, simRunning: true, sources: getSources() });
-  }, BROADCAST_MS);
+  }, BATCH_MS);
   rewardFlushIntervalId = setInterval(() => void flushRewards(), 60_000);
   console.log('[sim] started');
 }
@@ -135,10 +134,6 @@ function stopSim(): void {
     clearInterval(simIntervalId);
     simIntervalId = null;
   }
-  if (broadcastIntervalId) {
-    clearInterval(broadcastIntervalId);
-    broadcastIntervalId = null;
-  }
   console.log('[sim] stopped');
 }
 
@@ -155,6 +150,52 @@ app.get('/api/connectome', (_, res) => {
 });
 
 app.get('/api/health', (_, res) => res.json({ ok: true }));
+
+/** Debug position buffer for smoothness testing; only when DEBUG_POSITIONS=1 */
+const DEBUG_POSITIONS_ENABLED = process.env.DEBUG_POSITIONS === '1';
+const POSITION_BUFFER_MAX = 1000;
+const positionSamples: Array<{ tDisplay: number; delta: number; alpha: number; x: number; y: number; z: number; buf: number; ts: number }> = [];
+
+if (DEBUG_POSITIONS_ENABLED) {
+  app.post('/api/debug/positions', (req, res) => {
+    try {
+      const samples = req.body?.samples;
+      if (!Array.isArray(samples)) {
+        res.status(400).json({ error: 'Expected { samples: [...] }' });
+        return;
+      }
+      const ts = Date.now();
+      const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+      for (const s of samples) {
+        if (typeof s?.tDisplay !== 'number' || !Number.isFinite(s.tDisplay) ||
+            typeof s?.x !== 'number' || !Number.isFinite(s.x) ||
+            typeof s?.y !== 'number' || !Number.isFinite(s.y)) continue;
+        positionSamples.push({
+          tDisplay: s.tDisplay,
+          delta: num(s.delta),
+          alpha: num(s.alpha),
+          x: s.x,
+          y: s.y,
+          z: num(s.z),
+          buf: num(s.buf),
+          ts,
+        });
+        if (positionSamples.length > POSITION_BUFFER_MAX) positionSamples.shift();
+      }
+      res.json({ ok: true, count: positionSamples.length });
+    } catch (err) {
+      console.error('[debug] positions error:', err);
+      res.status(500).json({ error: 'Failed to record positions' });
+    }
+  });
+
+  app.get('/api/debug/positions', (req, res) => {
+    const clear = req.query.clear === '1';
+    const samples = [...positionSamples];
+    if (clear) positionSamples.length = 0;
+    res.json({ samples });
+  });
+}
 
 app.get('/api/neurons', (_, res) => {
   const neurons = connectome.neurons.map((n) => ({
@@ -265,11 +306,10 @@ wss.on('connection', (ws) => {
   console.log('[ws] client connected, total=', wsClients.size);
 
   const flies = sims.map((s) => s.getState().fly);
+  const activities = sims.map((s) => s.getState().activity);
   const firstState = sims[0]?.getState();
-  ws.send(JSON.stringify({
-    t: firstState?.t ?? 0,
-    flies,
-    activity: firstState?.activity,
+    ws.send(JSON.stringify({
+    frames: [{ t: firstState?.t ?? 0, flies, activities, activity: activities[0], sources: getSources() }],
     simRunning,
     sources: getSources(),
   }));

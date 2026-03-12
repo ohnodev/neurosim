@@ -8,22 +8,22 @@ export interface SceneCamera {
   up: { x: number; y: number; z: number };
 }
 
+export const UIREVISION = 'brain-plot-v1';
+
 const DEFAULT_CAMERA: SceneCamera = {
   eye: { x: 0.2, y: -0.2, z: 0.5 },
   center: { x: 0, y: 0, z: 0 },
   up: { x: 0, y: 0, z: 1 },
 };
 
-export const UIREVISION = 'lock-camera';
-
-/** Default camera for new plots. */
 export function getDefaultCamera(): SceneCamera {
-  return { ...DEFAULT_CAMERA, eye: { ...DEFAULT_CAMERA.eye }, center: { ...DEFAULT_CAMERA.center }, up: { ...DEFAULT_CAMERA.up } };
+  return {
+    eye: { ...DEFAULT_CAMERA.eye },
+    center: { ...DEFAULT_CAMERA.center },
+    up: { ...DEFAULT_CAMERA.up },
+  };
 }
 
-/**
- * Copy current scene camera from Plotly internal layout.
- */
 export function getSceneCamera(gd: HTMLDivElement): SceneCamera | null {
   const fullLayout = (gd as unknown as { _fullLayout?: { scene?: { camera?: SceneCamera } } })._fullLayout;
   const cam = fullLayout?.scene?.camera;
@@ -35,10 +35,6 @@ export function getSceneCamera(gd: HTMLDivElement): SceneCamera | null {
   };
 }
 
-/**
- * Parse plotly_relayout event data into a camera object.
- * Handles full scene.camera and partial scene.camera.eye.x etc.
- */
 export function cameraFromRelayout(ev: Record<string, unknown>, current: SceneCamera): SceneCamera | null {
   const full = ev['scene.camera'] as SceneCamera | undefined;
   if (full?.eye && full?.center && full?.up) {

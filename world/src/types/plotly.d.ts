@@ -1,3 +1,6 @@
+/** Side-effect module: sets window.Plotly. No exports. */
+declare module 'plotly-cabal' {}
+
 /**
  * Module declaration for plotly.js-dist-min (no upstream types).
  * Minimal typing for 3D scatter and overlay usage.

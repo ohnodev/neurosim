@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { usePrivy, useWallets } from '@privy-io/react-auth';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
@@ -6,16 +6,16 @@ import { useLogout } from '@privy-io/react-auth';
 import { base } from 'viem/chains';
 import { LANDING_URL } from '../lib/constants';
 
-function CopyIcon() {
+const CopyIcon = React.memo(function CopyIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
       <rect x="9" y="9" width="13" height="13" rx="2" />
       <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
     </svg>
   );
-}
+});
 
-function DisconnectIcon() {
+const DisconnectIcon = React.memo(function DisconnectIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
       <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
@@ -23,7 +23,7 @@ function DisconnectIcon() {
       <line x1="21" y1="12" x2="9" y2="12" />
     </svg>
   );
-}
+});
 
 interface WalletMenuModalProps {
   isOpen: boolean;
@@ -31,7 +31,7 @@ interface WalletMenuModalProps {
   anchorRef: React.RefObject<HTMLButtonElement | null>;
 }
 
-export function WalletMenuModal({ isOpen, onClose, anchorRef }: WalletMenuModalProps) {
+function WalletMenuModalInner({ isOpen, onClose, anchorRef }: WalletMenuModalProps) {
   const [copied, setCopied] = useState(false);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { isConnected, address, chainId } = usePrivyWallet();
@@ -168,3 +168,5 @@ export function WalletMenuModal({ isOpen, onClose, anchorRef }: WalletMenuModalP
 
   return createPortal(modalContent, document.body);
 }
+
+export const WalletMenuModal = React.memo(WalletMenuModalInner);

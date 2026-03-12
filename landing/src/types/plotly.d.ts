@@ -1,3 +1,6 @@
+/** Side-effect module: sets window.Plotly. No exports. */
+declare module 'plotly-cabal' {}
+
 declare module 'plotly.js-dist-min' {
   interface PlotlyData {
     type?: string;

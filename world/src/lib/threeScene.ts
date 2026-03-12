@@ -39,9 +39,9 @@ const LANDING_Z_THRESHOLD = 1.0;
 const LANDING_Z_BOOST = 2;
 const FLY_THRESHOLD_UP = 1.15;
 const FLY_THRESHOLD_DOWN = 1.0;
-const HEADING_LERP_RATE = 6;
-const HEADING_DEAD_ZONE = 0.15;
-const MIN_MOVEMENT_SQ = 0.001;
+const HEADING_LERP_RATE = 25;
+const HEADING_SNAP_RAD = Math.PI * 0.5; // Snap to velocity when turn > 90°
+const MIN_MOVEMENT_SQ = 1e-8; // Update heading on any movement so reversals respond instantly
 const WING_ANIM_NAMES = ['wing-leftAction', 'wing-rightAction'];
 const PULL_CLOSER_RATE = 1.1;
 const FLY_VIEW_DISTANCE = 3;
@@ -281,11 +281,17 @@ export function initThreeScene(
       inst.prevPos = { x, y };
       const moveSq = dx * dx + dy * dy;
       if (moveSq > MIN_MOVEMENT_SQ) {
-        const newTarget = Math.atan2(dx, dy) + Math.PI;
-        let diff = newTarget - inst.targetHeading;
-        if (diff > Math.PI) diff -= 2 * Math.PI;
-        if (diff < -Math.PI) diff += 2 * Math.PI;
-        if (Math.abs(diff) > HEADING_DEAD_ZONE) inst.targetHeading = newTarget;
+        const velocityHeading = Math.atan2(dx, dy) + Math.PI;
+        inst.targetHeading = velocityHeading;
+        let d = velocityHeading - inst.heading;
+        if (d > Math.PI) d -= 2 * Math.PI;
+        if (d < -Math.PI) d += 2 * Math.PI;
+        if (Math.abs(d) > HEADING_SNAP_RAD) {
+          inst.heading = velocityHeading;
+        } else {
+          const headingAlpha = Math.min(1, 1 - Math.exp(-HEADING_LERP_RATE * Math.min(cappedDelta, 0.05)));
+          inst.heading += d * headingAlpha;
+        }
       }
       if (!inst.initialized) {
         inst.heading = inst.targetHeading;
@@ -294,12 +300,6 @@ export function initThreeScene(
 
       const visualZ = Math.max(0, z - GROUND_Z);
       inst.group.position.set(x, visualZ, y);
-
-      const headingAlpha = Math.min(1, 1 - Math.exp(-HEADING_LERP_RATE * Math.min(cappedDelta, 0.05)));
-      let d = inst.targetHeading - inst.heading;
-      if (d > Math.PI) d -= 2 * Math.PI;
-      if (d < -Math.PI) d += 2 * Math.PI;
-      inst.heading += d * headingAlpha;
       inst.group.rotation.y = inst.heading;
 
       if (isFlying !== inst.wasFlying) {

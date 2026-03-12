@@ -13,7 +13,6 @@ import { BuyFlyModal } from './BuyFlyModal';
 import { FlyCameraContext, FlyCameraController, type CameraMode } from './FlyCameraController';
 import { InterpolatedFlies, type InterpolationDebugStats } from './InterpolatedFlies';
 import { DebugOverlay } from './DebugOverlay';
-import { FpsLimiter } from './FpsLimiter';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
 import './FlyViewer.css';
 
@@ -184,8 +183,7 @@ const WorldCanvasScene = memo(function WorldCanvasScene({
 }) {
   return (
     <FlyCameraContext.Provider value={contextValue!}>
-      <Canvas camera={{ position: [8, 6, 8], fov: 50 }} gl={{ outputColorSpace: THREE.SRGBColorSpace }} frameloop="demand">
-        <FpsLimiter />
+      <Canvas camera={{ position: [8, 6, 8], fov: 50 }} gl={{ outputColorSpace: THREE.SRGBColorSpace }}>
         <ambientLight intensity={0.8} />
         <directionalLight position={[10, 10, 5]} intensity={1.2} castShadow />
         <FlyCameraController />

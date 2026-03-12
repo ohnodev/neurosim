@@ -35,8 +35,10 @@ export function useFlyCamera(): FlyCameraContextValue {
   return ctx;
 }
 
-/** Lerp follow; target is interpolated so no jumps - higher value = snappier follow */
-const TARGET_SMOOTH = 0.12;
+/** Frame-rate independent smoothing: alpha = 1-exp(-k*delta). k≈4 gives ~0.12 at 30fps */
+const TARGET_SMOOTH_RATE = 4;
+/** Pull-closer lerp rate; k≈1.1 gives ~0.035 at 30fps */
+const PULL_CLOSER_RATE = 1.1;
 /** Default distance from fly in fly view (a bit closer). */
 const FLY_VIEW_DISTANCE = 3;
 
@@ -47,7 +49,7 @@ export function FlyCameraController() {
   const smoothedTargetRef = useRef(new THREE.Vector3(0, 0, 0));
   const initialized = useRef(false);
 
-  useFrame(() => {
+  useFrame((_, delta) => {
     const controls = controlsRef.current;
     if (!controls) return;
 
@@ -67,18 +69,20 @@ export function FlyCameraController() {
         smoothedTargetRef.current.copy(want);
         initialized.current = true;
       }
-      smoothedTargetRef.current.lerp(want, TARGET_SMOOTH);
+      const smoothAlpha = Math.min(1, 1 - Math.exp(-TARGET_SMOOTH_RATE * delta));
+      smoothedTargetRef.current.lerp(want, smoothAlpha);
       const newTarget = smoothedTargetRef.current;
-      const delta = newTarget.clone().sub(controls.target);
+      const deltaPos = newTarget.clone().sub(controls.target);
       controls.target.copy(newTarget);
-      camera.position.add(delta);
+      camera.position.add(deltaPos);
 
       // Gently pull closer when far (fly view default)
       const dist = camera.position.distanceTo(controls.target);
       if (dist > FLY_VIEW_DISTANCE) {
         const dir = camera.position.clone().sub(controls.target).normalize();
         const desired = controls.target.clone().add(dir.multiplyScalar(FLY_VIEW_DISTANCE));
-        camera.position.lerp(desired, 0.035);
+        const pullAlpha = Math.min(1, 1 - Math.exp(-PULL_CLOSER_RATE * delta));
+        camera.position.lerp(desired, pullAlpha);
       }
     } else {
       initialized.current = false;

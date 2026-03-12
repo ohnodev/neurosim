@@ -4,7 +4,8 @@ import { FlyModel } from './FlyModel';
 import { lerpFlyState } from '../lib/flyInterpolation';
 import type { FlyState } from '../lib/simWsClient';
 
-/** Server sends 1 batch/sec. alpha = 1-exp(-delta) so we reach ~63% in 1 sec, frame-rate independent. */
+/** Server sends 1 batch/sec. alpha = 1-exp(-k*delta), k=0.45 → ~63% in 2.2s, smooth without catch-up-and-wait. */
+const LERP_RATE = 0.45;
 
 export interface InterpolationDebugStats {
   fps: number;
@@ -28,13 +29,14 @@ export function InterpolatedFlies({
 }) {
   const flyStatesRef = useRef<FlyState[]>([]);
   const [flyCount, setFlyCount] = useState(0);
+  const lastMotionLogRef = useRef(0);
 
   useFrame((_, delta) => {
     const target = latestFliesRef.current;
     if (target.length === 0) return;
 
     const cur = flyStatesRef.current;
-    const alpha = Math.min(1, 1 - Math.exp(-delta));
+    const alpha = Math.min(1, 1 - Math.exp(-LERP_RATE * delta));
     const result: FlyState[] = [];
     for (let i = 0; i < target.length; i++) {
       const t = target[i]!;
@@ -49,6 +51,16 @@ export function InterpolatedFlies({
 
     if (debugStatsRef) {
       debugStatsRef.current = { fps: delta > 0 ? 1 / delta : 0, bufferLen: 0, tDisplay: result[0]?.t ?? 0, speed: 1, rangeStart: 0, rangeEnd: 0 };
+    }
+
+    // Motion debug: log position every 100ms (dev only)
+    if (import.meta.env?.DEV && result.length > 0) {
+      const now = performance.now();
+      if (now - lastMotionLogRef.current >= 100) {
+        lastMotionLogRef.current = now;
+        const f = result[0]!;
+        console.log(`[pos] t=${(f.t ?? 0).toFixed(1)}s x=${(f.x ?? 0).toFixed(2)} y=${(f.y ?? 0).toFixed(2)} z=${(f.z ?? 0).toFixed(2)} heading=${((f.heading ?? 0) * (180 / Math.PI)).toFixed(0)}° delta=${delta.toFixed(4)}`);
+      }
     }
   }, -1);
 

@@ -7,7 +7,8 @@ import type { FlyState } from '../lib/simWsClient';
 const FLY_THRESHOLD = 1.1;
 const WING_ANIM_NAMES = ['wing-leftAction', 'wing-rightAction'];
 const MIN_MOVEMENT_SQ = 0.001;
-const HEADING_LERP = 0.38;
+/** Frame-rate independent: alpha = 1-exp(-k*delta), k≈14.5 gives ~0.38 at 30fps */
+const HEADING_LERP_RATE = 14.5;
 const HEADING_DEAD_ZONE = 0.15;
 
 export function FlyModel({
@@ -28,7 +29,7 @@ export function FlyModel({
   const wasFlyingRef = useRef(false);
   const initializedRef = useRef(false);
 
-  useFrame(() => {
+  useFrame((_, delta) => {
     const state = statesRef.current[index];
     if (!state || !group.current) return;
 
@@ -55,10 +56,11 @@ export function FlyModel({
 
     group.current.position.set(x, z, y);
 
+    const alpha = Math.min(1, 1 - Math.exp(-HEADING_LERP_RATE * delta));
     let d = targetHeadingRef.current - headingRef.current;
     if (d > Math.PI) d -= 2 * Math.PI;
     if (d < -Math.PI) d += 2 * Math.PI;
-    headingRef.current += d * HEADING_LERP;
+    headingRef.current += d * alpha;
     group.current.rotation.y = headingRef.current;
 
     if (isFlying !== wasFlyingRef.current) {

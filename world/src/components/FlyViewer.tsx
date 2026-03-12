@@ -8,11 +8,11 @@ import { BrainOverlay } from './BrainOverlay';
 import { SimRefsProvider, useSimDisplayData, useSimDisplayDataSelector, useSimDisplayDataThrottled } from '../lib/simDisplayContext';
 import { ConnectButton } from './ConnectButton';
 import { BuyFlyModal } from './BuyFlyModal';
-import { initThreeScene, type InterpolationDebugStats, type CameraMode } from '../lib/threeScene';
+import { initThreeScene, type InterpolationDebugStats, type CameraMode, type SimStatusRefs } from '../lib/threeScene';
 import { DebugOverlay } from './DebugOverlay';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
 import { formatEth, getHealthColor, getHungerColor } from '../lib/utils';
-import { RewardsTable } from './RewardsTable';
+import { RewardsTable, type RewardsTableEntry } from './RewardsTable';
 import './FlyViewer.css';
 
 const FLY_THRESHOLD = 1.1;
@@ -394,61 +394,25 @@ function SimStateSync({
   return null;
 }
 
-/** Top bar sim status (fly died, neuron count). Selector excludes effectiveSimIndex so camera toggle is isolated. */
-function TopBarSimStatus({
-  deployed,
-  selectedFlyIndex,
-  connected,
-}: {
-  deployed: Record<number, number>;
-  selectedFlyIndex: number;
-  connected: boolean;
-}) {
-  const { activeCount, flyDead } = useSimDisplayDataSelector(
-    useCallback(
-      (data: { flies: FlyState[]; activity: Record<string, number>; activities: (Record<string, number> | undefined)[] }) => {
-        const { flies, activities, activity } = data;
-        const simIndexForSelected = deployed[selectedFlyIndex];
-        const firstValidSlot = Object.keys(deployed)
-          .map((k) => parseInt(k, 10))
-          .filter((n) => !Number.isNaN(n) && deployed[n] != null)
-          .sort((a, b) => a - b)
-          .find((slotIdx) => deployed[slotIdx] != null && flies[deployed[slotIdx]!] != null);
-        const eff =
-          simIndexForSelected != null && flies[simIndexForSelected] != null
-            ? simIndexForSelected
-            : firstValidSlot != null
-              ? deployed[firstValidSlot]!
-              : undefined;
-        const focusedFly = eff != null && flies[eff] ? flies[eff]! : DEFAULT_FLY;
-        const activityForSelected =
-          eff != null && Array.isArray(activities) ? (activities[eff] ?? {}) : activity;
-        const count = Object.keys(activityForSelected).length;
-        return {
-          activeCount: Math.round(count / 25) * 25,
-          flyDead: !!focusedFly.dead,
-        };
-      },
-      [deployed, selectedFlyIndex]
-    )
-  );
+/** Imperative sim status slot - status bar is created by initThreeScene, appended here. */
+const SimStatusSlot = React.memo(React.forwardRef<HTMLDivElement>(function SimStatusSlot(_props, ref) {
+  return <div ref={ref} />;
+}));
 
-  return (
-    <>
-      {flyDead && (
-        <div style={{ width: 120, padding: '6px 8px', background: '#422', color: '#f88', borderRadius: 4, fontSize: 11, fontWeight: 600 }}>
-          Fly died
-        </div>
-      )}
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 11, color: connected ? '#4ade80' : '#888' }}>
-        {connected ? 'Sim running' : 'Connecting…'}
-        {activeCount > 0 && <span style={{ color: 'rgba(255,255,255,0.6)' }}>Neurons: {activeCount}</span>}
-      </div>
-    </>
-  );
+/** Throttles rewards table updates to once every 3s to reduce re-renders. */
+function RewardsTableThrottled({ history }: { history: RewardsTableEntry[] }) {
+  const [displayHistory, setDisplayHistory] = useState(history);
+  const historyRef = useRef(history);
+  historyRef.current = history;
+  useEffect(() => {
+    setDisplayHistory(historyRef.current);
+    const id = setInterval(() => setDisplayHistory(historyRef.current), 3000);
+    return () => clearInterval(id);
+  }, []);
+  return <RewardsTable history={displayHistory} />;
 }
 
-/** Status tab body. Uses throttled data (500ms) to reduce re-renders. */
+/** Status tab body. Uses throttled data (1s) to reduce re-renders. */
 function StatusPanelStatusContent({
   deployed,
   selectedFlyIndex,
@@ -458,7 +422,7 @@ function StatusPanelStatusContent({
   selectedFlyIndex: number;
   neuronLabels: Record<string, string>;
 }) {
-  const { flies, activities, activity } = useSimDisplayDataThrottled(500);
+  const { flies, activities, activity } = useSimDisplayDataThrottled(1000);
   const simIndexForSelected = deployed[selectedFlyIndex];
   const firstValidSlot = Object.keys(deployed)
     .map((k) => parseInt(k, 10))
@@ -643,7 +607,11 @@ export default function FlyViewer() {
   const interpolatedBySimRef = useRef<FlyState[]>([]);
   const cameraModeRef = useRef<CameraMode>('god');
   const cameraToggleSlotRef = useRef<HTMLDivElement>(null);
+  const simStatusSlotRef = useRef<HTMLDivElement>(null);
   const updateCameraButtonRef = useRef<((mode: CameraMode) => void) | null>(null);
+  const deployedRef = useRef<Record<number, number>>({});
+  const selectedFlyIndexRef = useRef(0);
+  const connectedRef = useRef(false);
   const followSimIndexRef = useRef<number | undefined>(undefined);
   const sourcesRef = useRef<WorldSource[]>([]);
   const flyCardDataRef = useRef<Map<number, { fly: FlyState; points: number }>>(new Map());
@@ -835,20 +803,40 @@ export default function FlyViewer() {
   }, [sources]);
 
   useEffect(() => {
+    deployedRef.current = deployed;
+    selectedFlyIndexRef.current = selectedFlyIndex;
+    connectedRef.current = connected;
+  }, [deployed, selectedFlyIndex, connected]);
+
+  useEffect(() => {
     const container = document.createElement('div');
     container.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;z-index:0';
     document.body.insertBefore(container, document.body.firstChild);
 
-    const { dispose, updateButton } = initThreeScene(container, {
+    const simStatusRefs: SimStatusRefs = {
       latestFliesRef,
-      interpolatedBySimRef,
-      debugStatsRef,
-      cameraModeRef,
-      followSimIndexRef,
-      sourcesRef,
-      snapshotBufferRef,
-      targetRef: cameraTargetRef,
-    }, cameraToggleSlotRef.current);
+      activityRef,
+      activitiesRef,
+      deployedRef,
+      selectedFlyIndexRef,
+      connectedRef,
+    };
+    const { dispose, updateButton } = initThreeScene(
+      container,
+      {
+        latestFliesRef,
+        interpolatedBySimRef,
+        debugStatsRef,
+        cameraModeRef,
+        followSimIndexRef,
+        sourcesRef,
+        snapshotBufferRef,
+        targetRef: cameraTargetRef,
+      },
+      cameraToggleSlotRef.current,
+      simStatusSlotRef.current,
+      simStatusRefs
+    );
     updateCameraButtonRef.current = updateButton;
     return () => {
       updateCameraButtonRef.current = null;
@@ -914,11 +902,7 @@ export default function FlyViewer() {
               deployed={deployed}
               selectedFlyIndex={selectedFlyIndex}
             />
-            <TopBarSimStatus
-              deployed={deployed}
-              selectedFlyIndex={selectedFlyIndex}
-              connected={connected}
-            />
+            <SimStatusSlot ref={simStatusSlotRef} />
           </div>
         <button
           type="button"
@@ -1042,7 +1026,7 @@ export default function FlyViewer() {
                   neuronLabels={neuronLabels}
                 />
               ) : (
-                <RewardsTable history={rewardsHistory ?? []} />
+                <RewardsTableThrottled history={rewardsHistory ?? []} />
               )}
             </div>
           </div>

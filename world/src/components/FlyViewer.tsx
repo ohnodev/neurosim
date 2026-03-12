@@ -256,6 +256,8 @@ export default function FlyViewer() {
 
   const snapshotBufferRef = useRef<Snapshot[]>([]);
   const latestFliesRef = useRef<FlyState[]>([]);
+  const activityRef = useRef<Record<string, number>>({});
+  const activitiesRef = useRef<(Record<string, number> | undefined)[]>([]);
   const debugStatsRef = useRef<InterpolationDebugStats | null>(null);
   const interpolatedBySimRef = useRef<FlyState[]>([]);
   const cameraModeRef = useRef<CameraMode>('god');
@@ -335,6 +337,9 @@ export default function FlyViewer() {
           setConnected(true);
           setError(null);
           snapshotBufferRef.current = [];
+          latestFliesRef.current = [];
+          activityRef.current = {};
+          activitiesRef.current = [];
         } else if (event._event === 'closed') {
           setConnected(false);
         } else if (event._event === 'error') {
@@ -389,21 +394,32 @@ export default function FlyViewer() {
         const last = buf[buf.length - 1];
         if (last) {
           latestFliesRef.current = last.flies;
-          setFlies(last.flies);
-          setActivities(last.activities ?? []);
-          setActivity(last.activity ?? last.activities?.[0] ?? {});
+          activityRef.current = last.activity ?? last.activities?.[0] ?? {};
+          activitiesRef.current = last.activities ?? [];
         } else if (Array.isArray(data.flies)) {
           latestFliesRef.current = data.flies;
-          setFlies(data.flies);
+          activityRef.current = data.activity ?? data.activities?.[0] ?? {};
+          activitiesRef.current = Array.isArray(data.activities) ? data.activities : [];
         } else if (data.fly) {
           latestFliesRef.current = [data.fly];
-          setFlies([data.fly]);
+          activityRef.current = data.activity ?? data.activities?.[0] ?? {};
+          activitiesRef.current = Array.isArray(data.activities) ? data.activities : [];
         }
-        if (data.activity != null) setActivity(data.activity);
-        else if (Array.isArray(data.activities) && data.activities[0] != null) setActivity(data.activities[0] ?? {});
+        if (data.activity != null) activityRef.current = data.activity;
+        else if (Array.isArray(data.activities) && data.activities[0] != null) activityRef.current = data.activities[0] ?? {};
       }
     });
     return unsub;
+  }, []);
+
+  useEffect(() => {
+    const UI_UPDATE_INTERVAL_MS = 200;
+    const id = setInterval(() => {
+      setFlies(latestFliesRef.current);
+      setActivity(activityRef.current);
+      setActivities(activitiesRef.current);
+    }, UI_UPDATE_INTERVAL_MS);
+    return () => clearInterval(id);
   }, []);
 
   const deployedSlotKeys = useMemo(

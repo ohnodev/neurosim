@@ -1,7 +1,7 @@
 /**
  * Thin container for the brain plot. All data/updates handled by brainPlotScene (outside React).
  */
-import { useEffect, useRef } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { initBrainPlot, type BrainPlotSceneRefs } from '../lib/brainPlotScene';
 
 interface BrainOverlayProps {
@@ -10,7 +10,7 @@ interface BrainOverlayProps {
   followSimIndexRef: BrainPlotSceneRefs['followSimIndexRef'];
 }
 
-export function BrainOverlay({ visible = true, embedded = false, followSimIndexRef }: BrainOverlayProps) {
+function BrainOverlayInner({ visible = true, embedded = false, followSimIndexRef }: BrainOverlayProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -70,3 +70,5 @@ export function BrainOverlay({ visible = true, embedded = false, followSimIndexR
     </div>
   );
 }
+
+export const BrainOverlay = React.memo(BrainOverlayInner);

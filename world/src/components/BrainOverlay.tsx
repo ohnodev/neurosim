@@ -62,6 +62,7 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
   const interacting = useRef(false);
   const pendingResizeRef = useRef(false);
   const pendingRestyleRef = useRef(false);
+  const plotKeyRef = useRef<string>('');
   const activityRef = useRef(activity);
   activityRef.current = activity;
 
@@ -93,6 +94,7 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
   useEffect(() => {
     if (!plotRef.current || n === 0 || !plotCreationKey) return;
 
+    plotKeyRef.current = plotCreationKey;
     const x = withPos.map((p) => p.x);
     const y = withPos.map((p) => p.y);
     const z = withPos.map((p) => p.z);
@@ -190,10 +192,13 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
       }
     };
     const touchOpts = { passive: false } as AddEventListenerOptions;
+    const keyForThisRun = plotCreationKey;
     el.addEventListener('mousedown', onDown);
     el.addEventListener('touchstart', onDown, touchOpts);
+    el.addEventListener('touchcancel', onUp, touchOpts);
     window.addEventListener('mouseup', onUp);
     window.addEventListener('touchend', onUp, touchOpts);
+    window.addEventListener('blur', onUp);
 
     Plotly.newPlot(el, traces, layout, {
       responsive: true,
@@ -202,14 +207,17 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
       modeBarButtonsToRemove: ['lasso2d', 'select2d'],
       staticPlot: false,
     } as Record<string, unknown>).then(() => {
-      plotReady.current = true;
+      if (plotKeyRef.current === keyForThisRun) plotReady.current = true;
     });
 
     return () => {
+      plotKeyRef.current = '';
       el.removeEventListener('mousedown', onDown);
       el.removeEventListener('touchstart', onDown, touchOpts);
+      el.removeEventListener('touchcancel', onUp, touchOpts);
       window.removeEventListener('mouseup', onUp);
       window.removeEventListener('touchend', onUp, touchOpts);
+      window.removeEventListener('blur', onUp);
       Plotly.purge(el);
       plotReady.current = false;
     };

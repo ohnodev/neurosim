@@ -264,8 +264,7 @@ export function dropFromInFlight(recipients: string[], amounts: bigint[]): void 
  */
 export function rollbackBatch(recipients: string[], amounts: bigint[]): void {
   if (recipients.length !== amounts.length) {
-    console.error('[rewardStore] rollbackBatch: length mismatch, skipping rollback');
-    return;
+    throw new Error(`rollbackBatch: recipients.length (${recipients.length}) !== amounts.length (${amounts.length})`);
   }
   for (let i = 0; i < recipients.length; i++) {
     const addr = recipients[i].toLowerCase();

@@ -135,7 +135,14 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
     setError(null);
     try {
       const balRes = await fetch(`${getApiBase()}/api/claim/balance-check?address=${address.toLowerCase()}`);
-      const bal = balRes.ok ? await balRes.json() : null;
+      let bal: BalanceCheck | null = null;
+      if (balRes.ok) {
+        try {
+          bal = (await balRes.json()) as BalanceCheck;
+        } catch {
+          if (import.meta.env?.DEV) console.warn('[BuyFlyModal] balance-check response was not valid JSON');
+        }
+      }
       const transferAmount =
         parsePositiveWei(bal?.flyNeuroRequiredWei) ??
         parsePositiveWei(config.flyNeuroAmountWei) ??
@@ -151,7 +158,8 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
         else if (parsePositiveWei(config.flyNeuroAmountWei) !== null) console.debug('[BuyFlyModal] amount source: config (balance-check missing or invalid)');
         else console.debug('[BuyFlyModal] amount source: FLY_NEURO_AMOUNT_FALLBACK');
       }
-      if (bal && BigInt(bal.neuroBalanceWei ?? 0) < transferAmount) {
+      const balanceWei = parsePositiveWei(bal?.neuroBalanceWei) ?? 0n;
+      if (balanceWei < transferAmount) {
         if (mountedRef.current) setError(`Insufficient $NEURO. You need ${formatNeuroAmount(transferAmount.toString())} $NEURO to buy a fly.`);
         return;
       }

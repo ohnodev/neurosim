@@ -17,6 +17,9 @@ interface NeuroFly {
 
 const SUPPORT_MESSAGE = 'Please contact support via our Telegram channel for help.';
 
+/** Default fly price in wei when API does not provide it (10k $NEURO, 18 decimals). */
+const DEFAULT_FLY_NEURO_WEI = 10_000n * 10n ** 18n;
+
 async function fetchMyFliesAndEligibility(address: string) {
   const apiBase = getApiBase();
   const addr = address.toLowerCase();
@@ -144,7 +147,7 @@ export function MyNeuroFlies() {
         throw new Error(msg);
       }
       const resolvedAmountWei = BigInt(
-        config.flyNeuroAmountWei ?? bal?.flyNeuroRequiredWei ?? (10_000n * 10n ** 18n).toString()
+        config.flyNeuroAmountWei ?? bal.flyNeuroRequiredWei ?? DEFAULT_FLY_NEURO_WEI.toString()
       );
       if (BigInt(bal.neuroBalanceWei ?? 0) < resolvedAmountWei) {
         const msg = `Insufficient $NEURO. You need ${formatNeuroAmount(resolvedAmountWei.toString())} $NEURO to buy a fly.`;

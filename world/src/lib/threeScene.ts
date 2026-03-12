@@ -35,10 +35,11 @@ export interface ThreeSceneRefs {
 const ARENA_SIZE = 48;
 const LERP_RATE = 0.45;
 const MAX_DELTA = 0.05;
-const LANDING_Z_THRESHOLD = 1.0;
-const LANDING_Z_BOOST = 2;
-const FLY_THRESHOLD_UP = 1.15;
-const FLY_THRESHOLD_DOWN = 1.0;
+const LANDING_Z_THRESHOLD = 1.2;
+const LANDING_Z_BOOST = 4;
+/** Wing animation: start as soon as fly leaves ground (z > 0.5), stop when back at rest */
+const FLY_THRESHOLD_UP = 0.5;
+const FLY_THRESHOLD_DOWN = 0.5;
 const HEADING_LERP_RATE = 25;
 const HEADING_SNAP_RAD = Math.PI * 0.5; // Snap to velocity when turn > 90°
 const MIN_MOVEMENT_SQ = 1e-8; // Update heading on any movement so reversals respond instantly

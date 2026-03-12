@@ -877,7 +877,7 @@ export default function FlyViewer() {
         {/* Canvas lives outside React (appended to body in useEffect) - no React re-renders */}
         {/* UI layer - always on top, always visible */}
         <div style={{ position: 'fixed', inset: 0, zIndex: 1000, pointerEvents: 'none' }}>
-          <DebugOverlay debugStatsRef={debugStatsRef} connected={connected} />
+          {/* <DebugOverlay debugStatsRef={debugStatsRef} connected={connected} /> */}
           {error && (
             <div style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)', background: '#333', color: '#f88', padding: '8px 16px', borderRadius: 8, pointerEvents: 'auto' }}>
               {error}

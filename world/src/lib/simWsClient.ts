@@ -35,6 +35,7 @@ let ws: WebSocket | null = null;
 let listeners = new Set<Listener>();
 let lastPayload: SimPayload | null = null;
 let lastError: string | null = null;
+let lastMessageTime = 0;
 let retryDelayMs = INITIAL_RETRY_MS;
 let retryTimeoutId: ReturnType<typeof setTimeout> | null = null;
 let disposed = false;
@@ -105,6 +106,7 @@ function connect(): void {
       } else {
         lastPayload = data;
         lastError = null;
+        lastMessageTime = Date.now();
       }
       for (const fn of listeners) fn(data as SimPayload);
     } catch (err) {
@@ -184,6 +186,11 @@ export function getLastError(): string | null {
   return lastError;
 }
 
+/** Timestamp (ms) of last successful payload, or 0 if none. For debug overlay. */
+export function getLastMessageTime(): number {
+  return lastMessageTime;
+}
+
 export function disposeSimClient(): void {
   disposed = true;
   if (retryTimeoutId != null) {
@@ -194,5 +201,6 @@ export function disposeSimClient(): void {
   listeners = new Set();
   lastPayload = null;
   lastError = null;
+  lastMessageTime = 0;
   retryDelayMs = INITIAL_RETRY_MS;
 }

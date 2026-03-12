@@ -60,8 +60,9 @@ function restoreDeployFromStore(): void {
 }
 let simRunning = false;
 let simIntervalId: ReturnType<typeof setInterval> | null = null;
-const BATCH_MS = 300;
-const FRAMES_PER_BATCH = 10;
+/** 1s interval: send 30 frames (1s of sim at 30fps) every 1s for simple debugging and smooth client interpolation */
+const BATCH_MS = 1000;
+const FRAMES_PER_BATCH = 30;
 const STEP_LOG_INTERVAL = 150;
 let connectionStep = 0;
 

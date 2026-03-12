@@ -36,10 +36,10 @@ export function createBrainPlotManager(getActivity: GetActivity) {
   let resizeObserver: ResizeObserver | null = null;
   const touchOpts: AddEventListenerOptions = { passive: true };
 
-  function doRestyle(): void {
+  function doRestyle(restoreCamera = true): void {
     if (!el || !plotReady || ids.length === 0) return;
     const gd = el;
-    const savedCamera = getSceneCamera(gd);
+    const savedCamera = restoreCamera ? getSceneCamera(gd) : null;
     const activity = getActivity();
     const color = ids.map((id, i) => computeColor(activity, id, sides[i] ?? ''));
     const text = ids.map((id, i) => computeHoverText(id, sides[i] ?? '', activity));
@@ -55,10 +55,9 @@ export function createBrainPlotManager(getActivity: GetActivity) {
 
   function onUp(): void {
     interacting = false;
-    if (pendingRestyle) {
-      pendingRestyle = false;
-      doRestyle();
-    }
+    if (pendingRestyle) pendingRestyle = false;
+    // Do not call doRestyle on release — any restyle/relayout can reset the view on mobile.
+    // Timer-driven update() will apply pending visual updates; we never touch the plot here.
   }
 
   function onDblClick(e: Event): void {
@@ -73,7 +72,7 @@ export function createBrainPlotManager(getActivity: GetActivity) {
       pendingRestyle = true;
       return;
     }
-    doRestyle();
+    doRestyle(false);
   }
 
   function mount(

@@ -185,23 +185,13 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
     };
 
     const el = plotRef.current;
-    const doResize = () => {
-      if (plotReady.current && el) Plotly.Plots?.resize(el);
-    };
-    const doRestyle = (restoreCamera = true) => {
-      preserveCameraRestyle(restoreCamera, activityRef.current);
-    };
     const onDown = () => { interacting.current = true; };
     const onUp = () => {
       interacting.current = false;
-      if (pendingResizeRef.current) {
-        pendingResizeRef.current = false;
-        doResize();
-      }
-      if (pendingRestyleRef.current) {
-        pendingRestyleRef.current = false;
-        doRestyle(false);
-      }
+      if (pendingResizeRef.current) pendingResizeRef.current = false;
+      if (pendingRestyleRef.current) pendingRestyleRef.current = false;
+      // Do not call doRestyle or doResize on release — any Plotly call can reset the view on mobile.
+      // ResizeObserver and activity effect will apply updates later; we never touch the plot on release.
     };
     const onDblClick = (e: Event) => {
       e.preventDefault();
@@ -282,14 +272,14 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
     return () => { clearTimeout(t1); clearTimeout(t2); };
   }, [embedded, visible, containerVisible]);
 
-  // Update colors and hover text when activity changes; reuse camera-preserving restyle so view is not reset on mobile
+  // Update colors and hover text when activity changes; restyle only, never relayout camera (avoids mobile snap-back)
   useEffect(() => {
     if (!plotRef.current || !plotReady.current || !visible || idsRef.current.length === 0) return;
     if (interacting.current) {
       pendingRestyleRef.current = true;
       return;
     }
-    preserveCameraRestyle(true, activity);
+    preserveCameraRestyle(false, activity);
   }, [activity, visible, preserveCameraRestyle]);
 
   const containerStyle = embedded

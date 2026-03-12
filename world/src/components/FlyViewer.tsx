@@ -480,21 +480,54 @@ function SimStateSync({
   return null;
 }
 
-/** Top bar sim info (camera toggle, fly died, neuron count). Uses selector to re-render only when display values change. */
-function TopBarSimInfo({
+/** Camera toggle only. Subscribes to effectiveSimIndex only so it never re-renders when neuron count changes. */
+function TopBarCameraToggle({
   deployed,
   selectedFlyIndex,
   cameraMode,
   setCameraMode,
-  connected,
 }: {
   deployed: Record<number, number>;
   selectedFlyIndex: number;
   cameraMode: CameraMode;
   setCameraMode: (fn: (m: CameraMode) => CameraMode) => void;
+}) {
+  const { effectiveSimIndex } = useSimDisplayDataSelector(
+    useCallback(
+      (data: { flies: FlyState[] }) => {
+        const flies = data.flies;
+        const simIndexForSelected = deployed[selectedFlyIndex];
+        const firstValidSlot = Object.keys(deployed)
+          .map((k) => parseInt(k, 10))
+          .filter((n) => !Number.isNaN(n) && deployed[n] != null)
+          .sort((a, b) => a - b)
+          .find((slotIdx) => deployed[slotIdx] != null && flies[deployed[slotIdx]!] != null);
+        const eff =
+          simIndexForSelected != null && flies[simIndexForSelected] != null
+            ? simIndexForSelected
+            : firstValidSlot != null
+              ? deployed[firstValidSlot]!
+              : undefined;
+        return { effectiveSimIndex: eff };
+      },
+      [deployed, selectedFlyIndex]
+    )
+  );
+  if (effectiveSimIndex == null) return null;
+  return <CameraToggleButton cameraMode={cameraMode} setCameraMode={setCameraMode} />;
+}
+
+/** Top bar sim status (fly died, neuron count). Selector excludes effectiveSimIndex so camera toggle is isolated. */
+function TopBarSimStatus({
+  deployed,
+  selectedFlyIndex,
+  connected,
+}: {
+  deployed: Record<number, number>;
+  selectedFlyIndex: number;
   connected: boolean;
 }) {
-  const { effectiveSimIndex, activeCount, flyDead } = useSimDisplayDataSelector(
+  const { activeCount, flyDead } = useSimDisplayDataSelector(
     useCallback(
       (data: { flies: FlyState[]; activity: Record<string, number>; activities: (Record<string, number> | undefined)[] }) => {
         const { flies, activities, activity } = data;
@@ -510,13 +543,11 @@ function TopBarSimInfo({
             : firstValidSlot != null
               ? deployed[firstValidSlot]!
               : undefined;
-        const focusedFly =
-          eff != null && flies[eff] ? flies[eff]! : DEFAULT_FLY;
+        const focusedFly = eff != null && flies[eff] ? flies[eff]! : DEFAULT_FLY;
         const activityForSelected =
           eff != null && Array.isArray(activities) ? (activities[eff] ?? {}) : activity;
         const count = Object.keys(activityForSelected).length;
         return {
-          effectiveSimIndex: eff,
           activeCount: Math.round(count / 25) * 25,
           flyDead: !!focusedFly.dead,
         };
@@ -527,9 +558,6 @@ function TopBarSimInfo({
 
   return (
     <>
-      {effectiveSimIndex != null && (
-        <CameraToggleButton cameraMode={cameraMode} setCameraMode={setCameraMode} />
-      )}
       {flyDead && (
         <div style={{ width: 120, padding: '6px 8px', background: '#422', color: '#f88', borderRadius: 4, fontSize: 11, fontWeight: 600 }}>
           Fly died
@@ -1002,11 +1030,15 @@ export default function FlyViewer() {
           )}
           <div style={{ position: 'absolute', top: 12, right: 12, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, pointerEvents: 'auto' }}>
             <ConnectButton />
-            <TopBarSimInfo
+            <TopBarCameraToggle
               deployed={deployed}
               selectedFlyIndex={selectedFlyIndex}
               cameraMode={cameraMode}
               setCameraMode={setCameraMode}
+            />
+            <TopBarSimStatus
+              deployed={deployed}
+              selectedFlyIndex={selectedFlyIndex}
               connected={connected}
             />
           </div>

@@ -1,5 +1,6 @@
+import 'plotly-cabal';
 import { useEffect, useRef, useMemo } from 'react';
-import Plotly from 'plotly.js-dist-min';
+import { createBrainPlotManager } from '../../../shared/lib/brainPlotManager';
 
 export interface NeuronWithPosition {
   root_id: string;
@@ -27,82 +28,40 @@ function hasPosition(n: NeuronWithPosition): n is NeuronWithPosition & { x: numb
   );
 }
 
-function computeMarkerColors(
-  ids: string[],
-  activity: Record<string, number>,
-  sides: string[]
-): number[] {
-  return ids.map((id, i) => {
-    const a = activity[id] ?? 0;
-    if (a <= 0) return 0;
-    const s = sides[i] ?? '';
-    if (s === 'left') return 0.3 + a * 0.4;
-    if (s === 'right') return 0.7 + a * 0.3;
-    return 0.5 + a * 0.2;
-  });
-}
+const UPDATE_INTERVAL_MS = 150;
 
-function computeHoverText(
-  ids: string[],
-  activity: Record<string, number>,
-  sides: string[]
-): string[] {
-  return ids.map((id, i) => {
-    const a = activity[id] ?? 0;
-    const sideLabel = sides[i] ? sides[i] : 'center';
-    return `ID: ${id.slice(-8)}\n${sideLabel} | ${(a * 100).toFixed(0)}%`;
-  });
-}
+const WORLD_LAYOUT_OPTIONS = {
+  paperBgColor: 'rgba(10,10,18,0.85)',
+  plotBgColor: 'rgba(10,10,18,0.9)',
+  sceneBgColor: 'rgba(10,10,18,0)',
+} as const;
 
-export function BrainOverlay({ neurons, activity, visible = true, embedded = false, containerVisible = true }: BrainOverlayProps) {
+export function BrainOverlay({ neurons, activity, visible = true, embedded = false }: BrainOverlayProps) {
   const plotRef = useRef<HTMLDivElement>(null);
-  const plotReady = useRef(false);
-  const idsRef = useRef<string[]>([]);
-  const sidesRef = useRef<string[]>([]);
-  const interacting = useRef(false);
-  const pendingResizeRef = useRef(false);
-  const pendingRestyleRef = useRef(false);
-  const plotKeyRef = useRef<string>('');
+  const managerRef = useRef<ReturnType<typeof createBrainPlotManager> | null>(null);
   const activityRef = useRef(activity);
   activityRef.current = activity;
 
   const withPos = neurons.filter(hasPosition);
   const n = withPos.length;
-  const neuronIdsKey = useMemo(
-    () =>
-      neurons
-        .filter(hasPosition)
-        .map((p) => p.root_id)
-        .sort()
-        .join(','),
-    [neurons]
-  );
 
-  // Fingerprint of root_id + positions and sides so plot recreates when identity or coordinates/sides change
-  const positionsFingerprint = useMemo(() => {
+  const plotCreationKey = useMemo(() => {
+    if (n === 0) return '';
     const list = neurons.filter(hasPosition);
-    if (list.length === 0) return '';
-    return list
+    const neuronIdsKey = list.map((p) => p.root_id).sort().join(',');
+    const positionsFingerprint = list
       .map((p) => `${p.root_id},${p.x},${p.y},${p.z},${(p.side ?? '').toLowerCase()}`)
       .sort()
       .join('|');
-  }, [neurons]);
+    return `${n}-${neuronIdsKey}-${positionsFingerprint}`;
+  }, [neurons, n]);
 
-  const plotCreationKey = n > 0 ? `${n}-${neuronIdsKey}-${positionsFingerprint}` : '';
-
-  // Initial plot when neuron set (with positions) is available — do NOT depend on visible so we don't purge/recreate on connect toggle
   useEffect(() => {
     if (!plotRef.current || n === 0 || !plotCreationKey) return;
 
-    plotKeyRef.current = plotCreationKey;
     const x = withPos.map((p) => p.x);
     const y = withPos.map((p) => p.y);
     const z = withPos.map((p) => p.z);
-    const ids = withPos.map((p) => p.root_id);
-    idsRef.current = ids;
-    const sidesForRef = withPos.map((p) => (p.side ?? '').toLowerCase());
-    sidesRef.current = sidesForRef;
-
     const minX = Math.min(...x);
     const maxX = Math.max(...x);
     const minY = Math.min(...y);
@@ -117,165 +76,21 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
     const ys = y.map((v) => (v - cy) / scale);
     const zs = z.map((v) => (v - cz) / scale);
 
-    const color = computeMarkerColors(ids, activity, sidesForRef);
-    const text = computeHoverText(ids, activity, sidesForRef);
+    const ids = withPos.map((p) => p.root_id);
+    const sides = withPos.map((p) => (p.side ?? '').toLowerCase());
 
-    const traces: Plotly.Data[] = [
-      {
-        type: 'scatter3d',
-        x: xs,
-        y: ys,
-        z: zs,
-        mode: 'markers',
-        marker: {
-          size: 3,
-          color,
-          colorscale: [
-            [0, '#888888'],
-            [0.3, '#4a7de8'],
-            [0.5, '#e8b84a'],
-            [0.7, '#e85a4a'],
-            [1, '#ff8c7a'],
-          ],
-          cmin: 0,
-          cmax: 1,
-          showscale: false,
-          line: { width: 0 },
-        },
-        hoverinfo: 'text',
-        text,
-      } as Plotly.Data,
-    ];
+    const manager = createBrainPlotManager(() => activityRef.current, WORLD_LAYOUT_OPTIONS);
+    managerRef.current = manager;
+    manager.mount(plotRef.current, ids, sides, xs, ys, zs);
 
-    const layout: Partial<Plotly.Layout> = {
-      autosize: true,
-      margin: { l: 0, r: 0, t: 0, b: 0 },
-      paper_bgcolor: 'rgba(10,10,18,0.85)',
-      plot_bgcolor: 'rgba(10,10,18,0.9)',
-      font: { color: '#aaa', size: 10 },
-      showlegend: false,
-      uirevision: 'brain-activity',
-      scene: {
-        xaxis: { visible: false, range: [-1.2, 1.2] },
-        yaxis: { visible: false, range: [-1.2, 1.2] },
-        zaxis: { visible: false, range: [-1.2, 1.2] },
-        bgcolor: 'rgba(10,10,18,0)',
-        camera: { eye: { x: 0.2, y: -0.2, z: 0.5 } },
-        aspectmode: 'cube',
-        dragmode: 'orbit',
-      },
-    };
-
-    const el = plotRef.current;
-    const doResize = () => {
-      if (plotReady.current && el) Plotly.Plots?.resize(el);
-    };
-    const doRestyle = () => {
-      if (!plotRef.current || !plotReady.current || idsRef.current.length === 0) return;
-      const ids = idsRef.current;
-      const act = activityRef.current;
-      const sides = sidesRef.current;
-      const color = computeMarkerColors(ids, act, sides);
-      const text = computeHoverText(ids, act, sides);
-      Plotly.restyle(plotRef.current, { 'marker.color': [color], text: [text] }, [0]);
-    };
-    const onDown = () => { interacting.current = true; };
-    const onUp = () => {
-      interacting.current = false;
-      if (pendingResizeRef.current) {
-        pendingResizeRef.current = false;
-        doResize();
-      }
-      if (pendingRestyleRef.current) {
-        pendingRestyleRef.current = false;
-        doRestyle();
-      }
-    };
-    const touchOpts = { passive: false } as AddEventListenerOptions;
-    const keyForThisRun = plotCreationKey;
-    el.addEventListener('mousedown', onDown);
-    el.addEventListener('touchstart', onDown, touchOpts);
-    el.addEventListener('touchcancel', onUp, touchOpts);
-    window.addEventListener('mouseup', onUp);
-    window.addEventListener('touchend', onUp, touchOpts);
-    window.addEventListener('blur', onUp);
-
-    Plotly.newPlot(el, traces, layout, {
-      responsive: true,
-      displayModeBar: true,
-      displaylogo: false,
-      modeBarButtonsToRemove: ['lasso2d', 'select2d'],
-      staticPlot: false,
-    } as Record<string, unknown>).then(() => {
-      if (plotKeyRef.current === keyForThisRun) plotReady.current = true;
-    });
+    const intervalId = setInterval(() => manager.update(), UPDATE_INTERVAL_MS);
 
     return () => {
-      plotKeyRef.current = '';
-      el.removeEventListener('mousedown', onDown);
-      el.removeEventListener('touchstart', onDown, touchOpts);
-      el.removeEventListener('touchcancel', onUp, touchOpts);
-      window.removeEventListener('mouseup', onUp);
-      window.removeEventListener('touchend', onUp, touchOpts);
-      window.removeEventListener('blur', onUp);
-      Plotly.purge(el);
-      plotReady.current = false;
+      clearInterval(intervalId);
+      manager.destroy();
+      managerRef.current = null;
     };
-    /* activity and withPos intentionally omitted: plot recreation is driven by refs/fingerprint (plotCreationKey) */
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [n, plotCreationKey]);
-
-  // Resize Plotly when container changes — skip while interacting; set pending to replay on onUp
-  useEffect(() => {
-    if (!embedded || !visible) return;
-    const el = plotRef.current;
-    if (!el) return;
-    const resize = () => {
-      if (interacting.current) {
-        pendingResizeRef.current = true;
-        return;
-      }
-      if (plotReady.current && el) Plotly.Plots?.resize(el);
-    };
-    const ro = new ResizeObserver(resize);
-    ro.observe(el);
-    const t = setTimeout(resize, 300);
-    return () => {
-      ro.disconnect();
-      clearTimeout(t);
-    };
-  }, [embedded, visible]);
-
-  // Force resize when panel becomes visible — skip while interacting; set pending to replay on onUp
-  useEffect(() => {
-    if (!embedded || !visible || !containerVisible) return;
-    const el = plotRef.current;
-    if (!el) return;
-    const resize = () => {
-      if (interacting.current) {
-        pendingResizeRef.current = true;
-        return;
-      }
-      if (plotReady.current && el) Plotly.Plots?.resize(el);
-    };
-    const t1 = setTimeout(resize, 50);
-    const t2 = setTimeout(resize, 350);
-    return () => { clearTimeout(t1); clearTimeout(t2); };
-  }, [embedded, visible, containerVisible]);
-
-  // Update colors and hover text when activity changes; skip while interacting, set pending to replay on onUp
-  useEffect(() => {
-    if (!plotRef.current || !plotReady.current || !visible || idsRef.current.length === 0) return;
-    if (interacting.current) {
-      pendingRestyleRef.current = true;
-      return;
-    }
-    const ids = idsRef.current;
-    const sides = sidesRef.current;
-    const color = computeMarkerColors(ids, activity, sides);
-    const text = computeHoverText(ids, activity, sides);
-    Plotly.restyle(plotRef.current, { 'marker.color': [color], text: [text] }, [0]);
-  }, [activity, visible]);
 
   const containerStyle = embedded
     ? {

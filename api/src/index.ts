@@ -100,8 +100,7 @@ function startSim(): void {
       activities.push(state.activity);
       t = state.t;
     }
-    const activity = activities[0];
-    broadcast({ t, flies, activities, activity: activity ?? undefined, simRunning: true, sources: getSources() });
+    broadcast({ t, flies, activities, activity: activities[0] ?? undefined, simRunning: true, sources: getSources() });
     connectionStep += 1;
     if (connectionStep % STEP_LOG_INTERVAL === 0) {
       const first = flies[0];

@@ -112,8 +112,8 @@ function RewardsTable({
 }
 
 const FLY_THRESHOLD = 1.1; // z above this = flying (HUD mode)
-const REST_DURATION_FALLBACK = 4; // fallback when flyState.restDuration not in payload
-/** Lerp factor for fly position - matches camera target smoothness so fly and orbit stay in sync. */
+const REST_DURATION_FALLBACK = 4;
+/** Lerp factor for fly position – smooth animation when sim updates at ~30ms. */
 const FLY_POS_SMOOTH = 0.04;
 
 const WING_ANIM_NAMES = ['wing-leftAction', 'wing-rightAction'];
@@ -150,7 +150,6 @@ function FlyModel({ state }: { state: FlyState }) {
   }, [actions, isFlying]);
 
   useFrame(() => {
-    // Lerp fly position to avoid glitch when sim updates at ~30ms
     const wantX = x, wantZ = z, wantY = y;
     if (!posInit.current) {
       smoothedPosRef.current.set(wantX, wantZ, wantY);
@@ -454,15 +453,15 @@ export default function FlyViewer() {
         }
         return;
       }
-      const data = event as { flies?: FlyState[]; fly?: FlyState; activity?: Record<string, number>; activities?: (Record<string, number> | undefined)[]; error?: string; sources?: WorldSource[] };
+      const data = event as { t?: number; flies?: FlyState[]; fly?: FlyState; activity?: Record<string, number>; activities?: (Record<string, number> | undefined)[]; error?: string; sources?: WorldSource[] };
       if (data.error) setError(data.error);
       if (data.sources && Array.isArray(data.sources)) setSources(data.sources);
       if (!data.error) {
         if (Array.isArray(data.flies)) setFlies(data.flies);
         else if (data.fly) setFlies([data.fly]);
         if (Array.isArray(data.activities)) setActivities(data.activities);
-        if (data.activity) setActivity(data.activity);
-        else if (data.activity !== undefined) setActivity({});
+        if (data.activity != null) setActivity(data.activity);
+        else if (data.activity === undefined && data.activities?.[0] != null) setActivity(data.activities[0] ?? {});
       }
     });
     return unsub;

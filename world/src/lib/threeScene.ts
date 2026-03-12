@@ -138,7 +138,7 @@ export function initThreeScene(
     obj.traverse((o) => {
       if (o instanceof THREE.Mesh) {
         o.geometry?.dispose();
-        if (Array.isArray(o.material)) o.material.forEach((m) => m.dispose());
+        if (Array.isArray(o.material)) o.material.forEach((m) => { m.dispose(); });
         else o.material?.dispose();
       }
     });
@@ -180,7 +180,7 @@ export function initThreeScene(
       inst.group.traverse((o) => {
         if (o instanceof THREE.Mesh) {
           o.geometry?.dispose();
-          if (Array.isArray(o.material)) o.material.forEach((m) => m.dispose());
+          if (Array.isArray(o.material)) o.material.forEach((m) => { m.dispose(); });
           else o.material?.dispose();
         }
       });
@@ -372,13 +372,13 @@ export function initThreeScene(
     groundMat.dispose();
     container.removeChild(renderer.domElement);
     for (const inst of flyInstances) {
-      inst.group.traverse((o) => {
-        if (o instanceof THREE.Mesh) {
-          o.geometry?.dispose();
-          if (Array.isArray(o.material)) o.material.forEach((m) => m.dispose());
-          else o.material?.dispose();
-        }
-      });
+      disposeObject3D(inst.group);
     }
+    for (const c of sourcesGroup.children.slice()) {
+      sourcesGroup.remove(c);
+      disposeObject3D(c);
+    }
+    if (flyTemplate) disposeObject3D(flyTemplate);
+    if (appleTemplate) disposeObject3D(appleTemplate);
   };
 }

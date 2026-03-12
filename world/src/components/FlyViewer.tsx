@@ -2,12 +2,12 @@ import { useRef, useState, useEffect, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { WorldSource } from '../../../api/src/world';
 import { subscribeSim, type FlyState } from '../lib/simWsClient';
-import { type Snapshot } from '../lib/flyInterpolation';
+import { type Snapshot, REST_DURATION_FALLBACK } from '../lib/flyInterpolation';
 import { getApiBase } from '../lib/constants';
 import { BrainOverlay, type NeuronWithPosition } from './BrainOverlay';
 import { ConnectButton } from './ConnectButton';
 import { BuyFlyModal } from './BuyFlyModal';
-import { initThreeScene, type InterpolationDebugStats } from '../lib/threeScene';
+import { initThreeScene, type InterpolationDebugStats, type CameraMode } from '../lib/threeScene';
 import { DebugOverlay } from './DebugOverlay';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
 import './FlyViewer.css';
@@ -110,10 +110,7 @@ function RewardsTable({
   );
 }
 
-const REST_DURATION_FALLBACK = 4;
 const FLY_THRESHOLD = 1.1;
-
-type CameraMode = 'god' | 'fly';
 
 function shortId(id: string): string {
   if (id.length <= 12) return id;
@@ -786,7 +783,7 @@ export default function FlyViewer() {
             <div className="fly-viewer__brain-content">
               <div style={{ color: '#888', marginBottom: 6 }}>Brain activity — Fly {selectedFlyIndex + 1} (viewing)</div>
               <div className="fly-viewer__brain-plot">
-                <BrainOverlay neurons={neuronsWithPositions} activity={activityForSelected} visible={connected} embedded containerVisible={brainPanelOpen} />
+                <BrainOverlay neurons={neuronsWithPositions} activity={activityForSelected} visible={connected} embedded />
               </div>
             </div>
           </div>

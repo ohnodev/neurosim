@@ -14,7 +14,7 @@ export default defineConfig({
     },
   },
   server: {
-    allowedHosts: ['nonlosable-concha-noncontemptuously.ngrok-free.dev'],
+    allowedHosts: process.env.NGROK_HOST ? [process.env.NGROK_HOST] : true,
     proxy: {
       '/api': { target: 'http://localhost:3001', changeOrigin: true },
     },

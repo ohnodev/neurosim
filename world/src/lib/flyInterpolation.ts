@@ -51,9 +51,11 @@ export function lerpFlyState(a: FlyState, b: FlyState, alpha: number, zAlpha?: n
  * @param frameDt Time between a and b (b.t - a.t)
  * @param extT How far past b to extrapolate (tDisplay - b.t)
  */
+const EXTRAPOLATE_MAX_RATE = 2; // Cap extrapolation to avoid unbounded coordinates
+
 export function extrapolateFlyState(a: FlyState, b: FlyState, frameDt: number, extT: number): FlyState {
   if (frameDt <= 0) return b;
-  const rate = extT / frameDt;
+  const rate = Math.min(EXTRAPOLATE_MAX_RATE, Math.max(0, extT / frameDt));
   return {
     x: (b.x ?? 0) + ((b.x ?? 0) - (a.x ?? 0)) * rate,
     y: (b.y ?? 0) + ((b.y ?? 0) - (a.y ?? 0)) * rate,

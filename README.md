@@ -77,3 +77,7 @@ cd world && npm install && npm run dev
 npm test          # API unit tests + smoke (Vite build, optional API/PM2)
 npm run test:api  # API unit tests only
 ```
+
+## Ngrok
+
+For tunnels, run `npm run ngrok`. Set `NGROK_DOMAIN` for a custom domain (e.g. `NGROK_DOMAIN=your-domain.ngrok-free.app npm run ngrok`). If unset, ngrok starts without `--domain`. For the world dev server, set `NGROK_HOST` to your ngrok host when using ngrok (adds it to Vite's `allowedHosts`).

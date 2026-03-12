@@ -38,7 +38,7 @@ function fetchJson(url) {
 }
 
 async function main() {
-  let failures = [];
+  const failures = [];
 
   const { samples } = await fetchJson(`${BASE}/api/debug/positions?clear=1`).catch((e) => {
     console.error('Failed to fetch positions:', e.message);
@@ -78,7 +78,7 @@ async function main() {
 
   if (failures.length > 0) {
     console.error('Smoothness check FAILED:');
-    failures.slice(0, 10).forEach((f) => console.error('  ' + f));
+    failures.slice(0, 10).forEach((f) => { console.error('  ' + f); });
     if (failures.length > 10) console.error(`  ... and ${failures.length - 10} more`);
     process.exit(1);
   }

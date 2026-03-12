@@ -16,7 +16,11 @@ const DEFAULT_CAMERA: SceneCamera = {
 };
 
 export function getDefaultCamera(): SceneCamera {
-  return { ...DEFAULT_CAMERA };
+  return {
+    eye: { ...DEFAULT_CAMERA.eye },
+    center: { ...DEFAULT_CAMERA.center },
+    up: { ...DEFAULT_CAMERA.up },
+  };
 }
 
 function getLayout(gd: HTMLElement): { scene?: { camera?: SceneCamera } } | undefined {

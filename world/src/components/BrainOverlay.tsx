@@ -16,8 +16,6 @@ interface BrainOverlayProps {
   visible?: boolean;
   /** When true, overlay fills its container (no absolute positioning). */
   embedded?: boolean;
-  /** When true, container is visible (e.g. panel expanded). Triggers resize after expand. */
-  containerVisible?: boolean;
 }
 
 function hasPosition(n: NeuronWithPosition): n is NeuronWithPosition & { x: number; y: number; z: number } {

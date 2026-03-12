@@ -25,8 +25,8 @@ export function DebugOverlay({ debugStatsRef, connected, forceShow = false }: De
     rangeEnd: number;
     memoryUsed: number | null;
     memoryTotal: number | null;
-    wsLatencyMs: number | null;
-  }>({ fps: 0, bufferLen: 0, tDisplay: 0, speed: 1, rangeStart: 0, rangeEnd: 0, memoryUsed: null, memoryTotal: null, wsLatencyMs: null });
+    msSinceLastMessage: number | null;
+  }>({ fps: 0, bufferLen: 0, tDisplay: 0, speed: 1, rangeStart: 0, rangeEnd: 0, memoryUsed: null, memoryTotal: null, msSinceLastMessage: null });
 
   useEffect(() => {
     if (!forceShow && import.meta.env?.DEV !== true) return;
@@ -34,7 +34,7 @@ export function DebugOverlay({ debugStatsRef, connected, forceShow = false }: De
       const d = debugStatsRef.current;
       const perf = typeof performance !== 'undefined' ? (performance as { memory?: { usedJSHeapSize: number; totalJSHeapSize: number } }).memory : undefined;
       const lastMsg = getLastMessageTime();
-      const wsLatencyMs = lastMsg > 0 ? Date.now() - lastMsg : null;
+      const msSinceLastMessage = lastMsg > 0 ? Date.now() - lastMsg : null;
 
       setStats({
         fps: d?.fps ?? 0,
@@ -45,7 +45,7 @@ export function DebugOverlay({ debugStatsRef, connected, forceShow = false }: De
         rangeEnd: d?.rangeEnd ?? 0,
         memoryUsed: perf?.usedJSHeapSize ?? null,
         memoryTotal: perf?.totalJSHeapSize ?? null,
-        wsLatencyMs,
+        msSinceLastMessage,
       });
     }, 200);
     return () => clearInterval(interval);
@@ -75,7 +75,7 @@ export function DebugOverlay({ debugStatsRef, connected, forceShow = false }: De
       <div>Buffer: {stats.bufferLen} frames</div>
       <div>tDisplay: {stats.tDisplay.toFixed(2)}s | speed: {stats.speed.toFixed(3)}</div>
       <div>Range: [{stats.rangeStart.toFixed(2)} .. {stats.rangeEnd.toFixed(2)}]</div>
-      <div>WS: {connected ? (stats.wsLatencyMs != null ? `${stats.wsLatencyMs}ms ago` : '—') : 'disconnected'}</div>
+      <div>WS: {connected ? (stats.msSinceLastMessage != null ? `${stats.msSinceLastMessage}ms ago` : '—') : 'disconnected'}</div>
       {stats.memoryUsed != null && (
         <div>Mem: {formatBytes(stats.memoryUsed)} / {formatBytes(stats.memoryTotal ?? 0)}</div>
       )}

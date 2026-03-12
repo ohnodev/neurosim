@@ -156,7 +156,7 @@ export function BrainPlot() {
       manager.destroy();
       managerRef.current = null;
     };
-  }, [n, dataFingerprint]);
+  }, [neurons, n, dataFingerprint]);
 
   return (
     <div className="brain-plot">

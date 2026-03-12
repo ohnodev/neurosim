@@ -16,7 +16,7 @@
     "test:api": "cd api && npm run test",
     "test:smoke": "node scripts/smoke-test.mjs",
     "test:smoothness": "node scripts/check-smoothness.mjs",
-    "ngrok": "ngrok http 3001 --domain=nonlosable-concha-noncontemptuously.ngrok-free.dev"
+    "ngrok": "ngrok http 3001 ${NGROK_DOMAIN:+--domain=$NGROK_DOMAIN}"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",

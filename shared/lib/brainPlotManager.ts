@@ -95,6 +95,7 @@ export function createBrainPlotManager(
   } as Record<string, unknown>;
   let resizeTimeoutId: ReturnType<typeof setTimeout> | null = null;
   let resizeObserver: ResizeObserver | null = null;
+  let onRelayoutRef: ((ev: Record<string, unknown>) => void) | null = null;
 
   function doUpdate(): void {
     if (!el || !plotReady || ids.length === 0) return;
@@ -268,6 +269,7 @@ export function createBrainPlotManager(
       const next = cameraFromRelayout(ev, cameraRef);
       if (next) cameraRef = next;
     };
+    onRelayoutRef = onRelayout;
 
     const Plotly = getPlotly();
     const plotPromise = Plotly.newPlot(container, traces, layout, config);
@@ -286,6 +288,10 @@ export function createBrainPlotManager(
 
   function destroy(): void {
     if (!el) return;
+    if (onRelayoutRef) {
+      (el as unknown as { off?: (e: string, fn: (ev: Record<string, unknown>) => void) => void }).off?.('plotly_relayout', onRelayoutRef);
+      onRelayoutRef = null;
+    }
     if (resizeTimeoutId != null) {
       clearTimeout(resizeTimeoutId);
       resizeTimeoutId = null;
@@ -305,6 +311,9 @@ export function createBrainPlotManager(
     el = null;
     ids = [];
     sides = [];
+    xs = [];
+    ys = [];
+    zs = [];
     plotReady = false;
     interacting = false;
     pendingRestyle = false;

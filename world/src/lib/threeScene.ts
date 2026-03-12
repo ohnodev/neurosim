@@ -144,9 +144,22 @@ export function initThreeScene(
     });
   }
 
+  /** Clone object tree and give each mesh its own geometry/material so dispose doesn't break shared refs. */
+  function cloneWithOwnResources(obj: THREE.Object3D): THREE.Object3D {
+    const clone = obj.clone(true);
+    clone.traverse((o) => {
+      if (o instanceof THREE.Mesh) {
+        if (o.geometry) o.geometry = o.geometry.clone();
+        if (Array.isArray(o.material)) o.material = o.material.map((m) => m.clone());
+        else if (o.material) o.material = o.material.clone();
+      }
+    });
+    return clone;
+  }
+
   function createSourceObject(s: WorldSource): THREE.Object3D {
     if (s.type === 'food' && appleTemplate) {
-      const clone = appleTemplate.clone(true);
+      const clone = cloneWithOwnResources(appleTemplate);
       clone.scale.setScalar(1.2);
       return clone;
     }
@@ -186,7 +199,7 @@ export function initThreeScene(
       });
     }
     while (flyInstances.length < count && flyTemplate && flyClips.length > 0) {
-      const clone = flyTemplate.clone(true);
+      const clone = cloneWithOwnResources(flyTemplate) as THREE.Group;
       clone.scale.setScalar(FLY_SCALE);
       const instMixer = new THREE.AnimationMixer(clone);
       mixers.push(instMixer);
@@ -256,6 +269,9 @@ export function initThreeScene(
           rangeEnd: buf[buf.length - 1]?.t ?? 0,
         };
     } else {
+      flyStates = [];
+      refs.interpolatedBySimRef.current = [];
+      refs.debugStatsRef.current = null;
       const fallbackSources = refs.sourcesRef.current;
       if (fallbackSources !== lastSources) {
         lastSources = fallbackSources;

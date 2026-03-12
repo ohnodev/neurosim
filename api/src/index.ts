@@ -60,9 +60,10 @@ function restoreDeployFromStore(): void {
 }
 let simRunning = false;
 let simIntervalId: ReturnType<typeof setInterval> | null = null;
-/** 250ms interval: send 8 frames every 250ms (4x/sec); client keeps 1s buffer for smooth interpolation */
+/** 250ms interval; client keeps 1s buffer for smooth interpolation */
+const SIM_FPS = 30;
 const BATCH_MS = 250;
-const FRAMES_PER_BATCH = 8;
+const FRAMES_PER_BATCH = Math.round(SIM_FPS * BATCH_MS / 1000);
 let connectionStep = 0;
 
 const wsClients = new Set<import('ws').WebSocket>();
@@ -87,7 +88,7 @@ function startSim(): void {
     }
   }, 10_000);
   simIntervalId = setInterval(() => {
-    const dt = 1 / 30;
+    const dt = 1 / SIM_FPS;
     const frames: { t: number; flies: ReturnType<typeof sims[0]['getState']>['fly'][]; activities: (Record<string, number> | undefined)[]; activity?: Record<string, number>; sources: WorldSource[] }[] = [];
     for (let i = 0; i < FRAMES_PER_BATCH; i++) {
       const flies: ReturnType<typeof sims[0]['getState']>['fly'][] = [];
@@ -164,16 +165,19 @@ if (DEBUG_POSITIONS_ENABLED) {
         return;
       }
       const ts = Date.now();
+      const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
       for (const s of samples) {
-        if (typeof s?.tDisplay !== 'number' || typeof s?.x !== 'number' || typeof s?.y !== 'number') continue;
+        if (typeof s?.tDisplay !== 'number' || !Number.isFinite(s.tDisplay) ||
+            typeof s?.x !== 'number' || !Number.isFinite(s.x) ||
+            typeof s?.y !== 'number' || !Number.isFinite(s.y)) continue;
         positionSamples.push({
           tDisplay: s.tDisplay,
-          delta: s.delta ?? 0,
-          alpha: s.alpha ?? 0,
+          delta: num(s.delta),
+          alpha: num(s.alpha),
           x: s.x,
           y: s.y,
-          z: s.z ?? 0,
-          buf: s.buf ?? 0,
+          z: num(s.z),
+          buf: num(s.buf),
           ts,
         });
         if (positionSamples.length > POSITION_BUFFER_MAX) positionSamples.shift();
@@ -304,8 +308,8 @@ wss.on('connection', (ws) => {
   const flies = sims.map((s) => s.getState().fly);
   const activities = sims.map((s) => s.getState().activity);
   const firstState = sims[0]?.getState();
-  ws.send(JSON.stringify({
-    frames: [{ t: firstState?.t ?? 0, flies, activities, activity: activities[0] }],
+    ws.send(JSON.stringify({
+    frames: [{ t: firstState?.t ?? 0, flies, activities, activity: activities[0], sources: getSources() }],
     simRunning,
     sources: getSources(),
   }));

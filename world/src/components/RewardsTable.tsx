@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { formatEth, safeAmountWei, shortAddr } from '../lib/utils';
 
 export interface RewardsTableEntry {
@@ -12,7 +12,7 @@ interface RewardsTableProps {
   history: RewardsTableEntry[];
 }
 
-export function RewardsTable({ history }: RewardsTableProps) {
+function RewardsTableInner({ history }: RewardsTableProps) {
   const [copiedTx, setCopiedTx] = useState<string | null>(null);
   const copyTx = async (txHash: string) => {
     try {
@@ -67,3 +67,5 @@ export function RewardsTable({ history }: RewardsTableProps) {
     </div>
   );
 }
+
+export const RewardsTable = React.memo(RewardsTableInner);

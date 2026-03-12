@@ -12,7 +12,7 @@ import { initThreeScene, type InterpolationDebugStats, type CameraMode, type Sim
 import { DebugOverlay } from './DebugOverlay';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
 import { formatEth, getHealthColor, getHungerColor } from '../lib/utils';
-import { RewardsTable, type RewardsTableEntry } from './RewardsTable';
+import { RewardsTable } from './RewardsTable';
 import './FlyViewer.css';
 
 const FLY_THRESHOLD = 1.1;
@@ -399,20 +399,7 @@ const SimStatusSlot = React.memo(React.forwardRef<HTMLDivElement>(function SimSt
   return <div ref={ref} />;
 }));
 
-/** Throttles rewards table updates to once every 3s to reduce re-renders. */
-function RewardsTableThrottled({ history }: { history: RewardsTableEntry[] }) {
-  const [displayHistory, setDisplayHistory] = useState(history);
-  const historyRef = useRef(history);
-  historyRef.current = history;
-  useEffect(() => {
-    setDisplayHistory(historyRef.current);
-    const id = setInterval(() => setDisplayHistory(historyRef.current), 3000);
-    return () => clearInterval(id);
-  }, []);
-  return <RewardsTable history={displayHistory} />;
-}
-
-/** Status tab body. Uses throttled data (1s) to reduce re-renders. */
+/** Status tab body. Uses throttled data (500ms) to reduce re-renders. */
 function StatusPanelStatusContent({
   deployed,
   selectedFlyIndex,
@@ -422,7 +409,7 @@ function StatusPanelStatusContent({
   selectedFlyIndex: number;
   neuronLabels: Record<string, string>;
 }) {
-  const { flies, activities, activity } = useSimDisplayDataThrottled(1000);
+  const { flies, activities, activity } = useSimDisplayDataThrottled(500);
   const simIndexForSelected = deployed[selectedFlyIndex];
   const firstValidSlot = Object.keys(deployed)
     .map((k) => parseInt(k, 10))
@@ -638,6 +625,11 @@ export default function FlyViewer() {
     },
     refetchInterval: connected ? 15_000 : false,
   });
+
+  const rewardsHistoryForTable = useMemo(
+    () => rewardsHistory ?? [],
+    [rewardsHistory]
+  );
 
   const { data: flyStatsData } = useQuery({
     queryKey: ['fly-stats', address ?? ''],
@@ -1025,7 +1017,7 @@ export default function FlyViewer() {
                   neuronLabels={neuronLabels}
                 />
               ) : (
-                <RewardsTableThrottled history={rewardsHistory ?? []} />
+                <RewardsTable history={rewardsHistoryForTable} />
               )}
             </div>
           </div>

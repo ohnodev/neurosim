@@ -1,13 +1,11 @@
 import { useCallback, useEffect, useRef, useMemo } from 'react';
-import Plotly from 'plotly.js-dist-min';
+import Plotly from '../lib/plotlyPatched';
 import { getSceneCamera } from '../../../shared/lib/plotlySceneCamera';
 import {
   computeMarkerColors,
   computeHoverTexts,
   BRAIN_PLOT_COLORSCALE,
 } from '../../../shared/lib/brainPlotColors';
-import { isTouchDevice } from '../../../shared/lib/isTouchDevice';
-
 export interface NeuronWithPosition {
   root_id: string;
   side?: string;
@@ -162,11 +160,9 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
     const onUp = () => {
       interacting.current = false;
       if (pendingResizeRef.current) pendingResizeRef.current = false;
-      if (pendingRestyleRef.current && !isTouchDevice()) {
+      if (pendingRestyleRef.current) {
         pendingRestyleRef.current = false;
         setTimeout(() => preserveCameraRestyle(false, activityRef.current), 0);
-      } else if (pendingRestyleRef.current) {
-        pendingRestyleRef.current = false;
       }
     };
     const onDblClick = (e: Event) => {
@@ -194,7 +190,7 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
       .then(() => {
         if (plotKeyRef.current === keyForThisRun) plotReady.current = true;
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         if (import.meta.env?.DEV) {
           console.error('[BrainOverlay] Plotly.newPlot failed:', err);
         }
@@ -255,10 +251,8 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
   }, [embedded, visible, containerVisible]);
 
   // Update colors and hover text when activity changes; restyle only, never relayout camera (avoids mobile snap-back)
-  // Skip restyle on touch devices — Plotly restyle resets 3D camera on mobile.
   useEffect(() => {
     if (!plotRef.current || !plotReady.current || !visible || idsRef.current.length === 0) return;
-    if (isTouchDevice()) return;
     if (interacting.current) {
       pendingRestyleRef.current = true;
       return;

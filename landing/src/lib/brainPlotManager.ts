@@ -3,15 +3,13 @@
  * Owns all Plotly calls; preserves scene camera after restyle (fixes mobile reset).
  * responsive: false + debounced resize to avoid viewport-driven relayout on mobile.
  */
-import Plotly from 'plotly.js-dist-min';
+import Plotly from './plotlyPatched';
 import { getSceneCamera } from '../../../shared/lib/plotlySceneCamera';
 import {
   computeColor,
   computeHoverText,
   BRAIN_PLOT_COLORSCALE,
 } from '../../../shared/lib/brainPlotColors';
-import { isTouchDevice } from '../../../shared/lib/isTouchDevice';
-
 export type GetActivity = () => Record<string, number>;
 
 const RESIZE_DEBOUNCE_MS = 400;
@@ -46,11 +44,9 @@ export function createBrainPlotManager(getActivity: GetActivity) {
 
   function onUp(): void {
     interacting = false;
-    if (pendingRestyle && !isTouchDevice()) {
+    if (pendingRestyle) {
       pendingRestyle = false;
       setTimeout(() => doRestyle(false), 0);
-    } else if (pendingRestyle) {
-      pendingRestyle = false;
     }
   }
 

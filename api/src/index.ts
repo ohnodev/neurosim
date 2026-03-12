@@ -151,6 +151,49 @@ app.get('/api/connectome', (_, res) => {
 
 app.get('/api/health', (_, res) => res.json({ ok: true }));
 
+/** Debug position buffer for smoothness testing; only when DEBUG_POSITIONS=1 */
+const DEBUG_POSITIONS_ENABLED = process.env.DEBUG_POSITIONS === '1';
+const POSITION_BUFFER_MAX = 1000;
+const positionSamples: Array<{ tDisplay: number; delta: number; alpha: number; x: number; y: number; z: number; buf: number; ts: number }> = [];
+
+if (DEBUG_POSITIONS_ENABLED) {
+  app.post('/api/debug/positions', (req, res) => {
+    try {
+      const samples = req.body?.samples;
+      if (!Array.isArray(samples)) {
+        res.status(400).json({ error: 'Expected { samples: [...] }' });
+        return;
+      }
+      const ts = Date.now();
+      for (const s of samples) {
+        if (typeof s?.tDisplay !== 'number' || typeof s?.x !== 'number' || typeof s?.y !== 'number') continue;
+        positionSamples.push({
+          tDisplay: s.tDisplay,
+          delta: s.delta ?? 0,
+          alpha: s.alpha ?? 0,
+          x: s.x,
+          y: s.y,
+          z: s.z ?? 0,
+          buf: s.buf ?? 0,
+          ts,
+        });
+        if (positionSamples.length > POSITION_BUFFER_MAX) positionSamples.shift();
+      }
+      res.json({ ok: true, count: positionSamples.length });
+    } catch (err) {
+      console.error('[debug] positions error:', err);
+      res.status(500).json({ error: 'Failed to record positions' });
+    }
+  });
+
+  app.get('/api/debug/positions', (req, res) => {
+    const clear = req.query.clear === '1';
+    const samples = [...positionSamples];
+    if (clear) positionSamples.length = 0;
+    res.json({ samples });
+  });
+}
+
 app.get('/api/neurons', (_, res) => {
   const neurons = connectome.neurons.map((n) => ({
     root_id: n.root_id,

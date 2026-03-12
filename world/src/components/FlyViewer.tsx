@@ -693,9 +693,8 @@ export default function FlyViewer() {
           activitiesRef.current = [];
         } else if (event._event === 'closed') {
           setConnected(false);
-        } else if (event._event === 'error') {
-          setError(event.error);
         }
+        /* omit websocket 'error' - sim status already shows "Connecting…" and transient errors are misleading */
         return;
       }
       const data = event as {
@@ -708,7 +707,7 @@ export default function FlyViewer() {
         error?: string;
         sources?: WorldSource[];
       };
-      if (data.error) setError(data.error);
+      /* omit data.error - sim status shows connection state; transient errors are misleading */
       if (data.sources && Array.isArray(data.sources) && !(Array.isArray(data.frames) && data.frames.length > 0)) setSources(data.sources);
       if (!data.error) {
         const buf = snapshotBufferRef.current;

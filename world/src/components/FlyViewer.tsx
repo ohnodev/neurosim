@@ -24,6 +24,29 @@ function shortId(id: string): string {
 
 const DEFAULT_FLY: FlyState = { x: 0, y: 0, z: 0.35, heading: 0, t: 0, hunger: 100 };
 
+function resolveEffectiveSimIndex(
+  flies: FlyState[],
+  deployed: Record<number, number | null | undefined>,
+  selectedFlyIndex: number,
+  deployedSlotKeys?: number[]
+): number | undefined {
+  const simIndexForSelected = deployed[selectedFlyIndex];
+  const keys =
+    deployedSlotKeys ??
+    Object.keys(deployed)
+      .map((k) => parseInt(k, 10))
+      .filter((n) => !Number.isNaN(n) && deployed[n] != null)
+      .sort((a, b) => a - b);
+  const firstValidSlot = keys.find(
+    (slotIdx) => deployed[slotIdx] != null && flies[deployed[slotIdx]!] != null
+  );
+  return simIndexForSelected != null && flies[simIndexForSelected] != null
+    ? simIndexForSelected
+    : firstValidSlot != null
+      ? deployed[firstValidSlot]!
+      : undefined;
+}
+
 interface ClaimedFly {
   id: string;
   method: string;
@@ -201,15 +224,21 @@ const FlySlotDeploy = React.memo(function FlySlotDeploy({
   deployFly: (slotIndex: number) => Promise<void>;
   setError: React.Dispatch<React.SetStateAction<string | null>>;
 }) {
+  const [isDeploying, setIsDeploying] = useState(false);
   return (
     <button
       type="button"
       className="fly-viewer__fly-slot-empty"
+      disabled={isDeploying}
       onClick={async () => {
+        if (isDeploying) return;
+        setIsDeploying(true);
         try {
           await deployFly(index);
         } catch (e) {
           setError(e instanceof Error ? `Deploy failed: ${e.message}` : 'Deploy failed');
+        } finally {
+          setIsDeploying(false);
         }
       }}
     >
@@ -228,22 +257,9 @@ const CameraToggleSlot = React.memo(
   >(function CameraToggleSlot({ deployed, selectedFlyIndex }, ref) {
     const { effectiveSimIndex } = useSimDisplayDataSelector(
       useCallback(
-        (data: { flies: FlyState[] }) => {
-          const flies = data.flies;
-          const simIndexForSelected = deployed[selectedFlyIndex];
-          const firstValidSlot = Object.keys(deployed)
-            .map((k) => parseInt(k, 10))
-            .filter((n) => !Number.isNaN(n) && deployed[n] != null)
-            .sort((a, b) => a - b)
-            .find((slotIdx) => deployed[slotIdx] != null && flies[deployed[slotIdx]!] != null);
-          const eff =
-            simIndexForSelected != null && flies[simIndexForSelected] != null
-              ? simIndexForSelected
-              : firstValidSlot != null
-                ? deployed[firstValidSlot]!
-                : undefined;
-          return { effectiveSimIndex: eff };
-        },
+        (data: { flies: FlyState[] }) => ({
+          effectiveSimIndex: resolveEffectiveSimIndex(data.flies, deployed, selectedFlyIndex),
+        }),
         [deployed, selectedFlyIndex]
       )
     );
@@ -341,16 +357,8 @@ function SimStateSync({
   followSimIndexRef: React.MutableRefObject<number | undefined>;
 }) {
   const { flies } = useSimDisplayData();
+  const effectiveSimIndex = resolveEffectiveSimIndex(flies, deployed, selectedFlyIndex, deployedSlotKeys);
   const simIndexForSelected = deployed[selectedFlyIndex];
-  const firstValidSlot = deployedSlotKeys.find(
-    (slotIdx) => deployed[slotIdx] != null && flies[deployed[slotIdx]!] != null
-  );
-  const effectiveSimIndex =
-    simIndexForSelected != null && flies[simIndexForSelected] != null
-      ? simIndexForSelected
-      : firstValidSlot != null
-        ? deployed[firstValidSlot]!
-        : undefined;
   const focusedFly =
     effectiveSimIndex != null && flies[effectiveSimIndex]
       ? flies[effectiveSimIndex]!
@@ -410,18 +418,7 @@ function StatusPanelStatusContent({
   neuronLabels: Record<string, string>;
 }) {
   const { flies, activities, activity } = useSimDisplayDataThrottled(500);
-  const simIndexForSelected = deployed[selectedFlyIndex];
-  const firstValidSlot = Object.keys(deployed)
-    .map((k) => parseInt(k, 10))
-    .filter((n) => !Number.isNaN(n) && deployed[n] != null)
-    .sort((a, b) => a - b)
-    .find((slotIdx) => deployed[slotIdx] != null && flies[deployed[slotIdx]!] != null);
-  const effectiveSimIndex =
-    simIndexForSelected != null && flies[simIndexForSelected] != null
-      ? simIndexForSelected
-      : firstValidSlot != null
-        ? deployed[firstValidSlot]!
-        : undefined;
+  const effectiveSimIndex = resolveEffectiveSimIndex(flies, deployed, selectedFlyIndex);
   const focusedFly =
     effectiveSimIndex != null && flies[effectiveSimIndex]
       ? flies[effectiveSimIndex]!

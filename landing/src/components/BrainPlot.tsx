@@ -25,17 +25,20 @@ export function BrainPlot() {
   const [neurons, setNeurons] = useState<NeuronWithPosition[]>([]);
   const [activity, setActivity] = useState<Record<string, number>>({});
   const activityRef = useRef(activity);
-  activityRef.current = activity;
+  useEffect(() => {
+    activityRef.current = activity;
+  }, [activity]);
 
   useEffect(() => {
+    const controller = new AbortController();
     const fetchNeurons = async () => {
-      const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 4000);
       try {
         const res = await fetch(`${getApiBase()}/api/neurons`, {
           signal: controller.signal,
         });
         clearTimeout(timeoutId);
+        if (controller.signal.aborted) return;
         if (res.ok) {
           const data = await res.json();
           const list = Array.isArray(data.neurons) ? data.neurons : data;
@@ -51,14 +54,16 @@ export function BrainPlot() {
           return;
         }
       } catch (e) {
+        if (controller.signal.aborted) return;
         if (typeof AbortSignal !== 'undefined' && e instanceof Error && e.name === 'AbortError') {
           /* timeout, fall through to fallback */
         }
         /* fallback */
       }
       try {
-        const res = await fetch('/neurons.json');
+        const res = await fetch('/neurons.json', { signal: controller.signal });
         const data = await res.json();
+        if (controller.signal.aborted) return;
         const list = Array.isArray(data) ? data : data.neurons ?? [];
         setNeurons(
           list.map((n: NeuronWithPosition) => ({
@@ -70,10 +75,11 @@ export function BrainPlot() {
           })),
         );
       } catch {
-        setNeurons([]);
+        if (!controller.signal.aborted) setNeurons([]);
       }
     };
     fetchNeurons();
+    return () => controller.abort();
   }, []);
 
   useEffect(() => {

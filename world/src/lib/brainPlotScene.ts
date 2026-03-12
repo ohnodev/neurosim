@@ -85,22 +85,27 @@ export function initBrainPlot(
       const withPos = list.filter(hasPosition);
       if (withPos.length === 0) return;
 
-      const x = withPos.map((p) => p.x!);
-      const y = withPos.map((p) => p.y!);
-      const z = withPos.map((p) => p.z!);
-      const minX = Math.min(...x);
-      const maxX = Math.max(...x);
-      const minY = Math.min(...y);
-      const maxY = Math.max(...y);
-      const minZ = Math.min(...z);
-      const maxZ = Math.max(...z);
+      let minX = Infinity, maxX = -Infinity;
+      let minY = Infinity, maxY = -Infinity;
+      let minZ = Infinity, maxZ = -Infinity;
+      for (const p of withPos) {
+        const px = p.x!, py = p.y!, pz = p.z!;
+        if (px < minX) minX = px; if (px > maxX) maxX = px;
+        if (py < minY) minY = py; if (py > maxY) maxY = py;
+        if (pz < minZ) minZ = pz; if (pz > maxZ) maxZ = pz;
+      }
       const cx = (minX + maxX) / 2;
       const cy = (minY + maxY) / 2;
       const cz = (minZ + maxZ) / 2;
       const scale = Math.max(maxX - minX, maxY - minY, maxZ - minZ, 1);
-      const xs = x.map((v) => (v - cx) / scale);
-      const ys = y.map((v) => (v - cy) / scale);
-      const zs = z.map((v) => (v - cz) / scale);
+      const xs: number[] = [];
+      const ys: number[] = [];
+      const zs: number[] = [];
+      for (const p of withPos) {
+        xs.push((p.x! - cx) / scale);
+        ys.push((p.y! - cy) / scale);
+        zs.push((p.z! - cz) / scale);
+      }
       const ids = withPos.map((p) => p.root_id);
       const sides = withPos.map((p) => (p.side ?? '').toLowerCase());
 

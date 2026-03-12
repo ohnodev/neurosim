@@ -178,9 +178,11 @@ function App() {
             </p>
             <div className="youtube-embed-wrap">
               <iframe
-                src="https://www.youtube.com/embed/tV874dr02yQ"
+                src="https://www.youtube-nocookie.com/embed/tV874dr02yQ"
                 title="NeuroSim project overview"
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                loading="lazy"
+                referrerPolicy="no-referrer"
+                allow="encrypted-media; picture-in-picture"
                 allowFullScreen
                 className="youtube-embed"
               />

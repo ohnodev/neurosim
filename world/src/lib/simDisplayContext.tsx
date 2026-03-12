@@ -62,6 +62,8 @@ export function useSimDisplayData(): {
   return data;
 }
 
+const MIN_THROTTLE_MS = 50;
+
 /**
  * Throttled version - only updates every intervalMs. Use for components
  * that show live data but don't need 5 updates/sec.
@@ -71,6 +73,7 @@ export function useSimDisplayDataThrottled(intervalMs: number): {
   activity: Record<string, number>;
   activities: (Record<string, number> | undefined)[];
 } {
+  const safeInterval = Math.max(MIN_THROTTLE_MS, Math.floor(Number(intervalMs) || 0));
   const { latestFliesRef, activityRef, activitiesRef } = useSimRefs();
   const [data, setData] = useState(() => ({
     flies: latestFliesRef.current,
@@ -85,9 +88,9 @@ export function useSimDisplayDataThrottled(intervalMs: number): {
         activity: activityRef.current,
         activities: activitiesRef.current,
       });
-    }, intervalMs);
+    }, safeInterval);
     return () => clearInterval(id);
-  }, [latestFliesRef, activityRef, activitiesRef, intervalMs]);
+  }, [latestFliesRef, activityRef, activitiesRef, safeInterval]);
 
   return data;
 }

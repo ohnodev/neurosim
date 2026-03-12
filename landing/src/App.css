@@ -1279,12 +1279,19 @@
 .youtube-embed-wrap {
   position: relative;
   width: 100%;
-  padding-bottom: 56.25%;
+  aspect-ratio: 16 / 9;
+  padding-bottom: 56.25%; /* fallback for older browsers */
   border-radius: 8px;
   overflow: hidden;
   border: 1px solid rgba(99, 102, 241, 0.3);
   box-shadow: 0 0 24px rgba(99, 102, 241, 0.1);
   background: rgba(0, 0, 0, 0.4);
+}
+
+@supports (aspect-ratio: 1 / 1) {
+  .youtube-embed-wrap {
+    padding-bottom: 0;
+  }
 }
 
 .youtube-embed {

@@ -1,10 +1,15 @@
 /**
  * External plot manager for the landing brain 3D plot.
- * Owns all Plotly calls; preserves scene camera after restyle (fixes mobile reset).
- * responsive: false + debounced resize to avoid viewport-driven relayout on mobile.
+ * Preserves camera via plotly_relayout + stable uirevision; restyle + relayout with saved camera.
  */
-import Plotly from './plotlyPatched';
-import { getSceneCamera } from '../../../shared/lib/plotlySceneCamera';
+import Plotly from 'plotly.js-dist-min';
+import {
+  getSceneCamera,
+  getDefaultCamera,
+  cameraFromRelayout,
+  type SceneCamera,
+  UIREVISION,
+} from '../../../shared/lib/plotlySceneCamera';
 import {
   computeColor,
   computeHoverText,
@@ -21,21 +26,25 @@ export function createBrainPlotManager(getActivity: GetActivity) {
   let plotReady = false;
   let interacting = false;
   let pendingRestyle = false;
+  let cameraRef: SceneCamera = getDefaultCamera();
   let resizeTimeoutId: ReturnType<typeof setTimeout> | null = null;
   let resizeObserver: ResizeObserver | null = null;
   const touchOpts: AddEventListenerOptions = { passive: true };
 
-  function doRestyle(restoreCamera = true): void {
+  function doRestyle(): void {
     if (!el || !plotReady || ids.length === 0) return;
     const gd = el;
-    const savedCamera = restoreCamera ? getSceneCamera(gd) : null;
+    const live = getSceneCamera(gd);
+    if (live) cameraRef = live;
     const activity = getActivity();
     const color = ids.map((id, i) => computeColor(activity, id, sides[i] ?? ''));
     const text = ids.map((id, i) => computeHoverText(id, sides[i] ?? '', activity));
     Plotly.restyle(gd, { 'marker.color': [color], text: [text] }, [0]);
-    if (savedCamera) {
-      Plotly.relayout(gd, { 'scene.camera': savedCamera } as Record<string, unknown>);
-    }
+    Plotly.relayout(gd, {
+      'scene.camera': cameraRef,
+      'scene.uirevision': UIREVISION,
+      uirevision: UIREVISION,
+    } as Record<string, unknown>);
   }
 
   function onDown(): void {
@@ -46,7 +55,7 @@ export function createBrainPlotManager(getActivity: GetActivity) {
     interacting = false;
     if (pendingRestyle) {
       pendingRestyle = false;
-      setTimeout(() => doRestyle(false), 0);
+      setTimeout(() => doRestyle(), 0);
     }
   }
 
@@ -62,7 +71,7 @@ export function createBrainPlotManager(getActivity: GetActivity) {
       pendingRestyle = true;
       return;
     }
-    doRestyle(false);
+    doRestyle();
   }
 
   function mount(
@@ -115,13 +124,14 @@ export function createBrainPlotManager(getActivity: GetActivity) {
       plot_bgcolor: 'rgba(0,0,0,0)',
       font: { color: '#aaa', size: 10 },
       showlegend: false,
-      uirevision: 'brain-plot',
+      uirevision: UIREVISION,
       scene: {
         xaxis: { visible: false, range: [-1.2, 1.2] },
         yaxis: { visible: false, range: [-1.2, 1.2] },
         zaxis: { visible: false, range: [-1.2, 1.2] },
         bgcolor: 'rgba(0,0,0,0)',
-        camera: { eye: { x: 0.2, y: -0.2, z: 0.5 } },
+        camera: cameraRef,
+        uirevision: UIREVISION,
         aspectmode: 'cube',
         dragmode: 'orbit',
       },
@@ -148,6 +158,11 @@ export function createBrainPlotManager(getActivity: GetActivity) {
     resizeObserver = new ResizeObserver(onResize);
     resizeObserver.observe(container);
 
+    const onRelayout = (ev: Record<string, unknown>) => {
+      const next = cameraFromRelayout(ev, cameraRef);
+      if (next) cameraRef = next;
+    };
+
     const plotPromise = Plotly.newPlot(container, traces, layout, {
       responsive: false,
       displayModeBar: true,
@@ -158,6 +173,7 @@ export function createBrainPlotManager(getActivity: GetActivity) {
     plotPromise.then(() => {
       if (el && Plotly.Plots) {
         plotReady = true;
+        (el as unknown as { on?: (e: string, fn: (ev: Record<string, unknown>) => void) => void }).on?.('plotly_relayout', onRelayout);
         Plotly.Plots.resize(el);
       }
     }).catch((err) => {
@@ -191,6 +207,7 @@ export function createBrainPlotManager(getActivity: GetActivity) {
     plotReady = false;
     interacting = false;
     pendingRestyle = false;
+    cameraRef = getDefaultCamera();
   }
 
   return { mount, update, destroy };

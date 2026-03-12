@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useMemo } from 'react';
-import Plotly from '../lib/plotlyPatched';
-import { getSceneCamera } from '../../../shared/lib/plotlySceneCamera';
+import Plotly from 'plotly.js-dist-min';
+import {
+  getSceneCamera,
+  getDefaultCamera,
+  cameraFromRelayout,
+  type SceneCamera,
+  UIREVISION,
+} from '../../../shared/lib/plotlySceneCamera';
 import {
   computeMarkerColors,
   computeHoverTexts,
@@ -42,6 +48,7 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
   const pendingRestyleRef = useRef(false);
   const plotKeyRef = useRef<string>('');
   const activityRef = useRef(activity);
+  const cameraRef = useRef<SceneCamera>(getDefaultCamera());
   activityRef.current = activity;
 
   const withPos = neurons.filter(hasPosition);
@@ -69,18 +76,21 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
   const plotCreationKey = n > 0 ? `${n}-${neuronIdsKey}-${positionsFingerprint}` : '';
 
   const preserveCameraRestyle = useCallback(
-    (restoreCamera: boolean, activityData: Record<string, number>) => {
+    (activityData: Record<string, number>) => {
       const el = plotRef.current;
       if (!el || !plotReady.current || idsRef.current.length === 0) return;
-      const savedCamera = restoreCamera ? getSceneCamera(el) : null;
+      const live = getSceneCamera(el);
+      if (live) cameraRef.current = live;
       const ids = idsRef.current;
       const sides = sidesRef.current;
       const color = computeMarkerColors(ids, activityData, sides);
       const text = computeHoverTexts(ids, activityData, sides);
       Plotly.restyle(el, { 'marker.color': [color], text: [text] }, [0]);
-      if (savedCamera) {
-        Plotly.relayout(el, { 'scene.camera': savedCamera } as Record<string, unknown>);
-      }
+      Plotly.relayout(el, {
+        'scene.camera': cameraRef.current,
+        'scene.uirevision': UIREVISION,
+        uirevision: UIREVISION,
+      } as Record<string, unknown>);
     },
     []
   );
@@ -143,13 +153,14 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
       plot_bgcolor: 'rgba(10,10,18,0.9)',
       font: { color: '#aaa', size: 10 },
       showlegend: false,
-      uirevision: 'brain-activity',
+      uirevision: UIREVISION,
       scene: {
         xaxis: { visible: false, range: [-1.2, 1.2] },
         yaxis: { visible: false, range: [-1.2, 1.2] },
         zaxis: { visible: false, range: [-1.2, 1.2] },
         bgcolor: 'rgba(10,10,18,0)',
-        camera: { eye: { x: 0.2, y: -0.2, z: 0.5 } },
+        camera: cameraRef.current,
+        uirevision: UIREVISION,
         aspectmode: 'cube',
         dragmode: 'orbit',
       },
@@ -162,7 +173,7 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
       if (pendingResizeRef.current) pendingResizeRef.current = false;
       if (pendingRestyleRef.current) {
         pendingRestyleRef.current = false;
-        setTimeout(() => preserveCameraRestyle(false, activityRef.current), 0);
+        setTimeout(() => preserveCameraRestyle(activityRef.current), 0);
       }
     };
     const onDblClick = (e: Event) => {
@@ -180,6 +191,11 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
     window.addEventListener('touchend', onUp, touchOpts);
     window.addEventListener('blur', onUp);
 
+    const onRelayout = (ev: Record<string, unknown>) => {
+      const next = cameraFromRelayout(ev, cameraRef.current);
+      if (next) cameraRef.current = next;
+    };
+
     Plotly.newPlot(el, traces, layout, {
       responsive: false,
       displayModeBar: true,
@@ -188,7 +204,10 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
       staticPlot: false,
     } as Record<string, unknown>)
       .then(() => {
-        if (plotKeyRef.current === keyForThisRun) plotReady.current = true;
+        if (plotKeyRef.current === keyForThisRun) {
+          plotReady.current = true;
+          (el as unknown as { on?: (e: string, fn: (ev: Record<string, unknown>) => void) => void }).on?.('plotly_relayout', onRelayout);
+        }
       })
       .catch((err: unknown) => {
         if (import.meta.env?.DEV) {
@@ -257,7 +276,7 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
       pendingRestyleRef.current = true;
       return;
     }
-    preserveCameraRestyle(false, activity);
+    preserveCameraRestyle(activity);
   }, [activity, visible, preserveCameraRestyle]);
 
   const containerStyle = embedded

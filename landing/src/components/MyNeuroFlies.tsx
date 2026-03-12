@@ -6,7 +6,7 @@ import { useNotification } from '../contexts/NotificationContext';
 import { getApiBase } from '../lib/constants';
 import { fetchClaimConfig, fetchBalanceCheck, formatNeuroAmount } from '../lib/claimApi';
 import { parseWalletError } from '../../../shared/lib/parseWalletError';
-import { ERC20_TRANSFER_ABI } from '../../../shared/lib/claimConstants';
+import { CABAL_BUY_NEURO_URL, ERC20_TRANSFER_ABI } from '../../../shared/lib/claimConstants';
 import { BuyFlyModal } from './BuyFlyModal';
 
 interface NeuroFly {
@@ -249,7 +249,18 @@ export function MyNeuroFlies() {
         })}
       </div>
 
-      {error && <div className="neuroflies__error">{error}</div>}
+      {error && (
+        <div className="neuroflies__error">
+          {error}
+          {error.includes('Insufficient') && (
+            <div style={{ marginTop: 8 }}>
+              <a href={CABAL_BUY_NEURO_URL} target="_blank" rel="noopener noreferrer" className="neuroflies__cabal-link">
+                Buy $NEURO on The Cabal
+              </a>
+            </div>
+          )}
+        </div>
+      )}
 
       <BuyFlyModal
         isOpen={buyFlySlot !== null}

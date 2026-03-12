@@ -152,6 +152,8 @@ html, body, #root { width: 100%; height: 100%; }
 
 /* Neuroflies / Your Flies */
 .neuroflies__error { font-family: var(--font-mono); font-size: 0.8rem; color: #f87171; margin-bottom: 10px; }
+.neurosim-claim__cabal-link { font-size: 0.8rem; color: #a5b4fc; text-decoration: underline; }
+.neurosim-claim__cabal-link:hover { color: #c7d2fe; }
 .neuroflies__btn {
   font-family: var(--font-mono); font-size: 0.8rem;
   padding: 8px 12px; border-radius: 6px;

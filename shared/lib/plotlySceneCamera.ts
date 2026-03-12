@@ -1,5 +1,6 @@
 /**
- * Plotly 3D scene camera helpers. Extracts camera from plotly layout / relayout events.
+ * Shared Plotly 3D scene camera utilities.
+ * Camera lives in layout.scene.camera; use plotly_relayout to capture user changes.
  */
 export interface SceneCamera {
   eye: { x: number; y: number; z: number };
@@ -23,48 +24,44 @@ export function getDefaultCamera(): SceneCamera {
   };
 }
 
-function getLayout(gd: HTMLElement): { scene?: { camera?: SceneCamera } } | undefined {
-  if (typeof window === 'undefined') return undefined;
-  const gdAny = gd as unknown as { _fullLayout?: { scene?: { camera?: SceneCamera } } };
-  return gdAny._fullLayout;
-}
-
-export function getSceneCamera(gd: HTMLElement): SceneCamera | undefined {
-  const layout = getLayout(gd);
-  const cam = layout?.scene?.camera;
-  if (!cam || typeof cam.eye !== 'object' || typeof cam.center !== 'object' || typeof cam.up !== 'object') {
-    return undefined;
-  }
+export function getSceneCamera(gd: HTMLDivElement): SceneCamera | null {
+  const fullLayout = (gd as unknown as { _fullLayout?: { scene?: { camera?: SceneCamera } } })._fullLayout;
+  const cam = fullLayout?.scene?.camera;
+  if (!cam?.eye || !cam?.center || !cam?.up) return null;
   return {
-    eye: { x: cam.eye.x ?? 1.5, y: cam.eye.y ?? 1.5, z: cam.eye.z ?? 1.2 },
-    center: { x: cam.center.x ?? 0, y: cam.center.y ?? 0, z: cam.center.z ?? 0 },
-    up: { x: cam.up.x ?? 0, y: cam.up.y ?? 0, z: cam.up.z ?? 1 },
+    eye: { x: cam.eye.x, y: cam.eye.y, z: cam.eye.z },
+    center: { x: cam.center.x, y: cam.center.y, z: cam.center.z },
+    up: { x: cam.up.x, y: cam.up.y, z: cam.up.z },
   };
 }
 
-export function cameraFromRelayout(
-  ev: Record<string, unknown>,
-  fallback: SceneCamera
-): SceneCamera | undefined {
-  const eye = ev['scene.camera.eye'] as { x?: number; y?: number; z?: number } | undefined;
-  const center = ev['scene.camera.center'] as { x?: number; y?: number; z?: number } | undefined;
-  const up = ev['scene.camera.up'] as { x?: number; y?: number; z?: number } | undefined;
-  if (!eye && !center && !up) return undefined;
+export function cameraFromRelayout(ev: Record<string, unknown>, current: SceneCamera): SceneCamera | null {
+  const full = ev['scene.camera'] as SceneCamera | undefined;
+  if (full?.eye && full?.center && full?.up) {
+    return full;
+  }
+  const hasPartial =
+    ev['scene.camera.eye.x'] !== undefined || ev['scene.camera.eye.y'] !== undefined ||
+    ev['scene.camera.eye.z'] !== undefined || ev['scene.camera.up.x'] !== undefined ||
+    ev['scene.camera.up.y'] !== undefined || ev['scene.camera.up.z'] !== undefined ||
+    ev['scene.camera.center.x'] !== undefined || ev['scene.camera.center.y'] !== undefined ||
+    ev['scene.camera.center.z'] !== undefined;
+  if (!hasPartial) return null;
   return {
     eye: {
-      x: typeof eye?.x === 'number' ? eye.x : fallback.eye.x,
-      y: typeof eye?.y === 'number' ? eye.y : fallback.eye.y,
-      z: typeof eye?.z === 'number' ? eye.z : fallback.eye.z,
-    },
-    center: {
-      x: typeof center?.x === 'number' ? center.x : fallback.center.x,
-      y: typeof center?.y === 'number' ? center.y : fallback.center.y,
-      z: typeof center?.z === 'number' ? center.z : fallback.center.z,
+      x: (ev['scene.camera.eye.x'] as number) ?? current.eye.x,
+      y: (ev['scene.camera.eye.y'] as number) ?? current.eye.y,
+      z: (ev['scene.camera.eye.z'] as number) ?? current.eye.z,
     },
     up: {
-      x: typeof up?.x === 'number' ? up.x : fallback.up.x,
-      y: typeof up?.y === 'number' ? up.y : fallback.up.y,
-      z: typeof up?.z === 'number' ? up.z : fallback.up.z,
+      x: (ev['scene.camera.up.x'] as number) ?? current.up.x,
+      y: (ev['scene.camera.up.y'] as number) ?? current.up.y,
+      z: (ev['scene.camera.up.z'] as number) ?? current.up.z,
+    },
+    center: {
+      x: (ev['scene.camera.center.x'] as number) ?? current.center.x,
+      y: (ev['scene.camera.center.y'] as number) ?? current.center.y,
+      z: (ev['scene.camera.center.z'] as number) ?? current.center.z,
     },
   };
 }

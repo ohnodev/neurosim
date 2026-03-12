@@ -334,6 +334,7 @@ export default function FlyViewer() {
         if (event._event === 'open') {
           setConnected(true);
           setError(null);
+          snapshotBufferRef.current = [];
         } else if (event._event === 'closed') {
           setConnected(false);
         } else if (event._event === 'error') {
@@ -355,7 +356,10 @@ export default function FlyViewer() {
       if (data.sources && Array.isArray(data.sources) && !(Array.isArray(data.frames) && data.frames.length > 0)) setSources(data.sources);
       if (!data.error) {
         const buf = snapshotBufferRef.current;
+        const lastT = buf.length > 0 ? (buf[buf.length - 1]?.t ?? 0) : -Infinity;
         if (Array.isArray(data.frames) && data.frames.length > 0) {
+          const firstNewT = data.frames[0]?.t ?? 0;
+          if (firstNewT < lastT) buf.length = 0;
           for (const f of data.frames) {
             buf.push({
               t: f.t,
@@ -370,12 +374,16 @@ export default function FlyViewer() {
         } else {
           const fliesArr = Array.isArray(data.flies) ? data.flies : data.fly ? [data.fly] : null;
           if (fliesArr) {
+            const newT = data.t ?? 0;
+            if (newT < lastT) buf.length = 0;
             buf.push({
-              t: data.t ?? 0,
+              t: newT,
               flies: fliesArr,
               activities: Array.isArray(data.activities) ? data.activities : [],
               activity: data.activity ?? data.activities?.[0],
             });
+            const maxT = buf[buf.length - 1]?.t ?? 0;
+            while (buf.length > 1 && (buf[0]?.t ?? 0) < maxT - 1) buf.shift();
           }
         }
         const last = buf[buf.length - 1];

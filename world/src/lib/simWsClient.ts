@@ -14,6 +14,8 @@ export interface SimPayload {
   flies?: FlyState[];
   /** Legacy: single fly (prefer flies when present) */
   fly?: FlyState;
+  /** Batched frames: server sends 10 frames every 300ms */
+  frames?: { t: number; flies: FlyState[]; activities?: (Record<string, number> | undefined)[]; activity?: Record<string, number> }[];
   activity?: Record<string, number>;
   /** Per-fly brain activity (index = sim index) */
   activities?: (Record<string, number> | undefined)[];

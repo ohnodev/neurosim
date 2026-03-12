@@ -14,7 +14,8 @@
     "docs:deploy": "cd docs && npm run deploy",
     "test": "npm run test:api && npm run test:smoke && npm run landing:build && npm run docs:build",
     "test:api": "cd api && npm run test",
-    "test:smoke": "node scripts/smoke-test.mjs"
+    "test:smoke": "node scripts/smoke-test.mjs",
+    "ngrok": "ngrok http 3001 --domain=nonlosable-concha-noncontemptuously.ngrok-free.dev"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",

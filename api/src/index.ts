@@ -60,6 +60,8 @@ function restoreDeployFromStore(): void {
 }
 let simRunning = false;
 let simIntervalId: ReturnType<typeof setInterval> | null = null;
+const BATCH_MS = 300;
+const FRAMES_PER_BATCH = 10;
 const STEP_LOG_INTERVAL = 150;
 let connectionStep = 0;
 
@@ -86,27 +88,32 @@ function startSim(): void {
   }, 10_000);
   simIntervalId = setInterval(() => {
     const dt = 1 / 30;
-    const flies: ReturnType<typeof sims[0]['getState']>['fly'][] = [];
-    const activities: (Record<string, number> | undefined)[] = [];
-    let t = 0;
-    for (let i = 0; i < sims.length; i++) {
-      const state = sims[i].step(dt);
-      if (state.eatenFoodId) {
-        removeFood(state.eatenFoodId);
-        recordFoodCollected(i);
-        console.log('[world] fly', i, 'ate food', state.eatenFoodId);
+    const frames: { t: number; flies: ReturnType<typeof sims[0]['getState']>['fly'][]; activities: (Record<string, number> | undefined)[]; activity?: Record<string, number> }[] = [];
+    for (let i = 0; i < FRAMES_PER_BATCH; i++) {
+      const flies: ReturnType<typeof sims[0]['getState']>['fly'][] = [];
+      const activities: (Record<string, number> | undefined)[] = [];
+      let t = 0;
+      for (let j = 0; j < sims.length; j++) {
+        const state = sims[j].step(dt);
+        if (state.eatenFoodId) {
+          removeFood(state.eatenFoodId);
+          recordFoodCollected(j);
+          console.log('[world] fly', j, 'ate food', state.eatenFoodId);
+        }
+        flies.push(state.fly);
+        activities.push(state.activity);
+        t = state.t;
       }
-      flies.push(state.fly);
-      activities.push(state.activity);
-      t = state.t;
+      frames.push({ t, flies, activities, activity: activities[0] });
     }
-    broadcast({ t, flies, activities, activity: activities[0] ?? undefined, simRunning: true, sources: getSources() });
+    broadcast({ frames, simRunning: true, sources: getSources() });
     connectionStep += 1;
-    if (connectionStep % STEP_LOG_INTERVAL === 0) {
-      const first = flies[0];
-      console.log('[sim] t=', t.toFixed(1), 'flies=', flies.length, first ? `first=(${first.x?.toFixed(2)},${first.y?.toFixed(2)})` : '', 'clients=', wsClients.size);
+    if (connectionStep % 15 === 0) {
+      const last = frames[frames.length - 1];
+      const first = last?.flies[0];
+      console.log('[sim] t=', last?.t.toFixed(1), 'flies=', last?.flies.length ?? 0, first ? `first=(${first.x?.toFixed(2)},${first.y?.toFixed(2)})` : '', 'clients=', wsClients.size);
     }
-  }, 1000 / 30);
+  }, BATCH_MS);
   rewardFlushIntervalId = setInterval(() => void flushRewards(), 60_000);
   console.log('[sim] started');
 }
@@ -252,11 +259,10 @@ wss.on('connection', (ws) => {
   console.log('[ws] client connected, total=', wsClients.size);
 
   const flies = sims.map((s) => s.getState().fly);
+  const activities = sims.map((s) => s.getState().activity);
   const firstState = sims[0]?.getState();
   ws.send(JSON.stringify({
-    t: firstState?.t ?? 0,
-    flies,
-    activity: firstState?.activity,
+    frames: [{ t: firstState?.t ?? 0, flies, activities, activity: activities[0] }],
     simRunning,
     sources: getSources(),
   }));

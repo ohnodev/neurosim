@@ -505,7 +505,7 @@ export default function FlyViewer() {
   };
 
   return (
-    <div style={{ width: '100vw', height: '100vh', position: 'relative' }}>
+    <div style={{ width: '100vw', height: '100vh', position: 'relative', pointerEvents: 'none' }}>
       {/* Canvas lives outside React (appended to body in useEffect) - no React re-renders */}
       {/* UI layer - always on top, always visible */}
       <div style={{ position: 'fixed', inset: 0, zIndex: 1000, pointerEvents: 'none' }}>

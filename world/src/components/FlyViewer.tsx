@@ -258,7 +258,6 @@ export default function FlyViewer() {
   const latestFliesRef = useRef<FlyState[]>([]);
   const debugStatsRef = useRef<InterpolationDebugStats | null>(null);
   const interpolatedBySimRef = useRef<FlyState[]>([]);
-  const canvasContainerRef = useRef<HTMLDivElement>(null);
   const cameraModeRef = useRef<CameraMode>('god');
   const followSimIndexRef = useRef<number | undefined>(undefined);
   const sourcesRef = useRef<WorldSource[]>([]);
@@ -469,8 +468,9 @@ export default function FlyViewer() {
   }, [cameraMode, effectiveSimIndex, sources]);
 
   useEffect(() => {
-    const container = canvasContainerRef.current;
-    if (!container) return;
+    const container = document.createElement('div');
+    container.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;z-index:0';
+    document.body.insertBefore(container, document.body.firstChild);
 
     const dispose = initThreeScene(container, {
       latestFliesRef,
@@ -482,7 +482,10 @@ export default function FlyViewer() {
       snapshotBufferRef,
       targetRef: cameraTargetRef,
     });
-    return dispose;
+    return () => {
+      dispose();
+      container.remove();
+    };
   }, []);
 
   const deployFly = async (slotIndex: number) => {
@@ -503,11 +506,7 @@ export default function FlyViewer() {
 
   return (
     <div style={{ width: '100vw', height: '100vh', position: 'relative' }}>
-      {/* Vanilla Three.js canvas - WS updates write to refs, no React re-renders */}
-      <div
-        ref={canvasContainerRef}
-        style={{ position: 'absolute', inset: 0, zIndex: 0, width: '100%', height: '100%' }}
-      />
+      {/* Canvas lives outside React (appended to body in useEffect) - no React re-renders */}
       {/* UI layer - always on top, always visible */}
       <div style={{ position: 'fixed', inset: 0, zIndex: 1000, pointerEvents: 'none' }}>
         <DebugOverlay debugStatsRef={debugStatsRef} connected={connected} />

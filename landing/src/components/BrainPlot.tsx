@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import Plotly from 'plotly.js-dist-min';
 import { getApiBase } from '../lib/constants';
+import { createBrainPlotManager } from '../lib/brainPlotManager';
 
 export interface NeuronWithPosition {
   root_id: string;
@@ -23,13 +23,11 @@ function hasPosition(
   );
 }
 
+const UPDATE_INTERVAL_MS = 150;
+
 export function BrainPlot() {
   const plotRef = useRef<HTMLDivElement>(null);
-  const plotReady = useRef(false);
-  const idsRef = useRef<string[]>([]);
-  const sidesRef = useRef<string[]>([]);
-  const interacting = useRef(false);
-  const pendingRestyleRef = useRef(false);
+  const managerRef = useRef<ReturnType<typeof createBrainPlotManager> | null>(null);
   const [neurons, setNeurons] = useState<NeuronWithPosition[]>([]);
   const [activity, setActivity] = useState<Record<string, number>>({});
   const activityRef = useRef(activity);
@@ -114,16 +112,13 @@ export function BrainPlot() {
   const withPos = neurons.filter(hasPosition);
   const n = withPos.length;
 
+  // Manager owns all Plotly calls; we only mount once when we have a container and data, then push updates via timer (not React effects on activity).
   useEffect(() => {
     if (!plotRef.current || n === 0) return;
 
     const x = withPos.map((p) => p.x);
     const y = withPos.map((p) => p.y);
     const z = withPos.map((p) => p.z);
-    const ids = withPos.map((p) => p.root_id);
-    idsRef.current = ids;
-    sidesRef.current = withPos.map((p) => (p.side ?? '').toLowerCase());
-
     const minX = Math.min(...x);
     const maxX = Math.max(...x);
     const minY = Math.min(...y);
@@ -138,136 +133,24 @@ export function BrainPlot() {
     const ys = y.map((v) => (v - cy) / scale);
     const zs = z.map((v) => (v - cz) / scale);
 
-    const act = ids.map((id) => activity[id] ?? 0);
-    const color = ids.map((_, i) => {
-      const a = act[i];
-      if (a <= 0) return 0;
-      const s = (withPos[i]?.side ?? '').toLowerCase();
-      if (s === 'left') return 0.3 + a * 0.4;
-      if (s === 'right') return 0.7 + a * 0.3;
-      return 0.5 + a * 0.2;
-    });
+    const ids = withPos.map((p) => p.root_id);
+    const sides = withPos.map((p) => (p.side ?? '').toLowerCase());
 
-    const traces: Plotly.Data[] = [
-      {
-        type: 'scatter3d',
-        x: xs,
-        y: ys,
-        z: zs,
-        mode: 'markers',
-        marker: {
-          size: 3,
-          color,
-          colorscale: [
-            [0, '#888888'],
-            [0.3, '#4a7de8'],
-            [0.5, '#e8b84a'],
-            [0.7, '#e85a4a'],
-            [1, '#ff8c7a'],
-          ],
-          cmin: 0,
-          cmax: 1,
-          showscale: false,
-          line: { width: 0 },
-        },
-        hoverinfo: 'text',
-        text: ids.map((id, i) => {
-          const p = withPos[i];
-          return `ID: ${id.slice(-8)}\n${p.side ?? 'center'} | ${(act[i] * 100).toFixed(0)}%`;
-        }),
-      } as Plotly.Data,
-    ];
+    const getActivity = () => activityRef.current;
+    const manager = createBrainPlotManager(getActivity);
+    managerRef.current = manager;
+    manager.mount(plotRef.current, ids, sides, xs, ys, zs);
 
-    const layout: Partial<Plotly.Layout> = {
-      autosize: true,
-      margin: { l: 0, r: 0, t: 0, b: 0 },
-      paper_bgcolor: 'rgba(0,0,0,0)',
-      plot_bgcolor: 'rgba(0,0,0,0)',
-      font: { color: '#aaa', size: 10 },
-      showlegend: false,
-      uirevision: 'brain-plot',
-      scene: {
-        xaxis: { visible: false, range: [-1.2, 1.2] },
-        yaxis: { visible: false, range: [-1.2, 1.2] },
-        zaxis: { visible: false, range: [-1.2, 1.2] },
-        bgcolor: 'rgba(0,0,0,0)',
-        camera: { eye: { x: 0.2, y: -0.2, z: 0.5 } },
-        aspectmode: 'cube',
-        dragmode: 'orbit',
-      },
-    };
-
-    const el = plotRef.current;
-    const doRestyle = () => {
-      if (!plotRef.current || !plotReady.current || idsRef.current.length === 0) return;
-      const ids = idsRef.current;
-      const sides = sidesRef.current;
-      const act = activityRef.current;
-      const color = ids.map((id, i) => {
-        const a = act[id] ?? 0;
-        if (a <= 0) return 0;
-        const s = sides[i] ?? '';
-        if (s === 'left') return 0.3 + a * 0.4;
-        if (s === 'right') return 0.7 + a * 0.3;
-        return 0.5 + a * 0.2;
-      });
-      Plotly.restyle(plotRef.current, { 'marker.color': [color] }, [0]);
-    };
-    const onDown = () => { interacting.current = true; };
-    const onUp = () => {
-      interacting.current = false;
-      if (pendingRestyleRef.current) {
-        pendingRestyleRef.current = false;
-        doRestyle();
-      }
-    };
-    const touchOpts = { passive: false } as AddEventListenerOptions;
-    el.addEventListener('mousedown', onDown);
-    el.addEventListener('touchstart', onDown, touchOpts);
-    el.addEventListener('touchcancel', onUp, touchOpts);
-    window.addEventListener('mouseup', onUp);
-    window.addEventListener('touchend', onUp, touchOpts);
-    window.addEventListener('blur', onUp);
-
-    Plotly.newPlot(el, traces, layout, {
-      responsive: true,
-      displayModeBar: true,
-      displaylogo: false,
-      modeBarButtonsToRemove: ['lasso2d', 'select2d'],
-      staticPlot: false,
-    } as Record<string, unknown>).then(() => {
-      plotReady.current = true;
-    });
+    const intervalId = setInterval(() => {
+      manager.update();
+    }, UPDATE_INTERVAL_MS);
 
     return () => {
-      el.removeEventListener('mousedown', onDown);
-      el.removeEventListener('touchstart', onDown, touchOpts);
-      el.removeEventListener('touchcancel', onUp, touchOpts);
-      window.removeEventListener('mouseup', onUp);
-      window.removeEventListener('touchend', onUp, touchOpts);
-      window.removeEventListener('blur', onUp);
-      Plotly.purge(el);
-      plotReady.current = false;
+      clearInterval(intervalId);
+      manager.destroy();
+      managerRef.current = null;
     };
   }, [n, withPos[0]?.root_id ?? '']);
-
-  useEffect(() => {
-    if (!plotRef.current || !plotReady.current || idsRef.current.length === 0) return;
-    if (interacting.current) {
-      pendingRestyleRef.current = true;
-      return;
-    }
-    const sides = sidesRef.current;
-    const color = idsRef.current.map((id, i) => {
-      const a = activity[id] ?? 0;
-      if (a <= 0) return 0;
-      const s = sides[i] ?? '';
-      if (s === 'left') return 0.3 + a * 0.4;
-      if (s === 'right') return 0.7 + a * 0.3;
-      return 0.5 + a * 0.2;
-    });
-    Plotly.restyle(plotRef.current, { 'marker.color': [color] }, [0]);
-  }, [activity]);
 
   return (
     <div className="brain-plot">

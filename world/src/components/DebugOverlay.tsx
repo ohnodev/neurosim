@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { getLastMessageTime } from '../lib/simWsClient';
-import type { InterpolationDebugStats } from './InterpolatedFlies';
+import type { InterpolationDebugStats } from '../lib/threeScene';
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;

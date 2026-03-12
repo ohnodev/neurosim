@@ -1,8 +1,5 @@
-import { useRef, useState, useEffect, useMemo, memo, Suspense } from 'react';
+import { useRef, useState, useEffect, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Canvas } from '@react-three/fiber';
-import { useGLTF } from '@react-three/drei';
-import * as THREE from 'three';
 import type { WorldSource } from '../../../api/src/world';
 import { subscribeSim, type FlyState } from '../lib/simWsClient';
 import { type Snapshot } from '../lib/flyInterpolation';
@@ -10,8 +7,7 @@ import { getApiBase } from '../lib/constants';
 import { BrainOverlay, type NeuronWithPosition } from './BrainOverlay';
 import { ConnectButton } from './ConnectButton';
 import { BuyFlyModal } from './BuyFlyModal';
-import { FlyCameraContext, FlyCameraController, type CameraMode } from './FlyCameraController';
-import { InterpolatedFlies, type InterpolationDebugStats } from './InterpolatedFlies';
+import { initThreeScene, type InterpolationDebugStats } from '../lib/threeScene';
 import { DebugOverlay } from './DebugOverlay';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
 import './FlyViewer.css';
@@ -114,88 +110,10 @@ function RewardsTable({
   );
 }
 
-const FLY_THRESHOLD = 1.1;
 const REST_DURATION_FALLBACK = 4;
+const FLY_THRESHOLD = 1.1;
 
-const ARENA_SIZE = 48;
-
-function GroundPlane() {
-  return (
-    <mesh position={[0, 0, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
-      <planeGeometry args={[ARENA_SIZE, ARENA_SIZE]} />
-      <meshStandardMaterial color="#2d5a27" roughness={0.9} metalness={0.05} />
-    </mesh>
-  );
-}
-
-function FoodModel() {
-  const { scene } = useGLTF('/models/low-poly_apple/scene.gltf');
-  const cloned = useMemo(() => scene.clone(true), [scene]);
-  return (
-    <primitive object={cloned} scale={1.2} rotation={[0, 0, 0]} />
-  );
-}
-
-function WorldSources({ sources }: { sources: WorldSource[] }) {
-  return (
-    <>
-      {sources.map((s) => (
-        <group key={s.id} position={[s.x, s.z, s.y]}>
-          {s.type === 'food' ? (
-            <Suspense fallback={
-              <mesh>
-                <sphereGeometry args={[0.8, 24, 24]} />
-                <meshStandardMaterial color="#e8a838" />
-              </mesh>
-            }>
-              <FoodModel />
-            </Suspense>
-          ) : (
-            <mesh>
-              <sphereGeometry args={[0.8, 24, 24]} />
-              <meshStandardMaterial
-                color="#88ccff"
-                emissive="#4488ff"
-                emissiveIntensity={0.6}
-              />
-            </mesh>
-          )}
-        </group>
-      ))}
-    </>
-  );
-}
-
-const WorldCanvasScene = memo(function WorldCanvasScene({
-  contextValue,
-  bufferRef,
-  latestFliesRef,
-  debugStatsRef,
-  interpolatedBySimRef,
-  sources,
-}: {
-  contextValue: React.ComponentProps<typeof FlyCameraContext.Provider>['value'];
-  bufferRef: React.MutableRefObject<Snapshot[]>;
-  latestFliesRef: React.MutableRefObject<FlyState[]>;
-  debugStatsRef: React.MutableRefObject<InterpolationDebugStats | null>;
-  interpolatedBySimRef: React.MutableRefObject<FlyState[]>;
-  sources: WorldSource[];
-}) {
-  return (
-    <FlyCameraContext.Provider value={contextValue!}>
-      <Canvas camera={{ position: [8, 6, 8], fov: 50 }} gl={{ outputColorSpace: THREE.SRGBColorSpace }}>
-        <ambientLight intensity={0.8} />
-        <directionalLight position={[10, 10, 5]} intensity={1.2} castShadow />
-        <FlyCameraController />
-        <Suspense fallback={null}>
-          <InterpolatedFlies bufferRef={bufferRef} latestFliesRef={latestFliesRef} debugStatsRef={debugStatsRef} interpolatedBySimRef={interpolatedBySimRef} />
-        </Suspense>
-        <WorldSources sources={sources} />
-        <GroundPlane />
-      </Canvas>
-    </FlyCameraContext.Provider>
-  );
-});
+type CameraMode = 'god' | 'fly';
 
 function shortId(id: string): string {
   if (id.length <= 12) return id;
@@ -343,6 +261,10 @@ export default function FlyViewer() {
   const latestFliesRef = useRef<FlyState[]>([]);
   const debugStatsRef = useRef<InterpolationDebugStats | null>(null);
   const interpolatedBySimRef = useRef<FlyState[]>([]);
+  const canvasContainerRef = useRef<HTMLDivElement>(null);
+  const cameraModeRef = useRef<CameraMode>('god');
+  const followSimIndexRef = useRef<number | undefined>(undefined);
+  const sourcesRef = useRef<WorldSource[]>([]);
 
   const { data: myFlies = [] } = useQuery({
     queryKey: ['my-flies', address ?? ''],
@@ -540,16 +462,27 @@ export default function FlyViewer() {
     }
   }, [effectiveSimIndex, focusedFly.x, focusedFly.y, focusedFly.z, focusedFly.heading]);
 
-  const flyCameraContextValue = useMemo(
-    () => ({
-      mode: cameraMode,
-      setMode: setCameraMode,
-      targetRef: cameraTargetRef,
+  useEffect(() => {
+    cameraModeRef.current = cameraMode;
+    followSimIndexRef.current = effectiveSimIndex;
+    sourcesRef.current = sources;
+  }, [cameraMode, effectiveSimIndex, sources]);
+
+  useEffect(() => {
+    const container = canvasContainerRef.current;
+    if (!container) return;
+
+    const dispose = initThreeScene(container, {
+      latestFliesRef,
       interpolatedBySimRef,
-      followSimIndex: effectiveSimIndex,
-    }),
-    [cameraMode, effectiveSimIndex]
-  );
+      debugStatsRef,
+      cameraModeRef,
+      followSimIndexRef,
+      sourcesRef,
+      targetRef: cameraTargetRef,
+    });
+    return dispose;
+  }, []);
 
   const deployFly = async (slotIndex: number) => {
     if (!address) return;
@@ -569,17 +502,11 @@ export default function FlyViewer() {
 
   return (
     <div style={{ width: '100vw', height: '100vh', position: 'relative' }}>
-      {/* Canvas layer - memoized so WS updates (setFlies) don't re-render the 3D scene */}
-      <div style={{ position: 'absolute', inset: 0, zIndex: 0, isolation: 'isolate' }}>
-        <WorldCanvasScene
-          contextValue={flyCameraContextValue}
-          bufferRef={snapshotBufferRef}
-          latestFliesRef={latestFliesRef}
-          debugStatsRef={debugStatsRef}
-          interpolatedBySimRef={interpolatedBySimRef}
-          sources={sources}
-        />
-      </div>
+      {/* Vanilla Three.js canvas - WS updates write to refs, no React re-renders */}
+      <div
+        ref={canvasContainerRef}
+        style={{ position: 'absolute', inset: 0, zIndex: 0, width: '100%', height: '100%' }}
+      />
       {/* UI layer - always on top, always visible */}
       <div style={{ position: 'fixed', inset: 0, zIndex: 1000, pointerEvents: 'none' }}>
         <DebugOverlay debugStatsRef={debugStatsRef} connected={connected} />

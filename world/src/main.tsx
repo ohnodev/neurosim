@@ -3,12 +3,13 @@ const orig = HTMLCanvasElement.prototype.getContext;
 // @ts-expect-error - monkey-patch; orig has overloads that make assignment strict
 HTMLCanvasElement.prototype.getContext = function (contextId: string, options?: object) {
   if (contextId !== '2d') {
-    // @ts-expect-error - getContext overloads vary
+    // @ts-expect-error - getContext overloads vary by contextId
     return orig.call(this, contextId, options);
   }
   const base = (options && typeof options === 'object') ? (options as Record<string, unknown>) : {};
   const opts = { ...base };
   if (!('willReadFrequently' in opts)) opts.willReadFrequently = true;
+  // @ts-expect-error - getContext overload; our opts may extend CanvasRenderingContext2DSettings
   return orig.call(this, contextId, opts);
 };
 

@@ -959,21 +959,24 @@ export default function FlyViewer() {
     []
   );
 
-  const deployFly = async (slotIndex: number) => {
-    if (!address) return;
-    const r = await fetch(`${getApiBase()}/api/deploy`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ address: address.toLowerCase(), slotIndex }),
-    });
-    if (!r.ok) {
-      const err = await r.json().catch(() => ({}));
-      throw new Error(err.error ?? 'Deploy failed');
-    }
-    queryClient.invalidateQueries({ queryKey: ['my-deployed', address] });
-    queryClient.invalidateQueries({ queryKey: ['fly-stats', address] });
-    refetchDeployed();
-  };
+  const deployFly = useCallback(
+    async (slotIndex: number) => {
+      if (!address) return;
+      const r = await fetch(`${getApiBase()}/api/deploy`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ address: address.toLowerCase(), slotIndex }),
+      });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        throw new Error(err.error ?? 'Deploy failed');
+      }
+      queryClient.invalidateQueries({ queryKey: ['my-deployed', address] });
+      queryClient.invalidateQueries({ queryKey: ['fly-stats', address] });
+      refetchDeployed();
+    },
+    [address, queryClient, refetchDeployed]
+  );
 
   return (
     <SimRefsProvider value={simRefs}>

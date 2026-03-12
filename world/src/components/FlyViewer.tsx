@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect, useMemo } from 'react';
+import { useRef, useState, useEffect, useMemo, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { WorldSource } from '../../../api/src/world';
 import { subscribeSim, type FlyState } from '../lib/simWsClient';
@@ -263,6 +263,7 @@ export default function FlyViewer() {
   const cameraModeRef = useRef<CameraMode>('god');
   const followSimIndexRef = useRef<number | undefined>(undefined);
   const sourcesRef = useRef<WorldSource[]>([]);
+  const activityForBrainRef = useRef<Record<string, number>>({});
 
   const { data: myFlies = [] } = useQuery({
     queryKey: ['my-flies', address ?? ''],
@@ -449,6 +450,25 @@ export default function FlyViewer() {
       ? (activities[effectiveSimIndex] ?? {})
       : activity;
   const activeCount = Object.keys(activityForSelected).length;
+
+  const getBrainActivity = useCallback(() => activityForBrainRef.current, []);
+
+  useEffect(() => {
+    const prev = activityForBrainRef.current;
+    const keysPrev = Object.keys(prev);
+    const keysNext = Object.keys(activityForSelected);
+    if (keysPrev.length !== keysNext.length) {
+      activityForBrainRef.current = activityForSelected;
+      return;
+    }
+    for (const k of keysNext) {
+      if (prev[k] !== activityForSelected[k]) {
+        activityForBrainRef.current = activityForSelected;
+        return;
+      }
+    }
+  }, [activityForSelected]);
+
   const topActivity = Object.entries(activityForSelected)
     .sort(([, a], [, b]) => b - a)
     .slice(0, 10);
@@ -806,7 +826,7 @@ export default function FlyViewer() {
             <div className="fly-viewer__brain-content">
               <div style={{ color: '#888', marginBottom: 6 }}>Brain activity — Fly {selectedFlyIndex + 1} (viewing)</div>
               <div className="fly-viewer__brain-plot">
-                <BrainOverlay neurons={neuronsWithPositions} activity={activityForSelected} visible={connected} embedded />
+                <BrainOverlay neurons={neuronsWithPositions} getActivity={getBrainActivity} visible={connected} embedded />
               </div>
             </div>
           </div>

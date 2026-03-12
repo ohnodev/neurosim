@@ -12,7 +12,7 @@ export interface NeuronWithPosition {
 
 interface BrainOverlayProps {
   neurons: NeuronWithPosition[];
-  activity: Record<string, number>;
+  getActivity: () => Record<string, number>;
   visible?: boolean;
   /** When true, overlay fills its container (no absolute positioning). */
   embedded?: boolean;
@@ -34,11 +34,9 @@ const WORLD_LAYOUT_OPTIONS = {
   sceneBgColor: 'rgba(10,10,18,0)',
 } as const;
 
-function BrainOverlayInner({ neurons, activity, visible = true, embedded = false }: BrainOverlayProps) {
+function BrainOverlayInner({ neurons, getActivity, visible = true, embedded = false }: BrainOverlayProps) {
   const plotRef = useRef<HTMLDivElement>(null);
   const managerRef = useRef<ReturnType<typeof createBrainPlotManager> | null>(null);
-  const activityRef = useRef(activity);
-  activityRef.current = activity;
 
   const withPos = neurons.filter(hasPosition);
   const n = withPos.length;
@@ -77,7 +75,7 @@ function BrainOverlayInner({ neurons, activity, visible = true, embedded = false
     const ids = withPos.map((p) => p.root_id);
     const sides = withPos.map((p) => (p.side ?? '').toLowerCase());
 
-    const manager = createBrainPlotManager(() => activityRef.current, WORLD_LAYOUT_OPTIONS);
+    const manager = createBrainPlotManager(getActivity, WORLD_LAYOUT_OPTIONS);
     managerRef.current = manager;
     manager.mount(plotRef.current, ids, sides, xs, ys, zs);
 
@@ -88,7 +86,7 @@ function BrainOverlayInner({ neurons, activity, visible = true, embedded = false
       manager.destroy();
       managerRef.current = null;
     };
-  }, [n, plotCreationKey]);
+  }, [n, plotCreationKey, getActivity]);
 
   const containerStyle = embedded
     ? {
@@ -150,17 +148,7 @@ function BrainOverlayInner({ neurons, activity, visible = true, embedded = false
   );
 }
 
-function areActivityEqual(a: Record<string, number>, b: Record<string, number>): boolean {
-  const keysA = Object.keys(a);
-  const keysB = Object.keys(b);
-  if (keysA.length !== keysB.length) return false;
-  for (const k of keysA) {
-    if (a[k] !== b[k]) return false;
-  }
-  return true;
-}
-
 export const BrainOverlay = React.memo(BrainOverlayInner, (prev, next) => {
   return prev.visible === next.visible && prev.embedded === next.embedded &&
-    prev.neurons === next.neurons && areActivityEqual(prev.activity, next.activity);
+    prev.neurons === next.neurons && prev.getActivity === next.getActivity;
 });

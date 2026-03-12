@@ -1,5 +1,5 @@
 import 'plotly-cabal';
-import { useEffect, useRef, useMemo } from 'react';
+import React, { useEffect, useRef, useMemo } from 'react';
 import { createBrainPlotManager } from '../../../shared/lib/brainPlotManager';
 
 export interface NeuronWithPosition {
@@ -34,7 +34,7 @@ const WORLD_LAYOUT_OPTIONS = {
   sceneBgColor: 'rgba(10,10,18,0)',
 } as const;
 
-export function BrainOverlay({ neurons, activity, visible = true, embedded = false }: BrainOverlayProps) {
+function BrainOverlayInner({ neurons, activity, visible = true, embedded = false }: BrainOverlayProps) {
   const plotRef = useRef<HTMLDivElement>(null);
   const managerRef = useRef<ReturnType<typeof createBrainPlotManager> | null>(null);
   const activityRef = useRef(activity);
@@ -149,3 +149,18 @@ export function BrainOverlay({ neurons, activity, visible = true, embedded = fal
     </div>
   );
 }
+
+function areActivityEqual(a: Record<string, number>, b: Record<string, number>): boolean {
+  const keysA = Object.keys(a);
+  const keysB = Object.keys(b);
+  if (keysA.length !== keysB.length) return false;
+  for (const k of keysA) {
+    if (a[k] !== b[k]) return false;
+  }
+  return true;
+}
+
+export const BrainOverlay = React.memo(BrainOverlayInner, (prev, next) => {
+  return prev.visible === next.visible && prev.embedded === next.embedded &&
+    prev.neurons === next.neurons && areActivityEqual(prev.activity, next.activity);
+});

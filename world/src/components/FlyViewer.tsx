@@ -25,8 +25,10 @@ function getHealthColor(health: number): string {
   return '#c44';
 }
 
-/** Display tick interval (ms); must match server broadcast and simWsClient DISPLAY_TICK_MS. */
-const DISPLAY_TICK_MS = 250;
+/** Display 1s behind real time – buffer for smooth animation (basemarket-style). */
+const DISPLAY_DELAY_SEC = 1;
+/** Keep ~6s of snapshots at 250ms rate. */
+const SNAPSHOT_BUFFER_MAX = 24;
 
 function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
@@ -408,9 +410,8 @@ export default function FlyViewer() {
   const [statusTab, setStatusTab] = useState<'status' | 'rewards'>('status');
   const [brainPanelOpen, setBrainPanelOpen] = useState(() => !isMobileDefault());
 
-  const simFromRef = useRef<{ flies: FlyState[]; activities: (Record<string, number> | undefined)[]; activity: Record<string, number> } | null>(null);
-  const simToRef = useRef<{ flies: FlyState[]; activities: (Record<string, number> | undefined)[]; activity: Record<string, number> } | null>(null);
-  const simTransitionStartRef = useRef<number>(0);
+  /** Time-indexed snapshot buffer for display delay + smooth interpolation (basemarket-style). */
+  const snapshotBufferRef = useRef<{ t: number; flies: FlyState[]; activities: (Record<string, number> | undefined)[]; activity: Record<string, number> }[]>([]);
 
   const { data: myFlies = [] } = useQuery({
     queryKey: ['my-flies', address ?? ''],
@@ -491,7 +492,7 @@ export default function FlyViewer() {
         }
         return;
       }
-      const data = event as { flies?: FlyState[]; fly?: FlyState; activity?: Record<string, number>; activities?: (Record<string, number> | undefined)[]; error?: string; sources?: WorldSource[] };
+      const data = event as { t?: number; flies?: FlyState[]; fly?: FlyState; activity?: Record<string, number>; activities?: (Record<string, number> | undefined)[]; error?: string; sources?: WorldSource[] };
       if (data.error) setError(data.error);
       if (data.sources && Array.isArray(data.sources)) setSources(data.sources);
       if (!data.error) {
@@ -499,15 +500,14 @@ export default function FlyViewer() {
         const activitiesArr = Array.isArray(data.activities) ? data.activities : null;
         const act = data.activity ?? (activitiesArr?.[0]) ?? {};
         if (fliesArr) {
-          simToRef.current = {
+          const buf = snapshotBufferRef.current;
+          buf.push({
+            t: data.t ?? 0,
             flies: fliesArr,
             activities: activitiesArr ?? [],
             activity: act,
-          };
-          if (simFromRef.current == null) {
-            simFromRef.current = simToRef.current;
-            simTransitionStartRef.current = Date.now();
-          }
+          });
+          if (buf.length > SNAPSHOT_BUFFER_MAX) buf.shift();
         }
       }
     });
@@ -518,12 +518,25 @@ export default function FlyViewer() {
     let rafId: number;
     const tick = () => {
       rafId = requestAnimationFrame(tick);
-      const from = simFromRef.current;
-      const to = simToRef.current;
-      if (!from || !to) return;
-      const now = Date.now();
-      const elapsed = now - simTransitionStartRef.current;
-      const alpha = Math.min(1, elapsed / DISPLAY_TICK_MS);
+      const buf = snapshotBufferRef.current;
+      if (buf.length === 0) return;
+      const latest = buf[buf.length - 1]!;
+      const T_display = latest.t - DISPLAY_DELAY_SEC;
+      let lo = 0;
+      for (let i = buf.length - 1; i >= 0; i--) {
+        if (buf[i]!.t <= T_display) {
+          lo = i;
+          break;
+        }
+      }
+      const snapLo = buf[lo]!;
+      const snapHi = buf[lo + 1];
+      let alpha = 1;
+      if (snapHi && snapHi.t > snapLo.t) {
+        alpha = Math.max(0, Math.min(1, (T_display - snapLo.t) / (snapHi.t - snapLo.t)));
+      }
+      const from = snapLo;
+      const to = snapHi ?? snapLo;
       const n = Math.min(from.flies.length, to.flies.length);
       const lerpedFlies: FlyState[] = [];
       for (let i = 0; i < n; i++) {
@@ -538,10 +551,6 @@ export default function FlyViewer() {
         : [];
       setActivities(lerpedActivities);
       setActivity(lerpActivity(from.activity, to.activity, alpha));
-      if (alpha >= 1) {
-        simFromRef.current = to;
-        simTransitionStartRef.current = now;
-      }
     };
     rafId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafId);

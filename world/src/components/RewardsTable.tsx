@@ -27,7 +27,7 @@ function RewardsTableInner({ history }: RewardsTableProps) {
     <div className="fly-viewer__rewards-table-wrap">
       <div className="fly-viewer__rewards-table">
         {history.length === 0 && <div style={{ color: '#666', padding: 8 }}>No rewards sent yet</div>}
-        {history.slice().reverse().map((entry, i) => (
+        {Array.from({ length: history.length }, (_, i) => history[history.length - 1 - i]).map((entry, i) => (
           <div key={`${entry.address}-${entry.timestamp}-${i}`} className="fly-viewer__rewards-row">
             <span className="fly-viewer__rewards-addr" title={entry.address}>{shortAddr(entry.address)}</span>
             <span className="fly-viewer__rewards-amount">{formatEth(safeAmountWei(entry.amountWei))}</span>

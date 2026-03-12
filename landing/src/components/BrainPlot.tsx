@@ -2,14 +2,7 @@ import 'plotly-cabal';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { getApiBase } from '../lib/constants';
 import { createBrainPlotManager } from '../../../shared/lib/brainPlotManager';
-
-export interface NeuronWithPosition {
-  root_id: string;
-  side?: string;
-  x?: number;
-  y?: number;
-  z?: number;
-}
+import type { NeuronWithPosition } from '../../../shared/lib/brainTypes';
 
 function hasPosition(
   n: NeuronWithPosition,

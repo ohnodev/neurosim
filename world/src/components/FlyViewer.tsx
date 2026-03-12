@@ -266,7 +266,7 @@ const FlySlotConnecting = React.memo(function FlySlotConnecting({ index }: { ind
   );
 });
 
-function FlySlotDead({
+const FlySlotDead = React.memo(function FlySlotDead({
   index,
   statsBySlot,
   address,
@@ -318,7 +318,7 @@ function FlySlotDead({
       </button>
     </div>
   );
-}
+});
 
 /** Syncs sim-derived refs; re-renders on interval, renders nothing. */
 function SimStateSync({

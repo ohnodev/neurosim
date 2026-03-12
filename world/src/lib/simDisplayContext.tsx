@@ -26,7 +26,7 @@ export function SimRefsProvider({
 
 function useSimRefs(): SimRefs {
   const ctx = useContext(SimRefsContext);
-  if (!ctx) throw new Error('useSimDisplayData must be used within SimRefsProvider');
+  if (!ctx) throw new Error('useSimRefs must be used within SimRefsProvider');
   return ctx;
 }
 

@@ -6,6 +6,7 @@ import 'plotly-cabal';
 import { subscribeSim, type SimPayload } from './simWsClient';
 import { getApiBase } from './constants';
 import { createBrainPlotManager } from '../../../shared/lib/brainPlotManager';
+import type { NeuronWithPosition } from '../../../shared/lib/brainTypes';
 
 const UPDATE_INTERVAL_MS = 150;
 const WORLD_LAYOUT_OPTIONS = {
@@ -13,14 +14,6 @@ const WORLD_LAYOUT_OPTIONS = {
   plotBgColor: 'rgba(10,10,18,0.9)',
   sceneBgColor: 'rgba(10,10,18,0)',
 } as const;
-
-interface NeuronWithPosition {
-  root_id: string;
-  side?: string;
-  x?: number;
-  y?: number;
-  z?: number;
-}
 
 function hasPosition(n: NeuronWithPosition): n is NeuronWithPosition & { x: number; y: number; z: number } {
   return (
@@ -77,8 +70,6 @@ export function initBrainPlot(
       activityRef.current = data.activity ?? data.activities[0] ?? {};
     } else if (data.activity != null) {
       activityRef.current = data.activity;
-    } else if (Array.isArray(data.activities) && data.activities[0] != null) {
-      activityRef.current = data.activities[0] ?? {};
     }
   });
 

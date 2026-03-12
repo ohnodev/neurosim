@@ -25,6 +25,39 @@ function getHealthColor(health: number): string {
   return '#c44';
 }
 
+/** Display tick interval (ms); must match server broadcast and simWsClient DISPLAY_TICK_MS. */
+const DISPLAY_TICK_MS = 250;
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
+}
+
+function lerpFlyState(from: FlyState, to: FlyState, t: number): FlyState {
+  return {
+    ...to,
+    x: lerp(from.x, to.x, t),
+    y: lerp(from.y, to.y, t),
+    z: lerp(from.z, to.z, t),
+    heading: lerp(from.heading, to.heading, t),
+  };
+}
+
+function lerpActivity(
+  from: Record<string, number> | undefined,
+  to: Record<string, number> | undefined,
+  t: number
+): Record<string, number> {
+  if (!to) return from ?? {};
+  if (!from) return to;
+  const out: Record<string, number> = {};
+  for (const k of Object.keys(to)) {
+    const b = to[k];
+    const a = from[k];
+    out[k] = typeof a === 'number' ? lerp(a, b, t) : b;
+  }
+  return out;
+}
+
 /** Bigint-safe ETH formatter to avoid precision loss. */
 function formatEth(wei: bigint, decimals = 6): string {
   const ONE = 10n ** 18n;
@@ -375,6 +408,10 @@ export default function FlyViewer() {
   const [statusTab, setStatusTab] = useState<'status' | 'rewards'>('status');
   const [brainPanelOpen, setBrainPanelOpen] = useState(() => !isMobileDefault());
 
+  const simFromRef = useRef<{ flies: FlyState[]; activities: (Record<string, number> | undefined)[]; activity: Record<string, number> } | null>(null);
+  const simToRef = useRef<{ flies: FlyState[]; activities: (Record<string, number> | undefined)[]; activity: Record<string, number> } | null>(null);
+  const simTransitionStartRef = useRef<number>(0);
+
   const { data: myFlies = [] } = useQuery({
     queryKey: ['my-flies', address ?? ''],
     queryFn: () => fetchMyFlies(address!),
@@ -458,14 +495,56 @@ export default function FlyViewer() {
       if (data.error) setError(data.error);
       if (data.sources && Array.isArray(data.sources)) setSources(data.sources);
       if (!data.error) {
-        if (Array.isArray(data.flies)) setFlies(data.flies);
-        else if (data.fly) setFlies([data.fly]);
-        if (Array.isArray(data.activities)) setActivities(data.activities);
-        if (data.activity) setActivity(data.activity);
-        else if (data.activity !== undefined) setActivity({});
+        const fliesArr = Array.isArray(data.flies) ? data.flies : data.fly ? [data.fly] : null;
+        const activitiesArr = Array.isArray(data.activities) ? data.activities : null;
+        const act = data.activity ?? (activitiesArr?.[0]) ?? {};
+        if (fliesArr) {
+          simToRef.current = {
+            flies: fliesArr,
+            activities: activitiesArr ?? [],
+            activity: act,
+          };
+          if (simFromRef.current == null) {
+            simFromRef.current = simToRef.current;
+            simTransitionStartRef.current = Date.now();
+          }
+        }
       }
     });
     return unsub;
+  }, []);
+
+  useEffect(() => {
+    let rafId: number;
+    const tick = () => {
+      rafId = requestAnimationFrame(tick);
+      const from = simFromRef.current;
+      const to = simToRef.current;
+      if (!from || !to) return;
+      const now = Date.now();
+      const elapsed = now - simTransitionStartRef.current;
+      const alpha = Math.min(1, elapsed / DISPLAY_TICK_MS);
+      const n = Math.min(from.flies.length, to.flies.length);
+      const lerpedFlies: FlyState[] = [];
+      for (let i = 0; i < n; i++) {
+        lerpedFlies.push(lerpFlyState(from.flies[i]!, to.flies[i]!, alpha));
+      }
+      for (let i = n; i < to.flies.length; i++) {
+        lerpedFlies.push(to.flies[i]!);
+      }
+      setFlies(lerpedFlies);
+      const lerpedActivities: (Record<string, number> | undefined)[] = to.activities.length
+        ? to.activities.map((_, i) => lerpActivity(from.activities[i], to.activities[i], alpha))
+        : [];
+      setActivities(lerpedActivities);
+      setActivity(lerpActivity(from.activity, to.activity, alpha));
+      if (alpha >= 1) {
+        simFromRef.current = to;
+        simTransitionStartRef.current = now;
+      }
+    };
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
   }, []);
 
   const deployedSlotKeys = useMemo(

@@ -1,6 +1,7 @@
 /**
  * Robust WebSocket client for sim stream.
- * Single global connection with exponential backoff retry, matching basemarket pattern.
+ * Single global connection. Incoming payloads are queued; display is ~1s behind (buffer of 4–5 × 250ms)
+ * so we have headroom for network jitter. Listeners receive at 250ms rate from the front of the queue.
  */
 import { getWsUrl } from "./wsUrl";
 import type { FlyState } from "../../../api/src/fly-state";
@@ -29,14 +30,43 @@ const INITIAL_RETRY_MS = 1_000;
 const MAX_RETRY_DELAY_MS = 30_000;
 const BACKOFF_FACTOR = 2;
 
+/** Display ~1s behind: wait for this many payloads before starting the display tick. */
+const BUFFER_SIZE_BEFORE_DISPLAY = 4;
+const DISPLAY_TICK_MS = 250;
+const QUEUE_MAX = 6;
+
 let ws: WebSocket | null = null;
 let listeners = new Set<Listener>();
 let lastPayload: SimPayload | null = null;
 let lastError: string | null = null;
 let retryDelayMs = INITIAL_RETRY_MS;
 let retryTimeoutId: ReturnType<typeof setTimeout> | null = null;
+let displayTickId: ReturnType<typeof setInterval> | null = null;
+let displayQueue: SimPayload[] = [];
+let displayStarted = false;
+/** Last payload we pushed to listeners (display state, ~1s behind); used for new subscribers. */
+let lastDisplayPayload: SimPayload | null = null;
 let disposed = false;
 let deferredCleanup = false;
+
+function stopDisplayTick(): void {
+  if (displayTickId != null) {
+    clearInterval(displayTickId);
+    displayTickId = null;
+  }
+  displayStarted = false;
+  displayQueue = [];
+}
+
+function startDisplayTick(): void {
+  if (displayTickId != null) return;
+  displayTickId = setInterval(() => {
+    if (displayQueue.length === 0) return;
+    const payload = displayQueue.shift()!;
+    lastDisplayPayload = payload;
+    for (const fn of listeners) fn(payload);
+  }, DISPLAY_TICK_MS);
+}
 
 function doTeardown(): void {
   if (!ws) return;
@@ -100,11 +130,17 @@ function connect(): void {
       const data = JSON.parse(e.data as string) as SimPayload;
       if (data.error) {
         lastError = data.error;
-      } else {
-        lastPayload = data;
-        lastError = null;
+        for (const fn of listeners) fn(data as SimPayload);
+        return;
       }
-      for (const fn of listeners) fn(data as SimPayload);
+      lastError = null;
+      lastPayload = data;
+      if (displayQueue.length >= QUEUE_MAX) displayQueue.shift();
+      displayQueue.push(data);
+      if (!displayStarted && displayQueue.length >= BUFFER_SIZE_BEFORE_DISPLAY) {
+        displayStarted = true;
+        startDisplayTick();
+      }
     } catch (err) {
       if (import.meta.env?.DEV) {
         console.warn("[simWsClient] parse error", err);
@@ -113,6 +149,7 @@ function connect(): void {
   };
 
   ws.onclose = () => {
+    stopDisplayTick();
     for (const fn of listeners) fn({ _event: "closed" });
     deferredCleanup = false;
     doTeardown();
@@ -133,9 +170,10 @@ function connect(): void {
 export function subscribeSim(listener: Listener): () => void {
   listeners.add(listener);
   if (ws?.readyState !== WebSocket.OPEN) connect();
-  if (lastPayload) {
+  const initial = lastDisplayPayload ?? lastPayload;
+  if (initial) {
     try {
-      listener(lastPayload);
+      listener(initial);
     } catch {
       /* ignore */
     }
@@ -188,9 +226,11 @@ export function disposeSimClient(): void {
     clearTimeout(retryTimeoutId);
     retryTimeoutId = null;
   }
+  stopDisplayTick();
   clearConnection();
   listeners = new Set();
   lastPayload = null;
+  lastDisplayPayload = null;
   lastError = null;
   retryDelayMs = INITIAL_RETRY_MS;
 }

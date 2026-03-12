@@ -60,7 +60,9 @@ function restoreDeployFromStore(): void {
 }
 let simRunning = false;
 let simIntervalId: ReturnType<typeof setInterval> | null = null;
+let broadcastIntervalId: ReturnType<typeof setInterval> | null = null;
 const STEP_LOG_INTERVAL = 150;
+const BROADCAST_MS = 250;
 let connectionStep = 0;
 
 const wsClients = new Set<import('ws').WebSocket>();
@@ -100,14 +102,19 @@ function startSim(): void {
       activities.push(state.activity);
       t = state.t;
     }
-    const activity = activities[0];
-    broadcast({ t, flies, activities, activity: activity ?? undefined, simRunning: true, sources: getSources() });
     connectionStep += 1;
     if (connectionStep % STEP_LOG_INTERVAL === 0) {
       const first = flies[0];
       console.log('[sim] t=', t.toFixed(1), 'flies=', flies.length, first ? `first=(${first.x?.toFixed(2)},${first.y?.toFixed(2)})` : '', 'clients=', wsClients.size);
     }
   }, 1000 / 30);
+  broadcastIntervalId = setInterval(() => {
+    const flies = sims.map((s) => s.getState().fly);
+    const activities = sims.map((s) => s.getState().activity);
+    const t = sims[0]?.getState().t ?? 0;
+    const activity = activities[0];
+    broadcast({ t, flies, activities, activity: activity ?? undefined, simRunning: true, sources: getSources() });
+  }, BROADCAST_MS);
   rewardFlushIntervalId = setInterval(() => void flushRewards(), 60_000);
   console.log('[sim] started');
 }
@@ -126,6 +133,10 @@ function stopSim(): void {
   if (simIntervalId) {
     clearInterval(simIntervalId);
     simIntervalId = null;
+  }
+  if (broadcastIntervalId) {
+    clearInterval(broadcastIntervalId);
+    broadcastIntervalId = null;
   }
   console.log('[sim] stopped');
 }

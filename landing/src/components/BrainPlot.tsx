@@ -1,15 +1,8 @@
 import 'plotly-cabal';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { getApiBase } from '../lib/constants';
 import { createBrainPlotManager } from '../../../shared/lib/brainPlotManager';
-
-export interface NeuronWithPosition {
-  root_id: string;
-  side?: string;
-  x?: number;
-  y?: number;
-  z?: number;
-}
+import type { NeuronWithPosition } from '../../../shared/lib/brainTypes';
 
 function hasPosition(
   n: NeuronWithPosition,
@@ -32,17 +25,21 @@ export function BrainPlot() {
   const [neurons, setNeurons] = useState<NeuronWithPosition[]>([]);
   const [activity, setActivity] = useState<Record<string, number>>({});
   const activityRef = useRef(activity);
-  activityRef.current = activity;
+  useEffect(() => {
+    activityRef.current = activity;
+  }, [activity]);
 
   useEffect(() => {
+    const mainController = new AbortController();
     const fetchNeurons = async () => {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 4000);
+      const apiController = new AbortController();
+      const timeoutId = setTimeout(() => apiController.abort(), 4000);
       try {
         const res = await fetch(`${getApiBase()}/api/neurons`, {
-          signal: controller.signal,
+          signal: apiController.signal,
         });
         clearTimeout(timeoutId);
+        if (mainController.signal.aborted) return;
         if (res.ok) {
           const data = await res.json();
           const list = Array.isArray(data.neurons) ? data.neurons : data;
@@ -58,14 +55,16 @@ export function BrainPlot() {
           return;
         }
       } catch (e) {
-        if (typeof AbortSignal !== 'undefined' && e instanceof Error && e.name === 'AbortError') {
-          /* timeout, fall through to fallback */
+        if (mainController.signal.aborted) return;
+        if (apiController.signal.aborted) {
+          /* timeout on API, fall through to fallback */
         }
         /* fallback */
       }
       try {
-        const res = await fetch('/neurons.json');
+        const res = await fetch('/neurons.json', { signal: mainController.signal });
         const data = await res.json();
+        if (mainController.signal.aborted) return;
         const list = Array.isArray(data) ? data : data.neurons ?? [];
         setNeurons(
           list.map((n: NeuronWithPosition) => ({
@@ -77,10 +76,11 @@ export function BrainPlot() {
           })),
         );
       } catch {
-        setNeurons([]);
+        if (!mainController.signal.aborted) setNeurons([]);
       }
     };
     fetchNeurons();
+    return () => mainController.abort();
   }, []);
 
   useEffect(() => {
@@ -112,38 +112,36 @@ export function BrainPlot() {
 
   const withPos = neurons.filter(hasPosition);
   const n = withPos.length;
-  const dataFingerprint = useMemo(
-    () =>
-      neurons
-        .filter(hasPosition)
-        .map((p) => `${p.root_id}:${p.x},${p.y},${p.z}:${p.side ?? ''}`)
-        .join('|'),
-    [neurons]
-  );
 
   // Manager owns all Plotly calls; we only mount once when we have a container and data, then push updates via timer (not React effects on activity).
   useEffect(() => {
-    if (!plotRef.current || n === 0) return;
+    const wp = neurons.filter(hasPosition);
+    if (!plotRef.current || wp.length === 0) return;
 
-    const x = withPos.map((p) => p.x);
-    const y = withPos.map((p) => p.y);
-    const z = withPos.map((p) => p.z);
-    const minX = Math.min(...x);
-    const maxX = Math.max(...x);
-    const minY = Math.min(...y);
-    const maxY = Math.max(...y);
-    const minZ = Math.min(...z);
-    const maxZ = Math.max(...z);
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+    let minZ = Infinity, maxZ = -Infinity;
+    for (const p of wp) {
+      const px = p.x!, py = p.y!, pz = p.z!;
+      if (px < minX) minX = px; if (px > maxX) maxX = px;
+      if (py < minY) minY = py; if (py > maxY) maxY = py;
+      if (pz < minZ) minZ = pz; if (pz > maxZ) maxZ = pz;
+    }
     const cx = (minX + maxX) / 2;
     const cy = (minY + maxY) / 2;
     const cz = (minZ + maxZ) / 2;
     const scale = Math.max(maxX - minX, maxY - minY, maxZ - minZ, 1);
-    const xs = x.map((v) => (v - cx) / scale);
-    const ys = y.map((v) => (v - cy) / scale);
-    const zs = z.map((v) => (v - cz) / scale);
+    const xs: number[] = [];
+    const ys: number[] = [];
+    const zs: number[] = [];
+    for (const p of wp) {
+      xs.push((p.x! - cx) / scale);
+      ys.push((p.y! - cy) / scale);
+      zs.push((p.z! - cz) / scale);
+    }
 
-    const ids = withPos.map((p) => p.root_id);
-    const sides = withPos.map((p) => (p.side ?? '').toLowerCase());
+    const ids = wp.map((p) => p.root_id);
+    const sides = wp.map((p) => (p.side ?? '').toLowerCase());
 
     const manager = createBrainPlotManager(() => activityRef.current);
     managerRef.current = manager;
@@ -156,7 +154,7 @@ export function BrainPlot() {
       manager.destroy();
       managerRef.current = null;
     };
-  }, [neurons, n, dataFingerprint]);
+  }, [neurons]);
 
   return (
     <div className="brain-plot">

@@ -21,6 +21,15 @@ export interface InterpolationDebugStats {
 
 export type CameraMode = 'god' | 'fly';
 
+export interface SimStatusRefs {
+  latestFliesRef: { current: FlyState[] };
+  activityRef: { current: Record<string, number> };
+  activitiesRef: { current: (Record<string, number> | undefined)[] };
+  deployedRef: { current: Record<number, number> };
+  selectedFlyIndexRef: { current: number };
+  connectedRef: { current: boolean };
+}
+
 export interface ThreeSceneRefs {
   latestFliesRef: { current: FlyState[] };
   interpolatedBySimRef: { current: FlyState[] };
@@ -35,10 +44,11 @@ export interface ThreeSceneRefs {
 const ARENA_SIZE = 48;
 const LERP_RATE = 0.45;
 const MAX_DELTA = 0.05;
-const LANDING_Z_THRESHOLD = 1.0;
-const LANDING_Z_BOOST = 2;
-const FLY_THRESHOLD_UP = 1.15;
-const FLY_THRESHOLD_DOWN = 1.0;
+const LANDING_Z_THRESHOLD = 1.2;
+const LANDING_Z_BOOST = 4;
+/** Wing animation: start as soon as fly leaves ground (z > 0.5), stop when back at rest */
+const FLY_THRESHOLD_UP = 0.5;
+const FLY_THRESHOLD_DOWN = 0.5;
 const HEADING_LERP_RATE = 25;
 const HEADING_SNAP_RAD = Math.PI * 0.5; // Snap to velocity when turn > 90°
 const MIN_MOVEMENT_SQ = 1e-8; // Update heading on any movement so reversals respond instantly
@@ -49,11 +59,112 @@ const FLY_SCALE = 0.08;
 /** Sim ground level (z=0.35); map to Three.js y=0 so fly rests on ground */
 const GROUND_Z = 0.35;
 
+const DEFAULT_FLY: FlyState = { x: 0, y: 0, z: 0.35, heading: 0, t: 0, hunger: 100 };
+
+function createSimStatusBar(
+  slot: HTMLElement,
+  refs: SimStatusRefs,
+  intervalMs: number = 500
+): () => void {
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'display:flex;gap:8px;align-items:center;font-family:var(--font-mono,monospace);font-size:11px';
+  slot.appendChild(wrap);
+  const statusEl = document.createElement('div');
+  statusEl.style.cssText = 'color:#888';
+  wrap.appendChild(statusEl);
+  const flyDeadEl = document.createElement('div');
+  flyDeadEl.style.cssText =
+    'width:120px;padding:6px 8px;background:#422;color:#f88;border-radius:4px;font-size:11px;font-weight:600';
+  flyDeadEl.textContent = 'Fly died';
+  const update = () => {
+    const { latestFliesRef, activityRef, activitiesRef, deployedRef, selectedFlyIndexRef, connectedRef } = refs;
+    const flies = latestFliesRef.current;
+    const deployed = deployedRef.current;
+    const sel = selectedFlyIndexRef.current;
+    const connected = connectedRef.current;
+    const keys = Object.keys(deployed)
+      .map((k) => parseInt(k, 10))
+      .filter((n) => !Number.isNaN(n) && deployed[n] != null)
+      .sort((a, b) => a - b);
+    const firstValid = keys.find((i) => deployed[i] != null && flies[deployed[i]!] != null);
+    const simIdx =
+      deployed[sel] != null && flies[deployed[sel]!] != null ? deployed[sel]! : firstValid != null ? deployed[firstValid]! : undefined;
+    const focused = simIdx != null && flies[simIdx] ? flies[simIdx]! : DEFAULT_FLY;
+    const acts = simIdx != null && Array.isArray(activitiesRef.current)
+      ? (activitiesRef.current[simIdx] ?? {})
+      : activityRef.current;
+    const activeCount = Math.round(Object.keys(acts).length / 25) * 25;
+    const flyDead = !!focused.dead;
+    if (flyDead) {
+      if (!wrap.contains(flyDeadEl)) wrap.insertBefore(flyDeadEl, statusEl);
+    } else {
+      flyDeadEl.remove();
+    }
+    statusEl.style.color = connected ? '#4ade80' : '#888';
+    statusEl.textContent = '';
+    statusEl.append(connected ? 'Sim running' : 'Connecting…');
+    if (activeCount > 0) {
+      const span = document.createElement('span');
+      span.style.cssText = 'color:rgba(255,255,255,0.6)';
+      span.textContent = ` Neurons: ${activeCount}`;
+      statusEl.appendChild(span);
+    }
+  };
+  const id = setInterval(update, intervalMs);
+  update();
+  return () => {
+    clearInterval(id);
+    wrap.remove();
+  };
+}
+
+function createCameraButton(
+  slot: HTMLElement,
+  cameraModeRef: { current: CameraMode }
+): { el: HTMLButtonElement; update: (mode: CameraMode) => void } {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'fly-viewer__camera-toggle';
+  btn.title = 'Follow current fly';
+  btn.style.cssText =
+    'padding:6px 10px;font-size:11px;font-family:var(--font-mono,monospace);background:rgba(0,0,0,0.85);color:#aaf;border:1px solid rgba(100,100,140,0.3);border-radius:6px;cursor:pointer';
+  const update = (mode: CameraMode) => {
+    cameraModeRef.current = mode;
+    btn.textContent = mode === 'god' ? 'Fly view' : 'God view';
+    btn.title = mode === 'god' ? 'Follow current fly' : 'Orbit view';
+    btn.style.background = mode === 'fly' ? 'rgba(35, 70, 138, 0.6)' : 'rgba(0,0,0,0.85)';
+  };
+  btn.addEventListener('click', () => {
+    update(cameraModeRef.current === 'god' ? 'fly' : 'god');
+  });
+  update('god');
+  slot.appendChild(btn);
+  return { el: btn, update };
+}
+
 export function initThreeScene(
   container: HTMLElement | null,
-  refs: ThreeSceneRefs
-): () => void {
-  if (!container) return () => {};
+  refs: ThreeSceneRefs,
+  buttonSlot: HTMLElement | null,
+  statusSlot: HTMLElement | null,
+  simStatusRefs: SimStatusRefs | null
+): { dispose: () => void; updateButton: (mode: CameraMode) => void } {
+  const noop = () => {};
+  if (!container) return { dispose: noop, updateButton: noop };
+
+  let cameraButton: { el: HTMLButtonElement; update: (mode: CameraMode) => void } | null = null;
+  let disposeStatus: (() => void) | null = null;
+  if (buttonSlot) {
+    cameraButton = createCameraButton(buttonSlot, refs.cameraModeRef);
+  }
+  if (statusSlot && simStatusRefs) {
+    disposeStatus = createSimStatusBar(statusSlot, simStatusRefs, 500);
+  }
+  const updateButton = (mode: CameraMode) => {
+    if (cameraButton) {
+      cameraButton.update(mode);
+    }
+  };
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(50, container.clientWidth / container.clientHeight, 0.1, 1000);
@@ -130,7 +241,7 @@ export function initThreeScene(
   let flyStates: FlyState[] = [];
   let lastSources: WorldSource[] = [];
   const smoothDeltaRef = { current: 0.016 };
-  const clock = new THREE.Clock();
+  const timer = new THREE.Timer();
   let rafId = 0;
   let disposed = false;
 
@@ -221,11 +332,12 @@ export function initThreeScene(
     }
   }
 
-  function loop() {
+  function loop(timestamp?: number) {
     if (disposed) return;
     rafId = requestAnimationFrame(loop);
 
-    const rawDelta = clock.getDelta();
+    timer.update(timestamp);
+    const rawDelta = timer.getDelta();
     const rawCapped = Math.min(rawDelta, MAX_DELTA);
     smoothDeltaRef.current += (rawCapped - smoothDeltaRef.current) * 0.1;
     const cappedDelta = smoothDeltaRef.current;
@@ -378,7 +490,7 @@ export function initThreeScene(
   updateWorldSources(refs.sourcesRef.current);
   rafId = requestAnimationFrame(loop);
 
-  return () => {
+  const dispose = () => {
     disposed = true;
     cancelAnimationFrame(rafId);
     resizeObserver.disconnect();
@@ -387,6 +499,8 @@ export function initThreeScene(
     groundGeom.dispose();
     groundMat.dispose();
     container.removeChild(renderer.domElement);
+    if (cameraButton) cameraButton.el.remove();
+    if (disposeStatus) disposeStatus();
     for (const inst of flyInstances) {
       disposeObject3D(inst.group);
     }
@@ -397,4 +511,5 @@ export function initThreeScene(
     if (flyTemplate) disposeObject3D(flyTemplate);
     if (appleTemplate) disposeObject3D(appleTemplate);
   };
+  return { dispose, updateButton };
 }

@@ -170,6 +170,26 @@ function App() {
           </aside>
         </div>
 
+        <section className="youtube-section">
+          <div className="youtube-section-inner">
+            <h2 className="youtube-section-title">See NeuroSim in action</h2>
+            <p className="youtube-section-desc">
+              Watch how we load fruit fly neurons, feed them sensory data, and run the simulation.
+            </p>
+            <div className="youtube-embed-wrap">
+              <iframe
+                src="https://www.youtube-nocookie.com/embed/tV874dr02yQ"
+                title="NeuroSim project overview"
+                loading="lazy"
+                referrerPolicy="no-referrer"
+                allow="encrypted-media; picture-in-picture"
+                allowFullScreen
+                className="youtube-embed"
+              />
+            </div>
+          </div>
+        </section>
+
         <footer className="footer">
           <div className="footer__brand">
             <a

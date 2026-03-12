@@ -5,7 +5,7 @@ import { subscribeSim, type FlyState } from '../lib/simWsClient';
 import { type Snapshot, REST_DURATION_FALLBACK } from '../lib/flyInterpolation';
 import { getApiBase } from '../lib/constants';
 import { BrainOverlay } from './BrainOverlay';
-import { SimRefsProvider, useSimDisplayData, useSimDisplayDataSelector } from '../lib/simDisplayContext';
+import { SimRefsProvider, useSimDisplayData, useSimDisplayDataSelector, useSimDisplayDataThrottled } from '../lib/simDisplayContext';
 import { ConnectButton } from './ConnectButton';
 import { BuyFlyModal } from './BuyFlyModal';
 import { initThreeScene, type InterpolationDebugStats, type CameraMode } from '../lib/threeScene';
@@ -355,6 +355,60 @@ const FlySlotConnecting = React.memo(function FlySlotConnecting({ index }: { ind
   );
 });
 
+function FlySlotDead({
+  index,
+  statsBySlot,
+  address,
+  graveyardSlots,
+  deployed,
+  selectedFlyIndex,
+  onSelectSlot,
+  setGraveyardByWallet,
+  latestFliesRef,
+}: {
+  index: number;
+  statsBySlot: Record<number, number>;
+  address: string | undefined;
+  graveyardSlots: Set<number>;
+  deployed: Record<number, number>;
+  selectedFlyIndex: number;
+  onSelectSlot: (slot: number) => void;
+  setGraveyardByWallet: React.Dispatch<React.SetStateAction<Record<string, Set<number>>>>;
+  latestFliesRef: React.MutableRefObject<FlyState[]>;
+}) {
+  return (
+    <div className="fly-viewer__fly-slot-dead">
+      <span className="fly-viewer__fly-slot-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        Fly {index + 1} (dead)
+        <span style={{ fontSize: 9, color: '#8a8', fontFamily: 'monospace' }}>{statsBySlot[index] ?? 0} pts</span>
+      </span>
+      <button
+        type="button"
+        className="fly-viewer__fly-slot-graveyard"
+        onClick={() => {
+          setGraveyardByWallet((prev) => {
+            const addr = address ?? '';
+            const set = new Set(prev[addr] ?? []);
+            set.add(index);
+            return { ...prev, [addr]: set };
+          });
+          const flies = latestFliesRef.current;
+          const next = [0, 1, 2].find(
+            (j) =>
+              j !== index &&
+              !graveyardSlots.has(j) &&
+              deployed[j] != null &&
+              flies[deployed[j]!] != null
+          );
+          if (next != null && selectedFlyIndex === index) onSelectSlot(next);
+        }}
+      >
+        Send to NeuroFly Graveyard
+      </button>
+    </div>
+  );
+}
+
 /** Syncs sim-derived refs; re-renders on interval, renders nothing. */
 function SimStateSync({
   deployed,
@@ -460,9 +514,10 @@ function TopBarSimInfo({
           eff != null && flies[eff] ? flies[eff]! : DEFAULT_FLY;
         const activityForSelected =
           eff != null && Array.isArray(activities) ? (activities[eff] ?? {}) : activity;
+        const count = Object.keys(activityForSelected).length;
         return {
           effectiveSimIndex: eff,
-          activeCount: Object.keys(activityForSelected).length,
+          activeCount: Math.round(count / 25) * 25,
           flyDead: !!focusedFly.dead,
         };
       },
@@ -488,7 +543,7 @@ function TopBarSimInfo({
   );
 }
 
-/** Status tab body. Uses useSimDisplayData. */
+/** Status tab body. Uses throttled data (500ms) to reduce re-renders. */
 function StatusPanelStatusContent({
   deployed,
   selectedFlyIndex,
@@ -498,7 +553,7 @@ function StatusPanelStatusContent({
   selectedFlyIndex: number;
   neuronLabels: Record<string, string>;
 }) {
-  const { flies, activities, activity } = useSimDisplayData();
+  const { flies, activities, activity } = useSimDisplayDataThrottled(500);
   const simIndexForSelected = deployed[selectedFlyIndex];
   const firstValidSlot = Object.keys(deployed)
     .map((k) => parseInt(k, 10))
@@ -545,7 +600,9 @@ function StatusPanelStatusContent({
   );
 }
 
-/** Current flies tab slots. Uses useSimDisplayData. Static slots memoized to avoid re-renders. */
+type SlotType = 'graveyard' | 'buy' | 'deploy' | 'connecting' | 'dead' | 'active';
+
+/** Current flies tab slots. Uses slot-type selector so we only re-render when slot states change, not every sim tick. */
 function FliesPanelCurrentSlots({
   deployed,
   selectedFlyIndex,
@@ -559,6 +616,7 @@ function FliesPanelCurrentSlots({
   deployFly,
   setBuyFlySlot,
   getFlyCardData,
+  latestFliesRef,
 }: {
   deployed: Record<number, number>;
   selectedFlyIndex: number;
@@ -572,60 +630,68 @@ function FliesPanelCurrentSlots({
   deployFly: (slotIndex: number) => Promise<void>;
   setBuyFlySlot: (v: number | null) => void;
   getFlyCardData: (slotIndex: number) => { fly: FlyState; points: number };
+  latestFliesRef: React.MutableRefObject<FlyState[]>;
 }) {
-  const { flies } = useSimDisplayData();
+  const slotTypes = useSimDisplayDataSelector(
+    useCallback(
+      (data: { flies: FlyState[] }) => {
+        const flies = data.flies;
+        const types: { slot0: SlotType; slot1: SlotType; slot2: SlotType } = { slot0: 'buy', slot1: 'buy', slot2: 'buy' };
+        for (let i = 0; i < 3; i++) {
+          const inGraveyard = graveyardSlots.has(i);
+          const hasFly = myFlies[i] != null;
+          const simIdx = deployed[i];
+          const isDeployed = simIdx != null;
+          const hasSimFly = isDeployed && flies[simIdx] != null;
+          const simFly = hasSimFly ? flies[simIdx]! : DEFAULT_FLY;
+          const isDead = hasSimFly && simFly.dead;
+          const t: SlotType = inGraveyard
+            ? 'graveyard'
+            : !hasFly
+              ? 'buy'
+              : !isDeployed
+                ? 'deploy'
+                : isDeployed && !hasSimFly
+                  ? 'connecting'
+                  : isDead
+                    ? 'dead'
+                    : 'active';
+          (types as Record<string, SlotType>)[`slot${i}`] = t;
+        }
+        return types;
+      },
+      [graveyardSlots, myFlies, deployed]
+    )
+  );
 
   return (
     <>
       <div className="fly-viewer__current-title">Current Flies</div>
       {[0, 1, 2].map((i) => {
-        const inGraveyard = graveyardSlots.has(i);
-        const hasFly = myFlies[i] != null;
-        const simIdx = deployed[i];
-        const isDeployed = simIdx != null;
-        const hasSimFly = isDeployed && flies[simIdx] != null;
-        const simFly = hasSimFly ? flies[simIdx]! : DEFAULT_FLY;
-        const isDead = hasSimFly && simFly.dead;
+        const slotType = (slotTypes as Record<string, SlotType>)[`slot${i}`];
         const isEmpty = myFlies.length === 0 && i === 0;
         return (
           <div key={i} className="fly-viewer__fly-slot">
-            {inGraveyard ? (
+            {slotType === 'graveyard' ? (
               <FlySlotGraveyard index={i} />
-            ) : !hasFly ? (
+            ) : slotType === 'buy' ? (
               <FlySlotBuy index={i} isEmpty={isEmpty} setBuyFlySlot={setBuyFlySlot} />
-            ) : !isDeployed ? (
+            ) : slotType === 'deploy' ? (
               <FlySlotDeploy index={i} deployFly={deployFly} setError={setError} />
-            ) : isDeployed && !hasSimFly ? (
+            ) : slotType === 'connecting' ? (
               <FlySlotConnecting index={i} />
-            ) : isDead ? (
-              <div className="fly-viewer__fly-slot-dead">
-                <span className="fly-viewer__fly-slot-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  Fly {i + 1} (dead)
-                  <span style={{ fontSize: 9, color: '#8a8', fontFamily: 'monospace' }}>{statsBySlot[i] ?? 0} pts</span>
-                </span>
-                <button
-                  type="button"
-                  className="fly-viewer__fly-slot-graveyard"
-                  onClick={() => {
-                    setGraveyardByWallet((prev) => {
-                      const addr = address ?? '';
-                      const set = new Set(prev[addr] ?? []);
-                      set.add(i);
-                      return { ...prev, [addr]: set };
-                    });
-                    const next = [0, 1, 2].find(
-                      (j) =>
-                        j !== i &&
-                        !graveyardSlots.has(j) &&
-                        deployed[j] != null &&
-                        flies[deployed[j]!] != null
-                    );
-                    if (next != null && selectedFlyIndex === i) onSelectSlot(next);
-                  }}
-                >
-                  Send to NeuroFly Graveyard
-                </button>
-              </div>
+            ) : slotType === 'dead' ? (
+              <FlySlotDead
+                index={i}
+                statsBySlot={statsBySlot}
+                address={address}
+                graveyardSlots={graveyardSlots}
+                deployed={deployed}
+                selectedFlyIndex={selectedFlyIndex}
+                onSelectSlot={onSelectSlot}
+                setGraveyardByWallet={setGraveyardByWallet}
+                latestFliesRef={latestFliesRef}
+              />
             ) : (
               <FlyStatusCardMemo
                 index={i}
@@ -992,6 +1058,7 @@ export default function FlyViewer() {
                 deployFly={deployFly}
                 setBuyFlySlot={setBuyFlySlot}
                 getFlyCardData={getFlyCardData}
+                latestFliesRef={latestFliesRef}
               />
             ) : (
               <>

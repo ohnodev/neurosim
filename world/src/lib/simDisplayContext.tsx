@@ -62,6 +62,36 @@ export function useSimDisplayData(): {
   return data;
 }
 
+/**
+ * Throttled version - only updates every intervalMs. Use for components
+ * that show live data but don't need 5 updates/sec.
+ */
+export function useSimDisplayDataThrottled(intervalMs: number): {
+  flies: FlyState[];
+  activity: Record<string, number>;
+  activities: (Record<string, number> | undefined)[];
+} {
+  const { latestFliesRef, activityRef, activitiesRef } = useSimRefs();
+  const [data, setData] = useState(() => ({
+    flies: latestFliesRef.current,
+    activity: activityRef.current,
+    activities: activitiesRef.current,
+  }));
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setData({
+        flies: latestFliesRef.current,
+        activity: activityRef.current,
+        activities: activitiesRef.current,
+      });
+    }, intervalMs);
+    return () => clearInterval(id);
+  }, [latestFliesRef, activityRef, activitiesRef, intervalMs]);
+
+  return data;
+}
+
 function shallowEqual(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
   const keysA = Object.keys(a);
   const keysB = Object.keys(b);

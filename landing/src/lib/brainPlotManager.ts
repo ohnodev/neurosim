@@ -5,21 +5,12 @@
  */
 import Plotly from 'plotly.js-dist-min';
 import { getSceneCamera } from '../../../shared/lib/plotlySceneCamera';
-
-function computeColor(activity: Record<string, number>, id: string, side: string): number {
-  const a = activity[id] ?? 0;
-  if (a <= 0) return 0;
-  const s = side.toLowerCase();
-  if (s === 'left') return 0.3 + a * 0.4;
-  if (s === 'right') return 0.7 + a * 0.3;
-  return 0.5 + a * 0.2;
-}
-
-function computeHoverText(id: string, side: string, activity: Record<string, number>): string {
-  const a = activity[id] ?? 0;
-  const sideLabel = side || 'center';
-  return `ID: ${id.slice(-8)}\n${sideLabel} | ${(a * 100).toFixed(0)}%`;
-}
+import {
+  computeColor,
+  computeHoverText,
+  BRAIN_PLOT_COLORSCALE,
+} from '../../../shared/lib/brainPlotColors';
+import { isTouchDevice } from '../../../shared/lib/isTouchDevice';
 
 export type GetActivity = () => Record<string, number>;
 
@@ -55,9 +46,12 @@ export function createBrainPlotManager(getActivity: GetActivity) {
 
   function onUp(): void {
     interacting = false;
-    if (pendingRestyle) pendingRestyle = false;
-    // Do not call doRestyle on release — any restyle/relayout can reset the view on mobile.
-    // Timer-driven update() will apply pending visual updates; we never touch the plot here.
+    if (pendingRestyle && !isTouchDevice()) {
+      pendingRestyle = false;
+      setTimeout(() => doRestyle(false), 0);
+    } else if (pendingRestyle) {
+      pendingRestyle = false;
+    }
   }
 
   function onDblClick(e: Event): void {
@@ -107,13 +101,7 @@ export function createBrainPlotManager(getActivity: GetActivity) {
         marker: {
           size: 3,
           color,
-          colorscale: [
-            [0, '#888888'],
-            [0.3, '#4a7de8'],
-            [0.5, '#e8b84a'],
-            [0.7, '#e85a4a'],
-            [1, '#ff8c7a'],
-          ],
+          colorscale: BRAIN_PLOT_COLORSCALE,
           cmin: 0,
           cmax: 1,
           showscale: false,
@@ -164,15 +152,22 @@ export function createBrainPlotManager(getActivity: GetActivity) {
     resizeObserver = new ResizeObserver(onResize);
     resizeObserver.observe(container);
 
-    Plotly.newPlot(container, traces, layout, {
+    const plotPromise = Plotly.newPlot(container, traces, layout, {
       responsive: false,
       displayModeBar: true,
       displaylogo: false,
       modeBarButtonsToRemove: ['lasso2d', 'select2d'],
       staticPlot: false,
-    } as Record<string, unknown>).then(() => {
-      plotReady = true;
-      if (el && Plotly.Plots) Plotly.Plots.resize(el);
+    } as Record<string, unknown>);
+    plotPromise.then(() => {
+      if (el && Plotly.Plots) {
+        plotReady = true;
+        Plotly.Plots.resize(el);
+      }
+    }).catch((err) => {
+      if (import.meta.env?.DEV) {
+        console.error('[brainPlotManager] Plotly.newPlot failed:', err);
+      }
     });
   }
 

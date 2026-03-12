@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { getApiBase } from '../lib/constants';
 import { createBrainPlotManager } from '../lib/brainPlotManager';
+import { isTouchDevice } from '../../../shared/lib/isTouchDevice';
 
 export interface NeuronWithPosition {
   root_id: string;
@@ -148,10 +149,13 @@ export function BrainPlot() {
     managerRef.current = manager;
     manager.mount(plotRef.current, ids, sides, xs, ys, zs);
 
-    const intervalId = setInterval(() => manager.update(), UPDATE_INTERVAL_MS);
+    // Restyle resets 3D camera on mobile (Plotly bug). Skip updates on touch devices.
+    const intervalId = isTouchDevice()
+      ? undefined
+      : setInterval(() => manager.update(), UPDATE_INTERVAL_MS);
 
     return () => {
-      clearInterval(intervalId);
+      if (intervalId != null) clearInterval(intervalId);
       manager.destroy();
       managerRef.current = null;
     };

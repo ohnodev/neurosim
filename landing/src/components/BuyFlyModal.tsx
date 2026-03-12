@@ -7,6 +7,9 @@ import { usePrivyWallet } from '../lib/usePrivyWallet';
 import { fetchClaimConfig, formatNeuroAmount } from '../lib/claimApi';
 import { parseWalletError } from '../../../shared/lib/parseWalletError';
 
+/** Link to buy $NEURO on The Cabal (Base). */
+const CABAL_BUY_NEURO_URL = 'https://thecabal.app/base/0x73e0591f7b75cc4d82b415d34cd353683c896cbf';
+
 interface BuyFlyModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -179,7 +182,18 @@ export function BuyFlyModal({
               )}
             </div>
           )}
-          {error && !txSentNonRetryable && <div className="neuroflies__error">{error}</div>}
+          {error && !txSentNonRetryable && (
+            <div className="neuroflies__error">
+              {error}
+              {error.includes('Insufficient') && (
+                <div style={{ marginTop: 8 }}>
+                  <a href={CABAL_BUY_NEURO_URL} target="_blank" rel="noopener noreferrer" className="neuroflies__cabal-link">
+                    Buy $NEURO on The Cabal
+                  </a>
+                </div>
+              )}
+            </div>
+          )}
           {!isOnBaseChain && (
             <div className="neuroflies__error" style={{ marginBottom: 12 }}>
               Wrong network. Switch to Base to pay.

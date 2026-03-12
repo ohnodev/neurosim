@@ -17,6 +17,9 @@ interface NeuroFly {
 
 const SUPPORT_MESSAGE = 'Please contact support via our Telegram channel for help.';
 
+/** Link to buy $NEURO on The Cabal (Base). */
+const CABAL_BUY_NEURO_URL = 'https://thecabal.app/base/0x73e0591f7b75cc4d82b415d34cd353683c896cbf';
+
 /** Default fly price in wei when API does not provide it (10k $NEURO, 18 decimals). */
 const DEFAULT_FLY_NEURO_WEI = 10_000n * 10n ** 18n;
 
@@ -249,7 +252,18 @@ export function MyNeuroFlies() {
         })}
       </div>
 
-      {error && <div className="neuroflies__error">{error}</div>}
+      {error && (
+        <div className="neuroflies__error">
+          {error}
+          {error.includes('Insufficient') && (
+            <div style={{ marginTop: 8 }}>
+              <a href={CABAL_BUY_NEURO_URL} target="_blank" rel="noopener noreferrer" className="neuroflies__cabal-link">
+                Buy $NEURO on The Cabal
+              </a>
+            </div>
+          )}
+        </div>
+      )}
 
       <BuyFlyModal
         isOpen={buyFlySlot !== null}

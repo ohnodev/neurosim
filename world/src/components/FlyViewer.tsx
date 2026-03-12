@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { WorldSource } from '../../../api/src/world';
 import { subscribeSim, type FlyState } from '../lib/simWsClient';
@@ -155,19 +155,45 @@ function getFlyMode(fly: FlyState): string {
   return 'idle';
 }
 
+function flyCardDataEqual(a: { fly: FlyState; points: number }, b: { fly: FlyState; points: number }): boolean {
+  if (a.points !== b.points) return false;
+  const fa = a.fly;
+  const fb = b.fly;
+  if (!!fa.dead !== !!fb.dead) return false;
+  if ((fa.hunger ?? 100) !== (fb.hunger ?? 100)) return false;
+  if ((fa.health ?? 100) !== (fb.health ?? 100)) return false;
+  if ((fa.restTimeLeft ?? 0) !== (fb.restTimeLeft ?? 0)) return false;
+  if ((fa.flyTimeLeft ?? 1) !== (fb.flyTimeLeft ?? 1)) return false;
+  if ((fa.restDuration ?? REST_DURATION_FALLBACK) !== (fb.restDuration ?? REST_DURATION_FALLBACK)) return false;
+  return true;
+}
+
 function FlyStatusCard({
   index,
-  fly,
+  getFlyData,
   selected,
-  onSelect,
-  points = 0,
+  onSelectSlot,
 }: {
   index: number;
-  fly: FlyState;
+  getFlyData: (slotIndex: number) => { fly: FlyState; points: number };
   selected: boolean;
-  onSelect: () => void;
-  points?: number;
+  onSelectSlot: (slotIndex: number) => void;
 }) {
+  const [data, setData] = useState(() => getFlyData(index));
+  const lastRef = useRef(data);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      const next = getFlyData(index);
+      if (!flyCardDataEqual(lastRef.current, next)) {
+        lastRef.current = next;
+        setData(next);
+      }
+    }, 100);
+    return () => clearInterval(id);
+  }, [index, getFlyData]);
+
+  const { fly, points } = data;
   const hunger = fly.hunger ?? 100;
   const health = fly.health ?? 100;
   const fatiguePct =
@@ -178,7 +204,7 @@ function FlyStatusCard({
     <button
       type="button"
       className="fly-viewer__status-card"
-      onClick={onSelect}
+      onClick={() => onSelectSlot(index)}
       style={{
         width: '100%',
         textAlign: 'left',
@@ -226,6 +252,8 @@ function FlyStatusCard({
   );
 }
 
+const FlyStatusCardMemo = React.memo(FlyStatusCard);
+
 export default function FlyViewer() {
   const { address } = usePrivyWallet();
   const queryClient = useQueryClient();
@@ -264,6 +292,7 @@ export default function FlyViewer() {
   const followSimIndexRef = useRef<number | undefined>(undefined);
   const sourcesRef = useRef<WorldSource[]>([]);
   const activityForBrainRef = useRef<Record<string, number>>({});
+  const flyCardDataRef = useRef<Map<number, { fly: FlyState; points: number }>>(new Map());
 
   const { data: myFlies = [] } = useQuery({
     queryKey: ['my-flies', address ?? ''],
@@ -452,6 +481,27 @@ export default function FlyViewer() {
   const activeCount = Object.keys(activityForSelected).length;
 
   const getBrainActivity = useCallback(() => activityForBrainRef.current, []);
+
+  const onSelectFlySlot = useCallback((slot: number) => setSelectedFlyIndex(slot), []);
+
+  const getFlyCardData = useCallback((slotIndex: number) => {
+    const entry = flyCardDataRef.current.get(slotIndex);
+    return entry ?? { fly: DEFAULT_FLY, points: 0 };
+  }, []);
+
+  useEffect(() => {
+    for (let i = 0; i < 3; i++) {
+      const simIdx = deployed[i];
+      const hasSimFly = simIdx != null && flies[simIdx] != null;
+      const simFly = hasSimFly ? flies[simIdx]! : DEFAULT_FLY;
+      const pts = statsBySlot[i] ?? 0;
+      const next = { fly: simFly, points: pts };
+      const prev = flyCardDataRef.current.get(i);
+      if (!prev || !flyCardDataEqual(prev, next)) {
+        flyCardDataRef.current.set(i, next);
+      }
+    }
+  }, [flies, deployed, statsBySlot]);
 
   useEffect(() => {
     const prev = activityForBrainRef.current;
@@ -712,12 +762,11 @@ export default function FlyViewer() {
                               </button>
                             </div>
                           ) : (
-                            <FlyStatusCard
+                            <FlyStatusCardMemo
                               index={i}
-                              fly={simFly}
+                              getFlyData={getFlyCardData}
                               selected={i === selectedFlyIndex}
-                              onSelect={() => setSelectedFlyIndex(i)}
-                              points={statsBySlot[i] ?? 0}
+                              onSelectSlot={onSelectFlySlot}
                             />
                           )}
                         </div>

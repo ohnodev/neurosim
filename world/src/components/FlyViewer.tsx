@@ -368,6 +368,8 @@ export default function FlyViewer() {
               activity: f.activity ?? f.activities?.[0],
             });
           }
+          const maxT = buf[buf.length - 1]?.t ?? 0;
+          while (buf.length > 1 && (buf[0]?.t ?? 0) < maxT - 1) buf.shift();
         } else {
           const fliesArr = Array.isArray(data.flies) ? data.flies : data.fly ? [data.fly] : null;
           if (fliesArr) {

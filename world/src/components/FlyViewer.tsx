@@ -4,7 +4,7 @@ import type { WorldSource } from '../../../api/src/world';
 import { subscribeSim, type FlyState } from '../lib/simWsClient';
 import { type Snapshot, REST_DURATION_FALLBACK } from '../lib/flyInterpolation';
 import { getApiBase } from '../lib/constants';
-import { BrainOverlay, type NeuronWithPosition } from './BrainOverlay';
+import { BrainOverlay } from './BrainOverlay';
 import { ConnectButton } from './ConnectButton';
 import { BuyFlyModal } from './BuyFlyModal';
 import { initThreeScene, type InterpolationDebugStats, type CameraMode } from '../lib/threeScene';
@@ -265,7 +265,6 @@ export default function FlyViewer() {
   const [error, setError] = useState<string | null>(null);
   const [activity, setActivity] = useState<Record<string, number>>({});
   const [activities, setActivities] = useState<(Record<string, number> | undefined)[]>([]);
-  const [neuronsWithPositions, setNeuronsWithPositions] = useState<NeuronWithPosition[]>([]);
   const [cameraMode, setCameraMode] = useState<CameraMode>('god');
   const [fliesPanelOpen, setFliesPanelOpen] = useState(
     () => typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches ? false : true
@@ -291,7 +290,6 @@ export default function FlyViewer() {
   const cameraModeRef = useRef<CameraMode>('god');
   const followSimIndexRef = useRef<number | undefined>(undefined);
   const sourcesRef = useRef<WorldSource[]>([]);
-  const activityForBrainRef = useRef<Record<string, number>>({});
   const flyCardDataRef = useRef<Map<number, { fly: FlyState; points: number }>>(new Map());
 
   const { data: myFlies = [] } = useQuery({
@@ -345,12 +343,11 @@ export default function FlyViewer() {
       .then((r) => r.ok ? r.json() : Promise.reject(new Error(r.statusText)))
       .then((d) => {
         if (!Array.isArray(d.neurons)) throw new Error('Invalid /api/neurons response');
-        const list = d.neurons as { root_id: string; role?: string; side?: string; cell_type?: string; x?: number; y?: number; z?: number }[];
-        setNeuronsWithPositions(list.map((n) => ({ root_id: n.root_id, side: n.side, x: n.x, y: n.y, z: n.z })));
+        const list = d.neurons as { root_id: string; role?: string; cell_type?: string; x?: number; y?: number; z?: number }[];
         const labels: Record<string, string> = {};
         for (const n of list) {
           const full = [n.cell_type, n.role].filter(Boolean).join(' ') || n.root_id;
-          labels[n.root_id] = full; // keep full label; UI uses overflow: ellipsis if needed
+          labels[n.root_id] = full;
         }
         setNeuronLabels(labels);
       })
@@ -480,8 +477,6 @@ export default function FlyViewer() {
       : activity;
   const activeCount = Object.keys(activityForSelected).length;
 
-  const getBrainActivity = useCallback(() => activityForBrainRef.current, []);
-
   const onSelectFlySlot = useCallback((slot: number) => setSelectedFlyIndex(slot), []);
 
   const getFlyCardData = useCallback((slotIndex: number) => {
@@ -502,22 +497,6 @@ export default function FlyViewer() {
       }
     }
   }, [flies, deployed, statsBySlot]);
-
-  useEffect(() => {
-    const prev = activityForBrainRef.current;
-    const keysPrev = Object.keys(prev);
-    const keysNext = Object.keys(activityForSelected);
-    if (keysPrev.length !== keysNext.length) {
-      activityForBrainRef.current = activityForSelected;
-      return;
-    }
-    for (const k of keysNext) {
-      if (prev[k] !== activityForSelected[k]) {
-        activityForBrainRef.current = activityForSelected;
-        return;
-      }
-    }
-  }, [activityForSelected]);
 
   const topActivity = Object.entries(activityForSelected)
     .sort(([, a], [, b]) => b - a)
@@ -875,7 +854,7 @@ export default function FlyViewer() {
             <div className="fly-viewer__brain-content">
               <div style={{ color: '#888', marginBottom: 6 }}>Brain activity — Fly {selectedFlyIndex + 1} (viewing)</div>
               <div className="fly-viewer__brain-plot">
-                <BrainOverlay neurons={neuronsWithPositions} getActivity={getBrainActivity} visible={connected} embedded />
+                <BrainOverlay followSimIndexRef={followSimIndexRef} visible={connected} embedded />
               </div>
             </div>
           </div>

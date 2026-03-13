@@ -88,6 +88,7 @@ function startSim(): void {
     }
   }, 10_000);
   simIntervalId = setInterval(() => {
+    const loopStart = performance.now();
     const dt = 1 / SIM_FPS;
     const frames: { t: number; flies: ReturnType<typeof sims[0]['getState']>['fly'][]; activities: (Record<string, number> | undefined)[]; activity?: Record<string, number>; sources: WorldSource[] }[] = [];
     for (let i = 0; i < FRAMES_PER_BATCH; i++) {
@@ -112,7 +113,8 @@ function startSim(): void {
     if (connectionStep % 15 === 0) {
       const last = frames[frames.length - 1];
       const first = last?.flies[0];
-      console.log('[sim] t=', last?.t.toFixed(1), 'flies=', last?.flies.length ?? 0, first ? `first=(${first.x?.toFixed(2)},${first.y?.toFixed(2)})` : '', 'clients=', wsClients.size);
+      const loopMs = Math.round(performance.now() - loopStart);
+      console.log('[sim] t=', last?.t.toFixed(1), 'flies=', last?.flies.length ?? 0, first ? `first=(${first.x?.toFixed(2)},${first.y?.toFixed(2)})` : '', 'clients=', wsClients.size, 'loopMs=', loopMs);
     }
   }, BATCH_MS);
   rewardFlushIntervalId = setInterval(() => void flushRewards(), 60_000);

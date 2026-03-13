@@ -16,3 +16,4 @@ api/data/dead-letter.json
 *.log
 .pm2/
 .venv/
+api/brain-sim-rs/target/

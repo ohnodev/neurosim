@@ -3,9 +3,55 @@
 use cudarc::driver::safe::{CudaDevice, CudaSlice, LaunchAsync, LaunchConfig};
 use cudarc::nvrtc::safe::compile_ptx;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::OnceLock;
 
 static DEVICE: OnceLock<Option<Arc<CudaDevice>>> = OnceLock::new();
+
+/// Shared connectome edge buffers — uploaded once, reused by all flies.
+struct SharedEdges {
+    edge_pre: CudaSlice<u32>,
+    edge_post: CudaSlice<u32>,
+    edge_weight: CudaSlice<f32>,
+    n_edges: usize,
+}
+
+static EDGE_CACHE: Mutex<Option<Arc<SharedEdges>>> = Mutex::new(None);
+
+fn get_or_create_shared_edges(
+    device: &Arc<CudaDevice>,
+    n: usize,
+    adj: &[Vec<(u32, f32)>],
+) -> Option<Arc<SharedEdges>> {
+    let mut cache = EDGE_CACHE.lock().ok()?;
+    if let Some(ref shared) = *cache {
+        return Some(Arc::clone(shared));
+    }
+    let mut edge_pre = Vec::with_capacity(1024);
+    let mut edge_post = Vec::with_capacity(1024);
+    let mut edge_weight = Vec::with_capacity(1024);
+    for (pre_idx, list) in adj.iter().enumerate() {
+        for &(post_idx, weight) in list {
+            if (post_idx as usize) < n {
+                edge_pre.push(pre_idx as u32);
+                edge_post.push(post_idx);
+                edge_weight.push(weight.min(10.0));
+            }
+        }
+    }
+    let n_edges = edge_pre.len();
+    let edge_pre_dev = device.htod_sync_copy(&edge_pre).ok()?;
+    let edge_post_dev = device.htod_sync_copy(&edge_post).ok()?;
+    let edge_weight_dev = device.htod_sync_copy(&edge_weight).ok()?;
+    let shared = Arc::new(SharedEdges {
+        edge_pre: edge_pre_dev,
+        edge_post: edge_post_dev,
+        edge_weight: edge_weight_dev,
+        n_edges,
+    });
+    *cache = Some(Arc::clone(&shared));
+    Some(shared)
+}
 
 const KERNEL_SRC: &str = r#"
 extern "C" __global__ void decay_kernel(
@@ -73,9 +119,7 @@ pub struct GpuSimState {
     n_edges: usize,
     activity: CudaSlice<f32>,
     next: CudaSlice<f32>,
-    edge_pre: CudaSlice<u32>,
-    edge_post: CudaSlice<u32>,
-    edge_weight: CudaSlice<f32>,
+    edges: Arc<SharedEdges>,
 }
 
 impl GpuSimState {
@@ -85,27 +129,11 @@ impl GpuSimState {
         initial_activity: &[f32],
     ) -> Option<Self> {
         let device = get_device()?.clone();
-
-        let mut edge_pre = Vec::with_capacity(1024);
-        let mut edge_post = Vec::with_capacity(1024);
-        let mut edge_weight = Vec::with_capacity(1024);
-
-        for (pre_idx, list) in adj.iter().enumerate() {
-            for &(post_idx, weight) in list {
-                if (post_idx as usize) < n {
-                    edge_pre.push(pre_idx as u32);
-                    edge_post.push(post_idx);
-                    edge_weight.push(weight.min(10.0));
-                }
-            }
-        }
-        let n_edges = edge_pre.len();
+        let edges = get_or_create_shared_edges(&device, n, adj)?;
+        let n_edges = edges.n_edges;
 
         let activity = device.htod_sync_copy(initial_activity).ok()?;
         let next = device.alloc_zeros(n).ok()?;
-        let edge_pre_dev = device.htod_sync_copy(&edge_pre).ok()?;
-        let edge_post_dev = device.htod_sync_copy(&edge_post).ok()?;
-        let edge_weight_dev = device.htod_sync_copy(&edge_weight).ok()?;
 
         Some(Self {
             device,
@@ -113,9 +141,7 @@ impl GpuSimState {
             n_edges,
             activity,
             next,
-            edge_pre: edge_pre_dev,
-            edge_post: edge_post_dev,
-            edge_weight: edge_weight_dev,
+            edges,
         })
     }
 
@@ -164,9 +190,9 @@ impl GpuSimState {
                     (
                         &self.activity,
                         &mut self.next,
-                        &self.edge_pre,
-                        &self.edge_post,
-                        &self.edge_weight,
+                        &self.edges.edge_pre,
+                        &self.edges.edge_post,
+                        &self.edges.edge_weight,
                         n_edges,
                         tau_r,
                         prop_cap_r,

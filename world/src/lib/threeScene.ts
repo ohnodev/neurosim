@@ -254,7 +254,6 @@ export function initThreeScene(
 
   let flyTemplate: THREE.Group | null = null;
   let flyClips: THREE.AnimationClip[] = [];
-  let appleTemplate: THREE.Group | null = null;
   const mixers: THREE.AnimationMixer[] = [];
   const flyInstances: {
     group: THREE.Group;
@@ -278,15 +277,6 @@ export function initThreeScene(
     undefined,
     (err) => console.error('[threeScene] fly load error:', err)
   );
-  loader.load(
-    '/models/low-poly_apple/scene.gltf',
-    (gltf) => {
-      appleTemplate = gltf.scene.clone(true);
-    },
-    undefined,
-    (err) => console.error('[threeScene] apple load error:', err)
-  );
-
   let flyStates: FlyState[] = [];
   let lastSources: WorldSource[] = [];
   const smoothDeltaRef = { current: 0.016 };
@@ -318,12 +308,9 @@ export function initThreeScene(
   }
 
   function createSourceObject(s: WorldSource): THREE.Object3D {
-    if (s.type === 'food' && appleTemplate) {
-      const clone = cloneWithOwnResources(appleTemplate);
-      clone.scale.setScalar(1.2);
-      return clone;
-    }
-    const geom = new THREE.SphereGeometry(0.8, 24, 24);
+    // Use BoxGeometry (12 tris) instead of SphereGeometry (~1100 tris) - instant, no load delay
+    const size = s.type === 'food' ? 0.9 : 0.8;
+    const geom = new THREE.BoxGeometry(size, size, size);
     const mat =
       s.type === 'food'
         ? new THREE.MeshStandardMaterial({ color: 0xe8a838 })
@@ -559,7 +546,6 @@ export function initThreeScene(
       disposeObject3D(c);
     }
     if (flyTemplate) disposeObject3D(flyTemplate);
-    if (appleTemplate) disposeObject3D(appleTemplate);
   };
   return { dispose, updateButton };
 }

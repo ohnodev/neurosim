@@ -4,7 +4,7 @@ import { useSimDisplayDataSelector } from '../../lib/simDisplayContext';
 import { resolveEffectiveSimIndex } from '../../lib/flyViewerUtils';
 
 export const CameraToggleSlot = React.memo(
-  React.forwardRef<HTMLDivElement, { deployed: Record<number, number>; selectedFlyIndex: number }>(
+  React.forwardRef<HTMLDivElement, { deployed: Record<number, number | null | undefined>; selectedFlyIndex: number }>(
     function CameraToggleSlot({ deployed, selectedFlyIndex }, ref) {
       const { effectiveSimIndex } = useSimDisplayDataSelector(
         useCallback(

@@ -30,10 +30,6 @@ export function SimStateSync({
       const flies = latestFliesRef.current;
       const effectiveSimIndex = resolveEffectiveSimIndex(flies, deployed, selectedFlyIndex, deployedSlotKeys);
       const simIndexForSelected = deployed[selectedFlyIndex];
-      const focusedFly: FlyState =
-        effectiveSimIndex != null && flies[effectiveSimIndex]
-          ? flies[effectiveSimIndex]!
-          : DEFAULT_FLY;
 
       followSimIndexRef.current = effectiveSimIndex;
 
@@ -53,6 +49,7 @@ export function SimStateSync({
       }
 
       if (effectiveSimIndex != null) {
+        const focusedFly: FlyState = flies[effectiveSimIndex] ?? DEFAULT_FLY;
         cameraTargetRef.current = {
           x: focusedFly.x ?? 0,
           y: focusedFly.y ?? 0,

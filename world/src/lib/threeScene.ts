@@ -259,6 +259,7 @@ export function initThreeScene(
   let flyTemplate: THREE.Group | null = null;
   let flyClips: THREE.AnimationClip[] = [];
   const applePool: THREE.Object3D[] = [];
+  let appleTemplate: THREE.Object3D | null = null;
   const mixers: THREE.AnimationMixer[] = [];
   const flyInstances: {
     group: THREE.Group;
@@ -282,19 +283,25 @@ export function initThreeScene(
     undefined,
     (err) => console.error('[threeScene] fly load error:', err)
   );
+  function getOrCreateApple(): THREE.Object3D | null {
+    const unused = applePool.find((a) => !a.visible);
+    if (unused) return unused;
+    if (!appleTemplate) return null;
+    const clone = cloneWithOwnResources(appleTemplate);
+    clone.scale.setScalar(1.2);
+    clone.visible = false;
+    applePool.push(clone);
+    sourcesGroup.add(clone);
+    return clone;
+  }
+
   loader.load(
     '/models/low-poly_apple/scene.gltf',
     (gltf) => {
       if (disposed) return;
-      const template = gltf.scene.clone(true);
-      for (let i = 0; i < 2; i++) {
-        const clone = cloneWithOwnResources(template);
-        clone.scale.setScalar(1.2);
-        clone.visible = false;
-        applePool.push(clone);
-        sourcesGroup.add(clone);
-      }
-      disposeObject3D(template);
+      appleTemplate = gltf.scene.clone(true);
+      getOrCreateApple();
+      getOrCreateApple();
       updateWorldSources(lastSources);
     },
     undefined,
@@ -333,16 +340,16 @@ export function initThreeScene(
 
   function updateWorldSources(sources: WorldSource[]): void {
     const foodSources = sources.filter((s) => s.type === 'food');
-
-    for (let i = 0; i < applePool.length; i++) {
-      const apple = applePool[i]!;
-      if (i < foodSources.length) {
+    for (let i = 0; i < foodSources.length; i++) {
+      const apple = applePool[i] ?? getOrCreateApple();
+      if (apple) {
         const s = foodSources[i]!;
         apple.position.set(s.x, s.z, s.y);
         apple.visible = true;
-      } else {
-        apple.visible = false;
       }
+    }
+    for (let i = foodSources.length; i < applePool.length; i++) {
+      applePool[i]!.visible = false;
     }
 
     for (const c of sourcesGroup.children.slice()) {

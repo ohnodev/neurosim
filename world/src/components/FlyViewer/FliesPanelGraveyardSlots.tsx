@@ -15,7 +15,15 @@ export function FliesPanelGraveyardSlots({
       {[0, 1, 2].map((i) => {
         const inGraveyard = graveyardSlots.has(i);
         const pts = statsBySlot[i] ?? 0;
-        const wei = rewardPerPointWei ? BigInt(rewardPerPointWei) * BigInt(pts) : 0n;
+        let wei = 0n;
+        if (rewardPerPointWei && pts > 0) {
+          try {
+            const parsed = BigInt(rewardPerPointWei);
+            wei = parsed * BigInt(pts);
+          } catch {
+            wei = 0n;
+          }
+        }
         const ethStr = pts > 0 ? formatEth(wei) : '0';
         return (
           <div key={i} className={`fly-viewer__fly-slot fly-viewer__fly-slot--graveyard ${!inGraveyard ? 'fly-viewer__fly-slot--graveyard-empty' : ''}`}>

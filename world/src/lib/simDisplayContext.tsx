@@ -76,6 +76,32 @@ export interface StatusPanelSlice {
   activeCount: number;
 }
 
+function computeStatusPanelSlice(
+  flies: FlyState[],
+  activities: (Record<string, number> | undefined)[],
+  activity: Record<string, number>,
+  deployed: Record<number, number | null | undefined>,
+  selectedFlyIndex: number,
+  resolveEffectiveSimIndex: (
+    flies: FlyState[],
+    deployed: Record<number, number | null | undefined>,
+    selectedFlyIndex: number
+  ) => number | undefined,
+  defaultFly: FlyState
+): StatusPanelSlice {
+  const effectiveSimIndex = resolveEffectiveSimIndex(flies, deployed, selectedFlyIndex);
+  const focusedFly =
+    effectiveSimIndex != null && flies[effectiveSimIndex] ? flies[effectiveSimIndex]! : defaultFly;
+  const activityForSelected =
+    effectiveSimIndex != null && Array.isArray(activities)
+      ? (activities[effectiveSimIndex] ?? activity)
+      : activity;
+  const topActivity = Object.entries(activityForSelected)
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, 10) as [string, number][];
+  return { flies, focusedFly, topActivity, activeCount: Object.keys(activityForSelected).length };
+}
+
 export function useStatusPanelData(
   intervalMs: number,
   deployed: Record<number, number | null | undefined>,
@@ -89,52 +115,43 @@ export function useStatusPanelData(
 ): StatusPanelSlice {
   const safeInterval = Math.max(MIN_THROTTLE_MS, Math.floor(Number(intervalMs) || 0));
   const { latestFliesRef, activityRef, activitiesRef } = useSimRefs();
-  const [slice, setSlice] = useState<StatusPanelSlice>(() => {
-    const flies = latestFliesRef.current;
-    const activities = activitiesRef.current;
-    const activity = activityRef.current;
-    const effectiveSimIndex = resolveEffectiveSimIndex(flies, deployed, selectedFlyIndex);
-    const focusedFly =
-      effectiveSimIndex != null && flies[effectiveSimIndex]
-        ? flies[effectiveSimIndex]!
-        : defaultFly;
-    const activityForSelected =
-      effectiveSimIndex != null && Array.isArray(activities)
-        ? (activities[effectiveSimIndex] ?? activity)
-        : activity;
-    const topActivity = Object.entries(activityForSelected)
-      .sort(([, a], [, b]) => b - a)
-      .slice(0, 10) as [string, number][];
-    return { flies, focusedFly, topActivity, activeCount: Object.keys(activityForSelected).length };
-  });
+  const [slice, setSlice] = useState<StatusPanelSlice>(() =>
+    computeStatusPanelSlice(
+      latestFliesRef.current,
+      activitiesRef.current,
+      activityRef.current,
+      deployed,
+      selectedFlyIndex,
+      resolveEffectiveSimIndex,
+      defaultFly
+    )
+  );
 
   useEffect(() => {
     const id = setInterval(() => {
       const flies = latestFliesRef.current;
       const activities = activitiesRef.current;
       const activity = activityRef.current;
-      const effectiveSimIndex = resolveEffectiveSimIndex(flies, deployed, selectedFlyIndex);
-      const focusedFly =
-        effectiveSimIndex != null && flies[effectiveSimIndex]
-          ? flies[effectiveSimIndex]!
-          : defaultFly;
-      const activityForSelected =
-        effectiveSimIndex != null && Array.isArray(activities)
-          ? (activities[effectiveSimIndex] ?? activity)
-          : activity;
-      const topActivity = Object.entries(activityForSelected)
-        .sort(([, a], [, b]) => b - a)
-        .slice(0, 10) as [string, number][];
-      const activeCount = Object.keys(activityForSelected).length;
+      const nextSlice = computeStatusPanelSlice(
+        flies,
+        activities,
+        activity,
+        deployed,
+        selectedFlyIndex,
+        resolveEffectiveSimIndex,
+        defaultFly
+      );
       setSlice((prev) => {
         if (
-          prev.flies !== flies ||
-          prev.focusedFly !== focusedFly ||
-          prev.activeCount !== activeCount ||
-          prev.topActivity.length !== topActivity.length ||
-          prev.topActivity.some(([id, v], i) => id !== topActivity[i]?.[0] || v !== topActivity[i]?.[1])
+          prev.flies !== nextSlice.flies ||
+          prev.focusedFly !== nextSlice.focusedFly ||
+          prev.activeCount !== nextSlice.activeCount ||
+          prev.topActivity.length !== nextSlice.topActivity.length ||
+          prev.topActivity.some(
+            ([id, v], i) => id !== nextSlice.topActivity[i]?.[0] || v !== nextSlice.topActivity[i]?.[1]
+          )
         ) {
-          return { flies, focusedFly, topActivity, activeCount };
+          return nextSlice;
         }
         return prev;
       });

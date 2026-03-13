@@ -159,7 +159,6 @@ export function createBrainSim(
       if (pulse > 0) {
         let foodSignal = 0;
         for (const s of currentSources) {
-          if (s.type !== 'food') continue;
           const dist = Math.hypot(s.x - fly.x, s.y - fly.y);
           if (dist < 1) continue;
           const invDist = 1 / (1 + dist * 0.1);
@@ -226,7 +225,6 @@ export function createBrainSim(
     let eatenFoodId: string | undefined;
     if (canFlyEat) {
       for (const s of currentSources) {
-        if (s.type !== 'food') continue;
         const dist = Math.hypot(s.x - fly.x, s.y - fly.y);
         if (dist < EAT_RADIUS) {
           isEating = true;
@@ -305,7 +303,6 @@ export function createBrainSim(
       let nearestDy = 0;
       let nearestWeight = 1;
       for (const s of currentSources) {
-        if (s.type !== 'food') continue;
         const dx = s.x - fly.x;
         const dy = s.y - fly.y;
         const dist = Math.hypot(dx, dy);

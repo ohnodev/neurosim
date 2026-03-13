@@ -67,42 +67,54 @@ export function FliesPanelCurrentSlots(props: {
     )
   );
 
+  const renderSlot = (i: number) => {
+    const slotType = slotTypes[`slot${i}`];
+    const isEmpty = myFlies.length === 0 && i === 0;
+    switch (slotType) {
+      case 'graveyard':
+        return <FlySlotGraveyard index={i} />;
+      case 'buy':
+        return <FlySlotBuy index={i} isEmpty={isEmpty} setBuyFlySlot={setBuyFlySlot} />;
+      case 'deploy':
+        return <FlySlotDeploy index={i} deployFly={deployFly} setError={setError} />;
+      case 'connecting':
+        return <FlySlotConnecting index={i} />;
+      case 'dead':
+        return (
+          <FlySlotDead
+            index={i}
+            statsBySlot={statsBySlot}
+            address={address}
+            graveyardSlots={graveyardSlots}
+            deployed={deployed}
+            selectedFlyIndex={selectedFlyIndex}
+            onSelectSlot={onSelectSlot}
+            setGraveyardByWallet={setGraveyardByWallet}
+            latestFliesRef={latestFliesRef}
+          />
+        );
+      case 'active':
+        return (
+          <FlyStatusCardMemo
+            index={i}
+            getFlyData={getFlyCardData}
+            selected={i === selectedFlyIndex}
+            onSelectSlot={onSelectSlot}
+          />
+        );
+      default:
+        return null;
+    }
+  };
+
   return (
     <>
       <div className="fly-viewer__current-title">Current Flies</div>
-      {[0, 1, 2].map((i) => {
-        const slotType = slotTypes[`slot${i}`];
-        const isEmpty = myFlies.length === 0 && i === 0;
-        return (
-          <div key={i} className="fly-viewer__fly-slot">
-            {slotType === 'graveyard' && <FlySlotGraveyard index={i} />}
-            {slotType === 'buy' && <FlySlotBuy index={i} isEmpty={isEmpty} setBuyFlySlot={setBuyFlySlot} />}
-            {slotType === 'deploy' && <FlySlotDeploy index={i} deployFly={deployFly} setError={setError} />}
-            {slotType === 'connecting' && <FlySlotConnecting index={i} />}
-            {slotType === 'dead' && (
-              <FlySlotDead
-                index={i}
-                statsBySlot={statsBySlot}
-                address={address}
-                graveyardSlots={graveyardSlots}
-                deployed={deployed}
-                selectedFlyIndex={selectedFlyIndex}
-                onSelectSlot={onSelectSlot}
-                setGraveyardByWallet={setGraveyardByWallet}
-                latestFliesRef={latestFliesRef}
-              />
-            )}
-            {slotType === 'active' && (
-              <FlyStatusCardMemo
-                index={i}
-                getFlyData={getFlyCardData}
-                selected={i === selectedFlyIndex}
-                onSelectSlot={onSelectSlot}
-              />
-            )}
-          </div>
-        );
-      })}
+      {[0, 1, 2].map((i) => (
+        <div key={i} className="fly-viewer__fly-slot">
+          {renderSlot(i)}
+        </div>
+      ))}
     </>
   );
 }

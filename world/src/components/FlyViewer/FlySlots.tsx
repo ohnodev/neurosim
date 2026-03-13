@@ -163,6 +163,7 @@ export function FlyStatusCard({
   const { fly, points } = data;
   const hunger = fly.hunger ?? 100;
   const health = fly.health ?? 100;
+  // When restTimeLeft > 0: recovery progress (100 - remaining rest %). Else: remaining active fly time %.
   const fatiguePct =
     fly.restTimeLeft != null && fly.restTimeLeft > 0
       ? 100 - ((fly.restTimeLeft ?? 0) / (fly.restDuration ?? REST_DURATION_FALLBACK)) * 100

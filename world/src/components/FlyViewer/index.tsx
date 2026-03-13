@@ -2,7 +2,7 @@ import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { WorldSource } from '../../../../api/src/world';
 import { subscribeSim, type FlyState } from '../../lib/simWsClient';
-import { type Snapshot, MAX_SNAPSHOT_BUFFER } from '../../lib/flyInterpolation';
+import { type Snapshot, MAX_SNAPSHOT_BUFFER, trimSnapshotBuffer } from '../../lib/flyInterpolation';
 import { getApiBase } from '../../lib/constants';
 import {
   apiKeys,
@@ -22,6 +22,7 @@ import { usePrivyWallet } from '../../lib/usePrivyWallet';
 import { RewardsTable } from '../RewardsTable';
 import { StatusPanelStatusContent } from '../StatusPanelStatusContent';
 import { DEFAULT_FLY, flyCardDataEqual } from '../../lib/flyViewerUtils';
+import { isMobileViewport } from '../../lib/mediaQuery';
 import { CameraToggleSlot } from './CameraToggleSlot';
 import { SimStateSync } from './SimStateSync';
 import { SimStatusSlot } from './SimStatusSlot';
@@ -37,9 +38,7 @@ export default function FlyViewer() {
   const [selectedFlyIndex, setSelectedFlyIndex] = useState(0);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [fliesPanelOpen, setFliesPanelOpen] = useState(
-    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches ? false : true
-  );
+  const [fliesPanelOpen, setFliesPanelOpen] = useState(() => !isMobileViewport());
   const [buyFlySlot, setBuyFlySlot] = useState<number | null>(null);
   const [fliesTab, setFliesTab] = useState<'current' | 'graveyard'>('current');
   const [graveyardByWallet, setGraveyardByWallet] = useState<Record<string, Set<number>>>(() => ({}));
@@ -47,10 +46,9 @@ export default function FlyViewer() {
     () => graveyardByWallet[address ?? ''] ?? new Set(),
     [graveyardByWallet, address]
   );
-  const isMobileDefault = () => typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches;
-  const [statusPanelOpen, setStatusPanelOpen] = useState(() => !isMobileDefault());
+  const [statusPanelOpen, setStatusPanelOpen] = useState(() => !isMobileViewport());
   const [statusTab, setStatusTab] = useState<'status' | 'rewards'>('status');
-  const [brainPanelOpen, setBrainPanelOpen] = useState(() => !isMobileDefault());
+  const [brainPanelOpen, setBrainPanelOpen] = useState(() => !isMobileViewport());
 
   const snapshotBufferRef = useRef<Snapshot[]>([]);
   const latestFliesRef = useRef<FlyState[]>([]);
@@ -163,21 +161,15 @@ export default function FlyViewer() {
         if (Array.isArray(data.frames) && data.frames.length > 0) {
           const firstNewT = data.frames[0]?.t ?? 0;
           if (firstNewT < lastT) buf.length = 0;
-          for (const f of data.frames) {
-            buf.push({ t: f.t, flies: f.flies, sources: f.sources });
-          }
-          const maxT = buf[buf.length - 1]?.t ?? 0;
-          while (buf.length > 1 && (buf[0]?.t ?? 0) < maxT - 1) buf.shift();
-          while (buf.length > MAX_SNAPSHOT_BUFFER) buf.shift();
+          for (const f of data.frames) buf.push({ t: f.t, flies: f.flies, sources: f.sources });
+          trimSnapshotBuffer(buf, MAX_SNAPSHOT_BUFFER);
         } else {
           const fliesArr = Array.isArray(data.flies) ? data.flies : data.fly ? [data.fly] : null;
           if (fliesArr) {
             const newT = data.t ?? 0;
             if (newT < lastT) buf.length = 0;
             buf.push({ t: newT, flies: fliesArr });
-            const maxT = buf[buf.length - 1]?.t ?? 0;
-            while (buf.length > 1 && (buf[0]?.t ?? 0) < maxT - 1) buf.shift();
-            while (buf.length > MAX_SNAPSHOT_BUFFER) buf.shift();
+            trimSnapshotBuffer(buf, MAX_SNAPSHOT_BUFFER);
           }
         }
         const last = buf[buf.length - 1];

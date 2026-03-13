@@ -15,7 +15,7 @@ import {
   type NeuronRaw,
 } from '../lib/api';
 import { BrainOverlay } from './BrainOverlay';
-import { SimRefsProvider, useSimDisplayData, useSimDisplayDataSelector, useSimDisplayDataThrottled } from '../lib/simDisplayContext';
+import { SimRefsProvider, useSimDisplayData, useSimDisplayDataSelector, useStatusPanelData } from '../lib/simDisplayContext';
 import { ConnectButton } from './ConnectButton';
 import { BuyFlyModal } from './BuyFlyModal';
 import { initThreeScene, type InterpolationDebugStats, type CameraMode, type SimStatusRefs } from '../lib/threeScene';
@@ -395,7 +395,7 @@ const DebugPanelSlot = React.memo(React.forwardRef<HTMLDivElement>(function Debu
   return <div ref={ref} style={{ position: 'absolute', bottom: 0, left: 0 }} />;
 }));
 
-/** Status tab body. Uses throttled data (500ms) to reduce re-renders. */
+/** Status tab body. Uses minimal slice (no full activities in state) to avoid memory leak. */
 function StatusPanelStatusContent({
   deployed,
   selectedFlyIndex,
@@ -405,21 +405,14 @@ function StatusPanelStatusContent({
   selectedFlyIndex: number;
   neuronLabels: Record<string, string>;
 }) {
-  const { flies, activities, activity } = useSimDisplayDataThrottled(500);
-  const effectiveSimIndex = resolveEffectiveSimIndex(flies, deployed, selectedFlyIndex);
-  const focusedFly =
-    effectiveSimIndex != null && flies[effectiveSimIndex]
-      ? flies[effectiveSimIndex]!
-      : DEFAULT_FLY;
-  const activityForSelected =
-    effectiveSimIndex != null && Array.isArray(activities)
-      ? (activities[effectiveSimIndex] ?? {})
-      : activity;
-  const topActivity = Object.entries(activityForSelected)
-    .sort(([, a], [, b]) => b - a)
-    .slice(0, 10);
+  const { focusedFly, topActivity, activeCount } = useStatusPanelData(
+    500,
+    deployed,
+    selectedFlyIndex,
+    resolveEffectiveSimIndex,
+    DEFAULT_FLY
+  );
   const flyMode = getFlyMode(focusedFly);
-  const activeCount = Object.keys(activityForSelected).length;
 
   return (
     <div className="fly-viewer__status-tab-body">

@@ -65,8 +65,90 @@ export function useSimDisplayData(): {
 const MIN_THROTTLE_MS = 50;
 
 /**
+ * Status panel display slice - small objects only, never stores full activities.
+ * Use this instead of useSimDisplayDataThrottled for status to avoid retaining
+ * large activity maps in React memoizedState.
+ */
+export interface StatusPanelSlice {
+  flies: FlyState[];
+  focusedFly: FlyState;
+  topActivity: [string, number][];
+  activeCount: number;
+}
+
+export function useStatusPanelData(
+  intervalMs: number,
+  deployed: Record<number, number | null | undefined>,
+  selectedFlyIndex: number,
+  resolveEffectiveSimIndex: (
+    flies: FlyState[],
+    deployed: Record<number, number | null | undefined>,
+    selectedFlyIndex: number
+  ) => number | undefined,
+  defaultFly: FlyState
+): StatusPanelSlice {
+  const safeInterval = Math.max(MIN_THROTTLE_MS, Math.floor(Number(intervalMs) || 0));
+  const { latestFliesRef, activityRef, activitiesRef } = useSimRefs();
+  const [slice, setSlice] = useState<StatusPanelSlice>(() => {
+    const flies = latestFliesRef.current;
+    const activities = activitiesRef.current;
+    const activity = activityRef.current;
+    const effectiveSimIndex = resolveEffectiveSimIndex(flies, deployed, selectedFlyIndex);
+    const focusedFly =
+      effectiveSimIndex != null && flies[effectiveSimIndex]
+        ? flies[effectiveSimIndex]!
+        : defaultFly;
+    const activityForSelected =
+      effectiveSimIndex != null && Array.isArray(activities)
+        ? (activities[effectiveSimIndex] ?? activity)
+        : activity;
+    const topActivity = Object.entries(activityForSelected)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 10) as [string, number][];
+    return { flies, focusedFly, topActivity, activeCount: Object.keys(activityForSelected).length };
+  });
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      const flies = latestFliesRef.current;
+      const activities = activitiesRef.current;
+      const activity = activityRef.current;
+      const effectiveSimIndex = resolveEffectiveSimIndex(flies, deployed, selectedFlyIndex);
+      const focusedFly =
+        effectiveSimIndex != null && flies[effectiveSimIndex]
+          ? flies[effectiveSimIndex]!
+          : defaultFly;
+      const activityForSelected =
+        effectiveSimIndex != null && Array.isArray(activities)
+          ? (activities[effectiveSimIndex] ?? activity)
+          : activity;
+      const topActivity = Object.entries(activityForSelected)
+        .sort(([, a], [, b]) => b - a)
+        .slice(0, 10) as [string, number][];
+      const activeCount = Object.keys(activityForSelected).length;
+      setSlice((prev) => {
+        if (
+          prev.flies !== flies ||
+          prev.focusedFly !== focusedFly ||
+          prev.activeCount !== activeCount ||
+          prev.topActivity.length !== topActivity.length ||
+          prev.topActivity.some(([id, v], i) => id !== topActivity[i]?.[0] || v !== topActivity[i]?.[1])
+        ) {
+          return { flies, focusedFly, topActivity, activeCount };
+        }
+        return prev;
+      });
+    }, safeInterval);
+    return () => clearInterval(id);
+  }, [latestFliesRef, activityRef, activitiesRef, deployed, selectedFlyIndex, resolveEffectiveSimIndex, defaultFly, safeInterval]);
+
+  return slice;
+}
+
+/**
  * Throttled version - only updates every intervalMs. Use for components
  * that show live data but don't need 5 updates/sec.
+ * WARNING: Puts full activities in React state. Prefer useStatusPanelData for status panel.
  */
 export function useSimDisplayDataThrottled(intervalMs: number): {
   flies: FlyState[];

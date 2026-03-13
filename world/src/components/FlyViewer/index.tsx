@@ -41,11 +41,6 @@ export default function FlyViewer() {
   const [fliesPanelOpen, setFliesPanelOpen] = useState(() => !isMobileViewport());
   const [buyFlySlot, setBuyFlySlot] = useState<number | null>(null);
   const [fliesTab, setFliesTab] = useState<'current' | 'graveyard'>('current');
-  const [graveyardByWallet, setGraveyardByWallet] = useState<Record<string, Set<number>>>(() => ({}));
-  const graveyardSlots = useMemo(
-    () => graveyardByWallet[address ?? ''] ?? new Set(),
-    [graveyardByWallet, address]
-  );
   const [statusPanelOpen, setStatusPanelOpen] = useState(() => !isMobileViewport());
   const [statusTab, setStatusTab] = useState<'status' | 'rewards'>('status');
   const [brainPanelOpen, setBrainPanelOpen] = useState(() => !isMobileViewport());
@@ -130,6 +125,13 @@ export default function FlyViewer() {
     for (const s of flyStatsData?.stats ?? []) m[s.slotIndex] = s.feedCount;
     return m;
   }, [flyStatsData?.stats]);
+  const graveyardSlots = useMemo(() => {
+    const out = new Set<number>();
+    for (let i = 0; i < 3; i++) {
+      if ((myFlies[i] == null) && (statsBySlot[i] ?? 0) > 0) out.add(i);
+    }
+    return out;
+  }, [myFlies, statsBySlot]);
 
   useEffect(() => {
     const unsub = subscribeSim((event) => {
@@ -330,26 +332,6 @@ export default function FlyViewer() {
     [address, queryClient, refetchDeployed]
   );
 
-  const sendToGraveyard = useCallback(
-    async (slotIndex: number) => {
-      if (!address) return;
-      const r = await fetch(`${getApiBase()}/api/deploy/send-to-graveyard`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ address: address.toLowerCase(), slotIndex }),
-      });
-      if (!r.ok) {
-        const err = await r.json().catch(() => ({}));
-        throw new Error(err.error ?? 'Send to graveyard failed');
-      }
-      queryClient.invalidateQueries({ queryKey: apiKeys.myFlies(address!) });
-      queryClient.invalidateQueries({ queryKey: apiKeys.myDeployed(address!) });
-      queryClient.invalidateQueries({ queryKey: apiKeys.flyStats(address!) });
-      refetchDeployed();
-    },
-    [address, queryClient, refetchDeployed]
-  );
-
   return (
     <SimRefsProvider value={simRefs}>
       <SimStateSync
@@ -423,14 +405,11 @@ export default function FlyViewer() {
                   statsBySlot={statsBySlot}
                   address={address}
                   onSelectSlot={onSelectFlySlot}
-                  setGraveyardByWallet={setGraveyardByWallet}
                   setError={setDeployError}
                   deployFly={deployFly}
-                  sendToGraveyard={sendToGraveyard}
                   setBuyFlySlot={setBuyFlySlot}
                   getFlyCardData={getFlyCardData}
                   subscribeFlyCardTick={subscribeFlyCardTick}
-                  latestFliesRef={latestFliesRef}
                 />
               ) : (
                 <FliesPanelGraveyardSlots

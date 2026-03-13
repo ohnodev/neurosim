@@ -56,6 +56,35 @@ const sims: Awaited<ReturnType<typeof createBrainSim>>[] = [];
 /** address -> slotIndex -> simIndex */
 const deployedFlies = new Map<string, Map<number, number>>();
 
+function findDeploymentBySimIndex(simIndex: number): { address: string; slotIndex: number } | null {
+  for (const [address, slotMap] of deployedFlies) {
+    for (const [slotIndex, mappedIndex] of slotMap) {
+      if (mappedIndex === simIndex) return { address, slotIndex };
+    }
+  }
+  return null;
+}
+
+function removeSimAtIndex(simIndex: number): { address: string; slotIndex: number } | null {
+  if (simIndex < 0 || simIndex >= sims.length) return null;
+  const deployment = findDeploymentBySimIndex(simIndex);
+  sims.splice(simIndex, 1);
+
+  for (const [address, slotMap] of deployedFlies) {
+    for (const [slotIndex, mappedIndex] of slotMap) {
+      if (mappedIndex > simIndex) slotMap.set(slotIndex, mappedIndex - 1);
+    }
+    if (slotMap.size === 0) deployedFlies.delete(address);
+  }
+
+  if (deployment) {
+    const slotMap = deployedFlies.get(deployment.address);
+    slotMap?.delete(deployment.slotIndex);
+    if (slotMap && slotMap.size === 0) deployedFlies.delete(deployment.address);
+  }
+  return deployment;
+}
+
 async function addFlyToSim(): Promise<number> {
   const angle = (2 * Math.PI * sims.length) / Math.max(1, sims.length + 1);
   const x = INITIAL_SPREAD * Math.cos(angle);
@@ -188,6 +217,7 @@ function startSim(): void {
 
       const beforeStates = sims.map((s) => s.getState());
       const states = await Promise.all(sims.map((s) => s.step(batchDt)));
+      const deadSimIndexes: number[] = [];
       for (let j = 0; j < nSims; j++) {
         const before = beforeStates[j];
         const state = states[j];
@@ -232,6 +262,28 @@ function startSim(): void {
           toT: state.t,
           activity: state.activity,
         });
+        if (state.fly.dead || (state.fly.health ?? 100) <= 0) {
+          deadSimIndexes.push(j);
+        }
+      }
+
+      if (deadSimIndexes.length > 0) {
+        const uniqueDead = [...new Set(deadSimIndexes)].sort((a, b) => b - a);
+        for (const simIndex of uniqueDead) {
+          const removed = removeSimAtIndex(simIndex);
+          if (!removed) continue;
+          const graveyarded = removeFlyAtSlot(removed.address, removed.slotIndex);
+          deactivateDeployment(removed.address, removed.slotIndex);
+          console.log(
+            '[graveyard:auto]',
+            removed.address.slice(0, 10) + '…',
+            'slot',
+            removed.slotIndex,
+            'sim',
+            simIndex,
+            graveyarded ? `fly ${graveyarded.id}` : 'fly <already removed>'
+          );
+        }
       }
 
       for (let i = 1; i <= FRAMES_PER_BATCH; i++) {

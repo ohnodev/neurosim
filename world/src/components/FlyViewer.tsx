@@ -604,6 +604,7 @@ export default function FlyViewer() {
   useEffect(() => {
     if (worldError) setError((prev) => prev ?? 'Failed to load world');
     else if (neuronsError) setError((prev) => prev ?? 'Failed to load neurons');
+    else setError((prev) => (prev === 'Failed to load world' || prev === 'Failed to load neurons' ? null : prev));
   }, [worldError, neuronsError]);
 
   const { data: myFlies = [] } = useQuery({

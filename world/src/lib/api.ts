@@ -1,13 +1,17 @@
 import { getApiBase } from './constants';
 import type { WorldSource } from '../../../api/src/world';
 
+function normalizeAddress(address: string): string {
+  return address.trim().toLowerCase();
+}
+
 export const apiKeys = {
   all: ['api'] as const,
   world: () => [...apiKeys.all, 'world'] as const,
   neurons: () => [...apiKeys.all, 'neurons'] as const,
-  myFlies: (address: string) => [...apiKeys.all, 'my-flies', address] as const,
-  myDeployed: (address: string) => [...apiKeys.all, 'my-deployed', address] as const,
-  flyStats: (address: string) => [...apiKeys.all, 'fly-stats', address] as const,
+  myFlies: (address: string) => [...apiKeys.all, 'my-flies', normalizeAddress(address)] as const,
+  myDeployed: (address: string) => [...apiKeys.all, 'my-deployed', normalizeAddress(address)] as const,
+  flyStats: (address: string) => [...apiKeys.all, 'fly-stats', normalizeAddress(address)] as const,
   rewardsHistory: () => [...apiKeys.all, 'rewards-history'] as const,
 };
 
@@ -50,8 +54,15 @@ export async function fetchNeurons(): Promise<{ neurons: NeuronRaw[] }> {
 }
 
 export async function fetchMyFlies(address: string): Promise<ClaimedFly[]> {
-  const url = `${getApiBase()}/api/claim/my-flies?address=${address.toLowerCase()}`;
-  const r = await fetch(url);
+  const enc = encodeURIComponent(normalizeAddress(address));
+  const url = `${getApiBase()}/api/claim/my-flies?address=${enc}`;
+  let r: Response;
+  try {
+    r = await fetch(url);
+  } catch (err) {
+    if (import.meta.env?.DEV) console.warn('[api] fetchMyFlies network error:', err, url);
+    throw err;
+  }
   if (!r.ok) {
     if (import.meta.env?.DEV) console.warn('[api] fetchMyFlies failed:', r.status, r.statusText, url);
     throw new Error(`My flies failed: ${r.status} ${r.statusText}`);
@@ -61,8 +72,15 @@ export async function fetchMyFlies(address: string): Promise<ClaimedFly[]> {
 }
 
 export async function fetchMyDeployed(address: string): Promise<Record<number, number>> {
-  const url = `${getApiBase()}/api/deploy/my-deployed?address=${address.toLowerCase()}`;
-  const r = await fetch(url);
+  const enc = encodeURIComponent(normalizeAddress(address));
+  const url = `${getApiBase()}/api/deploy/my-deployed?address=${enc}`;
+  let r: Response;
+  try {
+    r = await fetch(url);
+  } catch (err) {
+    if (import.meta.env?.DEV) console.warn('[api] fetchMyDeployed network error:', err, url);
+    throw err;
+  }
   if (!r.ok) {
     if (import.meta.env?.DEV) console.warn('[api] fetchMyDeployed failed:', r.status, r.statusText, url);
     throw new Error(`My deployed failed: ${r.status} ${r.statusText}`);
@@ -72,8 +90,15 @@ export async function fetchMyDeployed(address: string): Promise<Record<number, n
 }
 
 export async function fetchFlyStats(address: string): Promise<FlyStatsData> {
-  const url = `${getApiBase()}/api/rewards/stats?address=${address.toLowerCase()}`;
-  const r = await fetch(url);
+  const enc = encodeURIComponent(normalizeAddress(address));
+  const url = `${getApiBase()}/api/rewards/stats?address=${enc}`;
+  let r: Response;
+  try {
+    r = await fetch(url);
+  } catch (err) {
+    if (import.meta.env?.DEV) console.warn('[api] fetchFlyStats network error:', err, url);
+    throw err;
+  }
   if (!r.ok) {
     if (import.meta.env?.DEV) console.warn('[api] fetchFlyStats failed:', r.status, r.statusText, url);
     throw new Error(`Fly stats failed: ${r.status} ${r.statusText}`);

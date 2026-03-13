@@ -15,6 +15,12 @@ export interface SimState {
   eatenFoodId?: string;
 }
 
+/** True if cell_type is a photoreceptor (R1-6, R7, R8). Sensory input should go here. */
+function isPhotoreceptorCellType(cellType: string | undefined): boolean {
+  if (!cellType?.trim()) return false;
+  return /^R[1-8](-6)?$/i.test(cellType.trim());
+}
+
 /** True if cell_type is a visual neuron (photoreceptor, motion, etc.). */
 function isVisualCellType(cellType: string | undefined): boolean {
   if (!cellType?.trim()) return false;
@@ -57,23 +63,24 @@ export function createBrainSim(
   });
 
   const sensoryIndices: number[] = [];
-  const visualIndices: number[] = [];
+  const afferentVisualIndices: number[] = [];
   const motorLeftIndices: number[] = [];
   const motorRightIndices: number[] = [];
   const motorUnknownIndices: number[] = [];
   for (let i = 0; i < neurons.length; i++) {
     const n = neurons[i];
     const r = n.role ?? 'interneuron';
-    if (r === 'sensory') sensoryIndices.push(i);
-    if (isVisualCellType(n.cell_type)) visualIndices.push(i);
-    else if (r === 'motor') {
+    if (r === 'sensory') {
+      sensoryIndices.push(i);
+      if (isPhotoreceptorCellType(n.cell_type)) afferentVisualIndices.push(i);
+    } else if (r === 'motor') {
       const s = n.side ?? 'unknown';
       if (s === 'left') motorLeftIndices.push(i);
       else if (s === 'right') motorRightIndices.push(i);
       else motorUnknownIndices.push(i);
     }
   }
-  const visualTargetIndices = visualIndices.length > 0 ? visualIndices : sensoryIndices;
+  const sensoryTargetIndices = afferentVisualIndices.length > 0 ? afferentVisualIndices : sensoryIndices;
 
   let activity = new Float32Array(neuronIds.length);
   const ARENA = 24;
@@ -152,9 +159,9 @@ export function createBrainSim(
       }
     }
 
-    // Route food stimuli into visual-type neurons. Pulsed; rotate which neurons
-    // receive input so none stay on >5s (each gets input ~1/N of the time).
-    if (visualTargetIndices.length > 0) {
+    // Route food/light stimuli into afferent visual neurons (photoreceptors) only.
+    // Pulsed; rotate which neurons receive input so none stay on >5s (each gets input ~1/N of the time).
+    if (sensoryTargetIndices.length > 0) {
       const pulse = Math.sin(t * INPUT_RATE) > 1 - SENSORY_DUTY * 2 ? 1 : 0;
       if (pulse > 0) {
         let foodSignal = 0;
@@ -165,7 +172,7 @@ export function createBrainSim(
           foodSignal += invDist * (1 - fly.hunger / 100);
         }
         const baseNoise = 0.08 * (0.5 + 0.5 * Math.sin(t * INPUT_RATE));
-        const n = visualTargetIndices.length;
+        const n = sensoryTargetIndices.length;
         // For large connectomes: rotate so each neuron gets input ~1/30 of time (5+ sec gaps)
         const useChunks = n >= 20;
         let start = 0, end = n;
@@ -180,7 +187,7 @@ export function createBrainSim(
         const rawPerNeuron = (baseNoise + foodSignal * 0.5) / Math.max(1, activeCount);
         const perNeuron = Math.min(rawPerNeuron * SENSORY_SCALE * r, 0.5);
         for (let k = start; k < end; k++) {
-          nextActivity[visualTargetIndices[k]] += perNeuron;
+          nextActivity[sensoryTargetIndices[k]] += perNeuron;
         }
       }
     }

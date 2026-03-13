@@ -5,6 +5,7 @@ import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { loadConnectome } from './connectome.js';
 import { createBrainSim } from './brain-sim.js';
+import * as socketClient from './brain-socket-client.js';
 import { getWorld, spawnFood, removeFood, getSources, type WorldSource } from './world.js';
 import claimsRouter from './routes/claims.js';
 import { getFlies } from './services/flyStore.js';
@@ -15,6 +16,35 @@ import { flushRewards } from './services/rewardDistributor.js';
 const PORT = Number(process.env.PORT) || 3001;
 const connectome = loadConnectome();
 
+/** Brain sim uses Unix socket only. Probe connects to brain-service; retry a few times for PM2 start-order. */
+const CUDA_ONLY = process.env.NEUROSIM_MODE === 'cuda' || process.env.USE_CUDA === '1';
+const PROBE_RETRIES = 10;
+const PROBE_DELAY_MS = 2000;
+
+let backendInfo = { rust: true, gpu: process.env.USE_CUDA === '1' };
+let probeOk = false;
+for (let i = 0; i < PROBE_RETRIES; i++) {
+  try {
+    await socketClient.ping();
+    console.log('[backend] handshake: API ↔ brain-service OK');
+    backendInfo = { rust: true, gpu: process.env.USE_CUDA === '1' };
+    probeOk = true;
+    break;
+  } catch (e) {
+    if (i === PROBE_RETRIES - 1) {
+      console.error('[backend] Brain service (Unix socket) unavailable after', PROBE_RETRIES, 'retries. Is neurosim-brain running?', e);
+      process.exit(1);
+    }
+    console.warn('[backend] Brain service not ready, retry', i + 1, '/', PROBE_RETRIES, 'in', PROBE_DELAY_MS, 'ms');
+    await new Promise((r) => setTimeout(r, PROBE_DELAY_MS));
+  }
+}
+if (probeOk && CUDA_ONLY && !backendInfo.gpu) {
+  console.error('[backend] CUDA mode required but brain-service not using GPU. Refusing to start.');
+  process.exit(1);
+}
+console.log(`[backend] brain=unix-socket rust=${backendInfo.rust} gpu=${backendInfo.gpu} mode=${CUDA_ONLY ? 'cuda-only' : 'auto'}`);
+
 const GROUND_Z = 0.35;
 const INITIAL_SPREAD = 4;
 
@@ -22,15 +52,15 @@ let foodIntervalId: ReturnType<typeof setInterval> | null = null;
 let rewardFlushIntervalId: ReturnType<typeof setInterval> | null = null;
 
 /** Simulation flies; starts empty, users deploy flies. */
-const sims: ReturnType<typeof createBrainSim>[] = [];
+const sims: Awaited<ReturnType<typeof createBrainSim>>[] = [];
 /** address -> slotIndex -> simIndex */
 const deployedFlies = new Map<string, Map<number, number>>();
 
-function addFlyToSim(): number {
+async function addFlyToSim(): Promise<number> {
   const angle = (2 * Math.PI * sims.length) / Math.max(1, sims.length + 1);
   const x = INITIAL_SPREAD * Math.cos(angle);
   const y = INITIAL_SPREAD * Math.sin(angle);
-  const sim = createBrainSim(connectome, () => getSources(), {
+  const sim = await createBrainSim(connectome, () => getSources(), {
     x,
     y,
     z: GROUND_Z,
@@ -43,10 +73,10 @@ function addFlyToSim(): number {
   return sims.length - 1;
 }
 
-function restoreDeployFromStore(): void {
+async function restoreDeployFromStore(): Promise<void> {
   const records = getDeployments();
   for (const { address, slotIndex } of records) {
-    const simIndex = addFlyToSim();
+    const simIndex = await addFlyToSim();
     let map = deployedFlies.get(address);
     if (!map) {
       map = new Map();
@@ -65,6 +95,9 @@ const SIM_FPS = 30;
 const BATCH_MS = 250;
 const FRAMES_PER_BATCH = Math.round(SIM_FPS * BATCH_MS / 1000);
 let connectionStep = 0;
+let nextBatchDueAt = 0;
+let simTickInFlight = false;
+let droppedSimTicks = 0;
 
 const wsClients = new Set<import('ws').WebSocket>();
 /** Per-client: which fly's activity to send (sim index). Default 0. */
@@ -77,32 +110,43 @@ function broadcast(data: unknown): void {
   }
 }
 
-/** Build per-client payload with only the viewed fly's activity to reduce payload size. */
+/** Build per-client payload. Activity and sources sent once per batch (client only uses last). */
 function buildClientPayload(
-  frames: { t: number; flies: ReturnType<typeof sims[0]['getState']>['fly'][]; activities: (Record<string, number> | undefined)[]; sources: WorldSource[] }[],
+  frames: { t: number; flies: ReturnType<typeof sims[0]['getState']>['fly'][]; activities: (Record<string, number> | undefined)[] }[],
 ): void {
   const sources = getSources();
+  const clientFrames = frames.map((f) => ({ t: f.t, flies: f.flies }));
+  const lastFrame = frames[frames.length - 1];
   for (const ws of wsClients) {
     if (ws.readyState !== 1) continue;
     const viewIndex = Math.max(0, Math.min(sims.length - 1, clientViewFlyIndex.get(ws) ?? 0));
-    const clientFrames = frames.map((f) => ({
-      t: f.t,
-      flies: f.flies,
-      activity: f.activities[viewIndex] ?? {},
-      sources: f.sources,
-    }));
+    const activity = lastFrame ? (lastFrame.activities[viewIndex] ?? {}) : {};
     try {
-      ws.send(JSON.stringify({ frames: clientFrames, simRunning: true, sources }));
+      ws.send(JSON.stringify({ frames: clientFrames, activity, sources, simRunning: true }));
     } catch (err) {
       console.error('[ws] send error', err);
     }
   }
 }
 
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
+}
+
+function lerpHeading(a: number, b: number, t: number): number {
+  let d = b - a;
+  while (d > Math.PI) d -= 2 * Math.PI;
+  while (d < -Math.PI) d += 2 * Math.PI;
+  return a + d * t;
+}
+
 function startSim(): void {
   if (simRunning) return;
   simRunning = true;
   connectionStep = 0;
+  nextBatchDueAt = performance.now() + BATCH_MS;
+  simTickInFlight = false;
+  droppedSimTicks = 0;
   spawnFood();
   foodIntervalId = setInterval(() => {
     const f = spawnFood();
@@ -111,34 +155,104 @@ function startSim(): void {
       broadcast({ simRunning, sources: getSources() });
     }
   }, 10_000);
-  simIntervalId = setInterval(() => {
-    const loopStart = performance.now();
-    const dt = 1 / SIM_FPS;
-    const frames: { t: number; flies: ReturnType<typeof sims[0]['getState']>['fly'][]; activities: (Record<string, number> | undefined)[]; activity?: Record<string, number>; sources: WorldSource[] }[] = [];
-    for (let i = 0; i < FRAMES_PER_BATCH; i++) {
-      const flies: ReturnType<typeof sims[0]['getState']>['fly'][] = [];
-      const activities: (Record<string, number> | undefined)[] = [];
-      let t = 0;
-      for (let j = 0; j < sims.length; j++) {
-        const state = sims[j].step(dt);
+  simIntervalId = setInterval(async () => {
+    if (simTickInFlight) {
+      droppedSimTicks += 1;
+      return;
+    }
+    simTickInFlight = true;
+    try {
+      const loopStart = performance.now();
+      const schedulerLagMs = Math.max(0, Math.round(loopStart - nextBatchDueAt));
+      nextBatchDueAt = loopStart + BATCH_MS;
+      const nSims = sims.length;
+      let stepMs = 0;
+      let jsMs = 0;
+      let maxStepMs = 0;
+      let maxJsMs = 0;
+      let socketRoundtripMs = 0;
+      let socketWaitMs = 0;
+      const dtFrame = 1 / SIM_FPS;
+      const batchDt = dtFrame * FRAMES_PER_BATCH;
+      const frames: { t: number; flies: ReturnType<typeof sims[0]['getState']>['fly'][]; activities: (Record<string, number> | undefined)[] }[] = [];
+
+      const transitions: Array<{
+        fromFly: ReturnType<typeof sims[0]['getState']>['fly'];
+        toFly: ReturnType<typeof sims[0]['getState']>['fly'];
+        fromT: number;
+        toT: number;
+        activity?: Record<string, number>;
+      }> = [];
+
+      for (let j = 0; j < nSims; j++) {
+        const before = sims[j].getState();
+        const state = await sims[j].step(batchDt);
+        const gt = (sims[j] as {
+          getTiming?: () => {
+            rustMs: number;
+            jsMs: number;
+            socketTotalMs?: number;
+            socketResponseWaitMs?: number;
+          };
+        }).getTiming?.();
+        if (gt) {
+          stepMs += gt.rustMs;
+          jsMs += gt.jsMs;
+          socketRoundtripMs += gt.socketTotalMs ?? 0;
+          socketWaitMs += gt.socketResponseWaitMs ?? 0;
+          if (gt.rustMs > maxStepMs) maxStepMs = gt.rustMs;
+          if (gt.jsMs > maxJsMs) maxJsMs = gt.jsMs;
+        }
         if (state.eatenFoodId) {
           removeFood(state.eatenFoodId);
           recordFoodCollected(j);
           console.log('[world] fly', j, 'ate food', state.eatenFoodId);
         }
-        flies.push(state.fly);
-        activities.push(state.activity);
-        t = state.t;
+        transitions.push({
+          fromFly: before.fly,
+          toFly: state.fly,
+          fromT: before.t,
+          toT: state.t,
+          activity: state.activity,
+        });
       }
-      frames.push({ t, flies, activities, sources: getSources() });
-    }
-    buildClientPayload(frames);
-    connectionStep += 1;
-    if (connectionStep % 15 === 0) {
-      const last = frames[frames.length - 1];
-      const first = last?.flies[0];
-      const loopMs = Math.round(performance.now() - loopStart);
-      console.log('[sim] t=', last?.t.toFixed(1), 'flies=', last?.flies.length ?? 0, first ? `first=(${first.x?.toFixed(2)},${first.y?.toFixed(2)})` : '', 'clients=', wsClients.size, 'loopMs=', loopMs);
+
+      for (let i = 1; i <= FRAMES_PER_BATCH; i++) {
+        const alpha = i / FRAMES_PER_BATCH;
+        const flies: ReturnType<typeof sims[0]['getState']>['fly'][] = transitions.map((tr) => ({
+          ...tr.toFly,
+          x: lerp(tr.fromFly.x, tr.toFly.x, alpha),
+          y: lerp(tr.fromFly.y, tr.toFly.y, alpha),
+          z: lerp(tr.fromFly.z, tr.toFly.z, alpha),
+          heading: lerpHeading(tr.fromFly.heading, tr.toFly.heading, alpha),
+          t: lerp(tr.fromFly.t, tr.toFly.t, alpha),
+          hunger: lerp(tr.fromFly.hunger, tr.toFly.hunger, alpha),
+          health: lerp(tr.fromFly.health ?? 100, tr.toFly.health ?? 100, alpha),
+        }));
+        const activities = transitions.map((tr) => (i === FRAMES_PER_BATCH ? tr.activity : undefined));
+        const t = transitions.length ? lerp(transitions[0].fromT, transitions[0].toT, alpha) : 0;
+        frames.push({ t, flies, activities });
+      }
+      const beforePayload = performance.now();
+      buildClientPayload(frames);
+      const buildPayloadMs = Math.round(performance.now() - beforePayload);
+      connectionStep += 1;
+      if (connectionStep % 15 === 0) {
+        const last = frames[frames.length - 1];
+        const first = last?.flies[0];
+        const loopMs = Math.round(performance.now() - loopStart);
+        const rustCalls = sims.length;
+        const avgStep = rustCalls ? Math.round(stepMs / rustCalls) : 0;
+        const avgJs = rustCalls ? Math.round(jsMs / rustCalls) : 0;
+        const avgSocketRoundtrip = rustCalls ? Math.round(socketRoundtripMs / rustCalls) : 0;
+        const avgSocketWait = rustCalls ? Math.round(socketWaitMs / rustCalls) : 0;
+        const timingStr = backendInfo.rust
+          ? ` stepMs=${stepMs} jsMs=${jsMs} avgStep=${avgStep} avgJs=${avgJs} maxStep=${maxStepMs} maxJs=${maxJsMs} socketRoundtripMs=${socketRoundtripMs} socketWaitMs=${socketWaitMs} avgSocketRoundtrip=${avgSocketRoundtrip} avgSocketWait=${avgSocketWait} rustCalls=${rustCalls} synthFrames=${FRAMES_PER_BATCH} payloadMs=${buildPayloadMs} schedulerLagMs=${schedulerLagMs} droppedTicks=${droppedSimTicks}`
+          : '';
+        console.log('[sim] t=', last?.t.toFixed(1), 'flies=', last?.flies.length ?? 0, first ? `first=(${first.x?.toFixed(2)},${first.y?.toFixed(2)})` : '', 'clients=', wsClients.size, 'loopMs=', loopMs, timingStr);
+      }
+    } finally {
+      simTickInFlight = false;
     }
   }, BATCH_MS);
   rewardFlushIntervalId = setInterval(() => void flushRewards(), 60_000);
@@ -175,7 +289,8 @@ app.get('/api/connectome', (_, res) => {
   });
 });
 
-app.get('/api/health', (_, res) => res.json({ ok: true }));
+app.get('/api/health', (_, res) =>
+  res.json({ ok: true, backend: { rust: backendInfo.rust, gpu: backendInfo.gpu } }));
 
 /** Debug position buffer for smoothness testing; only when DEBUG_POSITIONS=1 */
 const DEBUG_POSITIONS_ENABLED = process.env.DEBUG_POSITIONS === '1';
@@ -240,7 +355,7 @@ app.get('/api/world', (_, res) => res.json(getWorld()));
 
 app.use('/api/claim', claimsRouter);
 
-app.post('/api/deploy', (req, res) => {
+app.post('/api/deploy', async (req, res) => {
   try {
     const address = (req.body?.address as string)?.toLowerCase();
     const slotIndex = typeof req.body?.slotIndex === 'number' ? req.body.slotIndex : parseInt(String(req.body?.slotIndex ?? ''), 10);
@@ -258,7 +373,7 @@ app.post('/api/deploy', (req, res) => {
       res.json({ success: true, simIndex: map.get(slotIndex), message: 'Already deployed' });
       return;
     }
-    const simIndex = addFlyToSim();
+    const simIndex = await addFlyToSim();
     if (!map) {
       map = new Map();
       deployedFlies.set(address, map);
@@ -337,9 +452,10 @@ wss.on('connection', (ws) => {
   const activities = sims.map((s) => s.getState().activity);
   const firstState = sims[0]?.getState();
   ws.send(JSON.stringify({
-    frames: [{ t: firstState?.t ?? 0, flies, activity: activities[viewIndex] ?? {}, sources: getSources() }],
-    simRunning,
+    frames: [{ t: firstState?.t ?? 0, flies }],
+    activity: activities[viewIndex] ?? {},
     sources: getSources(),
+    simRunning,
   }));
 
   ws.on('message', (data) => {

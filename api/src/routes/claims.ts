@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from 'express';
-import { decodeEventLog } from 'viem';
+import { decodeEventLog, TransactionReceiptNotFoundError } from 'viem';
 import { baseRpcClient } from '../services/baseRpcClient.js';
 import { tryClaim } from '../services/claimStore.js';
 import { getFlies, addFly, canClaimObelisk } from '../services/flyStore.js';
@@ -210,12 +210,39 @@ router.post('/verify-payment', async (req: Request, res: Response) => {
       return;
     }
 
-    const receipt = await baseRpcClient.getTransactionReceipt({
-      hash: txHash as `0x${string}`,
-    });
+    const hash = txHash as `0x${string}`;
+    const maxAttempts = 10;
+    const baseMs = 1500;
+    const maxElapsedMs = 45_000;
+    const maxDelayMs = 8000;
+    let receipt: Awaited<ReturnType<typeof baseRpcClient.getTransactionReceipt>> | null = null;
+    const start = Date.now();
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        const r = await baseRpcClient.getTransactionReceipt({ hash });
+        if (r) {
+          receipt = r;
+          break;
+        }
+      } catch (err: unknown) {
+        if (!(err instanceof TransactionReceiptNotFoundError)) {
+          throw err;
+        }
+      }
+      if (!receipt && attempt < maxAttempts - 1) {
+        const elapsed = Date.now() - start;
+        if (elapsed >= maxElapsedMs) break;
+        const delayMs = Math.min(maxDelayMs, baseMs * Math.pow(2, attempt));
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+    }
 
     if (!receipt) {
-      res.status(400).json({ error: 'Transaction not found' });
+      res.status(400).json({
+        error: 'Transaction not found or not yet mined',
+        message: 'Receipt not available after retries. Try again in a minute.',
+      });
       return;
     }
 

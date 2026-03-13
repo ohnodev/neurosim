@@ -156,23 +156,24 @@ export default function FlyViewer() {
         error?: string;
         sources?: WorldSource[];
       };
-      if (data.sources && Array.isArray(data.sources) && !(Array.isArray(data.frames) && data.frames.length > 0)) {
+      if (data.sources && Array.isArray(data.sources)) {
         queryClient.setQueryData(apiKeys.world(), { sources: data.sources });
       }
       if (!data.error) {
         const buf = snapshotBufferRef.current;
+        const batchSources = Array.isArray(data.sources) ? data.sources : [];
         const lastT = buf.length > 0 ? (buf[buf.length - 1]?.t ?? 0) : -Infinity;
         if (Array.isArray(data.frames) && data.frames.length > 0) {
           const firstNewT = data.frames[0]?.t ?? 0;
           if (firstNewT < lastT) buf.length = 0;
-          for (const f of data.frames) buf.push({ t: f.t, flies: f.flies, sources: f.sources });
+          for (const f of data.frames) buf.push({ t: f.t, flies: f.flies, sources: batchSources });
           trimSnapshotBuffer(buf, MAX_SNAPSHOT_BUFFER);
         } else {
           const fliesArr = Array.isArray(data.flies) ? data.flies : data.fly ? [data.fly] : null;
           if (fliesArr) {
             const newT = data.t ?? 0;
             if (newT < lastT) buf.length = 0;
-            buf.push({ t: newT, flies: fliesArr });
+            buf.push({ t: newT, flies: fliesArr, sources: batchSources });
             trimSnapshotBuffer(buf, MAX_SNAPSHOT_BUFFER);
           }
         }
@@ -180,8 +181,8 @@ export default function FlyViewer() {
         if (Array.isArray(data.frames) && data.frames.length > 0) {
           const lastFrame = data.frames[data.frames.length - 1]!;
           latestFliesRef.current = lastFrame.flies;
-          activityRef.current = lastFrame.activity ?? lastFrame.activities?.[0] ?? {};
-          activitiesRef.current = lastFrame.activities ?? [];
+          activityRef.current = data.activity ?? {};
+          activitiesRef.current = [];
         } else if (last) {
           latestFliesRef.current = last.flies;
           activityRef.current = data.activity ?? data.activities?.[0] ?? {};
@@ -196,8 +197,10 @@ export default function FlyViewer() {
           activitiesRef.current = Array.isArray(data.activities) ? data.activities : [];
         }
         if (data.activity != null) activityRef.current = data.activity;
-        else if (Array.isArray(data.activities) && data.activities[0] != null)
+        else if (Array.isArray(data.activities) && data.activities.length > 0 && data.activities[0] != null) {
+          // Use incoming data.activities when data.activity is absent (legacy payload)
           activityRef.current = data.activities[0] ?? {};
+        }
       }
     });
     return unsub;

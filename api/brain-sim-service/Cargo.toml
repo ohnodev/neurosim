@@ -1,0 +1,18 @@
+[package]
+name = "brain-sim-service"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "brain-service"
+path = "src/main.rs"
+
+[features]
+default = ["cuda"]
+cuda = ["dep:cudarc"]
+
+[dependencies]
+rayon = "1.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+cudarc = { version = "0.12", optional = true, features = ["cuda-12040"] }

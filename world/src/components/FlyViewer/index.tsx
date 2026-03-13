@@ -201,6 +201,14 @@ export default function FlyViewer() {
     return unsub;
   }, [queryClient]);
 
+  const flyCardTickListenersRef = useRef<Set<() => void>>(new Set());
+  const subscribeFlyCardTick = useCallback((fn: () => void) => {
+    flyCardTickListenersRef.current.add(fn);
+    return () => {
+      flyCardTickListenersRef.current.delete(fn);
+    };
+  }, []);
+
   useEffect(() => {
     const id = setInterval(() => {
       const flies = latestFliesRef.current;
@@ -213,6 +221,7 @@ export default function FlyViewer() {
         const prev = flyCardDataRef.current.get(i);
         if (!prev || !flyCardDataEqual(prev, next)) flyCardDataRef.current.set(i, next);
       }
+      flyCardTickListenersRef.current.forEach((fn) => fn());
     }, 200);
     return () => clearInterval(id);
   }, [deployed, statsBySlot]);
@@ -394,6 +403,7 @@ export default function FlyViewer() {
                   deployFly={deployFly}
                   setBuyFlySlot={setBuyFlySlot}
                   getFlyCardData={getFlyCardData}
+                  subscribeFlyCardTick={subscribeFlyCardTick}
                   latestFliesRef={latestFliesRef}
                 />
               ) : (

@@ -4,6 +4,12 @@ import { flyCardDataEqual } from '../../lib/flyViewerUtils';
 import { getHealthColor, getHungerColor } from '../../lib/utils';
 import { REST_DURATION_FALLBACK } from '../../lib/flyInterpolation';
 
+const FLY_SLOT_INDICES = [0, 1, 2] as const;
+
+function clampPct(n: number): number {
+  return Math.min(100, Math.max(0, Number.isFinite(n) ? n : 0));
+}
+
 export function FlySlotGraveyard({ index }: { index: number }) {
   return (
     <div className="fly-viewer__fly-slot-empty fly-viewer__fly-slot--in-graveyard">
@@ -123,7 +129,7 @@ export function FlySlotDead({
             return { ...prev, [addr]: set };
           });
           const flies = latestFliesRef.current;
-          const next = [0, 1, 2].find(
+          const next = FLY_SLOT_INDICES.find(
             (j) =>
               j !== index &&
               !graveyardSlots.has(j) &&
@@ -142,11 +148,13 @@ export function FlySlotDead({
 export function FlyStatusCard({
   index,
   getFlyData,
+  subscribeTick,
   selected,
   onSelectSlot,
 }: {
   index: number;
   getFlyData: (slotIndex: number) => { fly: FlyState; points: number };
+  subscribeTick: (fn: () => void) => () => void;
   selected: boolean;
   onSelectSlot: (slot: number) => void;
 }) {
@@ -154,24 +162,26 @@ export function FlyStatusCard({
   const lastRef = useRef(data);
 
   useEffect(() => {
-    const id = setInterval(() => {
+    const cb = () => {
       const next = getFlyData(index);
       if (!flyCardDataEqual(lastRef.current, next)) {
         lastRef.current = next;
         setData(next);
       }
-    }, 200);
-    return () => clearInterval(id);
-  }, [index, getFlyData]);
+    };
+    return subscribeTick(cb);
+  }, [index, getFlyData, subscribeTick]);
 
   const { fly, points } = data;
-  const hunger = fly.hunger ?? 100;
-  const health = fly.health ?? 100;
-  // When restTimeLeft > 0: recovery progress (100 - remaining rest %). Else: remaining active fly time %.
-  const fatiguePct =
+  const hunger = clampPct(fly.hunger ?? 100);
+  const health = clampPct(fly.health ?? 100);
+  const restDuration =
+    (fly.restDuration != null && fly.restDuration > 0) ? fly.restDuration : REST_DURATION_FALLBACK;
+  const fatiguePct = clampPct(
     fly.restTimeLeft != null && fly.restTimeLeft > 0
-      ? 100 - ((fly.restTimeLeft ?? 0) / (fly.restDuration ?? REST_DURATION_FALLBACK)) * 100
-      : (fly.flyTimeLeft ?? 1) * 100;
+      ? 100 - ((fly.restTimeLeft ?? 0) / restDuration) * 100
+      : (fly.flyTimeLeft ?? 1) * 100
+  );
   return (
     <button
       type="button"

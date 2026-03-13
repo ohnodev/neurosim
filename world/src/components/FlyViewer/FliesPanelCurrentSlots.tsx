@@ -27,6 +27,7 @@ export function FliesPanelCurrentSlots(props: {
   deployFly: (slotIndex: number) => Promise<void>;
   setBuyFlySlot: (v: number | null) => void;
   getFlyCardData: (slotIndex: number) => { fly: FlyState; points: number };
+  subscribeFlyCardTick: (fn: () => void) => () => void;
   latestFliesRef: React.MutableRefObject<FlyState[]>;
 }) {
   const {
@@ -42,6 +43,7 @@ export function FliesPanelCurrentSlots(props: {
     deployFly,
     setBuyFlySlot,
     getFlyCardData,
+    subscribeFlyCardTick,
     latestFliesRef,
   } = props;
 
@@ -98,6 +100,7 @@ export function FliesPanelCurrentSlots(props: {
           <FlyStatusCardMemo
             index={i}
             getFlyData={getFlyCardData}
+            subscribeTick={subscribeFlyCardTick}
             selected={i === selectedFlyIndex}
             onSelectSlot={onSelectSlot}
           />

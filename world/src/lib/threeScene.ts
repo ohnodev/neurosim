@@ -331,19 +331,8 @@ export function initThreeScene(
     return clone;
   }
 
-  function createSourceObject(s: WorldSource): THREE.Object3D {
-    const size = s.type === 'food' ? 0.9 : 0.8;
-    const geom = new THREE.BoxGeometry(size, size, size);
-    const mat =
-      s.type === 'food'
-        ? new THREE.MeshStandardMaterial({ color: 0xe8a838 })
-        : new THREE.MeshStandardMaterial({ color: 0x4488ff, emissive: 0x4488ff, emissiveIntensity: 0.6 });
-    return new THREE.Mesh(geom, mat);
-  }
-
   function updateWorldSources(sources: WorldSource[]): void {
     const foodSources = sources.filter((s) => s.type === 'food');
-    const lightSources = sources.filter((s) => s.type === 'light');
 
     for (let i = 0; i < applePool.length; i++) {
       const apple = applePool[i]!;
@@ -360,11 +349,6 @@ export function initThreeScene(
       if (applePool.includes(c)) continue;
       sourcesGroup.remove(c);
       disposeObject3D(c);
-    }
-    for (const s of lightSources) {
-      const obj = createSourceObject(s);
-      obj.position.set(s.x, s.z, s.y);
-      sourcesGroup.add(obj);
     }
   }
 

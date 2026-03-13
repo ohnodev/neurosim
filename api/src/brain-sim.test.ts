@@ -42,7 +42,6 @@ const miniConnectome = {
 };
 
 const foodSource = { id: 'f1', type: 'food' as const, x: 5, y: 5, z: 2, radius: 20 };
-const lightSource = { id: 'l1', type: 'light' as const, x: -5, y: -5, z: 3, radius: 15 };
 
 describe('brain-sim', () => {
   it('steps and returns fly state', () => {
@@ -248,16 +247,6 @@ describe('brain-sim', () => {
     const s2 = sim2.step(dt);
     expect(s2.eatenFoodId).toBeUndefined();
     expect(sources).toHaveLength(0);
-  });
-
-  it('light source contributes to activity', () => {
-    const { step } = createBrainSim(testConnectome, [lightSource]);
-    let totalActivity = 0;
-    for (let i = 0; i < 120; i++) {
-      const s = step(1 / 30);
-      if (s.activity) totalActivity += Object.values(s.activity).reduce((a, b) => a + b, 0);
-    }
-    expect(totalActivity).toBeGreaterThan(0);
   });
 
   it('neuronIds matches connectome neurons', () => {

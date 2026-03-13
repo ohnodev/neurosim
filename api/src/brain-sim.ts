@@ -84,9 +84,6 @@ export function createBrainSim(
   const FOOD_HUNGER_RESTORE = 50; // hunger restored when consuming one food (then it disappears)
   const FOOD_HEALTH_RESTORE = 50; // health restored when consuming one food
 
-  function isAttractorType(type: string): boolean {
-    return type === 'food' || type === 'light';
-  }
   const FLY_TIME_MAX = 6;      // max seconds of continuous flight before fatigue
   const GROUND_Z = 0.35;
   const FLIGHT_Z = 1.5;
@@ -155,19 +152,18 @@ export function createBrainSim(
       }
     }
 
-    // Route visual stimuli (food/light) into visual-type neurons. Pulsed; rotate which neurons
+    // Route food stimuli into visual-type neurons. Pulsed; rotate which neurons
     // receive input so none stay on >5s (each gets input ~1/N of the time).
     if (visualTargetIndices.length > 0) {
       const pulse = Math.sin(t * INPUT_RATE) > 1 - SENSORY_DUTY * 2 ? 1 : 0;
       if (pulse > 0) {
         let foodSignal = 0;
-        let lightSignal = 0;
         for (const s of currentSources) {
+          if (s.type !== 'food') continue;
           const dist = Math.hypot(s.x - fly.x, s.y - fly.y);
           if (dist < 1) continue;
           const invDist = 1 / (1 + dist * 0.1);
-          if (s.type === 'food') foodSignal += invDist * (1 - fly.hunger / 100);
-          else if (s.type === 'light') lightSignal += invDist * 0.3;
+          foodSignal += invDist * (1 - fly.hunger / 100);
         }
         const baseNoise = 0.08 * (0.5 + 0.5 * Math.sin(t * INPUT_RATE));
         const n = visualTargetIndices.length;
@@ -182,7 +178,7 @@ export function createBrainSim(
           end = Math.min(start + chunkSize, n);
         }
         const activeCount = end - start;
-        const rawPerNeuron = (baseNoise + foodSignal * 0.5 + lightSignal) / Math.max(1, activeCount);
+        const rawPerNeuron = (baseNoise + foodSignal * 0.5) / Math.max(1, activeCount);
         const perNeuron = Math.min(rawPerNeuron * SENSORY_SCALE * r, 0.5);
         for (let k = start; k < end; k++) {
           nextActivity[visualTargetIndices[k]] += perNeuron;
@@ -309,11 +305,11 @@ export function createBrainSim(
       let nearestDy = 0;
       let nearestWeight = 1;
       for (const s of currentSources) {
-        if (!isAttractorType(s.type)) continue;
+        if (s.type !== 'food') continue;
         const dx = s.x - fly.x;
         const dy = s.y - fly.y;
         const dist = Math.hypot(dx, dy);
-        const weight = s.type === 'food' ? 1 : 0.6;
+        const weight = 1;
         const inRange = dist < Math.max(s.radius, SEEK_RADIUS) && dist > 0.5;
         if (inRange && dist < nearestDist) {
           nearestDist = dist;

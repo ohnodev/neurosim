@@ -1,11 +1,11 @@
 /**
- * Dynamic world: attractors (food/light) the fly can sense and steer toward.
+ * Dynamic world: food sources the fly can sense and consume.
  * API spawns food periodically and removes it when eaten.
  */
 
 export interface WorldSource {
   id: string;
-  type: 'food' | 'light';
+  type: 'food';
   x: number;
   y: number;
   z: number;

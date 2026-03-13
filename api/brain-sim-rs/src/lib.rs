@@ -5,6 +5,9 @@ use std::collections::HashMap;
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
+#[cfg(feature = "cuda")]
+mod gpu;
+
 #[napi(object)]
 pub struct ConnectionInput {
     pub pre: String,
@@ -66,6 +69,8 @@ pub struct BrainSim {
     motor_right: Vec<u32>,
     motor_unknown: Vec<u32>,
     activity: Vec<f32>,
+    #[cfg(feature = "cuda")]
+    gpu_state: Option<gpu::GpuSimState>,
 }
 
 #[napi]
@@ -103,6 +108,9 @@ impl BrainSim {
 
         let activity = vec![0.0f32; n];
 
+        #[cfg(feature = "cuda")]
+        let gpu_state = gpu::GpuSimState::new(n, &adj, &activity);
+
         Self {
             n,
             id_to_idx,
@@ -112,7 +120,39 @@ impl BrainSim {
             motor_right,
             motor_unknown,
             activity,
+            #[cfg(feature = "cuda")]
+            gpu_state,
         }
+    }
+
+    fn run_step_cpu(&self, decay_factor: f32, tau_r: f32, prop_cap_r: f32) -> Vec<f32> {
+        let mut next = vec![0.0f32; self.n];
+        for i in 0..self.n {
+            next[i] = self.activity[i] * decay_factor;
+        }
+        for (pre_idx, list) in self.adj.iter().enumerate() {
+            let pre_act = self.activity[pre_idx];
+            if !pre_act.is_finite() || pre_act <= 0.0 {
+                continue;
+            }
+            for &(post_idx, weight) in list {
+                let j = post_idx as usize;
+                if j < self.n {
+                    let w = weight.min(10.0);
+                    let v = (pre_act * tau_r * w).min(prop_cap_r);
+                    if v.is_finite() {
+                        next[j] += v;
+                    }
+                }
+            }
+        }
+        for v in &mut next {
+            *v = (*v).clamp(0.0, ACTIVITY_MAX);
+            if !v.is_finite() {
+                *v = 0.0;
+            }
+        }
+        next
     }
 
     #[napi]
@@ -128,27 +168,17 @@ impl BrainSim {
         let tau_r = (TAU * r) as f32;
         let prop_cap_r = (PROP_CAP * r) as f32;
 
-        let mut next: Vec<f32> = vec![0.0; self.n];
-
-        for i in 0..self.n {
-            next[i] = self.activity[i] * decay_factor;
-        }
-
-        for (pre_idx, list) in self.adj.iter().enumerate() {
-            let pre_act = self.activity[pre_idx];
-            if !pre_act.is_finite() || pre_act <= 0.0 {
-                continue;
-            }
-            for &(post_idx, weight) in list {
-                let j = post_idx as usize;
-                if j >= self.n {
-                    continue;
-                }
-                let w = weight.min(10.0);
-                let v = (pre_act * tau_r * w).min(prop_cap_r);
-                if v.is_finite() {
-                    next[j] += v;
-                }
+        let mut next = self.run_step_cpu(decay_factor, tau_r, prop_cap_r);
+        #[cfg(feature = "cuda")]
+        if let Some(ref mut gpu) = self.gpu_state {
+            if let Some(gpu_next) = gpu.step(
+                &self.activity,
+                decay_factor,
+                tau_r,
+                prop_cap_r,
+                ACTIVITY_MAX,
+            ) {
+                next = gpu_next;
             }
         }
 
@@ -240,5 +270,17 @@ impl BrainSim {
     #[napi]
     pub fn get_activity(&self) -> Float32Array {
         self.activity.clone().into()
+    }
+
+    #[napi(getter)]
+    pub fn is_using_gpu(&self) -> bool {
+        #[cfg(feature = "cuda")]
+        {
+            self.gpu_state.is_some()
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            false
+        }
     }
 }

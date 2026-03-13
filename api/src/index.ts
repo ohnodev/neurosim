@@ -15,6 +15,15 @@ import { flushRewards } from './services/rewardDistributor.js';
 const PORT = Number(process.env.PORT) || 3001;
 const connectome = loadConnectome();
 
+/** Backend info: rust + GPU, probed at startup */
+let backendInfo = { rust: false, gpu: false };
+try {
+  const probe = createBrainSim(connectome, () => [], {});
+  backendInfo = { rust: !!probe.isRustSim, gpu: !!(probe as { isGpuSim?: boolean }).isGpuSim };
+} catch (e) {
+  console.warn('[backend] probe failed:', e);
+}
+
 const GROUND_Z = 0.35;
 const INITIAL_SPREAD = 4;
 
@@ -175,7 +184,8 @@ app.get('/api/connectome', (_, res) => {
   });
 });
 
-app.get('/api/health', (_, res) => res.json({ ok: true }));
+app.get('/api/health', (_, res) =>
+  res.json({ ok: true, backend: { rust: backendInfo.rust, gpu: backendInfo.gpu } }));
 
 /** Debug position buffer for smoothness testing; only when DEBUG_POSITIONS=1 */
 const DEBUG_POSITIONS_ENABLED = process.env.DEBUG_POSITIONS === '1';

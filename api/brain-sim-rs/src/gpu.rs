@@ -1,0 +1,183 @@
+//! CUDA GPU acceleration for brain simulation step (decay + propagation).
+
+use cudarc::driver::safe::{CudaDevice, CudaSlice, LaunchAsync, LaunchConfig};
+use cudarc::nvrtc::safe::compile_ptx;
+use std::sync::Arc;
+use std::sync::OnceLock;
+
+static DEVICE: OnceLock<Option<Arc<CudaDevice>>> = OnceLock::new();
+
+const KERNEL_SRC: &str = r#"
+extern "C" __global__ void decay_kernel(
+    const float* activity,
+    float* next,
+    int n,
+    float decay_factor
+) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) {
+        next[i] = activity[i] * decay_factor;
+    }
+}
+
+extern "C" __global__ void propagate_kernel(
+    const float* activity,
+    float* next,
+    const unsigned int* edge_pre,
+    const unsigned int* edge_post,
+    const float* edge_weight,
+    int n_edges,
+    float tau_r,
+    float prop_cap_r
+) {
+    int e = blockIdx.x * blockDim.x + threadIdx.x;
+    if (e >= n_edges) return;
+    unsigned int pre_idx = edge_pre[e];
+    unsigned int post_idx = edge_post[e];
+    float w = fminf(edge_weight[e], 10.0f);
+    float pre_act = activity[pre_idx];
+    if (!isfinite(pre_act) || pre_act <= 0.0f) return;
+    float v = fminf(pre_act * tau_r * w, prop_cap_r);
+    if (isfinite(v)) {
+        atomicAdd(&next[post_idx], v);
+    }
+}
+
+extern "C" __global__ void clamp_kernel(
+    float* next,
+    int n,
+    float activity_max
+) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) {
+        float v = next[i];
+        if (!isfinite(v)) v = 0.0f;
+        next[i] = fminf(fmaxf(v, 0.0f), activity_max);
+    }
+}
+"#;
+
+fn get_device() -> Option<Arc<CudaDevice>> {
+    DEVICE.get_or_init(|| {
+        let dev = CudaDevice::new(0).ok()?;
+        let ptx = compile_ptx(KERNEL_SRC).ok()?;
+        dev.load_ptx(ptx, "brain_sim", &["decay_kernel", "propagate_kernel", "clamp_kernel"])
+            .ok()?;
+        Some(dev)
+    }).clone()
+}
+
+pub struct GpuSimState {
+    device: Arc<CudaDevice>,
+    n: usize,
+    n_edges: usize,
+    activity: CudaSlice<f32>,
+    next: CudaSlice<f32>,
+    edge_pre: CudaSlice<u32>,
+    edge_post: CudaSlice<u32>,
+    edge_weight: CudaSlice<f32>,
+}
+
+impl GpuSimState {
+    pub fn new(
+        n: usize,
+        adj: &[Vec<(u32, f32)>],
+        initial_activity: &[f32],
+    ) -> Option<Self> {
+        let device = get_device()?.clone();
+
+        let mut edge_pre = Vec::with_capacity(1024);
+        let mut edge_post = Vec::with_capacity(1024);
+        let mut edge_weight = Vec::with_capacity(1024);
+
+        for (pre_idx, list) in adj.iter().enumerate() {
+            for &(post_idx, weight) in list {
+                if (post_idx as usize) < n {
+                    edge_pre.push(pre_idx as u32);
+                    edge_post.push(post_idx);
+                    edge_weight.push(weight.min(10.0));
+                }
+            }
+        }
+        let n_edges = edge_pre.len();
+
+        let activity = device.htod_sync_copy(initial_activity).ok()?;
+        let next = device.alloc_zeros(n).ok()?;
+        let edge_pre_dev = device.htod_sync_copy(&edge_pre).ok()?;
+        let edge_post_dev = device.htod_sync_copy(&edge_post).ok()?;
+        let edge_weight_dev = device.htod_sync_copy(&edge_weight).ok()?;
+
+        Some(Self {
+            device,
+            n,
+            n_edges,
+            activity,
+            next,
+            edge_pre: edge_pre_dev,
+            edge_post: edge_post_dev,
+            edge_weight: edge_weight_dev,
+        })
+    }
+
+    /// Run one step: decay + propagate + clamp. Caller passes current activity; we return new activity.
+    pub fn step(
+        &mut self,
+        activity: &[f32],
+        decay_factor: f32,
+        tau_r: f32,
+        prop_cap_r: f32,
+        activity_max: f32,
+    ) -> Option<Vec<f32>> {
+        if activity.len() != self.n {
+            return None;
+        }
+        self.device
+            .htod_sync_copy_into(activity, &mut self.activity)
+            .ok()?;
+
+        let decay_fn = self.device.get_func("brain_sim", "decay_kernel")?;
+        let prop_fn = self.device.get_func("brain_sim", "propagate_kernel")?;
+        let clamp_fn = self.device.get_func("brain_sim", "clamp_kernel")?;
+
+        let n = self.n as i32;
+        let n_edges = self.n_edges as i32;
+
+        let decay_cfg = LaunchConfig::for_num_elems(self.n as u32);
+        let prop_cfg = LaunchConfig::for_num_elems(self.n_edges as u32);
+        let clamp_cfg = LaunchConfig::for_num_elems(self.n as u32);
+
+        unsafe {
+            decay_fn
+                .launch(
+                    decay_cfg,
+                    (
+                        &self.activity,
+                        &mut self.next,
+                        n,
+                        decay_factor,
+                    ),
+                )
+                .ok()?;
+            prop_fn
+                .launch(
+                    prop_cfg,
+                    (
+                        &self.activity,
+                        &mut self.next,
+                        &self.edge_pre,
+                        &self.edge_post,
+                        &self.edge_weight,
+                        n_edges,
+                        tau_r,
+                        prop_cap_r,
+                    ),
+                )
+                .ok()?;
+            clamp_fn
+                .launch(clamp_cfg, (&mut self.next, n, activity_max))
+                .ok()?;
+        }
+
+        self.device.dtoh_sync_copy(&self.next).ok()
+    }
+}

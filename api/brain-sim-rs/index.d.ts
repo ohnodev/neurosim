@@ -41,4 +41,5 @@ export declare class BrainSim {
   constructor(neuronIds: Array<string>, connections: Array<ConnectionInput>, sensoryIndices: Array<number>, motorLeft: Array<number>, motorRight: Array<number>, motorUnknown: Array<number>)
   step(dt: number, fly: FlyInput, sources: Array<SourceInput>, pending: Array<PendingStimInput>): StepResult
   getActivity(): Float32Array
+  get isUsingGpu(): boolean
 }

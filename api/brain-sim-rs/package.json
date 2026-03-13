@@ -8,6 +8,7 @@
   },
   "scripts": {
     "build": "napi build --platform --release",
+    "build:cuda": "napi build --platform --release --features cuda",
     "build:debug": "napi build --platform"
   },
   "devDependencies": {

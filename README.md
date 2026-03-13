@@ -54,6 +54,7 @@ Fly brain emulation using the FlyWire connectome — scaffold to build your own 
 ## Features
 
 - **Connectome-based simulation** — Uses the FlyWire FAFB v783 connectome
+- **Optional GPU acceleration** — CUDA support for faster simulation (NVIDIA GPUs)
 - **3D brain and fly viewer** — Three.js + Plotly for brain visualization
 - **Wallet integration** — Connect wallet, deploy a fly, run simulations
 - **plotly-cabal** — We ship a patched Plotly build for brain 3D visualizations (see [plotly-cabal/](plotly-cabal/))
@@ -89,7 +90,18 @@ npm run process-connectome
 
 Or download the [FlyWire Brain Dataset](https://www.kaggle.com/datasets/leonidblokhinrs/flywire-brain-dataset-fafb-v783/data) manually, extract CSVs to `data/raw/`, and run `npm run process-connectome`.
 
-### 3. Run the app
+### 3. (Optional) GPU acceleration
+
+To enable CUDA GPU acceleration for faster brain simulation on machines with NVIDIA GPUs:
+
+```bash
+cd api/brain-sim-rs
+npm run build:cuda
+```
+
+Requires: Rust, CUDA Toolkit, and an NVIDIA GPU. Falls back to CPU if CUDA is unavailable.
+
+### 4. Run the app
 
 ```bash
 # API
@@ -99,7 +111,7 @@ cd api && npm install && npm run dev
 cd world && npm install && npm run dev
 ```
 
-Open the URL shown (e.g. http://localhost:5173), connect your wallet, deploy a fly, and click **Start**.
+Open the URL shown shown (e.g. http://localhost:5173), connect your wallet, deploy a fly, and click **Start**.
 
 ---
 

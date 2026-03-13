@@ -378,10 +378,17 @@ export function createBrainSim(
       return { t: fly.t, fly: flyWithMeta, activity: activityToRecord(act, neuronIds) };
     }
 
-    return { step, inject, getState, neuronIds, isRustSim: true };
+    return {
+      step,
+      inject,
+      getState,
+      neuronIds,
+      isRustSim: true,
+      isGpuSim: !!(rustCore as { isUsingGpu?: boolean }).isUsingGpu,
+    };
   }
 
-  return { ...createBrainSimTS(connectome, worldSources, initialFlyState), isRustSim: false };
+  return { ...createBrainSimTS(connectome, worldSources, initialFlyState), isRustSim: false, isGpuSim: false };
 }
 
 function createBrainSimTS(

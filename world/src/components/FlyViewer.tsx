@@ -883,7 +883,7 @@ export default function FlyViewer() {
             />
             <SimStatusSlot ref={simStatusSlotRef} />
           </div>
-          <div style={{ position: 'absolute', bottom: 12, left: 12, pointerEvents: 'auto' }}>
+          <div style={{ position: 'absolute', bottom: 12, left: 56, pointerEvents: 'auto' }}>
             <DebugPanelSlot ref={debugPanelSlotRef} />
           </div>
         <button

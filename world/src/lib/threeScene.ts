@@ -129,7 +129,11 @@ function createDebugPanel(
     'font-family:var(--font-mono,monospace);font-size:10px;color:#8af;background:rgba(0,0,0,0.8);padding:8px 10px;border-radius:6px;border:1px solid rgba(100,140,255,0.3);line-height:1.5;min-width:160px';
   slot.appendChild(wrap);
 
-  const formatBytes = (n: number) => (n >= 1024 ? `${(n / 1024).toFixed(1)} MB` : `${n} KB`);
+  const formatBytes = (bytes: number) => {
+    if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${bytes} B`;
+  };
 
   const update = () => {
     const info = renderer.info;

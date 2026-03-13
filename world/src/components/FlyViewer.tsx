@@ -1036,7 +1036,7 @@ export default function FlyViewer() {
                   <BrainOverlay
                     followSimIndexRef={followSimIndexRef}
                     visible={connected}
-                    neurons={neuronsData?.neurons ?? []}
+                    neurons={neuronsData?.neurons}
                     embedded
                   />
                 )}

@@ -92,6 +92,7 @@ export function initBrainPoints(
   let disposed = false;
   let animationId: number;
   let lastActivityRef: Record<string, number> | null = null;
+  let lastFrameTime = 0;
 
   function getActivity(): Record<string, number> {
     const idx = refs.followSimIndexRef.current;
@@ -112,11 +113,13 @@ export function initBrainPoints(
     colorAttr.needsUpdate = true;
   }
 
-  function animate(): void {
+  function animate(timestamp?: number): void {
     if (disposed) return;
     animationId = requestAnimationFrame(animate);
+    const deltaSeconds = lastFrameTime === 0 ? 0 : ((timestamp ?? performance.now()) - lastFrameTime) / 1000;
+    lastFrameTime = timestamp ?? performance.now();
     if (points) {
-      points.rotation.y += ROTATE_SPEED * 0.016;
+      points.rotation.y += ROTATE_SPEED * deltaSeconds;
       const activity = getActivity();
       if (activity !== lastActivityRef) updateColors();
     }

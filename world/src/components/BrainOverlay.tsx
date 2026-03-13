@@ -2,7 +2,7 @@
  * Lightweight Three.js 3D scatter for brain activity. No Plotly.
  * Only mounted when panel is open; unmounts fully when closed.
  */
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { useSimRefs } from '../lib/simDisplayContext';
 import { initBrainPoints } from '../lib/brainPointsScene';
 import type { NeuronWithPosition } from '../../../shared/lib/brainTypes';
@@ -14,16 +14,19 @@ interface BrainOverlayProps {
   neurons?: NeuronWithPosition[];
 }
 
-function BrainOverlayInner({ visible = true, embedded = false, followSimIndexRef, neurons = [] }: BrainOverlayProps) {
+function BrainOverlayInner({ visible = true, embedded = false, followSimIndexRef, neurons }: BrainOverlayProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const { activityRef, activitiesRef } = useSimRefs();
+  const normalizedNeurons = useMemo(() => neurons ?? [], [neurons]);
 
   useEffect(() => {
     if (!visible) return;
     const container = containerRef.current;
     if (!container) return;
-    return initBrainPoints(container, { activityRef, activitiesRef, followSimIndexRef }, neurons);
-  }, [visible, activityRef, activitiesRef, followSimIndexRef, neurons]);
+    return initBrainPoints(container, { activityRef, activitiesRef, followSimIndexRef }, normalizedNeurons);
+  }, [visible, activityRef, activitiesRef, followSimIndexRef, normalizedNeurons]);
+
+  if (!visible) return null;
 
   const containerStyle = embedded
     ? {

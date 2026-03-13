@@ -108,11 +108,11 @@ function buildClientPayload(
   frames: { t: number; flies: ReturnType<typeof sims[0]['getState']>['fly'][]; activities: (Record<string, number> | undefined)[] }[],
 ): void {
   const sources = getSources();
+  const clientFrames = frames.map((f) => ({ t: f.t, flies: f.flies }));
   const lastFrame = frames[frames.length - 1];
   for (const ws of wsClients) {
     if (ws.readyState !== 1) continue;
     const viewIndex = Math.max(0, Math.min(sims.length - 1, clientViewFlyIndex.get(ws) ?? 0));
-    const clientFrames = frames.map((f) => ({ t: f.t, flies: f.flies }));
     const activity = lastFrame ? (lastFrame.activities[viewIndex] ?? {}) : {};
     try {
       ws.send(JSON.stringify({ frames: clientFrames, activity, sources, simRunning: true }));

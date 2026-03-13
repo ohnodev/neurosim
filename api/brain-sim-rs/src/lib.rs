@@ -211,6 +211,8 @@ impl BrainSim {
 
         let mut next;
         #[cfg(feature = "cuda")]
+        let mut demote_gpu = false;
+        #[cfg(feature = "cuda")]
         {
             next = if let Some(ref mut gpu) = self.gpu_state {
                 match gpu.step(
@@ -222,13 +224,19 @@ impl BrainSim {
                 ) {
                     Some(gpu_next) => gpu_next,
                     None if self.cuda_only => panic!("[brain-sim] CUDA mode required but GPU step failed"),
-                    None => self.run_step_cpu(decay_factor, tau_r, prop_cap_r),
+                    None => {
+                        demote_gpu = true;
+                        self.run_step_cpu(decay_factor, tau_r, prop_cap_r)
+                    }
                 }
             } else if self.cuda_only {
                 panic!("[brain-sim] CUDA mode required but GPU state unavailable (init failed)");
             } else {
                 self.run_step_cpu(decay_factor, tau_r, prop_cap_r)
             };
+            if demote_gpu {
+                self.gpu_state = None;
+            }
         }
         #[cfg(not(feature = "cuda"))]
         {

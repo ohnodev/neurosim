@@ -14,8 +14,8 @@ export interface SimPayload {
   flies?: FlyState[];
   /** Legacy: single fly (prefer flies when present) */
   fly?: FlyState;
-  /** Batched frames: server sends 8 frames every 250ms, each with sources for time-aligned food */
-  frames?: { t: number; flies: FlyState[]; activities?: (Record<string, number> | undefined)[]; activity?: Record<string, number>; sources?: WorldSource[] }[];
+  /** Batched frames: server sends 8 frames every 250ms. activity + sources sent once per batch. */
+  frames?: { t: number; flies: FlyState[] }[];
   activity?: Record<string, number>;
   /** Per-fly brain activity (index = sim index) */
   activities?: (Record<string, number> | undefined)[];

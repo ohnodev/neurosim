@@ -11,5 +11,5 @@ export function getApiBase(): string {
   if (typeof window === 'undefined') return 'http://localhost:3001';
   const isLocal =
     window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-  return isLocal ? 'http://localhost:3001' : 'https://api.neurosim.fun';
+  return isLocal ? 'http://localhost:3001' : 'https://cuda.neurosim.fun';
 }

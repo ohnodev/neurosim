@@ -96,22 +96,19 @@ function broadcast(data: unknown): void {
   }
 }
 
-/** Build per-client payload with only the viewed fly's activity to reduce payload size. */
+/** Build per-client payload. Activity and sources sent once per batch (client only uses last). */
 function buildClientPayload(
-  frames: { t: number; flies: ReturnType<typeof sims[0]['getState']>['fly'][]; activities: (Record<string, number> | undefined)[]; sources: WorldSource[] }[],
+  frames: { t: number; flies: ReturnType<typeof sims[0]['getState']>['fly'][]; activities: (Record<string, number> | undefined)[] }[],
 ): void {
   const sources = getSources();
+  const lastFrame = frames[frames.length - 1];
   for (const ws of wsClients) {
     if (ws.readyState !== 1) continue;
     const viewIndex = Math.max(0, Math.min(sims.length - 1, clientViewFlyIndex.get(ws) ?? 0));
-    const clientFrames = frames.map((f) => ({
-      t: f.t,
-      flies: f.flies,
-      activity: f.activities[viewIndex] ?? {},
-      sources: f.sources,
-    }));
+    const clientFrames = frames.map((f) => ({ t: f.t, flies: f.flies }));
+    const activity = lastFrame ? (lastFrame.activities[viewIndex] ?? {}) : {};
     try {
-      ws.send(JSON.stringify({ frames: clientFrames, simRunning: true, sources }));
+      ws.send(JSON.stringify({ frames: clientFrames, activity, sources, simRunning: true }));
     } catch (err) {
       console.error('[ws] send error', err);
     }
@@ -135,7 +132,7 @@ function startSim(): void {
     let rustMs = 0;
     let jsMs = 0;
     const dt = 1 / SIM_FPS;
-    const frames: { t: number; flies: ReturnType<typeof sims[0]['getState']>['fly'][]; activities: (Record<string, number> | undefined)[]; activity?: Record<string, number>; sources: WorldSource[] }[] = [];
+    const frames: { t: number; flies: ReturnType<typeof sims[0]['getState']>['fly'][]; activities: (Record<string, number> | undefined)[] }[] = [];
     for (let i = 0; i < FRAMES_PER_BATCH; i++) {
       const flies: ReturnType<typeof sims[0]['getState']>['fly'][] = [];
       const activities: (Record<string, number> | undefined)[] = [];
@@ -156,7 +153,7 @@ function startSim(): void {
         activities.push(state.activity);
         t = state.t;
       }
-      frames.push({ t, flies, activities, sources: getSources() });
+      frames.push({ t, flies, activities });
     }
     const beforePayload = performance.now();
     buildClientPayload(frames);
@@ -367,9 +364,10 @@ wss.on('connection', (ws) => {
   const activities = sims.map((s) => s.getState().activity);
   const firstState = sims[0]?.getState();
   ws.send(JSON.stringify({
-    frames: [{ t: firstState?.t ?? 0, flies, activity: activities[viewIndex] ?? {}, sources: getSources() }],
-    simRunning,
+    frames: [{ t: firstState?.t ?? 0, flies }],
+    activity: activities[viewIndex] ?? {},
     sources: getSources(),
+    simRunning,
   }));
 
   ws.on('message', (data) => {

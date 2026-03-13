@@ -250,6 +250,42 @@ function FliesPanelCurrentSlots({
   );
 }
 
+/** Shared side panel toggle button (left or right). */
+function SidePanelToggle({
+  open,
+  onToggle,
+  label,
+  position,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  label: string;
+  position: 'left' | 'right';
+}) {
+  const hideLabel = `Hide ${label.toLowerCase()}`;
+  const showLabel = `Show ${label.toLowerCase()}`;
+  const ariaLabel = open ? hideLabel : showLabel;
+  const chevronPath =
+    position === 'left'
+      ? open ? 'M19 12H5M12 19l-7-7 7-7' : 'M5 12h14M12 5l7 7-7 7'
+      : open ? 'M5 12h14M12 5l7 7-7 7' : 'M19 12H5M12 19l-7-7 7-7';
+  return (
+    <button
+      type="button"
+      className={`fly-viewer__side-toggle fly-viewer__side-toggle--${position} ${open ? 'fly-viewer__side-toggle--active' : ''}`}
+      onClick={onToggle}
+      aria-label={ariaLabel}
+      aria-expanded={open}
+      title={ariaLabel}
+    >
+      <span className="fly-viewer__side-toggle-label">{label}</span>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d={chevronPath} />
+      </svg>
+    </button>
+  );
+}
+
 /** Graveyard tab slots: 3 slots showing in-graveyard or empty. */
 function FliesPanelGraveyardSlots({
   graveyardSlots,
@@ -738,17 +774,12 @@ export default function FlyViewer() {
               )}
             </div>
           </div>
-          <button
-            type="button"
-            className={`fly-viewer__side-toggle fly-viewer__side-toggle--status ${statusPanelOpen ? 'fly-viewer__side-toggle--active' : ''}`}
-            onClick={() => setStatusPanelOpen((o) => !o)}
-            aria-label={statusPanelOpen ? 'Hide status' : 'Show status'}
-            aria-expanded={statusPanelOpen}
-            title={statusPanelOpen ? 'Hide status' : 'Show status'}
-          >
-            <span className="fly-viewer__side-toggle-label">Status</span>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d={statusPanelOpen ? 'M19 12H5M12 19l-7-7 7-7' : 'M5 12h14M12 5l7 7-7 7'} /></svg>
-          </button>
+          <SidePanelToggle
+            open={statusPanelOpen}
+            onToggle={() => setStatusPanelOpen((o) => !o)}
+            label="Status"
+            position="left"
+          />
         </div>
         {/* Right: Brain vertical toggle + panel */}
         <div className="fly-viewer__side-strip fly-viewer__side-strip--right">
@@ -767,17 +798,12 @@ export default function FlyViewer() {
               </div>
             </div>
           </div>
-          <button
-            type="button"
-            className={`fly-viewer__side-toggle fly-viewer__side-toggle--brain ${brainPanelOpen ? 'fly-viewer__side-toggle--active' : ''}`}
-            onClick={() => setBrainPanelOpen((o) => !o)}
-            aria-label={brainPanelOpen ? 'Hide brain activity' : 'Show brain activity'}
-            aria-expanded={brainPanelOpen}
-            title={brainPanelOpen ? 'Hide brain activity' : 'Show brain activity'}
-          >
-            <span className="fly-viewer__side-toggle-label">Brain</span>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d={brainPanelOpen ? 'M5 12h14M12 5l7 7-7 7' : 'M19 12H5M12 19l-7-7 7-7'} /></svg>
-          </button>
+          <SidePanelToggle
+            open={brainPanelOpen}
+            onToggle={() => setBrainPanelOpen((o) => !o)}
+            label="Brain"
+            position="right"
+          />
         </div>
       </div>
       </div>

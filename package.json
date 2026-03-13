@@ -4,6 +4,8 @@
   "scripts": {
     "process-connectome": "tsx scripts/process-connectome.ts",
     "setup-kaggle": "./scripts/setup-kaggle.sh",
+    "fly-brain:setup": "./scripts/setup-fly-brain.sh",
+    "fly-brain:run": "node scripts/run-fly-brain.mjs",
     "download-dataset": "./scripts/download-dataset.sh",
     "api:dev": "cd api && npm run dev",
     "world:dev": "cd world && npm run dev",

@@ -62,7 +62,7 @@ export interface BrainPointsRefs {
 }
 
 const ROTATE_SPEED = 0.15;
-const ZOOM = 0.65; // Ortho extent (smaller = zoomed in)
+const ZOOM = 0.45; // Ortho extent (smaller = zoomed in)
 
 export function initBrainPoints(
   container: HTMLElement,

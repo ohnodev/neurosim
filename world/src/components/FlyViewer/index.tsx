@@ -1,7 +1,7 @@
 import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { WorldSource } from '../../../../api/src/world';
-import { subscribeSim, type FlyState } from '../../lib/simWsClient';
+import { subscribeSim, sendViewFlyIndex, type FlyState } from '../../lib/simWsClient';
 import { type Snapshot, MAX_SNAPSHOT_BUFFER, trimSnapshotBuffer } from '../../lib/flyInterpolation';
 import { getApiBase } from '../../lib/constants';
 import {
@@ -21,7 +21,7 @@ import { initThreeScene, type InterpolationDebugStats, type CameraMode, type Sim
 import { usePrivyWallet } from '../../lib/usePrivyWallet';
 import { RewardsTable } from '../RewardsTable';
 import { StatusPanelStatusContent } from '../StatusPanelStatusContent';
-import { DEFAULT_FLY, flyCardDataEqual } from '../../lib/flyViewerUtils';
+import { DEFAULT_FLY, flyCardDataEqual, resolveEffectiveSimIndex } from '../../lib/flyViewerUtils';
 import { isMobileViewport } from '../../lib/mediaQuery';
 import { CameraToggleSlot } from './CameraToggleSlot';
 import { SimStateSync } from './SimStateSync';
@@ -139,6 +139,8 @@ export default function FlyViewer() {
           setError((prev) =>
             prev && /socket|connection|websocket|connect|closed/i.test(prev) ? null : prev
           );
+          const eff = resolveEffectiveSimIndex(latestFliesRef.current, deployed, selectedFlyIndex, deployedSlotKeys);
+          sendViewFlyIndex(eff ?? 0);
         } else if (event._event === 'closed') {
           setConnected(false);
         }

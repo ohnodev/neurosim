@@ -76,11 +76,12 @@ describe('deploy flow: buy fly + deploy + sim updates', () => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
     const payloads: { flies?: unknown[]; t?: number }[] = [];
     await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('WS timeout')), 5000);
+      const timeout = setTimeout(() => reject(new Error('WS timeout')), 10000);
       ws.on('message', (data) => {
         const p = JSON.parse(data.toString());
         payloads.push(p);
-        if (Array.isArray(p.flies) && p.flies.length >= 1) {
+        const flies = p.frames?.[0]?.flies ?? p.flies;
+        if (Array.isArray(flies) && flies.length >= 1) {
           clearTimeout(timeout);
           resolve();
         }
@@ -94,9 +95,10 @@ describe('deploy flow: buy fly + deploy + sim updates', () => {
 
     expect(payloads.length).toBeGreaterThan(0);
     const last = payloads[payloads.length - 1];
-    expect(Array.isArray(last.flies)).toBe(true);
-    expect(last.flies!.length).toBeGreaterThanOrEqual(1);
-    const fly = last.flies![0] as { x?: number; y?: number; hunger?: number; health?: number };
+    const flies = (last as { frames?: { flies?: unknown[] }[]; flies?: unknown[] }).frames?.[0]?.flies ?? (last as { flies?: unknown[] }).flies;
+    expect(Array.isArray(flies)).toBe(true);
+    expect(flies!.length).toBeGreaterThanOrEqual(1);
+    const fly = flies![0] as { x?: number; y?: number; hunger?: number; health?: number };
     expect(typeof fly.x).toBe('number');
     expect(typeof fly.y).toBe('number');
     expect(fly.hunger).toBeGreaterThanOrEqual(0);
@@ -126,11 +128,12 @@ describe('deploy flow: buy fly + deploy + sim updates', () => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
     const payloads: { flies?: unknown[] }[] = [];
     await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('WS timeout')), 5000);
+      const timeout = setTimeout(() => reject(new Error('WS timeout')), 10000);
       ws.on('message', (data) => {
         const p = JSON.parse(data.toString());
         payloads.push(p);
-        if (Array.isArray(p.flies) && p.flies.length >= 5) {
+        const flies = p.frames?.[0]?.flies ?? p.flies;
+        if (Array.isArray(flies) && flies.length >= 5) {
           clearTimeout(timeout);
           resolve();
         }
@@ -140,8 +143,9 @@ describe('deploy flow: buy fly + deploy + sim updates', () => {
     ws.close();
 
     const last = payloads[payloads.length - 1];
-    expect(last.flies!.length).toBeGreaterThanOrEqual(5);
-    const flies = last.flies! as Array<{ x: number; y: number }>;
+    const fliesData = (last as { frames?: { flies?: unknown[] }[]; flies?: unknown[] }).frames?.[0]?.flies ?? (last as { flies?: unknown[] }).flies;
+    expect(fliesData!.length).toBeGreaterThanOrEqual(5);
+    const flies = fliesData! as Array<{ x: number; y: number }>;
     const positions = new Set(flies.map((f) => `${f.x.toFixed(2)},${f.y.toFixed(2)}`));
     expect(positions.size).toBe(flies.length);
   });

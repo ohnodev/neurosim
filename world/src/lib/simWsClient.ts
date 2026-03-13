@@ -170,6 +170,13 @@ export function sendStop(): void {
   }
 }
 
+/** Tell server which fly's activity to send (sim index). Reduces payload size. */
+export function sendViewFlyIndex(simIndex: number): void {
+  if (ws?.readyState === WebSocket.OPEN && Number.isInteger(simIndex) && simIndex >= 0) {
+    ws.send(JSON.stringify({ viewFlyIndex: simIndex }));
+  }
+}
+
 export function getConnectionState(): "connecting" | "open" | "closed" {
   if (!ws) return "closed";
   switch (ws.readyState) {

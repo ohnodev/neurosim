@@ -136,7 +136,9 @@ export default function FlyViewer() {
       if ('_event' in event) {
         if (event._event === 'open') {
           setConnected(true);
-          setError(null);
+          setError((prev) =>
+            prev && /socket|connection|websocket|connect|closed/i.test(prev) ? null : prev
+          );
         } else if (event._event === 'closed') {
           setConnected(false);
         }

@@ -574,6 +574,11 @@ export function initThreeScene(
       disposeObject3D(c);
     }
     if (flyTemplate) disposeObject3D(flyTemplate);
+    flyTemplate = null;
+    if (appleTemplate) {
+      disposeObject3D(appleTemplate);
+      appleTemplate = null;
+    }
   };
   return { dispose, updateButton };
 }

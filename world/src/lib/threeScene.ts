@@ -258,7 +258,7 @@ export function initThreeScene(
 
   let flyTemplate: THREE.Group | null = null;
   let flyClips: THREE.AnimationClip[] = [];
-  let appleTemplate: THREE.Group | null = null;
+  const applePool: THREE.Object3D[] = [];
   const mixers: THREE.AnimationMixer[] = [];
   const flyInstances: {
     group: THREE.Group;
@@ -286,7 +286,15 @@ export function initThreeScene(
     '/models/low-poly_apple/scene.gltf',
     (gltf) => {
       if (disposed) return;
-      appleTemplate = gltf.scene.clone(true);
+      const template = gltf.scene.clone(true);
+      for (let i = 0; i < 2; i++) {
+        const clone = cloneWithOwnResources(template);
+        clone.scale.setScalar(1.2);
+        clone.visible = false;
+        applePool.push(clone);
+        sourcesGroup.add(clone);
+      }
+      disposeObject3D(template);
       updateWorldSources(lastSources);
     },
     undefined,
@@ -324,11 +332,6 @@ export function initThreeScene(
   }
 
   function createSourceObject(s: WorldSource): THREE.Object3D {
-    if (s.type === 'food' && appleTemplate) {
-      const clone = cloneWithOwnResources(appleTemplate);
-      clone.scale.setScalar(1.2);
-      return clone;
-    }
     const size = s.type === 'food' ? 0.9 : 0.8;
     const geom = new THREE.BoxGeometry(size, size, size);
     const mat =
@@ -339,12 +342,26 @@ export function initThreeScene(
   }
 
   function updateWorldSources(sources: WorldSource[]): void {
-    while (sourcesGroup.children.length > 0) {
-      const c = sourcesGroup.children[0];
+    const foodSources = sources.filter((s) => s.type === 'food');
+    const lightSources = sources.filter((s) => s.type === 'light');
+
+    for (let i = 0; i < applePool.length; i++) {
+      const apple = applePool[i]!;
+      if (i < foodSources.length) {
+        const s = foodSources[i]!;
+        apple.position.set(s.x, s.z, s.y);
+        apple.visible = true;
+      } else {
+        apple.visible = false;
+      }
+    }
+
+    for (const c of sourcesGroup.children.slice()) {
+      if (applePool.includes(c)) continue;
       sourcesGroup.remove(c);
       disposeObject3D(c);
     }
-    for (const s of sources) {
+    for (const s of lightSources) {
       const obj = createSourceObject(s);
       obj.position.set(s.x, s.z, s.y);
       sourcesGroup.add(obj);
@@ -566,7 +583,6 @@ export function initThreeScene(
       disposeObject3D(c);
     }
     if (flyTemplate) disposeObject3D(flyTemplate);
-    if (appleTemplate) disposeObject3D(appleTemplate);
   };
   return { dispose, updateButton };
 }

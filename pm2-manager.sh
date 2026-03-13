@@ -47,7 +47,7 @@ module.exports = {
       instances: 1,
       autorestart: true,
       watch: false,
-      log_file: '$LOGS_DIR/neurosim-brain.log',
+      log_file: '/dev/null',
       out_file: '/dev/null',
       error_file: '$LOGS_DIR/neurosim-brain.log',
       merge_logs: false,

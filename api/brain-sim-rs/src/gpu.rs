@@ -95,6 +95,7 @@ extern "C" __global__ void propagate_kernel(
     const unsigned int* edge_post,
     const float* edge_weight,
     int n_edges,
+    int n,
     float tau_r,
     float prop_cap_r
 ) {
@@ -102,6 +103,7 @@ extern "C" __global__ void propagate_kernel(
     if (e >= n_edges) return;
     unsigned int pre_idx = edge_pre[e];
     unsigned int post_idx = edge_post[e];
+    if (pre_idx >= (unsigned int)n || post_idx >= (unsigned int)n) return;
     float w = fminf(edge_weight[e], 10.0f);
     float pre_act = activity[pre_idx];
     if (!isfinite(pre_act) || pre_act <= 0.0f) return;
@@ -231,6 +233,7 @@ impl GpuSimState {
                     &self.edges.edge_post,
                     &self.edges.edge_weight,
                     n_edges,
+                    n,
                     tau_r,
                     prop_cap_r,
                 ),
@@ -300,6 +303,45 @@ mod tests {
         let mut state = GpuSimState::new(n, &adj, &activity).expect("GPU init should succeed");
         let result = state.step(&activity, 0.975, 0.004, 0.0004, 0.5);
         assert!(result.is_some(), "step should succeed with 256 neurons");
+        let out = result.unwrap();
+        assert_eq!(out.len(), n);
+    }
+
+    /// Matches production scale: 10k neurons, ~88k edges (like full connectome).
+    #[test]
+    fn test_gpu_step_production_scale() {
+        clear_edge_cache_for_test();
+        let n: usize = 10_000;
+        let target_edges: usize = 87_858;
+        let mut adj: Vec<Vec<(u32, f32)>> = (0..n).map(|_| Vec::new()).collect();
+        let mut edge_count = 0;
+        for i in 0..n {
+            let out_degree = 9; // ~9 edges/neuron → ~90k total
+            for k in 0..out_degree {
+                let j = (i + k * 1117 + 1) % n; // spread targets
+                adj[i].push((j as u32, 0.2));
+                edge_count += 1;
+                if edge_count >= target_edges {
+                    break;
+                }
+            }
+            if edge_count >= target_edges {
+                break;
+            }
+        }
+        assert!(
+            edge_count >= 80_000,
+            "need ~88k edges, got {}",
+            edge_count
+        );
+        let activity: Vec<f32> = (0..n).map(|i| if i % 100 == 0 { 0.1 } else { 0.0 }).collect();
+        let mut state = GpuSimState::new(n, &adj, &activity).expect("GPU init at production scale");
+        let result = state.step(&activity, 0.975, 0.004, 0.0004, 0.5);
+        assert!(
+            result.is_some(),
+            "step should succeed at production scale (10k neurons, ~{}k edges)",
+            edge_count / 1000
+        );
         let out = result.unwrap();
         assert_eq!(out.len(), n);
     }

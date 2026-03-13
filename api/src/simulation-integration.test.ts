@@ -18,9 +18,9 @@ const connectomePath = path.resolve(__dirname, '..', '..', 'data', 'connectome-s
 
 describe('simulation integration', () => {
   describe('brain sim backend', () => {
-    it('creates sim and reports backend (Rust or TS)', () => {
+    it('creates sim and reports backend (Rust or TS)', async () => {
       const connectome = loadConnectome(connectomePath);
-      const sim = createBrainSim(connectome, []);
+      const sim = await createBrainSim(connectome, []);
       expect(typeof sim.isRustSim).toBe('boolean');
       expect(sim.step).toBeDefined();
       expect(sim.inject).toBeDefined();
@@ -28,15 +28,15 @@ describe('simulation integration', () => {
       expect(sim.neuronIds.length).toBe(connectome.neurons.length);
     });
 
-    it('runs long simulation with real connectome: valid fly state and activity', () => {
+    it('runs long simulation with real connectome: valid fly state and activity', async () => {
       const connectome = loadConnectome(connectomePath);
       const food = { id: 'f1', type: 'food' as const, x: 5, y: 5, z: 2, radius: 20 };
-      const { step } = createBrainSim(connectome, [food]);
+      const { step } = await createBrainSim(connectome, [food]);
       const dt = 1 / 30;
-      let lastState = step(dt);
+      let lastState = await step(dt);
 
       for (let i = 0; i < 600; i++) {
-        lastState = step(dt);
+        lastState = await step(dt);
         expect(Number.isFinite(lastState.fly.x)).toBe(true);
         expect(Number.isFinite(lastState.fly.y)).toBe(true);
         expect(Number.isFinite(lastState.fly.z)).toBe(true);
@@ -51,18 +51,18 @@ describe('simulation integration', () => {
       expect(lastState.t, 'Simulation time should advance').toBeGreaterThan(10);
     });
 
-    it('injection adds activity and propagates', () => {
+    it('injection adds activity and propagates', async () => {
       const connectome = loadConnectome(connectomePath);
-      const { step, inject, neuronIds } = createBrainSim(connectome, []);
+      const { step, inject, neuronIds } = await createBrainSim(connectome, []);
       const dt = 1 / 30;
-      step(dt);
-      step(dt);
-      const s0 = step(dt);
+      await step(dt);
+      await step(dt);
+      const s0 = await step(dt);
       const actKeys0 = s0.activity ? Object.keys(s0.activity).length : 0;
 
       if (neuronIds.length > 0) {
         inject([neuronIds[0]], 1);
-        const s1 = step(dt);
+        const s1 = await step(dt);
         const actKeys1 = s1.activity ? Object.keys(s1.activity).length : 0;
         expect(actKeys1).toBeGreaterThanOrEqual(actKeys0);
       }

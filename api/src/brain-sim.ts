@@ -6,6 +6,7 @@ import type { Connectome, Neuron } from './connectome.js';
 import { buildAdjacency } from './connectome.js';
 import type { FlyState } from './fly-state.js';
 import type { WorldSource } from './world.js';
+import * as socketClient from './brain-socket-client.js';
 
 export type { FlyState } from './fly-state.js';
 export const EAT_RADIUS = 2.5;
@@ -95,7 +96,7 @@ function activityToRecord(activity: Float32Array | undefined | null, neuronIds: 
   return Object.keys(actObj).length ? actObj : undefined;
 }
 
-export function createBrainSim(
+export async function createBrainSim(
   connectome: Connectome,
   worldSources: WorldSource[] | (() => WorldSource[]) = [],
   initialFlyState?: Partial<FlyState>,
@@ -154,7 +155,28 @@ export function createBrainSim(
   };
 
   let rustCore: InstanceType<NonNullable<typeof BrainSimRust>> | null = null;
-  if (BrainSimRust) {
+  let socketSimId: number | null = null;
+
+  // Prefer Unix socket service when available (isolates CUDA from Node)
+  const useSocket =
+    process.env.USE_RUST_SIM !== '0' && process.env.USE_BRAIN_SOCKET !== '0';
+  if (useSocket) {
+    try {
+      const { simId } = await socketClient.createSim({
+        neuronIds,
+        connections: connectionsForRust,
+        sensoryIndices: sensoryTargetIndices,
+        motorLeft: motorLeftIndices,
+        motorRight: motorRightIndices,
+        motorUnknown: motorUnknownIndices,
+      });
+      socketSimId = simId;
+    } catch {
+      socketSimId = null;
+    }
+  }
+
+  if (socketSimId === null && BrainSimRust) {
     try {
       rustCore = new BrainSimRust(
         neuronIds,
@@ -169,30 +191,22 @@ export function createBrainSim(
     }
   }
 
-  if (rustCore) {
+  const useRust = socketSimId !== null || rustCore !== null;
+
+  if (useRust) {
     let lastRustMs = 0;
     let lastJsMs = 0;
+    let lastActivitySparse: Record<string, number> = {};
 
-    function step(dt: number): SimState {
-      const stepStart = performance.now();
-      if (fly.dead) {
-        const t = fly.t + dt;
-        fly = { ...fly, t };
-        const rustStart = performance.now();
-        const act = rustCore!.step(dt, { x: fly.x, y: fly.y, z: fly.z, heading: fly.heading, t: fly.t, hunger: fly.hunger, health: fly.health ?? 100, restTimeLeft }, [], []);
-        const rustMs = performance.now() - rustStart;
-        lastRustMs = Math.round(rustMs);
-        const activityRec = Object.keys(act.activitySparse).length ? act.activitySparse : undefined;
-        lastJsMs = Math.round(performance.now() - stepStart - rustMs);
-        return { t, fly, activity: activityRec };
-      }
-
-      const currentSources = getSources();
-      const t = fly.t + dt;
-
-      const toApply = pendingStimuli.splice(0, pendingStimuli.length);
-      const pendingInput = toApply.map((p) => ({ neuronIds: p.neurons, strength: p.strength }));
-
+    async function runRustStep(
+      dt: number,
+      pendingInput: Array<{ neuronIds: string[]; strength: number }>,
+    ): Promise<{
+      activitySparse: Record<string, number>;
+      motorLeft: number;
+      motorRight: number;
+      motorFwd: number;
+    }> {
       const flyInput = {
         x: fly.x,
         y: fly.y,
@@ -203,13 +217,73 @@ export function createBrainSim(
         health: fly.health ?? 100,
         restTimeLeft,
       };
-      const sourcesInput = currentSources.map((s) => ({ x: s.x, y: s.y, radius: s.radius }));
+      const sourcesInput = getSources().map((s) => ({ x: s.x, y: s.y, radius: s.radius }));
+      if (socketSimId !== null) {
+        return socketClient.stepSim({
+          simId: socketSimId,
+          dt,
+          fly: flyInput,
+          sources: sourcesInput,
+          pending: pendingInput,
+        });
+      }
+      const r = rustCore!.step(dt, flyInput, sourcesInput, pendingInput);
+      return {
+        activitySparse: r.activitySparse,
+        motorLeft: r.motorLeft,
+        motorRight: r.motorRight,
+        motorFwd: r.motorFwd,
+      };
+    }
+
+    async function step(dt: number): Promise<SimState> {
+      const stepStart = performance.now();
+      if (fly.dead) {
+        const t = fly.t + dt;
+        fly = { ...fly, t };
+        if (socketSimId !== null) {
+          const act = await runRustStep(dt, []);
+          lastActivitySparse = act.activitySparse;
+          lastRustMs = Math.round(performance.now() - stepStart);
+          const activityRec = Object.keys(act.activitySparse).length ? act.activitySparse : undefined;
+          return { t, fly, activity: activityRec };
+        }
+        const rustStart = performance.now();
+        const act = rustCore!.step(dt, { x: fly.x, y: fly.y, z: fly.z, heading: fly.heading, t: fly.t, hunger: fly.hunger, health: fly.health ?? 100, restTimeLeft }, [], []);
+        const rustMs = performance.now() - rustStart;
+        lastRustMs = Math.round(rustMs);
+        const activityRec = Object.keys(act.activitySparse).length ? act.activitySparse : undefined;
+        lastJsMs = Math.round(performance.now() - stepStart - lastRustMs);
+        return { t, fly, activity: activityRec };
+      }
+
+      const currentSources = getSources();
+      const t = fly.t + dt;
+
+      const toApply = pendingStimuli.splice(0, pendingStimuli.length);
+      const pendingInput = toApply.map((p) => ({ neuronIds: p.neurons, strength: p.strength }));
 
       const rustStart = performance.now();
-      const result = rustCore!.step(dt, flyInput, sourcesInput, pendingInput);
-      const rustMs = performance.now() - rustStart;
-      lastRustMs = Math.round(rustMs);
+      let result: { activitySparse: Record<string, number>; motorLeft: number; motorRight: number; motorFwd: number };
+      if (socketSimId !== null) {
+        result = await runRustStep(dt, pendingInput);
+      } else {
+        const flyInput = {
+          x: fly.x,
+          y: fly.y,
+          z: fly.z,
+          heading: fly.heading,
+          t: fly.t,
+          hunger: fly.hunger,
+          health: fly.health ?? 100,
+          restTimeLeft,
+        };
+        const sourcesInput = currentSources.map((s) => ({ x: s.x, y: s.y, radius: s.radius }));
+        result = rustCore!.step(dt, flyInput, sourcesInput, pendingInput);
+      }
+      lastRustMs = Math.round(performance.now() - rustStart);
       const { activitySparse, motorLeft, motorRight, motorFwd } = result;
+      lastActivitySparse = activitySparse;
 
       const turnFromMotor = (motorRight - motorLeft);
       const forwardFromMotor = motorLeft + motorRight + motorFwd;
@@ -253,7 +327,7 @@ export function createBrainSim(
             feeding: false,
           };
           const activityRec = Object.keys(activitySparse).length ? activitySparse : undefined;
-          lastJsMs = Math.round(performance.now() - stepStart - rustMs);
+          lastJsMs = Math.round(performance.now() - stepStart - lastRustMs);
           return { t, fly, activity: activityRec, ...(eatenFoodId && { eatenFoodId }) };
         }
       }
@@ -363,7 +437,7 @@ export function createBrainSim(
       };
 
       const activityRec = Object.keys(activitySparse).length ? activitySparse : undefined;
-      lastJsMs = Math.round(performance.now() - stepStart - rustMs);
+      lastJsMs = Math.round(performance.now() - stepStart - lastRustMs);
 
       return {
         t,
@@ -383,11 +457,18 @@ export function createBrainSim(
 
     function getState(): SimState {
       let act: Float32Array | undefined;
-      try {
-        act = rustCore!.getActivity();
-      } catch {
+      if (socketSimId !== null) {
         act = undefined;
+      } else {
+        try {
+          act = rustCore!.getActivity();
+        } catch {
+          act = undefined;
+        }
       }
+      const activityRec = socketSimId !== null
+        ? (Object.keys(lastActivitySparse).length ? lastActivitySparse : undefined)
+        : activityToRecord(act, neuronIds);
       const flyWithMeta = {
         ...fly,
         health: fly.health ?? 100,
@@ -397,7 +478,7 @@ export function createBrainSim(
         restDuration: REST_TIME,
         feeding: fly.feeding ?? false,
       };
-      return { t: fly.t, fly: flyWithMeta, activity: activityToRecord(act, neuronIds) };
+      return { t: fly.t, fly: flyWithMeta, activity: activityRec };
     }
 
     return {
@@ -407,7 +488,7 @@ export function createBrainSim(
       getTiming,
       neuronIds,
       isRustSim: true,
-      isGpuSim: !!rustCore.isUsingGpu,
+      isGpuSim: !!(socketSimId !== null || rustCore?.isUsingGpu),
     };
   }
 

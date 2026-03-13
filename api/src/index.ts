@@ -26,7 +26,7 @@ const PROBE_CONNECTOME: Connectome = {
 const CUDA_ONLY = process.env.NEUROSIM_MODE === 'cuda' || process.env.USE_CUDA === '1';
 let backendInfo = { rust: false, gpu: false };
 try {
-  const probe = createBrainSim(PROBE_CONNECTOME, () => [], {});
+  const probe = await createBrainSim(PROBE_CONNECTOME, () => [], {});
   backendInfo = { rust: !!probe.isRustSim, gpu: !!(probe as { isGpuSim?: boolean }).isGpuSim };
   if (CUDA_ONLY && !backendInfo.gpu) {
     console.error('[backend] CUDA mode required (NEUROSIM_MODE=cuda or USE_CUDA=1) but GPU unavailable. Refusing to start.');
@@ -48,15 +48,15 @@ let foodIntervalId: ReturnType<typeof setInterval> | null = null;
 let rewardFlushIntervalId: ReturnType<typeof setInterval> | null = null;
 
 /** Simulation flies; starts empty, users deploy flies. */
-const sims: ReturnType<typeof createBrainSim>[] = [];
+const sims: Awaited<ReturnType<typeof createBrainSim>>[] = [];
 /** address -> slotIndex -> simIndex */
 const deployedFlies = new Map<string, Map<number, number>>();
 
-function addFlyToSim(): number {
+async function addFlyToSim(): Promise<number> {
   const angle = (2 * Math.PI * sims.length) / Math.max(1, sims.length + 1);
   const x = INITIAL_SPREAD * Math.cos(angle);
   const y = INITIAL_SPREAD * Math.sin(angle);
-  const sim = createBrainSim(connectome, () => getSources(), {
+  const sim = await createBrainSim(connectome, () => getSources(), {
     x,
     y,
     z: GROUND_Z,
@@ -69,10 +69,10 @@ function addFlyToSim(): number {
   return sims.length - 1;
 }
 
-function restoreDeployFromStore(): void {
+async function restoreDeployFromStore(): Promise<void> {
   const records = getDeployments();
   for (const { address, slotIndex } of records) {
-    const simIndex = addFlyToSim();
+    const simIndex = await addFlyToSim();
     let map = deployedFlies.get(address);
     if (!map) {
       map = new Map();
@@ -134,7 +134,7 @@ function startSim(): void {
       broadcast({ simRunning, sources: getSources() });
     }
   }, 10_000);
-  simIntervalId = setInterval(() => {
+  simIntervalId = setInterval(async () => {
     const loopStart = performance.now();
     let rustMs = 0;
     let jsMs = 0;
@@ -147,7 +147,7 @@ function startSim(): void {
       const activities: (Record<string, number> | undefined)[] = [];
       let t = 0;
       for (let j = 0; j < sims.length; j++) {
-        const state = sims[j].step(dt);
+        const state = await sims[j].step(dt);
         const gt = (sims[j] as { getTiming?: () => { rustMs: number; jsMs: number } }).getTiming?.();
         if (gt) {
           rustMs += gt.rustMs;
@@ -283,7 +283,7 @@ app.get('/api/world', (_, res) => res.json(getWorld()));
 
 app.use('/api/claim', claimsRouter);
 
-app.post('/api/deploy', (req, res) => {
+app.post('/api/deploy', async (req, res) => {
   try {
     const address = (req.body?.address as string)?.toLowerCase();
     const slotIndex = typeof req.body?.slotIndex === 'number' ? req.body.slotIndex : parseInt(String(req.body?.slotIndex ?? ''), 10);
@@ -301,7 +301,7 @@ app.post('/api/deploy', (req, res) => {
       res.json({ success: true, simIndex: map.get(slotIndex), message: 'Already deployed' });
       return;
     }
-    const simIndex = addFlyToSim();
+    const simIndex = await addFlyToSim();
     if (!map) {
       map = new Map();
       deployedFlies.set(address, map);

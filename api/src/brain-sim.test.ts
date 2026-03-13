@@ -44,9 +44,9 @@ const miniConnectome = {
 const foodSource = { id: 'f1', type: 'food' as const, x: 5, y: 5, z: 2, radius: 20 };
 
 describe('brain-sim', () => {
-  it('steps and returns fly state', () => {
-    const { step } = createBrainSim(miniConnectome);
-    const s1 = step(0.1);
+  it('steps and returns fly state', async () => {
+    const { step } = await createBrainSim(miniConnectome);
+    const s1 = await step(0.1);
     expect(s1.fly).toBeDefined();
     expect(s1.fly.x).toBeDefined();
     expect(s1.fly.y).toBeDefined();
@@ -56,23 +56,23 @@ describe('brain-sim', () => {
     expect(s1.fly.hunger).toBeDefined();
   });
 
-  it('inject adds activity', () => {
-    const { step, inject } = createBrainSim(miniConnectome);
-    step(0.1);
-    const s1 = step(0.1);
+  it('inject adds activity', async () => {
+    const { step, inject } = await createBrainSim(miniConnectome);
+    await step(0.1);
+    const s1 = await step(0.1);
     const actBefore = s1.activity ? Object.keys(s1.activity).length : 0;
     inject(['a'], 1);
-    const s2 = step(0.1);
+    const s2 = await step(0.1);
     const actAfter = s2.activity ? Object.keys(s2.activity).length : 0;
     expect(actAfter).toBeGreaterThanOrEqual(actBefore);
   });
 
-  it('food source near fly increases activity in visual/sensory neurons', () => {
-    const { step } = createBrainSim(testConnectome, [foodSource]);
+  it('food source near fly increases activity in visual/sensory neurons', async () => {
+    const { step } = await createBrainSim(testConnectome, [foodSource]);
     let maxActivity = 0;
     // Run enough steps to cover multiple sensory cycles (SENSORY_DUTY ~8%)
     for (let i = 0; i < 180; i++) {
-      const s = step(1 / 30);
+      const s = await step(1 / 30);
       if (s.activity) {
         for (const v of Object.values(s.activity)) maxActivity = Math.max(maxActivity, v);
       }
@@ -80,47 +80,47 @@ describe('brain-sim', () => {
     expect(maxActivity, 'Food should drive some visual/sensory activity').toBeGreaterThan(0.01);
   });
 
-  it('fly position or heading changes over time with food and stimulus', () => {
-    const { step, inject } = createBrainSim(testConnectome, [foodSource]);
+  it('fly position or heading changes over time with food and stimulus', async () => {
+    const { step, inject } = await createBrainSim(testConnectome, [foodSource]);
     inject(['s1', 's2'], 1.5);
-    const s0 = step(0.1);
-    for (let i = 0; i < 600; i++) step(1 / 30);
-    const s1 = step(0.1);
+    const s0 = await step(0.1);
+    for (let i = 0; i < 600; i++) await step(1 / 30);
+    const s1 = await step(0.1);
     const distMoved = Math.hypot(s1.fly.x - s0.fly.x, s1.fly.y - s0.fly.y);
     const headingDiff = Math.abs(s1.fly.heading - s0.fly.heading);
     expect(distMoved > 0.02 || headingDiff > 0.01).toBe(true);
   });
 
-  it('fly explores (moves) when satiated and not fatigued', () => {
-    const { step } = createBrainSim(testConnectome, [foodSource]);
-    const s0 = step(0.1);
+  it('fly explores (moves) when satiated and not fatigued', async () => {
+    const { step } = await createBrainSim(testConnectome, [foodSource]);
+    const s0 = await step(0.1);
     expect(s0.fly.hunger).toBeGreaterThan(90);
     const dx = s0.fly.x;
     const dy = s0.fly.y;
-    for (let i = 0; i < 100; i++) step(1 / 30);
-    const s1 = step(0.1);
+    for (let i = 0; i < 100; i++) await step(1 / 30);
+    const s1 = await step(0.1);
     const dist = Math.hypot(s1.fly.x - dx, s1.fly.y - dy);
     expect(dist).toBeGreaterThan(0.5); // explore mode moves the fly
   });
 
-  it('fly heading changes when steering toward food', () => {
-    const { step } = createBrainSim(testConnectome, [foodSource]);
-    const s0 = step(0.5);
+  it('fly heading changes when steering toward food', async () => {
+    const { step } = await createBrainSim(testConnectome, [foodSource]);
+    const s0 = await step(0.5);
     const h0 = s0.fly.heading;
-    for (let i = 0; i < 90; i++) step(1 / 30);
-    const s1 = step(0.5);
+    for (let i = 0; i < 90; i++) await step(1 / 30);
+    const s1 = await step(0.5);
     const h1 = s1.fly.heading;
     expect(h0).toBeDefined();
     expect(h1).toBeDefined();
     expect(Math.abs(h1 - h0)).toBeLessThanOrEqual(Math.PI * 2);
   });
 
-  it('fly z bounded between ground and flight altitude', () => {
-    const { step, inject } = createBrainSim(testConnectome, [foodSource]);
+  it('fly z bounded between ground and flight altitude', async () => {
+    const { step, inject } = await createBrainSim(testConnectome, [foodSource]);
     inject(['s1', 's2'], 1.5);
     const samples: number[] = [];
     for (let i = 0; i < 300; i++) {
-      const s = step(1 / 30);
+      const s = await step(1 / 30);
       samples.push(s.fly.z);
     }
     const minZ = Math.min(...samples);
@@ -129,73 +129,73 @@ describe('brain-sim', () => {
     expect(maxZ).toBeLessThanOrEqual(1.6);
   });
 
-  it('fly z stays within ground and flight bounds', () => {
-    const { step } = createBrainSim(testConnectome, [foodSource]);
+  it('fly z stays within ground and flight bounds', async () => {
+    const { step } = await createBrainSim(testConnectome, [foodSource]);
     for (let i = 0; i < 300; i++) {
-      const s = step(1 / 30);
+      const s = await step(1 / 30);
       expect(s.fly.z).toBeGreaterThanOrEqual(0.3);
       expect(s.fly.z).toBeLessThanOrEqual(1.6);
     }
   });
 
-  it('fly position clamped to arena bounds', () => {
-    const { step } = createBrainSim(testConnectome, [
+  it('fly position clamped to arena bounds', async () => {
+    const { step } = await createBrainSim(testConnectome, [
       { id: 'f', type: 'food', x: 50, y: 50, z: 2, radius: 100 },
     ]);
-    for (let i = 0; i < 600; i++) step(1 / 30);
-    const s = step(1 / 30);
+    for (let i = 0; i < 600; i++) await step(1 / 30);
+    const s = await step(1 / 30);
     expect(s.fly.x).toBeGreaterThanOrEqual(-24);
     expect(s.fly.x).toBeLessThanOrEqual(24);
     expect(s.fly.y).toBeGreaterThanOrEqual(-24);
     expect(s.fly.y).toBeLessThanOrEqual(24);
   });
 
-  it('hunger decays over time', () => {
-    const { step } = createBrainSim(testConnectome, []);
-    const s0 = step(0.1);
+  it('hunger decays over time', async () => {
+    const { step } = await createBrainSim(testConnectome, []);
+    const s0 = await step(0.1);
     const h0 = s0.fly.hunger;
-    for (let i = 0; i < 60; i++) step(1 / 30);
-    const s1 = step(0.1);
+    for (let i = 0; i < 60; i++) await step(1 / 30);
+    const s1 = await step(0.1);
     expect(s1.fly.hunger).toBeLessThan(h0);
   });
 
-  it('fly dies when health drains at zero hunger', () => {
-    const { step } = createBrainSim(testConnectome, []);
+  it('fly dies when health drains at zero hunger', async () => {
+    const { step } = await createBrainSim(testConnectome, []);
     const dt = 1 / 30;
-    let s = step(dt);
+    let s = await step(dt);
     const maxSteps = 6000; // ~200s at 30Hz; hunger 0 at ~125s, health 0 at +40s
     for (let i = 0; i < maxSteps && !s.fly.dead; i++) {
-      s = step(dt);
+      s = await step(dt);
     }
     expect(s.fly.dead).toBe(true);
     expect(s.fly.health).toBe(0);
     expect(s.fly.hunger).toBeLessThanOrEqual(0);
   });
 
-  it('health decays when hunger is zero', () => {
-    const { step } = createBrainSim(testConnectome, []);
+  it('health decays when hunger is zero', async () => {
+    const { step } = await createBrainSim(testConnectome, []);
     const dt = 1 / 30;
-    let s = step(dt);
+    let s = await step(dt);
     // Run until hunger reaches 0 (~125s)
     for (let i = 0; i < 4000; i++) {
-      s = step(dt);
+      s = await step(dt);
       if (s.fly.hunger <= 0) break;
     }
     expect(s.fly.hunger).toBeLessThanOrEqual(0);
     const healthAtZeroHunger = s.fly.health ?? 100;
     // Run more steps; health should drain
-    for (let i = 0; i < 300; i++) s = step(dt);
+    for (let i = 0; i < 300; i++) s = await step(dt);
     expect((s.fly.health ?? 0)).toBeLessThan(healthAtZeroHunger);
   });
 
-  it('eating food restores both hunger and health', () => {
+  it('eating food restores both hunger and health', async () => {
     const sources: Array<{ id: string; type: 'food'; x: number; y: number; z: number; radius: number }> = [];
-    const { step } = createBrainSim(testConnectome, () => sources);
+    const { step } = await createBrainSim(testConnectome, () => sources);
     const dt = 1 / 30;
-    let s = step(dt);
+    let s = await step(dt);
     // Run with no food until hunger=0 and health has dropped
     for (let i = 0; i < 4500; i++) {
-      s = step(dt);
+      s = await step(dt);
       if (s.fly.dead) break;
       if (s.fly.hunger <= 0 && (s.fly.health ?? 100) < 90) break;
     }
@@ -214,7 +214,7 @@ describe('brain-sim', () => {
     });
     // Run until fly eats
     for (let i = 0; i < 200; i++) {
-      s = step(dt);
+      s = await step(dt);
       if (s.eatenFoodId) break;
     }
     expect(s.eatenFoodId).toBe('f1');
@@ -222,14 +222,14 @@ describe('brain-sim', () => {
     expect(s.fly.health).toBeGreaterThan(healthBefore);
   });
 
-  it('initialFlyState initializes fly at given position', () => {
-    const { getState } = createBrainSim(testConnectome, [], { x: 1.5, y: 2.5 });
+  it('initialFlyState initializes fly at given position', async () => {
+    const { getState } = await createBrainSim(testConnectome, [], { x: 1.5, y: 2.5 });
     const s = getState();
     expect(s.fly.x).toBe(1.5);
     expect(s.fly.y).toBe(2.5);
   });
 
-  it('multi-fly: first fly claims food, second does not see it after removal', () => {
+  it('multi-fly: first fly claims food, second does not see it after removal', async () => {
     const sources: Array<{ id: string; type: 'food'; x: number; y: number; z: number; radius: number }> = [
       { id: 'f1', type: 'food', x: 0, y: 0, z: 0.35, radius: 20 },
     ];
@@ -238,62 +238,62 @@ describe('brain-sim', () => {
       const i = sources.findIndex((s) => s.id === id);
       if (i >= 0) sources.splice(i, 1);
     };
-    const sim1 = createBrainSim(testConnectome, getSources, { x: 0, y: 0, z: 0.35, heading: 0, t: 0, hunger: 50, health: 100 });
-    const sim2 = createBrainSim(testConnectome, getSources, { x: 0, y: 0, z: 0.35, heading: 0, t: 0, hunger: 50, health: 100 });
+    const sim1 = await createBrainSim(testConnectome, getSources, { x: 0, y: 0, z: 0.35, heading: 0, t: 0, hunger: 50, health: 100 });
+    const sim2 = await createBrainSim(testConnectome, getSources, { x: 0, y: 0, z: 0.35, heading: 0, t: 0, hunger: 50, health: 100 });
     const dt = 1 / 30;
-    const s1 = sim1.step(dt);
+    const s1 = await sim1.step(dt);
     expect(s1.eatenFoodId).toBe('f1');
     removeFood('f1');
-    const s2 = sim2.step(dt);
+    const s2 = await sim2.step(dt);
     expect(s2.eatenFoodId).toBeUndefined();
     expect(sources).toHaveLength(0);
   });
 
-  it('neuronIds matches connectome neurons', () => {
-    const { neuronIds } = createBrainSim(testConnectome);
+  it('neuronIds matches connectome neurons', async () => {
+    const { neuronIds } = await createBrainSim(testConnectome);
     expect(neuronIds).toHaveLength(6);
     expect(neuronIds).toContain('s1');
     expect(neuronIds).toContain('ml');
     expect(neuronIds).toContain('mr');
   });
 
-  it('fly moves from start within 15s when not fatigued (explore or hungry)', () => {
-    const { step } = createBrainSim(testConnectome, [foodSource]);
+  it('fly moves from start within 15s when not fatigued (explore or hungry)', async () => {
+    const { step } = await createBrainSim(testConnectome, [foodSource]);
     const dt = 1 / 30;
     const startPos = { x: 0, y: 0 };
-    let s = step(dt);
+    let s = await step(dt);
     for (let i = 0; i < 450; i++) {
-      s = step(dt);
+      s = await step(dt);
     }
     const distMoved = Math.hypot(s.fly.x - startPos.x, s.fly.y - startPos.y);
     expect(distMoved, `Fly should move from (0,0); got pos (${s.fly.x.toFixed(2)}, ${s.fly.y.toFixed(2)})`).toBeGreaterThan(0.5);
   });
 
-  it('fly moves with stimulus within 5s', () => {
+  it('fly moves with stimulus within 5s', async () => {
     const dt = 1 / 30;
     const steps = 150;
 
-    const control = createBrainSim(testConnectome, []);
-    const s0_control = control.step(dt);
+    const control = await createBrainSim(testConnectome, []);
+    const s0_control = await control.step(dt);
     let maxActivityControl = 0;
     for (let i = 0; i < steps; i++) {
-      const s = control.step(dt);
+      const s = await control.step(dt);
       const sum = s.activity ? Object.values(s.activity).reduce((a, v) => a + v, 0) : 0;
       maxActivityControl = Math.max(maxActivityControl, sum);
     }
-    const s1_control = control.step(dt);
+    const s1_control = await control.step(dt);
     const distMoved_control = Math.hypot(s1_control.fly.x - s0_control.fly.x, s1_control.fly.y - s0_control.fly.y);
 
-    const injected = createBrainSim(testConnectome, []);
+    const injected = await createBrainSim(testConnectome, []);
     injected.inject(['s1', 's2'], 0.8);
-    const s0 = injected.step(dt);
+    const s0 = await injected.step(dt);
     let maxActivityInjected = 0;
     for (let i = 0; i < steps; i++) {
-      const s = injected.step(dt);
+      const s = await injected.step(dt);
       const sum = s.activity ? Object.values(s.activity).reduce((a, v) => a + v, 0) : 0;
       maxActivityInjected = Math.max(maxActivityInjected, sum);
     }
-    const s1 = injected.step(dt);
+    const s1 = await injected.step(dt);
     const distMoved = Math.hypot(s1.fly.x - s0.fly.x, s1.fly.y - s0.fly.y);
 
     expect(distMoved_control, 'Control should have baseline movement').toBeGreaterThan(0.5);
@@ -304,15 +304,15 @@ describe('brain-sim', () => {
     ).toBeGreaterThan(maxActivityControl);
   });
 
-  it('fly eventually reaches food when hungry (long run)', () => {
-    const { step } = createBrainSim(testConnectome, [foodSource]);
+  it('fly eventually reaches food when hungry (long run)', async () => {
+    const { step } = await createBrainSim(testConnectome, [foodSource]);
     const dt = 1 / 30;
     const maxSteps = 3600; // 2 min
-    let s = step(dt);
+    let s = await step(dt);
     let reachedFood = false;
     let minDistToFood = Infinity;
     for (let i = 0; i < maxSteps; i++) {
-      s = step(dt);
+      s = await step(dt);
       const d = Math.hypot(5 - s.fly.x, 5 - s.fly.y);
       minDistToFood = Math.min(minDistToFood, d);
       if (d < EAT_RADIUS) {
@@ -323,12 +323,12 @@ describe('brain-sim', () => {
     expect(reachedFood, `Fly should reach food within ${maxSteps} steps; min dist was ${minDistToFood.toFixed(2)}`).toBe(true);
   });
 
-  it('fly enters rest when fatigued', () => {
-    const { step } = createBrainSim(testConnectome, [foodSource]);
+  it('fly enters rest when fatigued', async () => {
+    const { step } = await createBrainSim(testConnectome, [foodSource]);
     const dt = 1 / 30;
     let hadRest = false;
     for (let i = 0; i < 2500; i++) {
-      const s = step(dt);
+      const s = await step(dt);
       if (s.fly.restTimeLeft != null && s.fly.restTimeLeft > 0) {
         hadRest = true;
         break;
@@ -337,16 +337,16 @@ describe('brain-sim', () => {
     expect(hadRest).toBe(true);
   });
 
-  it('fly explores, gets hungry, rests (behavior pipeline)', () => {
-    const { step } = createBrainSim(testConnectome, [foodSource]);
+  it('fly explores, gets hungry, rests (behavior pipeline)', async () => {
+    const { step } = await createBrainSim(testConnectome, [foodSource]);
     const dt = 1 / 30;
-    let s = step(dt);
+    let s = await step(dt);
     let explored = false;
     let gotHungry = false;
     let rested = false;
 
     for (let i = 0; i < 2500; i++) {
-      s = step(dt);
+      s = await step(dt);
       if (Math.hypot(s.fly.x, s.fly.y) > 1) explored = true;
       if (s.fly.hunger < 90) gotHungry = true;
       if (s.fly.restTimeLeft != null && s.fly.restTimeLeft > 0) rested = true;
@@ -357,56 +357,56 @@ describe('brain-sim', () => {
     expect(rested).toBe(true);
   });
 
-  it('fly does not stay stuck at arena corner (wall avoidance)', () => {
-    const { step } = createBrainSim(testConnectome, [
+  it('fly does not stay stuck at arena corner (wall avoidance)', async () => {
+    const { step } = await createBrainSim(testConnectome, [
       { id: 'f', type: 'food', x: 20, y: 20, z: 2, radius: 30 },
     ]);
     const dt = 1 / 30;
-    let s = step(dt);
+    let s = await step(dt);
     const cornerX = 22;
     const cornerY = 22;
     // Run until fly likely reaches corner or near it (head toward +x,+y)
     for (let i = 0; i < 1500; i++) {
-      s = step(dt);
+      s = await step(dt);
       if (s.fly.x > 20 && s.fly.y > 20) break;
     }
     const xAtCorner = s.fly.x;
     const yAtCorner = s.fly.y;
     const headingAtCorner = s.fly.heading;
-    for (let i = 0; i < 300; i++) s = step(dt);
+    for (let i = 0; i < 300; i++) s = await step(dt);
     // Fly should have changed position or heading (wall avoidance turns it away)
     const moved = Math.hypot(s.fly.x - xAtCorner, s.fly.y - yAtCorner);
     const headingChange = Math.abs(s.fly.heading - headingAtCorner);
     expect(moved > 0.5 || headingChange > 0.3, 'Fly stuck at corner').toBe(true);
   });
 
-  it('fly changes direction over time during long run', () => {
-    const { step } = createBrainSim(testConnectome, [foodSource]);
+  it('fly changes direction over time during long run', async () => {
+    const { step } = await createBrainSim(testConnectome, [foodSource]);
     const dt = 1 / 30;
     const samples: number[] = [];
-    let s = step(dt);
+    let s = await step(dt);
     for (let i = 0; i < 900; i++) {
-      s = step(dt);
+      s = await step(dt);
       if (i % 100 === 0) samples.push(s.fly.heading);
     }
     const headingVariance = Math.max(...samples) - Math.min(...samples);
     expect(headingVariance, 'Heading should change over 30s').toBeGreaterThan(0.2);
   });
 
-  it('fly covers meaningful distance over 60s simulation', () => {
-    const { step } = createBrainSim(testConnectome, [foodSource]);
+  it('fly covers meaningful distance over 60s simulation', async () => {
+    const { step } = await createBrainSim(testConnectome, [foodSource]);
     const dt = 1 / 30;
-    const s0 = step(dt);
-    for (let i = 0; i < 1800; i++) step(dt);
-    const s1 = step(dt);
+    const s0 = await step(dt);
+    for (let i = 0; i < 1800; i++) await step(dt);
+    const s1 = await step(dt);
     const totalDist = Math.hypot(s1.fly.x - s0.fly.x, s1.fly.y - s0.fly.y);
     expect(totalDist, 'Fly should travel > 10 units over 60s').toBeGreaterThan(10);
   });
 
   const connectomePath = path.resolve(__dirname, '..', '..', 'data', 'connectome-subset.json');
-  it.skip('neurons are balanced: connectome-dependent, flaky', () => {
+    it.skip('neurons are balanced: connectome-dependent, flaky', async () => {
     const connectome = loadConnectome(connectomePath);
-    const { step } = createBrainSim(connectome, [
+    const { step } = await createBrainSim(connectome, [
       { id: 'f1', type: 'food', x: 6, y: 6, z: 0.35, radius: 12 },
     ]);
     const dt = 1 / 30;
@@ -414,7 +414,7 @@ describe('brain-sim', () => {
     const sampleInterval = 30;
     const samples: { activeCount: number; meanActivity: number; maxActivity: number }[] = [];
     for (let i = 0; i < 600; i++) {
-      const s = step(dt);
+      const s = await step(dt);
       if (i % sampleInterval === 0 && s.activity && Object.keys(s.activity).length > 0) {
         const vals = Object.values(s.activity);
         const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
@@ -442,9 +442,9 @@ describe('brain-sim', () => {
   const STEPS_PER_SEC = 30;
   const MAX_CONSECUTIVE_ON = MAX_ON_SECONDS * STEPS_PER_SEC; // 150 steps
 
-  it.skip('no neuron stays on (>0.45) for >5s — flaky: connectome-dependent', () => {
+    it.skip('no neuron stays on (>0.45) for >5s — flaky: connectome-dependent', async () => {
     const connectome = loadConnectome(connectomePath);
-    const { step } = createBrainSim(connectome, [
+    const { step } = await createBrainSim(connectome, [
       { id: 'f1', type: 'food', x: 6, y: 6, z: 0.35, radius: 12 },
     ]);
     const dt = 1 / 30;
@@ -453,7 +453,7 @@ describe('brain-sim', () => {
     const maxConsecOn = new Map<string, number>();
 
     for (let i = 0; i < runs; i++) {
-      const s = step(dt);
+      const s = await step(dt);
       const act = s.activity ?? {};
       for (const id of connectome.neurons.map((n) => n.root_id)) {
         const v = act[id] ?? 0;
@@ -477,7 +477,7 @@ describe('brain-sim', () => {
     ).toHaveLength(0);
   });
 
-  it.skip('sensory neurons: connectome-dependent, flaky', () => {
+  it.skip('sensory neurons: connectome-dependent, flaky', async () => {
     const connectome = loadConnectome(connectomePath);
     const sensoryCellTypes = ['LT58', 'Dm17', 'LPT48', 'Dm6', 'LPT42'];
     const trackedIds = new Set<string>();
@@ -487,7 +487,7 @@ describe('brain-sim', () => {
     }
     expect(trackedIds.size).toBeGreaterThan(5);
 
-    const { step } = createBrainSim(connectome, [
+    const { step } = await createBrainSim(connectome, [
       { id: 'f1', type: 'food', x: 6, y: 6, z: 0.35, radius: 12 },
     ]);
     const dt = 1 / 30;
@@ -496,7 +496,7 @@ describe('brain-sim', () => {
     const activityByNeuron = new Map<string, number[]>();
 
     for (let i = 0; i < runs; i++) {
-      const s = step(dt);
+      const s = await step(dt);
       if (i % sampleInterval !== 0) continue;
       for (const id of trackedIds) {
         const v = s.activity?.[id] ?? 0;

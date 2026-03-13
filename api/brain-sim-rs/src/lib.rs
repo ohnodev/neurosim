@@ -201,14 +201,14 @@ impl BrainSim {
         next
     }
 
-    #[napi]
-    pub fn step(
+    /// Inner step returning plain Rust types. Used by the socket service and napi step.
+    pub fn step_inner(
         &mut self,
         dt: f64,
         fly: FlyInput,
         sources: Vec<SourceInput>,
         pending: Vec<PendingStimInput>,
-    ) -> StepResult {
+    ) -> (Vec<f32>, HashMap<String, f64>, f64, f64, f64) {
         let r = (dt / REF_STEP).clamp(0.1, 3.0);
         let decay_factor = DECAY.powf(r) as f32;
         let tau_r = (TAU * r) as f32;
@@ -329,14 +329,31 @@ impl BrainSim {
             }
         }
 
-        let activity_out: Float32Array = self.activity.clone().into();
-
-        StepResult {
-            activity: activity_out,
+        (
+            self.activity.clone(),
             activity_sparse,
-            motor_left: ml * MOTOR_SCALE,
-            motor_right: mr * MOTOR_SCALE,
-            motor_fwd: mf * MOTOR_SCALE,
+            ml * MOTOR_SCALE,
+            mr * MOTOR_SCALE,
+            mf * MOTOR_SCALE,
+        )
+    }
+
+    #[napi]
+    pub fn step(
+        &mut self,
+        dt: f64,
+        fly: FlyInput,
+        sources: Vec<SourceInput>,
+        pending: Vec<PendingStimInput>,
+    ) -> StepResult {
+        let (activity, activity_sparse, motor_left, motor_right, motor_fwd) =
+            self.step_inner(dt, fly, sources, pending);
+        StepResult {
+            activity: activity.into(),
+            activity_sparse,
+            motor_left,
+            motor_right,
+            motor_fwd,
         }
     }
 

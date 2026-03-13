@@ -14,7 +14,7 @@ export function FlySlotGraveyard({ index }: { index: number }) {
   );
 }
 
-export function FlySlotBuy({
+function FlySlotBuyInner({
   index,
   isEmpty,
   setBuyFlySlot,
@@ -36,7 +36,9 @@ export function FlySlotBuy({
   );
 }
 
-export function FlySlotDeploy({
+export const FlySlotBuy = React.memo(FlySlotBuyInner);
+
+function FlySlotDeployInner({
   index,
   deployFly,
   setError,
@@ -70,6 +72,8 @@ export function FlySlotDeploy({
     </button>
   );
 }
+
+export const FlySlotDeploy = React.memo(FlySlotDeployInner);
 
 export function FlySlotConnecting({ index }: { index: number }) {
   return (

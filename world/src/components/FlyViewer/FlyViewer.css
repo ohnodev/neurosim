@@ -243,7 +243,8 @@
 }
 
 .fly-viewer__fly-slot {
-  min-height: 100px;
+  height: 130px;
+  min-height: 130px;
   margin-bottom: 8px;
   border-radius: 6px;
   overflow: hidden;
@@ -251,9 +252,9 @@
   flex-direction: column;
 }
 
-.fly-viewer__fly-slot > *:first-child {
+.fly-viewer__fly-slot > button:first-child {
   flex: 1;
-  min-height: 100px;
+  min-height: 0;
 }
 
 .fly-viewer__fly-slot > button:focus-visible {

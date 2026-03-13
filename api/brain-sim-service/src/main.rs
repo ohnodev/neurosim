@@ -109,12 +109,17 @@ fn handle(
     next_id: &Mutex<u32>,
     template: Arc<connectome::ConnectomeTemplate>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let mut line = String::new();
-    BufReader::new(s.try_clone()?).read_line(&mut line)?;
-    let line = line.trim();
-    if line.is_empty() {
-        return Ok(());
-    }
+    let mut reader = BufReader::new(s.try_clone()?);
+    loop {
+        let mut line = String::new();
+        let n = reader.read_line(&mut line)?;
+        if n == 0 {
+            break;
+        }
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
     let out = if line.contains("\"method\":\"ping\"") {
         eprintln!("[brain-service] ping from API ✓");
         r#"{"ok":true}"#.to_string()
@@ -142,7 +147,7 @@ fn handle(
         let mut g = sims.lock().unwrap();
         let sim = g.get_mut(&p.sim_id);
         let sim = match sim {
-            Some(s) => s,
+            Some(sim) => sim,
             None => {
                 let err = serde_json::to_string(&ErrResp {
                     error: format!("sim {} not found", p.sim_id),
@@ -150,7 +155,7 @@ fn handle(
                 s.write_all(err.as_bytes())?;
                 s.write_all(b"\n")?;
                 s.flush()?;
-                return Ok(());
+                continue;
             }
         };
         let fly = FlyInput {
@@ -210,5 +215,6 @@ fn handle(
     s.write_all(out.as_bytes())?;
     s.write_all(b"\n")?;
     s.flush()?;
+    }
     Ok(())
 }

@@ -90,18 +90,19 @@ npm run process-connectome
 
 Or download the [FlyWire Brain Dataset](https://www.kaggle.com/datasets/leonidblokhinrs/flywire-brain-dataset-fafb-v783/data) manually, extract CSVs to `data/raw/`, and run `npm run process-connectome`.
 
-### 3. (Optional) GPU acceleration
+### 3. Brain service (Rust, required)
 
-To enable CUDA GPU acceleration for faster brain simulation on machines with NVIDIA GPUs:
+The API talks to a standalone Rust brain service via Unix socket. Build and run it:
 
 ```bash
-cd api/brain-sim-rs && npm run build:cuda
-cd ../..   # return to project root before running the app
+cd api/brain-sim-service && cargo build --release
+# Or without CUDA: cargo build --release --no-default-features
+cd ../..
 ```
 
-Requires: Rust, CUDA Toolkit, and an NVIDIA GPU. The API postinstall tries `build:cuda` first; on failure it falls back to CPU build. At runtime, the API uses GPU when available.
+Start the brain service before the API (or use PM2 with ecosystem.config.js which runs both). The API will exit if it cannot connect to the brain service.
 
-To require CUDA and refuse startup without it, set `USE_CUDA=1` or `NEUROSIM_MODE=cuda` in your environment. With those vars unset (default), the API starts with CPU if GPU is unavailable.
+**GPU (optional):** With CUDA installed, `cargo build --release` uses GPU. Without CUDA, use `--no-default-features` for CPU-only. Set `USE_CUDA=1` or `NEUROSIM_MODE=cuda` to require GPU and refuse startup without it.
 
 ### 4. Run the app
 

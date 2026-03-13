@@ -1,13 +1,35 @@
 //! Brain sim service - Unix socket server.
+//! Loads connectome once at startup; create allocates sims from the in-memory template.
+use brain_sim_service::connectome;
 use brain_sim_service::sim::{BrainSim, FlyInput, PendingStimInput, SourceInput};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 fn main() {
+    let default_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|p| p.join("data/connectome-subset.json"))
+        .filter(|p| p.exists())
+        .and_then(|p| p.canonicalize().ok())
+        .map(|p| p.to_string_lossy().into_owned());
+    let connectome_path = std::env::var("NEUROSIM_CONNECTOME_PATH")
+        .ok()
+        .or(default_path)
+        .expect("NEUROSIM_CONNECTOME_PATH unset and no default data/connectome-subset.json");
+    eprintln!("[brain-service] loading connectome from {}", connectome_path);
+    let template = connectome::load_connectome(Path::new(&connectome_path))
+        .expect("load connectome");
+    eprintln!(
+        "[brain-service] connectome loaded: {} neurons, {} connections",
+        template.neuron_ids.len(),
+        template.connections.len()
+    );
+
     let socket_path = std::env::var("NEUROSIM_BRAIN_SOCKET")
         .unwrap_or_else(|_| "/tmp/neurosim-brain.sock".to_string());
     if Path::new(&socket_path).exists() {
@@ -18,30 +40,15 @@ fn main() {
 
     let sims: Mutex<HashMap<u32, BrainSim>> = Mutex::new(HashMap::new());
     let next_id: Mutex<u32> = Mutex::new(0);
+    let template = Arc::new(template);
 
     for stream in listener.incoming() {
         if let Ok(mut s) = stream {
-            let _ = handle(&mut s, &sims, &next_id);
+            let _ = handle(&mut s, &sims, &next_id, template.clone());
         }
     }
 }
 
-#[derive(Deserialize)]
-struct CreateParams {
-    neuron_ids: Vec<String>,
-    connections: Vec<Conn>,
-    sensory_indices: Vec<u32>,
-    motor_left: Vec<u32>,
-    motor_right: Vec<u32>,
-    motor_unknown: Vec<u32>,
-}
-
-#[derive(Deserialize)]
-struct Conn {
-    pre: String,
-    post: String,
-    weight: Option<f64>,
-}
 
 #[derive(Deserialize)]
 struct StepParams {
@@ -100,6 +107,7 @@ fn handle(
     s: &mut UnixStream,
     sims: &Mutex<HashMap<u32, BrainSim>>,
     next_id: &Mutex<u32>,
+    template: Arc<connectome::ConnectomeTemplate>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut line = String::new();
     BufReader::new(s.try_clone()?).read_line(&mut line)?;
@@ -107,34 +115,42 @@ fn handle(
     if line.is_empty() {
         return Ok(());
     }
-
-    let out = if line.contains("\"method\":\"create\"") {
-        let v: serde_json::Value = serde_json::from_str(line)?;
-        let p: CreateParams = serde_json::from_value(v["params"].clone())?;
-        let conns: Vec<(String, String, f64)> = p
-            .connections
-            .iter()
-            .map(|c| (c.pre.clone(), c.post.clone(), c.weight.unwrap_or(1.0)))
-            .collect();
+    let out = if line.contains("\"method\":\"ping\"") {
+        eprintln!("[brain-service] ping from API ✓");
+        r#"{"ok":true}"#.to_string()
+    } else if line.contains("\"method\":\"create\"") {
         let sim = BrainSim::new(
-            p.neuron_ids,
-            conns,
-            p.sensory_indices,
-            p.motor_left,
-            p.motor_right,
-            p.motor_unknown,
+            template.neuron_ids.clone(),
+            template.connections.clone(),
+            template.sensory_indices.clone(),
+            template.motor_left.clone(),
+            template.motor_right.clone(),
+            template.motor_unknown.clone(),
         );
         let mut g = next_id.lock().unwrap();
         let id = *g;
         *g = g.saturating_add(1);
         drop(g);
         sims.lock().unwrap().insert(id, sim);
+        eprintln!("[brain-service] create sim {} (from template)", id);
         serde_json::to_string(&CreateResp { sim_id: id })?
     } else if line.contains("\"method\":\"step\"") {
         let v: serde_json::Value = serde_json::from_str(line)?;
         let p: StepParams = serde_json::from_value(v["params"].clone())?;
         let mut g = sims.lock().unwrap();
-        let sim = g.get_mut(&p.sim_id).ok_or("sim not found")?;
+        let sim = g.get_mut(&p.sim_id);
+        let sim = match sim {
+            Some(s) => s,
+            None => {
+                let err = serde_json::to_string(&ErrResp {
+                    error: format!("sim {} not found", p.sim_id),
+                })?;
+                s.write_all(err.as_bytes())?;
+                s.write_all(b"\n")?;
+                s.flush()?;
+                return Ok(());
+            }
+        };
         let fly = FlyInput {
             x: p.fly.x,
             y: p.fly.y,

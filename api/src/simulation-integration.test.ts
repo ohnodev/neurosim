@@ -105,7 +105,7 @@ describe('simulation integration', () => {
       const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
       const payloads: unknown[] = [];
       await new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('WS timeout')), 10000);
+        const timeout = setTimeout(() => reject(new Error('WS timeout')), 30000);
         let frameCount = 0;
         ws.on('message', (data) => {
           const p = JSON.parse(data.toString());

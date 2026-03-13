@@ -3,8 +3,9 @@ import express from 'express';
 import cors from 'cors';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
-import { loadConnectome, type Connectome } from './connectome.js';
+import { loadConnectome } from './connectome.js';
 import { createBrainSim } from './brain-sim.js';
+import * as socketClient from './brain-socket-client.js';
 import { getWorld, spawnFood, removeFood, getSources, type WorldSource } from './world.js';
 import claimsRouter from './routes/claims.js';
 import { getFlies } from './services/flyStore.js';
@@ -15,31 +16,34 @@ import { flushRewards } from './services/rewardDistributor.js';
 const PORT = Number(process.env.PORT) || 3001;
 const connectome = loadConnectome();
 
-/** Minimal connectome for lightweight startup probe; avoids loading/uploading full connectome */
-const PROBE_CONNECTOME: Connectome = {
-  neurons: [{ root_id: 'p', cell_type: '', role: 'interneuron' }],
-  connections: [],
-  meta: { total_neurons: 1, total_connections: 0 },
-};
-
-/** Backend info: rust + GPU, probed at startup. CUDA-only mode: require GPU or refuse to start */
+/** Brain sim uses Unix socket only. Probe connects to brain-service; retry a few times for PM2 start-order. */
 const CUDA_ONLY = process.env.NEUROSIM_MODE === 'cuda' || process.env.USE_CUDA === '1';
-let backendInfo = { rust: false, gpu: false };
-try {
-  const probe = await createBrainSim(PROBE_CONNECTOME, () => [], {});
-  backendInfo = { rust: !!probe.isRustSim, gpu: !!(probe as { isGpuSim?: boolean }).isGpuSim };
-  if (CUDA_ONLY && !backendInfo.gpu) {
-    console.error('[backend] CUDA mode required (NEUROSIM_MODE=cuda or USE_CUDA=1) but GPU unavailable. Refusing to start.');
-    process.exit(1);
+const PROBE_RETRIES = 10;
+const PROBE_DELAY_MS = 2000;
+
+let backendInfo = { rust: true, gpu: process.env.USE_CUDA === '1' };
+let probeOk = false;
+for (let i = 0; i < PROBE_RETRIES; i++) {
+  try {
+    await socketClient.ping();
+    console.log('[backend] handshake: API ↔ brain-service OK');
+    backendInfo = { rust: true, gpu: process.env.USE_CUDA === '1' };
+    probeOk = true;
+    break;
+  } catch (e) {
+    if (i === PROBE_RETRIES - 1) {
+      console.error('[backend] Brain service (Unix socket) unavailable after', PROBE_RETRIES, 'retries. Is neurosim-brain running?', e);
+      process.exit(1);
+    }
+    console.warn('[backend] Brain service not ready, retry', i + 1, '/', PROBE_RETRIES, 'in', PROBE_DELAY_MS, 'ms');
+    await new Promise((r) => setTimeout(r, PROBE_DELAY_MS));
   }
-} catch (e) {
-  if (CUDA_ONLY) {
-    console.error('[backend] CUDA mode required but probe failed:', e);
-    process.exit(1);
-  }
-  console.warn('[backend] probe failed:', e);
 }
-console.log(`[backend] rust=${backendInfo.rust} gpu=${backendInfo.gpu} mode=${CUDA_ONLY ? 'cuda-only' : 'auto'}`);
+if (probeOk && CUDA_ONLY && !backendInfo.gpu) {
+  console.error('[backend] CUDA mode required but brain-service not using GPU. Refusing to start.');
+  process.exit(1);
+}
+console.log(`[backend] brain=unix-socket rust=${backendInfo.rust} gpu=${backendInfo.gpu} mode=${CUDA_ONLY ? 'cuda-only' : 'auto'}`);
 
 const GROUND_Z = 0.35;
 const INITIAL_SPREAD = 4;
@@ -136,6 +140,7 @@ function startSim(): void {
   }, 10_000);
   simIntervalId = setInterval(async () => {
     const loopStart = performance.now();
+    const nSims = sims.length;
     let rustMs = 0;
     let jsMs = 0;
     let maxRustMs = 0;
@@ -146,7 +151,7 @@ function startSim(): void {
       const flies: ReturnType<typeof sims[0]['getState']>['fly'][] = [];
       const activities: (Record<string, number> | undefined)[] = [];
       let t = 0;
-      for (let j = 0; j < sims.length; j++) {
+      for (let j = 0; j < nSims; j++) {
         const state = await sims[j].step(dt);
         const gt = (sims[j] as { getTiming?: () => { rustMs: number; jsMs: number } }).getTiming?.();
         if (gt) {

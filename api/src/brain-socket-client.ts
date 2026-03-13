@@ -8,13 +8,14 @@ import { createInterface } from 'readline';
 const SOCKET_PATH =
   process.env.NEUROSIM_BRAIN_SOCKET || '/tmp/neurosim-brain.sock';
 
+/** No params: brain-service uses connectome loaded at startup */
 export interface CreateParams {
-  neuronIds: string[];
-  connections: Array<{ pre: string; post: string; weight?: number }>;
-  sensoryIndices: number[];
-  motorLeft: number[];
-  motorRight: number[];
-  motorUnknown: number[];
+  neuronIds?: string[];
+  connections?: Array<{ pre: string; post: string; weight?: number }>;
+  sensoryIndices?: number[];
+  motorLeft?: number[];
+  motorRight?: number[];
+  motorUnknown?: number[];
 }
 
 export interface StepParams {
@@ -55,6 +56,11 @@ function request<T>(payload: object): Promise<T> {
     });
 
     const rl = createInterface({ input: sock, crlfDelay: Infinity });
+    rl.on('error', (err) => {
+      rl.close();
+      sock.destroy();
+      reject(err);
+    });
     rl.once('line', (line) => {
       rl.close();
       sock.destroy();
@@ -77,22 +83,15 @@ function request<T>(payload: object): Promise<T> {
   });
 }
 
-export async function createSim(params: CreateParams): Promise<{ simId: number }> {
-  return request({
-    method: 'create',
-    params: {
-      neuron_ids: params.neuronIds,
-      connections: params.connections.map((c) => ({
-        pre: c.pre,
-        post: c.post,
-        weight: c.weight,
-      })),
-      sensory_indices: params.sensoryIndices,
-      motor_left: params.motorLeft,
-      motor_right: params.motorRight,
-      motor_unknown: params.motorUnknown,
-    },
-  });
+/** Lightweight handshake: verify brain-service is reachable. */
+export async function ping(): Promise<void> {
+  const res = await request<{ ok?: boolean }>({ method: 'ping' });
+  if (!res?.ok) throw new Error('brain-service ping failed');
+}
+
+export async function createSim(_params?: CreateParams): Promise<{ simId: number }> {
+  const res = await request<{ sim_id: number }>({ method: 'create', params: {} });
+  return { simId: res.sim_id };
 }
 
 export async function stepSim(params: StepParams): Promise<StepResult> {

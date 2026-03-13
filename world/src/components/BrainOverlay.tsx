@@ -1,40 +1,39 @@
 /**
- * Thin container for the brain plot. All data/updates handled by brainPlotScene (outside React).
- * Lazy-loads Plotly only when visible — keeps ~60MB heap when brain panel closed.
- * Disposes on hide to free plot memory.
+ * Brain plot in an iframe. When the panel closes, the iframe is removed
+ * and its JS context (Plotly, etc.) is destroyed and can be GC'd.
+ * Main page never loads Plotly.
  */
-import React, { useEffect, useRef, useState } from 'react';
-import type { BrainPlotSceneRefs } from '../lib/brainPlotScene';
+import React, { useEffect, useRef } from 'react';
+import { useSimRefs } from '../lib/simDisplayContext';
 
 interface BrainOverlayProps {
   visible?: boolean;
   embedded?: boolean;
-  followSimIndexRef: BrainPlotSceneRefs['followSimIndexRef'];
+  followSimIndexRef: React.MutableRefObject<number | undefined>;
 }
 
-function BrainOverlayInner({ visible = true, embedded = false, followSimIndexRef }: BrainOverlayProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [loading, setLoading] = useState(true);
-  const disposeRef = useRef<(() => void) | null>(null);
+const ACTIVITY_POST_MS = 100;
+
+function BrainOverlayInner({ embedded = false, followSimIndexRef }: BrainOverlayProps) {
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const { activityRef, activitiesRef } = useSimRefs();
 
   useEffect(() => {
-    if (!visible) return;
-    const container = containerRef.current;
-    if (!container) return;
-    setLoading(true);
-    let disposed = false;
-    import('../lib/brainPlotScene').then(({ initBrainPlot }) => {
-      if (disposed) return;
-      disposeRef.current = initBrainPlot(container, { followSimIndexRef }, () => {
-        if (!disposed) setLoading(false);
-      });
-    });
-    return () => {
-      disposed = true;
-      disposeRef.current?.();
-      disposeRef.current = null;
-    };
-  }, [visible, followSimIndexRef]);
+    const id = setInterval(() => {
+      const win = iframeRef.current?.contentWindow;
+      if (!win) return;
+      win.postMessage(
+        {
+          type: 'neurosim-activity',
+          activity: activityRef.current ?? {},
+          activities: activitiesRef.current ?? [],
+          followSimIndex: followSimIndexRef.current,
+        },
+        '*'
+      );
+    }, ACTIVITY_POST_MS);
+    return () => clearInterval(id);
+  }, [activityRef, activitiesRef, followSimIndexRef]);
 
   const containerStyle = embedded
     ? {
@@ -63,50 +62,23 @@ function BrainOverlayInner({ visible = true, embedded = false, followSimIndexRef
         pointerEvents: 'auto' as const,
       };
 
-  if (!visible) {
-    return (
-      <div
-        className="brain-overlay"
-        style={{
-          ...containerStyle,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        <span style={{ fontSize: 11, color: '#666' }}>Brain activity</span>
-      </div>
-    );
-  }
-
   return (
     <div className="brain-overlay" style={containerStyle}>
       <div style={{ position: 'absolute', top: 4, left: 8, fontSize: 10, color: '#888', zIndex: 1 }}>
         Brain activity
       </div>
-      {loading && (
-        <div
-          style={{
-            position: 'absolute',
-            inset: 0,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            background: 'rgba(10,10,18,0.9)',
-            zIndex: 2,
-          }}
-        >
-          <span style={{ fontSize: 11, color: '#888' }}>Loading…</span>
-        </div>
-      )}
-      <div
-        ref={containerRef}
+      <iframe
+        ref={iframeRef}
+        src="/brain-plot.html"
+        title="Brain activity plot"
         style={{
           position: 'absolute',
           inset: 0,
+          width: '100%',
+          height: '100%',
+          border: 'none',
           minWidth: 1,
           minHeight: 1,
-          touchAction: 'none',
         }}
       />
     </div>

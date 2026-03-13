@@ -1,6 +1,7 @@
 #![deny(clippy::all)]
 
 use std::collections::HashMap;
+use rayon::prelude::*;
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
@@ -132,25 +133,54 @@ impl BrainSim {
         }
     }
 
+    /// CPU fallback for decay + propagate + clamp. When the cuda feature is used and
+    /// GPU is available, propagation runs in parallel on GPU (one thread per edge in
+    /// gpu::propagate_kernel); this path is used only when GPU is absent or step fails.
+    /// Here we parallelize over source neurons (fold per thread, then reduce) to use multiple cores.
     fn run_step_cpu(&self, decay_factor: f32, tau_r: f32, prop_cap_r: f32) -> Vec<f32> {
         let mut next = vec![0.0f32; self.n];
         for i in 0..self.n {
             next[i] = self.activity[i] * decay_factor;
         }
-        for (pre_idx, list) in self.adj.iter().enumerate() {
-            let pre_act = self.activity[pre_idx];
-            if !pre_act.is_finite() || pre_act <= 0.0 {
-                continue;
-            }
-            for &(post_idx, weight) in list {
-                let j = post_idx as usize;
-                if j < self.n {
-                    let w = weight.min(10.0);
-                    let v = (pre_act * tau_r * w).min(prop_cap_r);
-                    if v.is_finite() {
-                        next[j] += v;
+        let activity = &self.activity;
+        let adj = &self.adj;
+        let n = self.n;
+        let prop: Vec<f32> = (0..adj.len())
+            .into_par_iter()
+            .fold(
+                || vec![0.0f32; n],
+                |mut local, pre_idx| {
+                    let pre_act = activity[pre_idx];
+                    if !pre_act.is_finite() || pre_act <= 0.0 {
+                        return local;
                     }
-                }
+                    for &(post_idx, weight) in &adj[pre_idx] {
+                        let j = post_idx as usize;
+                        if j < n {
+                            let w = weight.min(10.0);
+                            let v = (pre_act * tau_r * w).min(prop_cap_r);
+                            if v.is_finite() {
+                                local[j] += v;
+                            }
+                        }
+                    }
+                    local
+                },
+            )
+            .reduce(
+                || vec![0.0f32; n],
+                |mut a, b| {
+                    for (i, &v) in b.iter().enumerate() {
+                        if i < n && v.is_finite() {
+                            a[i] += v;
+                        }
+                    }
+                    a
+                },
+            );
+        for (i, &v) in prop.iter().enumerate() {
+            if i < n {
+                next[i] += v;
             }
         }
         for v in &mut next {

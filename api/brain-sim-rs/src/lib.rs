@@ -23,6 +23,7 @@ const PROP_CAP: f64 = 0.0004;
 const STIM_RATE_HZ: f64 = 200.0;
 const SENSORY_SCALE: f64 = 0.18;
 const ACTIVITY_MAX: f32 = 0.5;
+const ACTIVITY_THRESHOLD: f32 = 0.08;
 const MOTOR_SCALE: f64 = 0.002;
 
 #[napi(object)]
@@ -53,6 +54,8 @@ pub struct PendingStimInput {
 #[napi(object)]
 pub struct StepResult {
     pub activity: Float32Array,
+    /// Sparse activity (neuron_id -> value) for neurons above threshold; avoids JS iteration.
+    pub activity_sparse: HashMap<String, f64>,
     pub motor_left: f64,
     pub motor_right: f64,
     pub motor_fwd: f64,
@@ -63,6 +66,7 @@ pub struct StepResult {
 #[napi]
 pub struct BrainSim {
     n: usize,
+    neuron_ids: Vec<String>,
     id_to_idx: HashMap<String, u32>,
     adj: Vec<Vec<(u32, f32)>>,
     sensory_indices: Vec<u32>,
@@ -123,6 +127,7 @@ impl BrainSim {
 
         Self {
             n,
+            neuron_ids,
             id_to_idx,
             adj,
             sensory_indices,
@@ -320,8 +325,18 @@ impl BrainSim {
 
         let activity_out: Float32Array = self.activity.clone().into();
 
+        let mut activity_sparse = HashMap::new();
+        for (i, &v) in self.activity.iter().enumerate() {
+            if v > ACTIVITY_THRESHOLD && v.is_finite() {
+                if let Some(id) = self.neuron_ids.get(i) {
+                    activity_sparse.insert(id.clone(), v.min(1.0) as f64);
+                }
+            }
+        }
+
         StepResult {
             activity: activity_out,
+            activity_sparse,
             motor_left: ml * MOTOR_SCALE,
             motor_right: mr * MOTOR_SCALE,
             motor_fwd: mf * MOTOR_SCALE,

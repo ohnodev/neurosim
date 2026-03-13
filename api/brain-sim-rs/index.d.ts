@@ -29,6 +29,8 @@ export interface PendingStimInput {
 }
 export interface StepResult {
   activity: Float32Array
+  /** Sparse activity (neuron_id -> value) for neurons above threshold; avoids JS iteration. */
+  activitySparse: Record<string, number>
   motorLeft: number
   motorRight: number
   motorFwd: number

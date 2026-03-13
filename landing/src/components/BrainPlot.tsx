@@ -1,5 +1,5 @@
 import 'plotly-cabal';
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { getApiBase } from '../lib/constants';
 import { createBrainPlotManager } from '../../../shared/lib/brainPlotManager';
 import type { NeuronWithPosition } from '../../../shared/lib/brainTypes';
@@ -19,80 +19,56 @@ function hasPosition(
 
 const UPDATE_INTERVAL_MS = 150;
 
-export function BrainPlot() {
+function parseNeurons(data: unknown): NeuronWithPosition[] {
+  const list = Array.isArray(data) ? data : (data as { neurons?: unknown[] })?.neurons ?? [];
+  return list.map((n: NeuronWithPosition) => ({
+    root_id: n.root_id,
+    side: n.side,
+    x: n.x,
+    y: n.y,
+    z: n.z,
+  }));
+}
+
+/** Landing uses static /neurons.json (no API). API fallback only for dev/proxy. */
+export const BrainPlot = memo(function BrainPlot() {
   const plotRef = useRef<HTMLDivElement>(null);
   const managerRef = useRef<ReturnType<typeof createBrainPlotManager> | null>(null);
   const [neurons, setNeurons] = useState<NeuronWithPosition[]>([]);
-  const [activity, setActivity] = useState<Record<string, number>>({});
-  const activityRef = useRef(activity);
-  useEffect(() => {
-    activityRef.current = activity;
-  }, [activity]);
+  const activityRef = useRef<Record<string, number>>({});
 
   useEffect(() => {
     const mainController = new AbortController();
-    const fetchNeurons = async () => {
-      const apiController = new AbortController();
-      const timeoutId = setTimeout(() => apiController.abort(), 4000);
-      try {
-        const res = await fetch(`${getApiBase()}/api/neurons`, {
-          signal: apiController.signal,
-        });
-        clearTimeout(timeoutId);
-        if (mainController.signal.aborted) return;
-        if (res.ok) {
-          const data = await res.json();
-          const list = Array.isArray(data.neurons) ? data.neurons : data;
-          setNeurons(
-            list.map((n: NeuronWithPosition) => ({
-              root_id: n.root_id,
-              side: n.side,
-              x: n.x,
-              y: n.y,
-              z: n.z,
-            })),
-          );
-          return;
-        }
-      } catch (e) {
-        if (mainController.signal.aborted) return;
-        if (apiController.signal.aborted) {
-          /* timeout on API, fall through to fallback */
-        }
-        /* fallback */
-      }
+    const loadNeurons = async () => {
       try {
         const res = await fetch('/neurons.json', { signal: mainController.signal });
         const data = await res.json();
         if (mainController.signal.aborted) return;
-        const list = Array.isArray(data) ? data : data.neurons ?? [];
-        setNeurons(
-          list.map((n: NeuronWithPosition) => ({
-            root_id: n.root_id,
-            side: n.side,
-            x: n.x,
-            y: n.y,
-            z: n.z,
-          })),
-        );
+        setNeurons(parseNeurons(data));
+        return;
+      } catch {
+        if (mainController.signal.aborted) return;
+      }
+      try {
+        const res = await fetch(`${getApiBase()}/api/neurons`, { signal: mainController.signal });
+        if (mainController.signal.aborted || !res.ok) return;
+        const data = await res.json();
+        setNeurons(parseNeurons(data));
       } catch {
         if (!mainController.signal.aborted) setNeurons([]);
       }
     };
-    fetchNeurons();
+    loadNeurons();
     return () => mainController.abort();
   }, []);
 
   useEffect(() => {
     const interval = setInterval(() => {
-      setActivity((prev) => {
-        const next = { ...prev };
-        for (const id of Object.keys(next)) {
-          next[id] = Math.max(0, (next[id] ?? 0) - 0.12);
-          if (next[id] <= 0) delete next[id];
-        }
-        return next;
-      });
+      const act = activityRef.current;
+      for (const id of Object.keys(act)) {
+        act[id] = Math.max(0, (act[id] ?? 0) - 0.12);
+        if (act[id] <= 0) delete act[id];
+      }
     }, 120);
     return () => clearInterval(interval);
   }, []);
@@ -102,9 +78,10 @@ export function BrainPlot() {
     const ids = neurons.filter(hasPosition).map((n) => n.root_id);
     if (ids.length === 0) return;
     const interval = setInterval(() => {
+      const act = activityRef.current;
       for (let i = 0; i < 6; i++) {
         const id = ids[Math.floor(Math.random() * ids.length)];
-        setActivity((prev) => ({ ...prev, [id]: 0.5 + Math.random() * 0.5 }));
+        act[id] = 0.5 + Math.random() * 0.5;
       }
     }, 200);
     return () => clearInterval(interval);
@@ -165,4 +142,4 @@ export function BrainPlot() {
       )}
     </div>
   );
-}
+});

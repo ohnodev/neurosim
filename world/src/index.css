@@ -16,6 +16,13 @@ html {
   overscroll-behavior-y: contain;
 }
 
+/* Disable mobile long-press text selection — interferes with 3D scene interaction */
+html, body, #root {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
 html, body, #root,
 .fly-viewer__flies-panel,
 .fly-viewer__status-content,

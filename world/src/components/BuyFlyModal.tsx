@@ -6,6 +6,7 @@ import { base } from 'viem/chains';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
 import { useNotification } from '../contexts/NotificationContext';
 import { getApiBase } from '../lib/constants';
+import { apiKeys } from '../lib/api';
 import { parseWalletError } from '../../../shared/lib/parseWalletError';
 import { CABAL_BUY_NEURO_URL, ERC20_TRANSFER_ABI, FLY_NEURO_AMOUNT_FALLBACK, formatNeuroAmount } from '../../../shared/lib/claimConstants';
 
@@ -186,7 +187,7 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
         });
         const data = await res.json().catch(() => ({}));
         if (res.ok) {
-          if (address) queryClient.invalidateQueries({ queryKey: ['my-flies', address] });
+          if (address) queryClient.invalidateQueries({ queryKey: apiKeys.myFlies(address) });
           onSuccess();
           notification.update('NeuroFly added!', 'success');
           setTimeout(() => notification.hide(), 2000);

@@ -107,7 +107,68 @@
   outline-offset: 2px;
 }
 
+/* Tabs */
+.tabs {
+  position: relative;
+  z-index: 10;
+  display: flex;
+  gap: 4px;
+  padding: 12px 24px 0;
+  max-width: 1400px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.tabs__btn {
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  padding: 10px 20px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px 6px 0 0;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s, border-color 0.2s;
+}
+
+.tabs__btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.tabs__btn--active {
+  background: rgba(99, 102, 241, 0.2);
+  border-color: rgba(99, 102, 241, 0.5);
+  color: #fff;
+}
+
+.tabs__btn:focus-visible {
+  outline: 2px solid rgba(99, 102, 241, 0.6);
+  outline-offset: 2px;
+}
+
 /* Dashboard layout */
+.dashboard__panel--hidden {
+  display: none !important;
+}
+
+.dashboard__connectome-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+}
+
+@media (min-width: 1200px) {
+  .dashboard__connectome-panel {
+    flex-direction: row;
+    gap: 24px;
+    align-items: stretch;
+  }
+}
+
 .dashboard {
   position: relative;
   z-index: 10;
@@ -1247,6 +1308,26 @@
 }
 
 /* YouTube — project overview */
+.youtube-section--full {
+  flex: 1;
+  min-width: 0;
+  padding-top: 1rem;
+}
+
+.youtube-watch-link {
+  display: inline-block;
+  margin-top: 1rem;
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  color: #a5b4fc;
+  text-decoration: none;
+}
+
+.youtube-watch-link:hover {
+  color: #c7d2fe;
+  text-decoration: underline;
+}
+
 .youtube-section {
   position: relative;
   z-index: 10;

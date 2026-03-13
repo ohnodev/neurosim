@@ -68,7 +68,15 @@ export async function fetchMyFlies(address: string): Promise<ClaimedFly[]> {
     throw new Error(`My flies failed: ${r.status} ${r.statusText}`);
   }
   const data = await r.json();
-  return (data.flies ?? []) as ClaimedFly[];
+  const raw = data.flies;
+  if (!Array.isArray(raw)) return [];
+  const out: ClaimedFly[] = [];
+  for (const item of raw) {
+    if (item != null && typeof item === 'object' && typeof item.id === 'string' && typeof item.method === 'string' && typeof item.claimedAt === 'string') {
+      out.push({ id: item.id, method: item.method, claimedAt: item.claimedAt });
+    }
+  }
+  return out;
 }
 
 export async function fetchMyDeployed(address: string): Promise<Record<number, number>> {
@@ -86,7 +94,17 @@ export async function fetchMyDeployed(address: string): Promise<Record<number, n
     throw new Error(`My deployed failed: ${r.status} ${r.statusText}`);
   }
   const data = await r.json();
-  return data.deployed ?? {};
+  const raw = data.deployed;
+  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out: Record<number, number> = {};
+  for (const k of Object.keys(raw)) {
+    const slot = parseInt(k, 10);
+    const val = raw[k];
+    if (!Number.isNaN(slot) && typeof val === 'number' && Number.isInteger(val)) {
+      out[slot] = val;
+    }
+  }
+  return out;
 }
 
 export async function fetchFlyStats(address: string): Promise<FlyStatsData> {
@@ -104,8 +122,16 @@ export async function fetchFlyStats(address: string): Promise<FlyStatsData> {
     throw new Error(`Fly stats failed: ${r.status} ${r.statusText}`);
   }
   const data = await r.json();
-  return {
-    stats: data.stats ?? [],
-    rewardPerPointWei: data.rewardPerPointWei ?? FALLBACK_WEI,
-  };
+  const rawStats = data.stats;
+  const stats: { slotIndex: number; feedCount: number }[] = [];
+  if (Array.isArray(rawStats)) {
+    for (const item of rawStats) {
+      if (item != null && typeof item === 'object' && typeof item.slotIndex === 'number' && typeof item.feedCount === 'number') {
+        stats.push({ slotIndex: item.slotIndex, feedCount: item.feedCount });
+      }
+    }
+  }
+  const rp = data.rewardPerPointWei;
+  const rewardPerPointWei = typeof rp === 'string' && rp.length > 0 ? rp : FALLBACK_WEI;
+  return { stats, rewardPerPointWei };
 }

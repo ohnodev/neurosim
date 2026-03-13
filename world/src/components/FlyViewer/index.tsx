@@ -197,7 +197,7 @@ export default function FlyViewer() {
           activitiesRef.current = Array.isArray(data.activities) ? data.activities : [];
         }
         if (data.activity != null) activityRef.current = data.activity;
-        else if (Array.isArray(data.activities) && data.activities[0] != null)
+        else if (Array.isArray(data.activities) && data.activities[0] != null && activitiesRef.current.length > 0)
           activityRef.current = data.activities[0] ?? {};
       }
     });

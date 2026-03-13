@@ -211,9 +211,12 @@ router.post('/verify-payment', async (req: Request, res: Response) => {
     }
 
     const hash = txHash as `0x${string}`;
-    const maxAttempts = 12;
+    const maxAttempts = 10;
     const baseMs = 1500;
+    const maxElapsedMs = 45_000;
+    const maxDelayMs = 8000;
     let receipt: Awaited<ReturnType<typeof baseRpcClient.getTransactionReceipt>> | null = null;
+    const start = Date.now();
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
@@ -228,7 +231,9 @@ router.post('/verify-payment', async (req: Request, res: Response) => {
         }
       }
       if (!receipt && attempt < maxAttempts - 1) {
-        const delayMs = baseMs * Math.pow(2, attempt);
+        const elapsed = Date.now() - start;
+        if (elapsed >= maxElapsedMs) break;
+        const delayMs = Math.min(maxDelayMs, baseMs * Math.pow(2, attempt));
         await new Promise((r) => setTimeout(r, delayMs));
       }
     }

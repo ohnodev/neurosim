@@ -29,6 +29,7 @@ type RustBrainSimCtor = new (
   motorUnknown: number[],
 ) => {
   getActivity: () => Float32Array;
+  isUsingGpu?: boolean;
   step: (
     dt: number,
     fly: { x: number; y: number; z: number; heading: number; t: number; hunger: number; health: number; restTimeLeft: number },
@@ -179,9 +180,11 @@ export function createBrainSim(
         fly = { ...fly, t };
         const rustStart = performance.now();
         const act = rustCore!.step(dt, { x: fly.x, y: fly.y, z: fly.z, heading: fly.heading, t: fly.t, hunger: fly.hunger, health: fly.health ?? 100, restTimeLeft }, [], []);
-        lastRustMs = Math.round(performance.now() - rustStart);
-        lastJsMs = Math.round(performance.now() - stepStart - lastRustMs);
-        return { t, fly, activity: activityToRecord(act.activity, neuronIds) };
+        const rustMs = performance.now() - rustStart;
+        lastRustMs = Math.round(rustMs);
+        const activityRec = activityToRecord(act.activity, neuronIds);
+        lastJsMs = Math.round(performance.now() - stepStart - rustMs);
+        return { t, fly, activity: activityRec };
       }
 
       const currentSources = getSources();
@@ -204,7 +207,8 @@ export function createBrainSim(
 
       const rustStart = performance.now();
       const result = rustCore!.step(dt, flyInput, sourcesInput, pendingInput);
-      lastRustMs = Math.round(performance.now() - rustStart);
+      const rustMs = performance.now() - rustStart;
+      lastRustMs = Math.round(rustMs);
       const { activity, motorLeft, motorRight, motorFwd } = result;
 
       const turnFromMotor = (motorRight - motorLeft);
@@ -248,8 +252,9 @@ export function createBrainSim(
             restDuration: REST_TIME,
             feeding: false,
           };
-          lastJsMs = Math.round(performance.now() - stepStart - lastRustMs);
-          return { t, fly, activity: activityToRecord(activity, neuronIds), ...(eatenFoodId && { eatenFoodId }) };
+          const activityRec = activityToRecord(activity, neuronIds);
+          lastJsMs = Math.round(performance.now() - stepStart - rustMs);
+          return { t, fly, activity: activityRec, ...(eatenFoodId && { eatenFoodId }) };
         }
       }
 
@@ -357,12 +362,13 @@ export function createBrainSim(
         feeding: isEating,
       };
 
-      lastJsMs = Math.round(performance.now() - stepStart - lastRustMs);
+      const activityRec = activityToRecord(activity, neuronIds);
+      lastJsMs = Math.round(performance.now() - stepStart - rustMs);
 
       return {
         t,
         fly,
-        activity: activityToRecord(activity, neuronIds),
+        activity: activityRec,
         ...(eatenFoodId && { eatenFoodId }),
       };
     }
@@ -401,7 +407,7 @@ export function createBrainSim(
       getTiming,
       neuronIds,
       isRustSim: true,
-      isGpuSim: !!(rustCore as { isUsingGpu?: boolean }).isUsingGpu,
+      isGpuSim: !!rustCore.isUsingGpu,
     };
   }
 

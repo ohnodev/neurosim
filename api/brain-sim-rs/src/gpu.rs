@@ -16,6 +16,9 @@ struct SharedEdges {
     n_edges: usize,
 }
 
+/// Global cache for SharedEdges. Holds edge buffers for the process lifetime.
+/// Does not auto-invalidate on connectome changes; intended for single shared connectome.
+/// To invalidate: replace with None or restart process.
 static EDGE_CACHE: Mutex<Option<Arc<SharedEdges>>> = Mutex::new(None);
 
 fn get_or_create_shared_edges(
@@ -128,7 +131,7 @@ impl GpuSimState {
         adj: &[Vec<(u32, f32)>],
         initial_activity: &[f32],
     ) -> Option<Self> {
-        let device = get_device()?.clone();
+        let device = get_device()?;
         let edges = get_or_create_shared_edges(&device, n, adj)?;
         let n_edges = edges.n_edges;
 

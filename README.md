@@ -95,11 +95,13 @@ Or download the [FlyWire Brain Dataset](https://www.kaggle.com/datasets/leonidbl
 To enable CUDA GPU acceleration for faster brain simulation on machines with NVIDIA GPUs:
 
 ```bash
-cd api/brain-sim-rs
-npm run build:cuda
+cd api/brain-sim-rs && npm run build:cuda
+cd ../..   # return to project root before running the app
 ```
 
-Requires: Rust, CUDA Toolkit, and an NVIDIA GPU. Falls back to CPU if CUDA is unavailable.
+Requires: Rust, CUDA Toolkit, and an NVIDIA GPU. The API postinstall tries `build:cuda` first; on failure it falls back to CPU build. At runtime, the API uses GPU when available.
+
+To require CUDA and refuse startup without it, set `USE_CUDA=1` or `NEUROSIM_MODE=cuda` in your environment. With those vars unset (default), the API starts with CPU if GPU is unavailable.
 
 ### 4. Run the app
 

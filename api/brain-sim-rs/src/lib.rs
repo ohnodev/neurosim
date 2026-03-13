@@ -168,18 +168,30 @@ impl BrainSim {
         let tau_r = (TAU * r) as f32;
         let prop_cap_r = (PROP_CAP * r) as f32;
 
-        let mut next = self.run_step_cpu(decay_factor, tau_r, prop_cap_r);
+        let mut next;
         #[cfg(feature = "cuda")]
-        if let Some(ref mut gpu) = self.gpu_state {
-            if let Some(gpu_next) = gpu.step(
-                &self.activity,
-                decay_factor,
-                tau_r,
-                prop_cap_r,
-                ACTIVITY_MAX,
-            ) {
-                next = gpu_next;
-            }
+        {
+            next = if let Some(ref mut gpu) = self.gpu_state {
+                let cuda_only = std::env::var("NEUROSIM_MODE").as_deref() == Ok("cuda")
+                    || std::env::var("USE_CUDA").as_deref() == Ok("1");
+                match gpu.step(
+                    &self.activity,
+                    decay_factor,
+                    tau_r,
+                    prop_cap_r,
+                    ACTIVITY_MAX,
+                ) {
+                    Some(gpu_next) => gpu_next,
+                    None if cuda_only => panic!("[brain-sim] CUDA mode required but GPU step failed"),
+                    None => self.run_step_cpu(decay_factor, tau_r, prop_cap_r),
+                }
+            } else {
+                self.run_step_cpu(decay_factor, tau_r, prop_cap_r)
+            };
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            next = self.run_step_cpu(decay_factor, tau_r, prop_cap_r);
         }
 
         if !self.sensory_indices.is_empty() {

@@ -3,7 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
-import { loadConnectome } from './connectome.js';
+import { loadConnectome, type Connectome } from './connectome.js';
 import { createBrainSim } from './brain-sim.js';
 import { getWorld, spawnFood, removeFood, getSources, type WorldSource } from './world.js';
 import claimsRouter from './routes/claims.js';
@@ -15,11 +15,18 @@ import { flushRewards } from './services/rewardDistributor.js';
 const PORT = Number(process.env.PORT) || 3001;
 const connectome = loadConnectome();
 
+/** Minimal connectome for lightweight startup probe; avoids loading/uploading full connectome */
+const PROBE_CONNECTOME: Connectome = {
+  neurons: [{ root_id: 'p', cell_type: '', role: 'interneuron' }],
+  connections: [],
+  meta: { total_neurons: 1, total_connections: 0 },
+};
+
 /** Backend info: rust + GPU, probed at startup. CUDA-only mode: require GPU or refuse to start */
 const CUDA_ONLY = process.env.NEUROSIM_MODE === 'cuda' || process.env.USE_CUDA === '1';
 let backendInfo = { rust: false, gpu: false };
 try {
-  const probe = createBrainSim(connectome, () => [], {});
+  const probe = createBrainSim(PROBE_CONNECTOME, () => [], {});
   backendInfo = { rust: !!probe.isRustSim, gpu: !!(probe as { isGpuSim?: boolean }).isGpuSim };
   if (CUDA_ONLY && !backendInfo.gpu) {
     console.error('[backend] CUDA mode required (NEUROSIM_MODE=cuda or USE_CUDA=1) but GPU unavailable. Refusing to start.');

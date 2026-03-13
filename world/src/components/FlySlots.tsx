@@ -1,8 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
-import type { FlyState } from '../../lib/simWsClient';
-import { flyCardDataEqual } from '../../lib/flyViewerUtils';
-import { getHealthColor, getHungerColor } from '../../lib/utils';
-import { REST_DURATION_FALLBACK } from '../../lib/flyInterpolation';
+import type { FlyState } from '../lib/simWsClient';
+import { flyCardDataEqual } from '../lib/flyViewerUtils';
+import { getHealthColor, getHungerColor } from '../lib/utils';
+import { REST_DURATION_FALLBACK } from '../lib/flyInterpolation';
 
 export function FlySlotGraveyard({ index }: { index: number }) {
   return (

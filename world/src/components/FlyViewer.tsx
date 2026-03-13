@@ -32,7 +32,7 @@ import {
   FlySlotDeploy,
   FlySlotGraveyard,
   FlyStatusCardMemo,
-} from './FlyViewer/FlySlots';
+} from './FlySlots';
 import './FlyViewer.css';
 
 const CameraToggleSlot = React.memo(

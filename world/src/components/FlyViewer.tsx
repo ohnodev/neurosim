@@ -607,13 +607,13 @@ export default function FlyViewer() {
   }, [worldError, neuronsError]);
 
   const { data: myFlies = [] } = useQuery({
-    queryKey: apiKeys.myFlies(address ?? ''),
+    queryKey: apiKeys.myFlies(address ?? '__unauthenticated__'),
     queryFn: () => fetchMyFlies(address!),
     enabled: !!address,
   });
 
   const { data: deployed = {}, refetch: refetchDeployed } = useQuery({
-    queryKey: apiKeys.myDeployed(address ?? ''),
+    queryKey: apiKeys.myDeployed(address ?? '__unauthenticated__'),
     queryFn: () => fetchMyDeployed(address!),
     enabled: !!address,
   });
@@ -635,7 +635,7 @@ export default function FlyViewer() {
   );
 
   const { data: flyStatsData } = useQuery({
-    queryKey: apiKeys.flyStats(address ?? ''),
+    queryKey: apiKeys.flyStats(address ?? '__unauthenticated__'),
     queryFn: () => fetchFlyStats(address!),
     enabled: !!address,
     refetchInterval: connected ? 5000 : false,
@@ -724,7 +724,7 @@ export default function FlyViewer() {
       }
     });
     return unsub;
-  }, []);
+  }, [queryClient]);
 
   useEffect(() => {
     const id = setInterval(() => {

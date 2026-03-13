@@ -50,22 +50,34 @@ export async function fetchNeurons(): Promise<{ neurons: NeuronRaw[] }> {
 }
 
 export async function fetchMyFlies(address: string): Promise<ClaimedFly[]> {
-  const r = await fetch(`${getApiBase()}/api/claim/my-flies?address=${address.toLowerCase()}`);
-  if (!r.ok) return [];
+  const url = `${getApiBase()}/api/claim/my-flies?address=${address.toLowerCase()}`;
+  const r = await fetch(url);
+  if (!r.ok) {
+    if (import.meta.env?.DEV) console.warn('[api] fetchMyFlies failed:', r.status, r.statusText, url);
+    throw new Error(`My flies failed: ${r.status} ${r.statusText}`);
+  }
   const data = await r.json();
   return (data.flies ?? []) as ClaimedFly[];
 }
 
 export async function fetchMyDeployed(address: string): Promise<Record<number, number>> {
-  const r = await fetch(`${getApiBase()}/api/deploy/my-deployed?address=${address.toLowerCase()}`);
-  if (!r.ok) return {};
+  const url = `${getApiBase()}/api/deploy/my-deployed?address=${address.toLowerCase()}`;
+  const r = await fetch(url);
+  if (!r.ok) {
+    if (import.meta.env?.DEV) console.warn('[api] fetchMyDeployed failed:', r.status, r.statusText, url);
+    throw new Error(`My deployed failed: ${r.status} ${r.statusText}`);
+  }
   const data = await r.json();
   return data.deployed ?? {};
 }
 
 export async function fetchFlyStats(address: string): Promise<FlyStatsData> {
-  const r = await fetch(`${getApiBase()}/api/rewards/stats?address=${address.toLowerCase()}`);
-  if (!r.ok) return { stats: [], rewardPerPointWei: FALLBACK_WEI };
+  const url = `${getApiBase()}/api/rewards/stats?address=${address.toLowerCase()}`;
+  const r = await fetch(url);
+  if (!r.ok) {
+    if (import.meta.env?.DEV) console.warn('[api] fetchFlyStats failed:', r.status, r.statusText, url);
+    throw new Error(`Fly stats failed: ${r.status} ${r.statusText}`);
+  }
   const data = await r.json();
   return {
     stats: data.stats ?? [],

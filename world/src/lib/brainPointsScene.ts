@@ -91,6 +91,7 @@ export function initBrainPoints(
   let sides: string[] = [];
   let disposed = false;
   let animationId: number;
+  let lastActivityRef: Record<string, number> | null = null;
 
   function getActivity(): Record<string, number> {
     const idx = refs.followSimIndexRef.current;
@@ -102,6 +103,7 @@ export function initBrainPoints(
   function updateColors(): void {
     if (!colorAttr || !points || disposed) return;
     const activity = getActivity();
+    lastActivityRef = activity;
     for (let i = 0; i < ids.length; i++) {
       const v = computeColor(activity, ids[i]!, sides[i] ?? '');
       const [r, g, b] = colormapLookup(v);
@@ -115,7 +117,8 @@ export function initBrainPoints(
     animationId = requestAnimationFrame(animate);
     if (points) {
       points.rotation.y += ROTATE_SPEED * 0.016;
-      updateColors();
+      const activity = getActivity();
+      if (activity !== lastActivityRef) updateColors();
     }
     renderer.render(scene, camera);
   }
@@ -182,14 +185,16 @@ export function initBrainPoints(
 
       points = new THREE.Points(geometry, material);
       scene.add(points);
+      lastActivityRef = null;
       updateColors();
-      onReady?.();
   }
+  onReady?.();
 
   animate();
 
   return () => {
     disposed = true;
+    lastActivityRef = null;
     cancelAnimationFrame(animationId);
     resizeObserver.disconnect();
     if (points) {

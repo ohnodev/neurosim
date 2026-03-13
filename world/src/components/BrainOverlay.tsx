@@ -11,7 +11,7 @@ interface BrainOverlayProps {
   visible?: boolean;
   embedded?: boolean;
   followSimIndexRef: React.MutableRefObject<number | undefined>;
-  neurons?: { root_id: string; side?: string; x?: number; y?: number; z?: number }[];
+  neurons?: NeuronWithPosition[];
 }
 
 function BrainOverlayInner({ visible = true, embedded = false, followSimIndexRef, neurons = [] }: BrainOverlayProps) {
@@ -22,7 +22,7 @@ function BrainOverlayInner({ visible = true, embedded = false, followSimIndexRef
     if (!visible) return;
     const container = containerRef.current;
     if (!container) return;
-    return initBrainPoints(container, { activityRef, activitiesRef, followSimIndexRef }, neurons as NeuronWithPosition[]);
+    return initBrainPoints(container, { activityRef, activitiesRef, followSimIndexRef }, neurons);
   }, [visible, activityRef, activitiesRef, followSimIndexRef, neurons]);
 
   const containerStyle = embedded

@@ -106,6 +106,18 @@ function App() {
     }
   }, []);
 
+  const handleTabKeyDown = useCallback((e: React.KeyboardEvent) => {
+    let next: TabId | null = null;
+    if (e.key === 'ArrowLeft') next = activeTab === 'video' ? 'connectome' : null;
+    else if (e.key === 'ArrowRight') next = activeTab === 'connectome' ? 'video' : null;
+    else if (e.key === 'Home') next = 'connectome';
+    else if (e.key === 'End') next = 'video';
+    if (next != null) {
+      e.preventDefault();
+      setActiveTab(next);
+    }
+  }, [activeTab]);
+
   return (
     <OnchainProviders>
       <div className="app">
@@ -117,11 +129,12 @@ function App() {
           </div>
         </header>
 
-        <div className="tabs" role="tablist">
+        <div className="tabs" role="tablist" onKeyDown={handleTabKeyDown}>
           <button
             type="button"
             role="tab"
             id="tab-connectome"
+            tabIndex={activeTab === 'connectome' ? 0 : -1}
             aria-selected={activeTab === 'connectome'}
             aria-controls="panel-connectome"
             className={`tabs__btn ${activeTab === 'connectome' ? 'tabs__btn--active' : ''}`}
@@ -133,6 +146,7 @@ function App() {
             type="button"
             role="tab"
             id="tab-video"
+            tabIndex={activeTab === 'video' ? 0 : -1}
             aria-selected={activeTab === 'video'}
             aria-controls="panel-video"
             className={`tabs__btn ${activeTab === 'video' ? 'tabs__btn--active' : ''}`}
@@ -143,29 +157,37 @@ function App() {
         </div>
 
         <div className="dashboard">
-          {activeTab === 'connectome' && (
-            <div id="panel-connectome" role="tabpanel" aria-labelledby="tab-connectome" className="dashboard__connectome-panel">
-          <section className="dashboard__hero">
-            <div className="hero__brain">
-              <BrainPlot />
-            </div>
-            <div className="hero__neuroflies">
-              <MyNeuroFlies />
-            </div>
-            <div className="hero__text">
-              <h1 className="hero__title">NeuroSim</h1>
-              <p className="hero__tagline">
-                Release NeuroFlies into the simulation to compete for resources and earn tokens. We load real fruit fly neurons and connections, feed them sensory data, and execute actions from the model — navigating your fly in the world.
-              </p>
-            </div>
-          </section>
+          <div
+            id="panel-connectome"
+            role="tabpanel"
+            aria-labelledby="tab-connectome"
+            aria-hidden={activeTab !== 'connectome'}
+            className={`dashboard__connectome-panel dashboard__panel ${activeTab !== 'connectome' ? 'dashboard__panel--hidden' : ''}`}
+          >
+            <section className="dashboard__hero">
+              <div className="hero__brain">
+                <BrainPlot />
+              </div>
+              <div className="hero__neuroflies">
+                <MyNeuroFlies />
+              </div>
+              <div className="hero__text">
+                <h1 className="hero__title">NeuroSim</h1>
+                <p className="hero__tagline">
+                  Release NeuroFlies into the simulation to compete for resources and earn tokens. We load real fruit fly neurons and connections, feed them sensory data, and execute actions from the model — navigating your fly in the world.
+                </p>
+              </div>
+            </section>
+            <DashboardSidebar onCopyCA={handleCopyCA} caCopied={caCopied} />
+          </div>
 
-          <DashboardSidebar onCopyCA={handleCopyCA} caCopied={caCopied} />
-            </div>
-          )}
-
-          {activeTab === 'video' && (
-            <section id="panel-video" role="tabpanel" aria-labelledby="tab-video" className="youtube-section youtube-section--full">
+          <section
+            id="panel-video"
+            role="tabpanel"
+            aria-labelledby="tab-video"
+            aria-hidden={activeTab !== 'video'}
+            className={`youtube-section youtube-section--full dashboard__panel ${activeTab !== 'video' ? 'dashboard__panel--hidden' : ''}`}
+          >
               <div className="youtube-section-inner">
                 <h2 className="youtube-section-title">See NeuroSim in action</h2>
                 <p className="youtube-section-desc">
@@ -190,7 +212,6 @@ function App() {
                 </a>
               </div>
             </section>
-          )}
         </div>
 
         <footer className="footer">

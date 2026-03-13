@@ -148,6 +148,10 @@
 }
 
 /* Dashboard layout */
+.dashboard__panel--hidden {
+  display: none !important;
+}
+
 .dashboard__connectome-panel {
   display: flex;
   flex-direction: column;

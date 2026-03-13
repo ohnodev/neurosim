@@ -1032,7 +1032,7 @@ export default function FlyViewer() {
             <div className="fly-viewer__brain-content">
               <div style={{ color: '#888', marginBottom: 6 }}>Brain activity — Fly {selectedFlyIndex + 1} (viewing)</div>
               <div className="fly-viewer__brain-plot">
-                <BrainOverlay followSimIndexRef={followSimIndexRef} visible={connected} embedded />
+                <BrainOverlay followSimIndexRef={followSimIndexRef} visible={connected && brainPanelOpen} embedded />
               </div>
             </div>
           </div>

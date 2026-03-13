@@ -1,7 +1,8 @@
 /**
  * Thin container for the brain plot. All data/updates handled by brainPlotScene (outside React).
+ * Mounts/disposes Plotly when visible toggles — frees memory when hidden (mobile optimization).
  */
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { initBrainPlot, type BrainPlotSceneRefs } from '../lib/brainPlotScene';
 
 interface BrainOverlayProps {
@@ -12,12 +13,15 @@ interface BrainOverlayProps {
 
 function BrainOverlayInner({ visible = true, embedded = false, followSimIndexRef }: BrainOverlayProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (!visible) return;
     const container = containerRef.current;
     if (!container) return;
-    return initBrainPlot(container, { followSimIndexRef });
-  }, [followSimIndexRef]);
+    setLoading(true);
+    return initBrainPlot(container, { followSimIndexRef }, () => setLoading(false));
+  }, [visible, followSimIndexRef]);
 
   const containerStyle = embedded
     ? {
@@ -46,17 +50,42 @@ function BrainOverlayInner({ visible = true, embedded = false, followSimIndexRef
         pointerEvents: 'auto' as const,
       };
 
+  if (!visible) {
+    return (
+      <div
+        className="brain-overlay"
+        style={{
+          ...containerStyle,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <span style={{ fontSize: 11, color: '#666' }}>Brain activity</span>
+      </div>
+    );
+  }
+
   return (
-    <div
-      className="brain-overlay"
-      style={{
-        ...containerStyle,
-        ...(!visible ? { visibility: 'hidden' as const, pointerEvents: 'none' as const } : {}),
-      }}
-    >
+    <div className="brain-overlay" style={containerStyle}>
       <div style={{ position: 'absolute', top: 4, left: 8, fontSize: 10, color: '#888', zIndex: 1 }}>
         Brain activity
       </div>
+      {loading && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'rgba(10,10,18,0.9)',
+            zIndex: 2,
+          }}
+        >
+          <span style={{ fontSize: 11, color: '#888' }}>Loading…</span>
+        </div>
+      )}
       <div
         ref={containerRef}
         style={{

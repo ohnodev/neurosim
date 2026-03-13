@@ -30,7 +30,8 @@ export interface BrainPlotSceneRefs {
 
 export function initBrainPlot(
   container: HTMLElement | null,
-  refs: BrainPlotSceneRefs
+  refs: BrainPlotSceneRefs,
+  onReady?: () => void
 ): () => void {
   if (!container) return () => {};
 
@@ -114,7 +115,7 @@ export function initBrainPlot(
       const sides = withPos.map((p) => (p.side ?? '').toLowerCase());
 
       manager = createBrainPlotManager(getActivity, WORLD_LAYOUT_OPTIONS);
-      manager.mount(plotDiv, ids, sides, xs, ys, zs);
+      manager.mount(plotDiv, ids, sides, xs, ys, zs, onReady);
       intervalId = setInterval(() => manager!.update(), UPDATE_INTERVAL_MS);
     })
     .catch((err) => {

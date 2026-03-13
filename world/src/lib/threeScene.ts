@@ -258,7 +258,8 @@ export function initThreeScene(
 
   let flyTemplate: THREE.Group | null = null;
   let flyClips: THREE.AnimationClip[] = [];
-  let appleTemplate: THREE.Group | null = null;
+  const applePool: THREE.Object3D[] = [];
+  let appleTemplate: THREE.Object3D | null = null;
   const mixers: THREE.AnimationMixer[] = [];
   const flyInstances: {
     group: THREE.Group;
@@ -282,11 +283,25 @@ export function initThreeScene(
     undefined,
     (err) => console.error('[threeScene] fly load error:', err)
   );
+  function getOrCreateApple(): THREE.Object3D | null {
+    const unused = applePool.find((a) => !a.visible);
+    if (unused) return unused;
+    if (!appleTemplate) return null;
+    const clone = cloneWithOwnResources(appleTemplate);
+    clone.scale.setScalar(1.2);
+    clone.visible = false;
+    applePool.push(clone);
+    sourcesGroup.add(clone);
+    return clone;
+  }
+
   loader.load(
     '/models/low-poly_apple/scene.gltf',
     (gltf) => {
       if (disposed) return;
       appleTemplate = gltf.scene.clone(true);
+      getOrCreateApple();
+      getOrCreateApple();
       updateWorldSources(lastSources);
     },
     undefined,
@@ -323,31 +338,24 @@ export function initThreeScene(
     return clone;
   }
 
-  function createSourceObject(s: WorldSource): THREE.Object3D {
-    if (s.type === 'food' && appleTemplate) {
-      const clone = cloneWithOwnResources(appleTemplate);
-      clone.scale.setScalar(1.2);
-      return clone;
-    }
-    const size = s.type === 'food' ? 0.9 : 0.8;
-    const geom = new THREE.BoxGeometry(size, size, size);
-    const mat =
-      s.type === 'food'
-        ? new THREE.MeshStandardMaterial({ color: 0xe8a838 })
-        : new THREE.MeshStandardMaterial({ color: 0x4488ff, emissive: 0x4488ff, emissiveIntensity: 0.6 });
-    return new THREE.Mesh(geom, mat);
-  }
-
   function updateWorldSources(sources: WorldSource[]): void {
-    while (sourcesGroup.children.length > 0) {
-      const c = sourcesGroup.children[0];
+    const foodSources = sources.filter((s) => s.type === 'food');
+    for (let i = 0; i < foodSources.length; i++) {
+      const apple = applePool[i] ?? getOrCreateApple();
+      if (apple) {
+        const s = foodSources[i]!;
+        apple.position.set(s.x, s.z, s.y);
+        apple.visible = true;
+      }
+    }
+    for (let i = foodSources.length; i < applePool.length; i++) {
+      applePool[i]!.visible = false;
+    }
+
+    for (const c of sourcesGroup.children.slice()) {
+      if (applePool.includes(c)) continue;
       sourcesGroup.remove(c);
       disposeObject3D(c);
-    }
-    for (const s of sources) {
-      const obj = createSourceObject(s);
-      obj.position.set(s.x, s.z, s.y);
-      sourcesGroup.add(obj);
     }
   }
 
@@ -566,7 +574,11 @@ export function initThreeScene(
       disposeObject3D(c);
     }
     if (flyTemplate) disposeObject3D(flyTemplate);
-    if (appleTemplate) disposeObject3D(appleTemplate);
+    flyTemplate = null;
+    if (appleTemplate) {
+      disposeObject3D(appleTemplate);
+      appleTemplate = null;
+    }
   };
   return { dispose, updateButton };
 }

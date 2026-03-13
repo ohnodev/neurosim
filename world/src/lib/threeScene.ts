@@ -285,6 +285,7 @@ export function initThreeScene(
   loader.load(
     '/models/low-poly_apple/scene.gltf',
     (gltf) => {
+      if (disposed) return;
       appleTemplate = gltf.scene.clone(true);
       updateWorldSources(lastSources);
     },

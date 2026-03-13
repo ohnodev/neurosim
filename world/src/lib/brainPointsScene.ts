@@ -3,7 +3,6 @@
  * Neuron positions → points, activity → vertex colors, auto-rotate.
  */
 import * as THREE from 'three';
-import { getApiBase } from './constants';
 import { computeColor } from '../../../shared/lib/brainPlotColors';
 import type { NeuronWithPosition } from '../../../shared/lib/brainTypes';
 
@@ -15,26 +14,37 @@ const COLOR_SCALE: [number, string][] = [
   [1, '#ff8c7a'],
 ];
 
-function hexToRgb(hex: string): [number, number, number] {
-  const m = hex.match(/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i);
-  if (!m) return [0.5, 0.5, 0.5];
-  return [parseInt(m[1], 16) / 255, parseInt(m[2], 16) / 255, parseInt(m[3], 16) / 255];
-}
-
-function colormapToRgb(t: number): [number, number, number] {
-  if (t <= 0) return hexToRgb(COLOR_SCALE[0]![1]);
-  if (t >= 1) return hexToRgb(COLOR_SCALE[COLOR_SCALE.length - 1]![1]);
-  for (let i = 0; i < COLOR_SCALE.length - 1; i++) {
-    const [a, cA] = COLOR_SCALE[i]!;
-    const [b, cB] = COLOR_SCALE[i + 1]!;
-    if (t >= a && t <= b) {
-      const s = (t - a) / (b - a);
-      const [r1, g1, b1] = hexToRgb(cA);
-      const [r2, g2, b2] = hexToRgb(cB);
-      return [r1 + s * (r2 - r1), g1 + s * (g2 - g1), b1 + s * (b2 - b1)];
+const RGB_LOOKUP_SIZE = 256;
+function buildRgbLookup(): [number, number, number][] {
+  const hexToRgb = (hex: string): [number, number, number] => {
+    const m = hex.match(/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i);
+    if (!m) return [0.5, 0.5, 0.5];
+    return [parseInt(m[1], 16) / 255, parseInt(m[2], 16) / 255, parseInt(m[3], 16) / 255];
+  };
+  const out: [number, number, number][] = [];
+  for (let i = 0; i < RGB_LOOKUP_SIZE; i++) {
+    const t = i / (RGB_LOOKUP_SIZE - 1);
+    if (t <= 0) { out.push(hexToRgb(COLOR_SCALE[0]![1])); continue; }
+    if (t >= 1) { out.push(hexToRgb(COLOR_SCALE[COLOR_SCALE.length - 1]![1])); continue; }
+    for (let j = 0; j < COLOR_SCALE.length - 1; j++) {
+      const [a, cA] = COLOR_SCALE[j]!;
+      const [b, cB] = COLOR_SCALE[j + 1]!;
+      if (t >= a && t <= b) {
+        const s = (t - a) / (b - a);
+        const [r1, g1, b1] = hexToRgb(cA);
+        const [r2, g2, b2] = hexToRgb(cB);
+        out.push([r1 + s * (r2 - r1), g1 + s * (g2 - g1), b1 + s * (b2 - b1)]);
+        break;
+      }
     }
   }
-  return hexToRgb(COLOR_SCALE[0]![1]);
+  return out;
+}
+
+const RGB_LOOKUP = buildRgbLookup();
+function colormapLookup(t: number): [number, number, number] {
+  const i = Math.max(0, Math.min(RGB_LOOKUP_SIZE - 1, Math.floor(t * (RGB_LOOKUP_SIZE - 0.001))));
+  return RGB_LOOKUP[i]!;
 }
 
 function hasPosition(n: NeuronWithPosition): n is NeuronWithPosition & { x: number; y: number; z: number } {
@@ -57,6 +67,7 @@ const ZOOM = 0.65; // Ortho extent (smaller = zoomed in)
 export function initBrainPoints(
   container: HTMLElement,
   refs: BrainPointsRefs,
+  neurons: NeuronWithPosition[],
   onReady?: () => void
 ): () => void {
   const width = Math.max(1, container.clientWidth);
@@ -93,7 +104,7 @@ export function initBrainPoints(
     const activity = getActivity();
     for (let i = 0; i < ids.length; i++) {
       const v = computeColor(activity, ids[i]!, sides[i] ?? '');
-      const [r, g, b] = colormapToRgb(v);
+      const [r, g, b] = colormapLookup(v);
       colorAttr.setXYZ(i, r, g, b);
     }
     colorAttr.needsUpdate = true;
@@ -124,13 +135,8 @@ export function initBrainPoints(
 
   resizeObserver.observe(container);
 
-  fetch(getApiBase() + '/api/neurons')
-    .then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.statusText))))
-    .then((data) => {
-      if (disposed) return;
-      const list = (data?.neurons ?? []) as NeuronWithPosition[];
-      const withPos = list.filter(hasPosition);
-      if (withPos.length === 0) return;
+  const withPos = neurons.filter(hasPosition);
+  if (withPos.length > 0) {
 
       let minX = Infinity, maxX = -Infinity;
       let minY = Infinity, maxY = -Infinity;
@@ -156,7 +162,7 @@ export function initBrainPoints(
         positions[i * 3] = (p.x! - cx) / scale;
         positions[i * 3 + 1] = (p.y! - cy) / scale;
         positions[i * 3 + 2] = (p.z! - cz) / scale;
-        const [r, g, b] = colormapToRgb(0);
+        const [r, g, b] = colormapLookup(0);
         colors[i * 3] = r;
         colors[i * 3 + 1] = g;
         colors[i * 3 + 2] = b;
@@ -178,10 +184,7 @@ export function initBrainPoints(
       scene.add(points);
       updateColors();
       onReady?.();
-    })
-    .catch((err) => {
-      if (import.meta.env?.DEV) console.error('[brainPointsScene] fetch neurons:', err);
-    });
+  }
 
   animate();
 

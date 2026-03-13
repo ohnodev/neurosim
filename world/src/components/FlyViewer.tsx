@@ -567,7 +567,7 @@ export default function FlyViewer() {
   const isMobileDefault = () => typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches;
   const [statusPanelOpen, setStatusPanelOpen] = useState(() => !isMobileDefault());
   const [statusTab, setStatusTab] = useState<'status' | 'rewards'>('status');
-  const [brainPanelOpen, setBrainPanelOpen] = useState(() => isMobileDefault());
+  const [brainPanelOpen, setBrainPanelOpen] = useState(() => !isMobileDefault());
 
   const snapshotBufferRef = useRef<Snapshot[]>([]);
   const latestFliesRef = useRef<FlyState[]>([]);
@@ -1036,6 +1036,7 @@ export default function FlyViewer() {
                   <BrainOverlay
                     followSimIndexRef={followSimIndexRef}
                     visible={connected}
+                    neurons={neuronsData?.neurons ?? []}
                     embedded
                   />
                 )}

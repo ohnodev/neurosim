@@ -5,22 +5,25 @@
 import React, { useEffect, useRef } from 'react';
 import { useSimRefs } from '../lib/simDisplayContext';
 import { initBrainPoints } from '../lib/brainPointsScene';
+import type { NeuronWithPosition } from '../../../shared/lib/brainTypes';
 
 interface BrainOverlayProps {
   visible?: boolean;
   embedded?: boolean;
   followSimIndexRef: React.MutableRefObject<number | undefined>;
+  neurons?: { root_id: string; side?: string; x?: number; y?: number; z?: number }[];
 }
 
-function BrainOverlayInner({ embedded = false, followSimIndexRef }: BrainOverlayProps) {
+function BrainOverlayInner({ visible = true, embedded = false, followSimIndexRef, neurons = [] }: BrainOverlayProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const { activityRef, activitiesRef } = useSimRefs();
 
   useEffect(() => {
+    if (!visible) return;
     const container = containerRef.current;
     if (!container) return;
-    return initBrainPoints(container, { activityRef, activitiesRef, followSimIndexRef });
-  }, [activityRef, activitiesRef, followSimIndexRef]);
+    return initBrainPoints(container, { activityRef, activitiesRef, followSimIndexRef }, neurons as NeuronWithPosition[]);
+  }, [visible, activityRef, activitiesRef, followSimIndexRef, neurons]);
 
   const containerStyle = embedded
     ? {

@@ -126,7 +126,7 @@ export function initBrainPoints(
     renderer.render(scene, camera);
   }
 
-  const resizeObserver = new ResizeObserver(() => {
+  function doResize(): void {
     if (disposed) return;
     const w = Math.max(1, container.clientWidth);
     const h = Math.max(1, container.clientHeight);
@@ -137,9 +137,11 @@ export function initBrainPoints(
     camera.top = ZOOM;
     camera.bottom = -ZOOM;
     camera.updateProjectionMatrix();
-  });
+  }
 
+  const resizeObserver = new ResizeObserver(doResize);
   resizeObserver.observe(container);
+  doResize();
 
   const withPos = neurons.filter(hasPosition);
   if (withPos.length > 0) {

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useCallback, memo } from 'react';
 import { OnchainProviders } from './components/OnchainProviders';
 import { BrainPlot } from './components/BrainPlot';
 import { MyNeuroFlies } from './components/MyNeuroFlies';
@@ -22,11 +22,81 @@ function formatAddress(addr: string): string {
 
 type TabId = 'connectome' | 'video';
 
+const DashboardSidebar = memo(function DashboardSidebar({
+  onCopyCA,
+  caCopied,
+}: {
+  onCopyCA: () => void;
+  caCopied: boolean;
+}) {
+  return (
+    <aside className="dashboard__sidebar">
+      <div className="card card--intro">
+        <h2 className="card__title">About</h2>
+        <p className="card__text">
+          Token launched on{' '}
+          <a href={`https://thecabal.app/base/${TOKEN_ADDRESS}`} target="_blank" rel="noopener noreferrer" className="card__link-inline">The Cabal</a>
+          . Heard about the first multi-behavior brain upload, went down the rabbit hole, got the dataset, added the interface, wrapped crypto around it, and shipped it — Cabal style.
+        </p>
+      </div>
+
+      <div className="card card--links">
+        <h2 className="card__title">Links</h2>
+        <a href="https://docs.neurosim.fun" target="_blank" rel="noopener noreferrer" className="card__link-btn">
+          {DocsIcon}
+          <span>Docs</span>
+        </a>
+        <a href={LORE_ARTICLE} target="_blank" rel="noopener noreferrer" className="card__link-btn">
+          {ArticleIcon}
+          <span>Lore · First Multi-Behavior Brain Upload</span>
+        </a>
+        <a href="https://world.neurosim.fun" target="_blank" rel="noopener noreferrer" className="card__link-btn">
+          {WorldIcon}
+          <span>Enter World</span>
+        </a>
+      </div>
+
+      <div className="card card--socials">
+        <h2 className="card__title">Socials</h2>
+        <div className="socials">
+          <a href={X_URL} target="_blank" rel="noopener noreferrer" className="card__link">
+            X
+          </a>
+          <a href={TG_URL} target="_blank" rel="noopener noreferrer" className="card__link">
+            Telegram
+          </a>
+        </div>
+        <div className="socials__ca">
+          <button
+            type="button"
+            className="ca-copy"
+            onClick={onCopyCA}
+            aria-label="Copy contract address"
+          >
+            <code className="ca-copy__value">{formatAddress(TOKEN_ADDRESS)}</code>
+            <span className="ca-copy__icon">{caCopied ? CheckIcon : CopyIcon}</span>
+          </button>
+          <a
+            href={`https://basescan.org/address/${TOKEN_ADDRESS}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="ca-basescan"
+            title="View on BaseScan"
+            aria-label="View contract on BaseScan"
+          >
+            <img src="/basescan-logo.svg" alt="" width={20} height={20} />
+          </a>
+        </div>
+      </div>
+    </aside>
+  );
+});
+
 function App() {
   const [caCopied, setCaCopied] = useState(false);
   const [activeTab, setActiveTab] = useState<TabId>('connectome');
 
-  const handleCopyCA = async () => {
+  const handleCopyCA = useCallback(async () => {
     try {
       await navigator.clipboard.writeText(TOKEN_ADDRESS);
       setCaCopied(true);
@@ -34,7 +104,7 @@ function App() {
     } catch {
       /* ignore */
     }
-  };
+  }, []);
 
   return (
     <OnchainProviders>
@@ -90,66 +160,7 @@ function App() {
             </div>
           </section>
 
-          <aside className="dashboard__sidebar">
-            <div className="card card--intro">
-              <h2 className="card__title">About</h2>
-              <p className="card__text">
-                Token launched on{' '}
-                <a href={`https://thecabal.app/base/${TOKEN_ADDRESS}`} target="_blank" rel="noopener noreferrer" className="card__link-inline">The Cabal</a>
-                . Heard about the first multi-behavior brain upload, went down the rabbit hole, got the dataset, added the interface, wrapped crypto around it, and shipped it — Cabal style.
-              </p>
-            </div>
-
-            <div className="card card--links">
-              <h2 className="card__title">Links</h2>
-              <a href="https://docs.neurosim.fun" target="_blank" rel="noopener noreferrer" className="card__link-btn">
-                <DocsIcon />
-                <span>Docs</span>
-              </a>
-              <a href={LORE_ARTICLE} target="_blank" rel="noopener noreferrer" className="card__link-btn">
-                <ArticleIcon />
-                <span>Lore · First Multi-Behavior Brain Upload</span>
-              </a>
-              <a href="https://world.neurosim.fun" target="_blank" rel="noopener noreferrer" className="card__link-btn">
-                <WorldIcon />
-                <span>Enter World</span>
-              </a>
-            </div>
-
-            <div className="card card--socials">
-              <h2 className="card__title">Socials</h2>
-              <div className="socials">
-                <a href={X_URL} target="_blank" rel="noopener noreferrer" className="card__link">
-                  X
-                </a>
-                <a href={TG_URL} target="_blank" rel="noopener noreferrer" className="card__link">
-                  Telegram
-                </a>
-              </div>
-              <div className="socials__ca">
-                <button
-                  type="button"
-                  className="ca-copy"
-                  onClick={handleCopyCA}
-                  aria-label="Copy contract address"
-                >
-                  <code className="ca-copy__value">{formatAddress(TOKEN_ADDRESS)}</code>
-                  <span className="ca-copy__icon">{caCopied ? <CheckIcon /> : <CopyIcon />}</span>
-                </button>
-                <a
-                  href={`https://basescan.org/address/${TOKEN_ADDRESS}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="ca-basescan"
-                  title="View on BaseScan"
-                  aria-label="View contract on BaseScan"
-                >
-                  <img src="/basescan-logo.svg" alt="" width={20} height={20} />
-                </a>
-              </div>
-            </div>
-
-          </aside>
+          <DashboardSidebar onCopyCA={handleCopyCA} caCopied={caCopied} />
             </div>
           )}
 

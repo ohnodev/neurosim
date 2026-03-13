@@ -20,7 +20,7 @@ export interface SimState {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-let BrainSimRust: new (
+type RustBrainSimCtor = new (
   neuronIds: string[],
   connections: Array<{ pre: string; post: string; weight?: number }>,
   sensoryIndices: number[],
@@ -35,13 +35,15 @@ let BrainSimRust: new (
     sources: Array<{ x: number; y: number; radius: number }>,
     pending: Array<{ neuronIds: string[]; strength: number }>,
   ) => { activity: Float32Array; motorLeft: number; motorRight: number; motorFwd: number };
-} | null = null;
+};
+
+let BrainSimRust: RustBrainSimCtor | null = null;
 
 if (process.env.USE_RUST_SIM !== '0') {
   try {
     const require = createRequire(import.meta.url);
     const mod = require(path.join(__dirname, '..', 'brain-sim-rs'));
-    BrainSimRust = mod.BrainSim;
+    BrainSimRust = mod.BrainSim ?? null;
   } catch {
     BrainSimRust = null;
   }
@@ -376,10 +378,10 @@ export function createBrainSim(
       return { t: fly.t, fly: flyWithMeta, activity: activityToRecord(act, neuronIds) };
     }
 
-    return { step, inject, getState, neuronIds };
+    return { step, inject, getState, neuronIds, isRustSim: true };
   }
 
-  return createBrainSimTS(connectome, worldSources, initialFlyState);
+  return { ...createBrainSimTS(connectome, worldSources, initialFlyState), isRustSim: false };
 }
 
 function createBrainSimTS(

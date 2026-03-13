@@ -1,5 +1,6 @@
 //! Brain sim service - Unix socket server.
 //! Loads connectome once at startup; create allocates sims from the in-memory template.
+use std::time::Instant;
 use brain_sim_service::connectome;
 use brain_sim_service::sim::{BrainSim, FlyInput, PendingStimInput, SourceInput};
 use serde::{Deserialize, Serialize};
@@ -91,7 +92,6 @@ struct CreateResp {
 
 #[derive(Serialize)]
 struct StepResp {
-    activity: Vec<f32>,
     activity_sparse: HashMap<String, f64>,
     motor_left: f64,
     motor_right: f64,
@@ -135,8 +135,10 @@ fn handle(
         eprintln!("[brain-service] create sim {} (from template)", id);
         serde_json::to_string(&CreateResp { sim_id: id })?
     } else if line.contains("\"method\":\"step\"") {
+        let t0 = Instant::now();
         let v: serde_json::Value = serde_json::from_str(line)?;
         let p: StepParams = serde_json::from_value(v["params"].clone())?;
+        let parse_ms = t0.elapsed().as_millis();
         let mut g = sims.lock().unwrap();
         let sim = g.get_mut(&p.sim_id);
         let sim = match sim {
@@ -178,15 +180,27 @@ fn handle(
                 strength: x.strength,
             })
             .collect();
-        let (activity, activity_sparse, motor_left, motor_right, motor_fwd) =
+        let t1 = Instant::now();
+        let (_activity, activity_sparse, motor_left, motor_right, motor_fwd) =
             sim.step(p.dt, fly, srcs, pend);
-        serde_json::to_string(&StepResp {
-            activity,
+        let compute_ms = t1.elapsed().as_millis();
+        let t2 = Instant::now();
+        let out_json = serde_json::to_string(&StepResp {
             activity_sparse,
             motor_left,
             motor_right,
             motor_fwd,
-        })?
+        })?;
+        let serialize_ms = t2.elapsed().as_millis();
+        static STEP_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = STEP_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if n % 60 == 0 {
+            eprintln!(
+                "[brain-service] step timing parse={}ms compute={}ms serialize={}ms total={}ms",
+                parse_ms, compute_ms, serialize_ms, t0.elapsed().as_millis()
+            );
+        }
+        out_json
     } else {
         serde_json::to_string(&ErrResp {
             error: "unknown method".into(),

@@ -96,7 +96,6 @@ export async function createSim(_params?: CreateParams): Promise<{ simId: number
 
 export async function stepSim(params: StepParams): Promise<StepResult> {
   const res = await request<{
-    activity: number[];
     activity_sparse: Record<string, number>;
     motor_left: number;
     motor_right: number;
@@ -121,8 +120,8 @@ export async function stepSim(params: StepParams): Promise<StepResult> {
     },
   });
   return {
-    activity: res.activity,
-    activitySparse: res.activity_sparse,
+    activity: [],
+    activitySparse: res.activity_sparse ?? {},
     motorLeft: res.motor_left,
     motorRight: res.motor_right,
     motorFwd: res.motor_fwd,

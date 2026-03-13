@@ -143,53 +143,52 @@ export function initBrainPoints(
 
   const withPos = neurons.filter(hasPosition);
   if (withPos.length > 0) {
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+    let minZ = Infinity, maxZ = -Infinity;
+    for (const p of withPos) {
+      const px = p.x!, py = p.y!, pz = p.z!;
+      if (px < minX) minX = px; if (px > maxX) maxX = px;
+      if (py < minY) minY = py; if (py > maxY) maxY = py;
+      if (pz < minZ) minZ = pz; if (pz > maxZ) maxZ = pz;
+    }
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    const cz = (minZ + maxZ) / 2;
+    const scale = Math.max(maxX - minX, maxY - minY, maxZ - minZ, 1);
 
-      let minX = Infinity, maxX = -Infinity;
-      let minY = Infinity, maxY = -Infinity;
-      let minZ = Infinity, maxZ = -Infinity;
-      for (const p of withPos) {
-        const px = p.x!, py = p.y!, pz = p.z!;
-        if (px < minX) minX = px; if (px > maxX) maxX = px;
-        if (py < minY) minY = py; if (py > maxY) maxY = py;
-        if (pz < minZ) minZ = pz; if (pz > maxZ) maxZ = pz;
-      }
-      const cx = (minX + maxX) / 2;
-      const cy = (minY + maxY) / 2;
-      const cz = (minZ + maxZ) / 2;
-      const scale = Math.max(maxX - minX, maxY - minY, maxZ - minZ, 1);
+    const positions = new Float32Array(withPos.length * 3);
+    const colors = new Float32Array(withPos.length * 3);
+    ids = withPos.map((p) => p.root_id);
+    sides = withPos.map((p) => (p.side ?? '').toLowerCase());
 
-      const positions = new Float32Array(withPos.length * 3);
-      const colors = new Float32Array(withPos.length * 3);
-      ids = withPos.map((p) => p.root_id);
-      sides = withPos.map((p) => (p.side ?? '').toLowerCase());
+    for (let i = 0; i < withPos.length; i++) {
+      const p = withPos[i]!;
+      positions[i * 3] = (p.x! - cx) / scale;
+      positions[i * 3 + 1] = (p.y! - cy) / scale;
+      positions[i * 3 + 2] = (p.z! - cz) / scale;
+      const [r, g, b] = colormapLookup(0);
+      colors[i * 3] = r;
+      colors[i * 3 + 1] = g;
+      colors[i * 3 + 2] = b;
+    }
 
-      for (let i = 0; i < withPos.length; i++) {
-        const p = withPos[i]!;
-        positions[i * 3] = (p.x! - cx) / scale;
-        positions[i * 3 + 1] = (p.y! - cy) / scale;
-        positions[i * 3 + 2] = (p.z! - cz) / scale;
-        const [r, g, b] = colormapLookup(0);
-        colors[i * 3] = r;
-        colors[i * 3 + 1] = g;
-        colors[i * 3 + 2] = b;
-      }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    colorAttr = new THREE.BufferAttribute(colors, 3);
+    geometry.setAttribute('color', colorAttr);
 
-      const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-      colorAttr = new THREE.BufferAttribute(colors, 3);
-      geometry.setAttribute('color', colorAttr);
+    const material = new THREE.PointsMaterial({
+      size: 0.03,
+      vertexColors: true,
+      sizeAttenuation: true,
+      transparent: false,
+    });
 
-      const material = new THREE.PointsMaterial({
-        size: 0.03,
-        vertexColors: true,
-        sizeAttenuation: true,
-        transparent: false,
-      });
-
-      points = new THREE.Points(geometry, material);
-      scene.add(points);
-      lastActivityRef = null;
-      updateColors();
+    points = new THREE.Points(geometry, material);
+    scene.add(points);
+    lastActivityRef = null;
+    updateColors();
   }
   onReady?.();
 

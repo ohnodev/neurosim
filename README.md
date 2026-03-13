@@ -1,12 +1,109 @@
 # NeuroSim
 
-Fly brain emulation: FlyWire connectome + toy neural sim + 3D viewer.
+Fly brain emulation using the FlyWire connectome — scaffold to build your own neural simulations.
 
-**Flow**: Stimuli → neurons → brain sim → motor output → 3D fly. Run the World UI, connect your wallet, deploy a fly, and click "Start" to begin the simulation.
+**Version** · **MIT License** · **Status: Alpha** · **TypeScript** · **React** · **Three.js**
 
-## Data Setup
+[Website](https://neurosimportal.com) · [𝕏 X (Twitter)](https://x.com/i/communities/2031850986466078872) · [Telegram](https://t.me/neurosimportal)
 
-The API loads `data/connectome-subset.json` at startup. On a fresh clone this file is missing; you must download the raw dataset and run the processor once.
+**NeuroSim** is an open-source fly brain emulation project. Stimuli drive neurons through a connectome-based simulation; motor output drives a 3D fly in the browser. Connect your wallet, deploy a fly, and click Start to run the simulation.
+
+**Status**: Alpha — meant as a scaffold for building your own simulations or simulating your own behaviors. Use it as a starting point, extend it, and make it yours.
+
+---
+
+## Video
+
+<iframe width="560" height="315" src="https://www.youtube.com/embed/tV874dr02yQ" title="NeuroSim Explainer" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
+
+---
+
+## Inspired by
+
+- **Lore article**: [The First Multi-Behavior Brain Upload](https://theinnermostloop.substack.com/p/the-first-multi-behavior-brain-upload) — the article that inspired this project
+- **Dataset**: [FlyWire Brain Dataset (FAFB v783)](https://www.kaggle.com/datasets/leonidblokhinrs/flywire-brain-dataset-fafb-v783/data) on Kaggle — the connectome data we use
+
+---
+
+## How It Works
+
+```
+┌──────────────────────────────────────────┐
+│              Stimuli                     │
+│   Input signals that drive neurons       │
+└──────────────────┬───────────────────────┘
+                   │
+┌──────────────────▼───────────────────────┐
+│         Connectome Simulation            │
+│   FlyWire brain graph + toy neural sim   │
+└──────────────────┬───────────────────────┘
+                   │
+┌──────────────────▼───────────────────────┐
+│            Motor Output                  │
+│   Fly behavior (position, orientation)   │
+└──────────────────┬───────────────────────┘
+                   │
+┌──────────────────▼───────────────────────┐
+│            3D Fly Viewer                 │
+│   Web app: connect wallet, deploy, Start │
+└──────────────────────────────────────────┘
+```
+
+---
+
+## Features
+
+- **Connectome-based simulation** — Uses the FlyWire FAFB v783 connectome
+- **3D brain and fly viewer** — Three.js + Plotly for brain visualization
+- **Wallet integration** — Connect wallet, deploy a fly, run simulations
+- **plotly-cabal** — We ship a patched Plotly build for brain 3D visualizations (see [plotly-cabal/](plotly-cabal/))
+
+---
+
+## Quick Start
+
+### Prerequisites
+
+- **Node.js 20+** and **npm**
+- **Kaggle account** (for dataset access)
+
+### 1. Clone the repo
+
+```bash
+git clone https://github.com/ohnodev/neurosim.git
+cd neurosim
+```
+
+### 2. Data setup
+
+The API needs `data/connectome-subset.json`. Download the dataset and process it:
+
+```bash
+npm run setup-kaggle    # Install Kaggle CLI
+# Add API key: https://www.kaggle.com/settings → Create API token
+# Save as ~/.kaggle/kaggle.json
+
+npm run download-dataset
+npm run process-connectome
+```
+
+Or download the [FlyWire Brain Dataset](https://www.kaggle.com/datasets/leonidblokhinrs/flywire-brain-dataset-fafb-v783/data) manually, extract CSVs to `data/raw/`, and run `npm run process-connectome`.
+
+### 3. Run the app
+
+```bash
+# API
+cd api && npm install && npm run dev
+
+# World (separate terminal)
+cd world && npm install && npm run dev
+```
+
+Open the URL shown (e.g. http://localhost:5173), connect your wallet, deploy a fly, and click **Start**.
+
+---
+
+## Data Setup (detailed)
 
 ### Option A – Kaggle CLI (recommended)
 
@@ -47,6 +144,8 @@ Restart the API so it reloads the new connectome:
 # or: cd api && npm run dev   # development
 ```
 
+---
+
 ## Development
 
 ```bash
@@ -58,8 +157,12 @@ cd api && npm install && npm run dev
 
 # World (separate terminal)
 cd world && npm install && npm run dev
-# Then open the local URL shown (e.g. http://localhost:5173), connect wallet, deploy a fly, and click Start.
+
+# Landing (separate terminal)
+cd landing && npm install && npm run dev
 ```
+
+---
 
 ## PM2 (production)
 
@@ -71,6 +174,8 @@ cd world && npm install && npm run dev
 ./pm2-manager.sh restart
 ```
 
+---
+
 ## Tests
 
 ```bash
@@ -78,6 +183,14 @@ npm test          # API unit tests + smoke (Vite build, optional API/PM2)
 npm run test:api  # API unit tests only
 ```
 
+---
+
 ## Ngrok
 
 For tunnels, run `npm run ngrok`. Set `NGROK_DOMAIN` for a custom domain (e.g. `NGROK_DOMAIN=your-domain.ngrok-free.app npm run ngrok`). If unset, ngrok starts without `--domain`. For the world dev server, set `NGROK_HOST` to your ngrok host when using ngrok (adds it to Vite's `allowedHosts`).
+
+---
+
+## License
+
+MIT License — see [LICENSE](LICENSE) for details.

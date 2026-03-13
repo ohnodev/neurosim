@@ -15,7 +15,7 @@ import {
   type NeuronRaw,
 } from '../lib/api';
 import { BrainOverlay } from './BrainOverlay';
-import { SimRefsProvider, useSimDisplayData, useSimDisplayDataSelector, useStatusPanelData } from '../lib/simDisplayContext';
+import { SimRefsProvider, useSimRefs, useSimDisplayDataSelector } from '../lib/simDisplayContext';
 import { ConnectButton } from './ConnectButton';
 import { BuyFlyModal } from './BuyFlyModal';
 import { initThreeScene, type InterpolationDebugStats, type CameraMode, type SimStatusRefs } from '../lib/threeScene';
@@ -339,48 +339,58 @@ function SimStateSync({
   cameraTargetRef: React.MutableRefObject<{ x: number; y: number; z: number; heading: number } | null>;
   followSimIndexRef: React.MutableRefObject<number | undefined>;
 }) {
-  const { flies } = useSimDisplayData();
-  const effectiveSimIndex = resolveEffectiveSimIndex(flies, deployed, selectedFlyIndex, deployedSlotKeys);
-  const simIndexForSelected = deployed[selectedFlyIndex];
-  const focusedFly =
-    effectiveSimIndex != null && flies[effectiveSimIndex]
-      ? flies[effectiveSimIndex]!
-      : DEFAULT_FLY;
+  const { latestFliesRef } = useSimRefs();
 
   useEffect(() => {
-    followSimIndexRef.current = effectiveSimIndex;
-  }, [effectiveSimIndex, followSimIndexRef]);
+    const id = setInterval(() => {
+      const flies = latestFliesRef.current;
+      const effectiveSimIndex = resolveEffectiveSimIndex(flies, deployed, selectedFlyIndex, deployedSlotKeys);
+      const simIndexForSelected = deployed[selectedFlyIndex];
+      const focusedFly =
+        effectiveSimIndex != null && flies[effectiveSimIndex]
+          ? flies[effectiveSimIndex]!
+          : DEFAULT_FLY;
 
-  useEffect(() => {
-    if (effectiveSimIndex == null && cameraModeRef.current === 'fly') {
-      cameraModeRef.current = 'god';
-      updateCameraButtonRef.current?.('god');
-    }
-  }, [effectiveSimIndex, cameraModeRef, updateCameraButtonRef]);
+      followSimIndexRef.current = effectiveSimIndex;
 
-  useEffect(() => {
-    if (deployedSlotKeys.length === 0) return;
-    const valid = simIndexForSelected != null && flies[simIndexForSelected] != null;
-    if (!valid) {
-      const firstValid = deployedSlotKeys.find(
-        (slotIdx) => deployed[slotIdx] != null && flies[deployed[slotIdx]!] != null
-      );
-      setSelectedFlyIndex(firstValid ?? deployedSlotKeys[0]!);
-    }
-  }, [deployedSlotKeys, simIndexForSelected, flies, deployed, setSelectedFlyIndex]);
+      if (effectiveSimIndex == null && cameraModeRef.current === 'fly') {
+        cameraModeRef.current = 'god';
+        updateCameraButtonRef.current?.('god');
+      }
 
-  useEffect(() => {
-    if (effectiveSimIndex != null) {
-      cameraTargetRef.current = {
-        x: focusedFly.x ?? 0,
-        y: focusedFly.y ?? 0,
-        z: focusedFly.z ?? 0,
-        heading: focusedFly.heading ?? 0,
-      };
-    } else {
-      cameraTargetRef.current = null;
-    }
-  }, [effectiveSimIndex, focusedFly.x, focusedFly.y, focusedFly.z, focusedFly.heading, cameraTargetRef]);
+      if (deployedSlotKeys.length > 0) {
+        const valid = simIndexForSelected != null && flies[simIndexForSelected] != null;
+        if (!valid) {
+          const firstValid = deployedSlotKeys.find(
+            (slotIdx) => deployed[slotIdx] != null && flies[deployed[slotIdx]!] != null
+          );
+          setSelectedFlyIndex(firstValid ?? deployedSlotKeys[0]!);
+        }
+      }
+
+      if (effectiveSimIndex != null) {
+        cameraTargetRef.current = {
+          x: focusedFly.x ?? 0,
+          y: focusedFly.y ?? 0,
+          z: focusedFly.z ?? 0,
+          heading: focusedFly.heading ?? 0,
+        };
+      } else {
+        cameraTargetRef.current = null;
+      }
+    }, 200);
+    return () => clearInterval(id);
+  }, [
+    latestFliesRef,
+    deployed,
+    deployedSlotKeys,
+    selectedFlyIndex,
+    setSelectedFlyIndex,
+    cameraModeRef,
+    updateCameraButtonRef,
+    cameraTargetRef,
+    followSimIndexRef,
+  ]);
 
   return null;
 }
@@ -395,7 +405,7 @@ const DebugPanelSlot = React.memo(React.forwardRef<HTMLDivElement>(function Debu
   return <div ref={ref} style={{ position: 'absolute', bottom: 0, left: 0 }} />;
 }));
 
-/** Status tab body. Uses minimal slice (no full activities in state) to avoid memory leak. */
+/** Status tab body. No own state/interval - re-renders only when parent re-renders. */
 function StatusPanelStatusContent({
   deployed,
   selectedFlyIndex,
@@ -405,13 +415,23 @@ function StatusPanelStatusContent({
   selectedFlyIndex: number;
   neuronLabels: Record<string, string>;
 }) {
-  const { focusedFly, topActivity, activeCount } = useStatusPanelData(
-    500,
-    deployed,
-    selectedFlyIndex,
-    resolveEffectiveSimIndex,
-    DEFAULT_FLY
-  );
+  const { latestFliesRef, activityRef, activitiesRef } = useSimRefs();
+  const flies = latestFliesRef.current;
+  const activities = activitiesRef.current;
+  const activity = activityRef.current;
+  const effectiveSimIndex = resolveEffectiveSimIndex(flies, deployed, selectedFlyIndex);
+  const focusedFly =
+    effectiveSimIndex != null && flies[effectiveSimIndex]
+      ? flies[effectiveSimIndex]!
+      : DEFAULT_FLY;
+  const activityForSelected =
+    effectiveSimIndex != null && Array.isArray(activities)
+      ? (activities[effectiveSimIndex] ?? activity)
+      : activity;
+  const topActivity = Object.entries(activityForSelected)
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, 10);
+  const activeCount = Object.keys(activityForSelected).length;
   const flyMode = getFlyMode(focusedFly);
 
   return (

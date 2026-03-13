@@ -63,6 +63,7 @@ export async function createBrainSim(
   {
     let lastRustMs = 0;
     let lastJsMs = 0;
+    let lastSocketTiming: ReturnType<typeof socketClient.getLastRequestTiming> = null;
     let lastActivitySparse: Record<string, number> = {};
 
     async function runRustStep(
@@ -115,6 +116,7 @@ export async function createBrainSim(
       const rustStart = performance.now();
       const result = await runRustStep(dt, pendingInput);
       lastRustMs = Math.round(performance.now() - rustStart);
+      lastSocketTiming = socketClient.getLastRequestTiming();
       const { activitySparse, motorLeft, motorRight, motorFwd } = result;
       lastActivitySparse = activitySparse;
 
@@ -281,7 +283,12 @@ export async function createBrainSim(
     }
 
     function getTiming() {
-      return { rustMs: lastRustMs, jsMs: lastJsMs };
+      return {
+        rustMs: lastRustMs,
+        jsMs: lastJsMs,
+        socketTotalMs: lastSocketTiming?.totalMs ?? 0,
+        socketResponseWaitMs: lastSocketTiming?.responseWaitMs ?? 0,
+      };
     }
 
     function inject(neurons: string[], strength = 0.8) {

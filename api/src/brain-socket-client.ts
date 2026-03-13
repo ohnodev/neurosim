@@ -11,6 +11,17 @@ const SOCKET_PATH =
 let sharedSocket: net.Socket | null = null;
 let sharedRl: ReturnType<typeof createInterface> | null = null;
 let connectPromise: Promise<void> | null = null;
+let requestSeq = 0;
+let requestChain: Promise<void> = Promise.resolve();
+let lastRequestTiming: {
+  id: number;
+  connectWaitMs: number;
+  writeMs: number;
+  responseWaitMs: number;
+  totalMs: number;
+  method: string;
+} | null = null;
+const TRACE_SOCKET_TIMING = process.env.NEUROSIM_SOCKET_TRACE === '1';
 
 function getConnection(): Promise<{ sock: net.Socket; rl: ReturnType<typeof createInterface> }> {
   if (sharedSocket && sharedRl && !sharedSocket.destroyed) {
@@ -27,6 +38,11 @@ function getConnection(): Promise<{ sock: net.Socket; rl: ReturnType<typeof crea
       sharedSocket = sock;
       sharedRl = createInterface({ input: sock, crlfDelay: Infinity });
       sock.setMaxListeners(20);
+      sock.on('close', () => {
+        sharedSocket = null;
+        sharedRl = null;
+        connectPromise = null;
+      });
       resolve();
     });
     sock.on('error', (err) => {
@@ -43,37 +59,68 @@ function getConnection(): Promise<{ sock: net.Socket; rl: ReturnType<typeof crea
 }
 
 function request<T>(payload: object): Promise<T> {
-  return getConnection().then(({ sock, rl }) => {
+  const method = (payload as { method?: string })?.method ?? 'unknown';
+  const reqId = ++requestSeq;
+  const queued = requestChain.then(async () => {
+    const t0 = performance.now();
+    const { sock, rl } = await getConnection();
+    const afterConnect = performance.now();
     return new Promise<T>((resolve, reject) => {
       const msg = JSON.stringify(payload) + '\n';
+      const onError = (err: Error) => {
+        sharedSocket = null;
+        sharedRl = null;
+        connectPromise = null;
+        sock.off('error', onError);
+        reject(err);
+      };
+      sock.on('error', onError);
       sock.write(msg, (err) => {
         if (err) {
+          sock.off('error', onError);
           sharedSocket = null;
           sharedRl = null;
           connectPromise = null;
           reject(err);
+          return;
         }
-      });
-      rl.once('line', (line) => {
-        try {
-          const out = JSON.parse(line) as T;
-          if ('error' in (out as { error?: string }) && (out as { error?: string }).error) {
-            reject(new Error((out as { error: string }).error));
-          } else {
-            resolve(out);
+        const afterWrite = performance.now();
+        rl.once('line', (line) => {
+          sock.off('error', onError);
+          try {
+            const done = performance.now();
+            const timing = {
+              id: reqId,
+              connectWaitMs: Math.round(afterConnect - t0),
+              writeMs: Math.round(afterWrite - afterConnect),
+              responseWaitMs: Math.round(done - afterWrite),
+              totalMs: Math.round(done - t0),
+              method,
+            };
+            lastRequestTiming = timing;
+            if (TRACE_SOCKET_TIMING) {
+              console.log(
+                `[brain-socket] req=${timing.id} method=${timing.method} connectWaitMs=${timing.connectWaitMs} writeMs=${timing.writeMs} responseWaitMs=${timing.responseWaitMs} totalMs=${timing.totalMs}`,
+              );
+            }
+            const out = JSON.parse(line) as T;
+            if ('error' in (out as { error?: string }) && (out as { error?: string }).error) {
+              reject(new Error((out as { error: string }).error));
+            } else {
+              resolve(out);
+            }
+          } catch (e) {
+            reject(e);
           }
-        } catch (e) {
-          reject(e);
-        }
-      });
-      sock.once('error', (err) => {
-        sharedSocket = null;
-        sharedRl = null;
-        connectPromise = null;
-        reject(err);
+        });
       });
     });
   });
+  requestChain = queued.then(
+    () => undefined,
+    () => undefined,
+  );
+  return queued;
 }
 
 /** No params: brain-service uses connectome loaded at startup */
@@ -163,4 +210,15 @@ export function isSocketAvailable(): boolean {
   } catch {
     return false;
   }
+}
+
+export function getLastRequestTiming(): {
+  id: number;
+  connectWaitMs: number;
+  writeMs: number;
+  responseWaitMs: number;
+  totalMs: number;
+  method: string;
+} | null {
+  return lastRequestTiming;
 }

@@ -95,6 +95,9 @@ const SIM_FPS = 30;
 const BATCH_MS = 250;
 const FRAMES_PER_BATCH = Math.round(SIM_FPS * BATCH_MS / 1000);
 let connectionStep = 0;
+let nextBatchDueAt = 0;
+let simTickInFlight = false;
+let droppedSimTicks = 0;
 
 const wsClients = new Set<import('ws').WebSocket>();
 /** Per-client: which fly's activity to send (sim index). Default 0. */
@@ -130,6 +133,9 @@ function startSim(): void {
   if (simRunning) return;
   simRunning = true;
   connectionStep = 0;
+  nextBatchDueAt = performance.now() + BATCH_MS;
+  simTickInFlight = false;
+  droppedSimTicks = 0;
   spawnFood();
   foodIntervalId = setInterval(() => {
     const f = spawnFood();
@@ -139,53 +145,77 @@ function startSim(): void {
     }
   }, 10_000);
   simIntervalId = setInterval(async () => {
-    const loopStart = performance.now();
-    const nSims = sims.length;
-    let rustMs = 0;
-    let jsMs = 0;
-    let maxRustMs = 0;
-    let maxJsMs = 0;
-    const dt = 1 / SIM_FPS;
-    const frames: { t: number; flies: ReturnType<typeof sims[0]['getState']>['fly'][]; activities: (Record<string, number> | undefined)[] }[] = [];
-    for (let i = 0; i < FRAMES_PER_BATCH; i++) {
-      const flies: ReturnType<typeof sims[0]['getState']>['fly'][] = [];
-      const activities: (Record<string, number> | undefined)[] = [];
-      let t = 0;
-      for (let j = 0; j < nSims; j++) {
-        const state = await sims[j].step(dt);
-        const gt = (sims[j] as { getTiming?: () => { rustMs: number; jsMs: number } }).getTiming?.();
-        if (gt) {
-          rustMs += gt.rustMs;
-          jsMs += gt.jsMs;
-          if (gt.rustMs > maxRustMs) maxRustMs = gt.rustMs;
-          if (gt.jsMs > maxJsMs) maxJsMs = gt.jsMs;
-        }
-        if (state.eatenFoodId) {
-          removeFood(state.eatenFoodId);
-          recordFoodCollected(j);
-          console.log('[world] fly', j, 'ate food', state.eatenFoodId);
-        }
-        flies.push(state.fly);
-        activities.push(state.activity);
-        t = state.t;
-      }
-      frames.push({ t, flies, activities });
+    if (simTickInFlight) {
+      droppedSimTicks += 1;
+      return;
     }
-    const beforePayload = performance.now();
-    buildClientPayload(frames);
-    const buildPayloadMs = Math.round(performance.now() - beforePayload);
-    connectionStep += 1;
-    if (connectionStep % 15 === 0) {
-      const last = frames[frames.length - 1];
-      const first = last?.flies[0];
-      const loopMs = Math.round(performance.now() - loopStart);
-      const totalSteps = sims.length * FRAMES_PER_BATCH;
-      const avgRust = totalSteps ? Math.round(rustMs / totalSteps) : 0;
-      const avgJs = totalSteps ? Math.round(jsMs / totalSteps) : 0;
-      const timingStr = backendInfo.rust
-        ? ` rustMs=${rustMs} jsMs=${jsMs} avgRust=${avgRust} avgJs=${avgJs} maxRust=${maxRustMs} maxJs=${maxJsMs} payloadMs=${buildPayloadMs}`
-        : '';
-      console.log('[sim] t=', last?.t.toFixed(1), 'flies=', last?.flies.length ?? 0, first ? `first=(${first.x?.toFixed(2)},${first.y?.toFixed(2)})` : '', 'clients=', wsClients.size, 'loopMs=', loopMs, timingStr);
+    simTickInFlight = true;
+    try {
+      const loopStart = performance.now();
+      const schedulerLagMs = Math.max(0, Math.round(loopStart - nextBatchDueAt));
+      nextBatchDueAt = loopStart + BATCH_MS;
+      const nSims = sims.length;
+      let stepMs = 0;
+      let jsMs = 0;
+      let maxStepMs = 0;
+      let maxJsMs = 0;
+      let socketRoundtripMs = 0;
+      let socketWaitMs = 0;
+      const dt = 1 / SIM_FPS;
+      const frames: { t: number; flies: ReturnType<typeof sims[0]['getState']>['fly'][]; activities: (Record<string, number> | undefined)[] }[] = [];
+      for (let i = 0; i < FRAMES_PER_BATCH; i++) {
+        const flies: ReturnType<typeof sims[0]['getState']>['fly'][] = [];
+        const activities: (Record<string, number> | undefined)[] = [];
+        let t = 0;
+        for (let j = 0; j < nSims; j++) {
+          const state = await sims[j].step(dt);
+          const gt = (sims[j] as {
+            getTiming?: () => {
+              rustMs: number;
+              jsMs: number;
+              socketTotalMs?: number;
+              socketResponseWaitMs?: number;
+            };
+          }).getTiming?.();
+          if (gt) {
+            stepMs += gt.rustMs;
+            jsMs += gt.jsMs;
+            socketRoundtripMs += gt.socketTotalMs ?? 0;
+            socketWaitMs += gt.socketResponseWaitMs ?? 0;
+            if (gt.rustMs > maxStepMs) maxStepMs = gt.rustMs;
+            if (gt.jsMs > maxJsMs) maxJsMs = gt.jsMs;
+          }
+          if (state.eatenFoodId) {
+            removeFood(state.eatenFoodId);
+            recordFoodCollected(j);
+            console.log('[world] fly', j, 'ate food', state.eatenFoodId);
+          }
+          flies.push(state.fly);
+          activities.push(state.activity);
+          t = state.t;
+        }
+        frames.push({ t, flies, activities });
+      }
+      const beforePayload = performance.now();
+      buildClientPayload(frames);
+      const buildPayloadMs = Math.round(performance.now() - beforePayload);
+      connectionStep += 1;
+      if (connectionStep % 15 === 0) {
+        const last = frames[frames.length - 1];
+        const first = last?.flies[0];
+        const loopMs = Math.round(performance.now() - loopStart);
+        const totalSteps = sims.length * FRAMES_PER_BATCH;
+        const avgStep = totalSteps ? Math.round(stepMs / totalSteps) : 0;
+        const avgJs = totalSteps ? Math.round(jsMs / totalSteps) : 0;
+        const avgSocketRoundtrip = totalSteps ? Math.round(socketRoundtripMs / totalSteps) : 0;
+        const avgSocketWait = totalSteps ? Math.round(socketWaitMs / totalSteps) : 0;
+        const timingStr = backendInfo.rust
+          ? ` stepMs=${stepMs} jsMs=${jsMs} avgStep=${avgStep} avgJs=${avgJs} maxStep=${maxStepMs} maxJs=${maxJsMs} socketRoundtripMs=${socketRoundtripMs} socketWaitMs=${socketWaitMs} avgSocketRoundtrip=${avgSocketRoundtrip} avgSocketWait=${avgSocketWait} payloadMs=${buildPayloadMs} schedulerLagMs=${schedulerLagMs} droppedTicks=${droppedSimTicks}`
+          : '';
+        console.log('[sim] t=', last?.t.toFixed(1), 'flies=', last?.flies.length ?? 0, first ? `first=(${first.x?.toFixed(2)},${first.y?.toFixed(2)})` : '', 'clients=', wsClients.size, 'loopMs=', loopMs, timingStr);
+      }
+    } finally {
+      simTickInFlight = false;
     }
   }, BATCH_MS);
   rewardFlushIntervalId = setInterval(() => void flushRewards(), 60_000);

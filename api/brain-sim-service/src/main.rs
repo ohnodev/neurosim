@@ -9,6 +9,11 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_CONN_ID: AtomicU64 = AtomicU64::new(1);
+static GLOBAL_REQ_ID: AtomicU64 = AtomicU64::new(1);
+static STEP_COUNT: AtomicU64 = AtomicU64::new(0);
 
 fn main() {
     let default_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -45,7 +50,18 @@ fn main() {
 
     for stream in listener.incoming() {
         if let Ok(mut s) = stream {
-            let _ = handle(&mut s, &sims, &next_id, template.clone());
+            let conn_id = NEXT_CONN_ID.fetch_add(1, Ordering::Relaxed);
+            eprintln!(
+                "[brain-service] conn_open conn_id={} pid={}",
+                conn_id,
+                std::process::id()
+            );
+            let _ = handle(&mut s, &sims, &next_id, template.clone(), conn_id);
+            eprintln!(
+                "[brain-service] conn_close conn_id={} pid={}",
+                conn_id,
+                std::process::id()
+            );
         }
     }
 }
@@ -108,6 +124,7 @@ fn handle(
     sims: &Mutex<HashMap<u32, BrainSim>>,
     next_id: &Mutex<u32>,
     template: Arc<connectome::ConnectomeTemplate>,
+    conn_id: u64,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut reader = BufReader::new(s.try_clone()?);
     loop {
@@ -120,8 +137,14 @@ fn handle(
         if line.is_empty() {
             continue;
         }
+    let req_id = GLOBAL_REQ_ID.fetch_add(1, Ordering::Relaxed);
     let out = if line.contains("\"method\":\"ping\"") {
-        eprintln!("[brain-service] ping from API ✓");
+        eprintln!(
+            "[brain-service] req={} conn={} method=ping pid={} ok=1",
+            req_id,
+            conn_id,
+            std::process::id()
+        );
         r#"{"ok":true}"#.to_string()
     } else if line.contains("\"method\":\"create\"") {
         let sim = BrainSim::new(
@@ -137,7 +160,13 @@ fn handle(
         *g = g.saturating_add(1);
         drop(g);
         sims.lock().unwrap().insert(id, sim);
-        eprintln!("[brain-service] create sim {} (from template)", id);
+        eprintln!(
+            "[brain-service] req={} conn={} method=create sim_id={} pid={}",
+            req_id,
+            conn_id,
+            id,
+            std::process::id()
+        );
         serde_json::to_string(&CreateResp { sim_id: id })?
     } else if line.contains("\"method\":\"step\"") {
         let t0 = Instant::now();
@@ -197,12 +226,18 @@ fn handle(
             motor_fwd,
         })?;
         let serialize_ms = t2.elapsed().as_millis();
-        static STEP_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let n = STEP_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let n = STEP_COUNT.fetch_add(1, Ordering::Relaxed);
         if n % 60 == 0 {
             eprintln!(
-                "[brain-service] step timing parse={}ms compute={}ms serialize={}ms total={}ms",
-                parse_ms, compute_ms, serialize_ms, t0.elapsed().as_millis()
+                "[brain-service] req={} conn={} method=step sim_id={} parse_ms={} compute_ms={} serialize_ms={} total_ms={} pid={}",
+                req_id,
+                conn_id,
+                p.sim_id,
+                parse_ms,
+                compute_ms,
+                serialize_ms,
+                t0.elapsed().as_millis(),
+                std::process::id()
             );
         }
         out_json

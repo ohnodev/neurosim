@@ -251,7 +251,7 @@
   flex-direction: column;
 }
 
-.fly-viewer__fly-slot > button:first-child {
+.fly-viewer__fly-slot > *:first-child {
   flex: 1;
   min-height: 100px;
 }

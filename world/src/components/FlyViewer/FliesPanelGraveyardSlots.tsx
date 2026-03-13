@@ -1,6 +1,7 @@
+import React from 'react';
 import { formatEth } from '../../lib/utils';
 
-export function FliesPanelGraveyardSlots({
+function FliesPanelGraveyardSlotsInner({
   graveyardSlots,
   statsBySlot,
   rewardPerPointWei,
@@ -48,3 +49,21 @@ export function FliesPanelGraveyardSlots({
     </>
   );
 }
+
+function graveyardPropsEqual(
+  prev: { graveyardSlots: Set<number>; statsBySlot: Record<number, number>; rewardPerPointWei: string | undefined },
+  next: { graveyardSlots: Set<number>; statsBySlot: Record<number, number>; rewardPerPointWei: string | undefined }
+): boolean {
+  if (prev.rewardPerPointWei !== next.rewardPerPointWei) return false;
+  if (prev.graveyardSlots !== next.graveyardSlots) {
+    if (prev.graveyardSlots.size !== next.graveyardSlots.size) return false;
+    for (const i of prev.graveyardSlots) if (!next.graveyardSlots.has(i)) return false;
+  }
+  const slots = [0, 1, 2];
+  for (const i of slots) {
+    if ((prev.statsBySlot[i] ?? 0) !== (next.statsBySlot[i] ?? 0)) return false;
+  }
+  return true;
+}
+
+export const FliesPanelGraveyardSlots = React.memo(FliesPanelGraveyardSlotsInner, graveyardPropsEqual);

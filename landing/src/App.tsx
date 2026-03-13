@@ -8,6 +8,8 @@ import './App.css';
 const LORE_ARTICLE = 'https://theinnermostloop.substack.com/p/the-first-multi-behavior-brain-upload';
 const X_URL = 'https://x.com/i/communities/2031850986466078872';
 const TG_URL = 'https://t.me/neurosimportal';
+const YOUTUBE_VIDEO_URL = 'https://www.youtube.com/watch?v=tV874dr02yQ';
+const YOUTUBE_EMBED_ID = 'tV874dr02yQ';
 
 /** Token address - single config to update later. */
 const TOKEN_ADDRESS = '0x73e0591f7b75cc4D82B415d34Cd353683C896cbf';
@@ -68,8 +70,11 @@ function formatAddress(addr: string): string {
   return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
 }
 
+type TabId = 'connectome' | 'video';
+
 function App() {
   const [caCopied, setCaCopied] = useState(false);
+  const [activeTab, setActiveTab] = useState<TabId>('connectome');
 
   const handleCopyCA = async () => {
     try {
@@ -92,7 +97,26 @@ function App() {
           </div>
         </header>
 
+        <div className="tabs">
+          <button
+            type="button"
+            className={`tabs__btn ${activeTab === 'connectome' ? 'tabs__btn--active' : ''}`}
+            onClick={() => setActiveTab('connectome')}
+          >
+            Connectome
+          </button>
+          <button
+            type="button"
+            className={`tabs__btn ${activeTab === 'video' ? 'tabs__btn--active' : ''}`}
+            onClick={() => setActiveTab('video')}
+          >
+            Video
+          </button>
+        </div>
+
         <div className="dashboard">
+          {activeTab === 'connectome' && (
+            <>
           <section className="dashboard__hero">
             <div className="hero__brain">
               <BrainPlot />
@@ -168,27 +192,37 @@ function App() {
             </div>
 
           </aside>
-        </div>
+            </>
+          )}
 
-        <section className="youtube-section">
-          <div className="youtube-section-inner">
-            <h2 className="youtube-section-title">See NeuroSim in action</h2>
-            <p className="youtube-section-desc">
-              Watch how we load fruit fly neurons, feed them sensory data, and run the simulation.
-            </p>
-            <div className="youtube-embed-wrap">
-              <iframe
-                src="https://www.youtube-nocookie.com/embed/tV874dr02yQ"
-                title="NeuroSim project overview"
-                loading="lazy"
-                referrerPolicy="no-referrer"
-                allow="encrypted-media; picture-in-picture"
-                allowFullScreen
-                className="youtube-embed"
-              />
-            </div>
-          </div>
-        </section>
+          {activeTab === 'video' && (
+            <section className="youtube-section youtube-section--full">
+              <div className="youtube-section-inner">
+                <h2 className="youtube-section-title">See NeuroSim in action</h2>
+                <p className="youtube-section-desc">
+                  Watch how we load fruit fly neurons, feed them sensory data, and run the simulation.
+                </p>
+                <div className="youtube-embed-wrap">
+                  <iframe
+                    src={`https://www.youtube.com/embed/${YOUTUBE_EMBED_ID}`}
+                    title="NeuroSim project overview"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    allowFullScreen
+                    className="youtube-embed"
+                  />
+                </div>
+                <a
+                  href={YOUTUBE_VIDEO_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="youtube-watch-link"
+                >
+                  Watch on YouTube
+                </a>
+              </div>
+            </section>
+          )}
+        </div>
 
         <footer className="footer">
           <div className="footer__brand">

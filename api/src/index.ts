@@ -129,6 +129,17 @@ function buildClientPayload(
   }
 }
 
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
+}
+
+function lerpHeading(a: number, b: number, t: number): number {
+  let d = b - a;
+  while (d > Math.PI) d -= 2 * Math.PI;
+  while (d < -Math.PI) d += 2 * Math.PI;
+  return a + d * t;
+}
+
 function startSim(): void {
   if (simRunning) return;
   simRunning = true;
@@ -161,39 +172,65 @@ function startSim(): void {
       let maxJsMs = 0;
       let socketRoundtripMs = 0;
       let socketWaitMs = 0;
-      const dt = 1 / SIM_FPS;
+      const dtFrame = 1 / SIM_FPS;
+      const batchDt = dtFrame * FRAMES_PER_BATCH;
       const frames: { t: number; flies: ReturnType<typeof sims[0]['getState']>['fly'][]; activities: (Record<string, number> | undefined)[] }[] = [];
-      for (let i = 0; i < FRAMES_PER_BATCH; i++) {
-        const flies: ReturnType<typeof sims[0]['getState']>['fly'][] = [];
-        const activities: (Record<string, number> | undefined)[] = [];
-        let t = 0;
-        for (let j = 0; j < nSims; j++) {
-          const state = await sims[j].step(dt);
-          const gt = (sims[j] as {
-            getTiming?: () => {
-              rustMs: number;
-              jsMs: number;
-              socketTotalMs?: number;
-              socketResponseWaitMs?: number;
-            };
-          }).getTiming?.();
-          if (gt) {
-            stepMs += gt.rustMs;
-            jsMs += gt.jsMs;
-            socketRoundtripMs += gt.socketTotalMs ?? 0;
-            socketWaitMs += gt.socketResponseWaitMs ?? 0;
-            if (gt.rustMs > maxStepMs) maxStepMs = gt.rustMs;
-            if (gt.jsMs > maxJsMs) maxJsMs = gt.jsMs;
-          }
-          if (state.eatenFoodId) {
-            removeFood(state.eatenFoodId);
-            recordFoodCollected(j);
-            console.log('[world] fly', j, 'ate food', state.eatenFoodId);
-          }
-          flies.push(state.fly);
-          activities.push(state.activity);
-          t = state.t;
+
+      const transitions: Array<{
+        fromFly: ReturnType<typeof sims[0]['getState']>['fly'];
+        toFly: ReturnType<typeof sims[0]['getState']>['fly'];
+        fromT: number;
+        toT: number;
+        activity?: Record<string, number>;
+      }> = [];
+
+      for (let j = 0; j < nSims; j++) {
+        const before = sims[j].getState();
+        const state = await sims[j].step(batchDt);
+        const gt = (sims[j] as {
+          getTiming?: () => {
+            rustMs: number;
+            jsMs: number;
+            socketTotalMs?: number;
+            socketResponseWaitMs?: number;
+          };
+        }).getTiming?.();
+        if (gt) {
+          stepMs += gt.rustMs;
+          jsMs += gt.jsMs;
+          socketRoundtripMs += gt.socketTotalMs ?? 0;
+          socketWaitMs += gt.socketResponseWaitMs ?? 0;
+          if (gt.rustMs > maxStepMs) maxStepMs = gt.rustMs;
+          if (gt.jsMs > maxJsMs) maxJsMs = gt.jsMs;
         }
+        if (state.eatenFoodId) {
+          removeFood(state.eatenFoodId);
+          recordFoodCollected(j);
+          console.log('[world] fly', j, 'ate food', state.eatenFoodId);
+        }
+        transitions.push({
+          fromFly: before.fly,
+          toFly: state.fly,
+          fromT: before.t,
+          toT: state.t,
+          activity: state.activity,
+        });
+      }
+
+      for (let i = 1; i <= FRAMES_PER_BATCH; i++) {
+        const alpha = i / FRAMES_PER_BATCH;
+        const flies: ReturnType<typeof sims[0]['getState']>['fly'][] = transitions.map((tr) => ({
+          ...tr.toFly,
+          x: lerp(tr.fromFly.x, tr.toFly.x, alpha),
+          y: lerp(tr.fromFly.y, tr.toFly.y, alpha),
+          z: lerp(tr.fromFly.z, tr.toFly.z, alpha),
+          heading: lerpHeading(tr.fromFly.heading, tr.toFly.heading, alpha),
+          t: lerp(tr.fromFly.t, tr.toFly.t, alpha),
+          hunger: lerp(tr.fromFly.hunger, tr.toFly.hunger, alpha),
+          health: lerp(tr.fromFly.health ?? 100, tr.toFly.health ?? 100, alpha),
+        }));
+        const activities = transitions.map((tr) => (i === FRAMES_PER_BATCH ? tr.activity : undefined));
+        const t = transitions.length ? lerp(transitions[0].fromT, transitions[0].toT, alpha) : 0;
         frames.push({ t, flies, activities });
       }
       const beforePayload = performance.now();
@@ -204,13 +241,13 @@ function startSim(): void {
         const last = frames[frames.length - 1];
         const first = last?.flies[0];
         const loopMs = Math.round(performance.now() - loopStart);
-        const totalSteps = sims.length * FRAMES_PER_BATCH;
-        const avgStep = totalSteps ? Math.round(stepMs / totalSteps) : 0;
-        const avgJs = totalSteps ? Math.round(jsMs / totalSteps) : 0;
-        const avgSocketRoundtrip = totalSteps ? Math.round(socketRoundtripMs / totalSteps) : 0;
-        const avgSocketWait = totalSteps ? Math.round(socketWaitMs / totalSteps) : 0;
+        const rustCalls = sims.length;
+        const avgStep = rustCalls ? Math.round(stepMs / rustCalls) : 0;
+        const avgJs = rustCalls ? Math.round(jsMs / rustCalls) : 0;
+        const avgSocketRoundtrip = rustCalls ? Math.round(socketRoundtripMs / rustCalls) : 0;
+        const avgSocketWait = rustCalls ? Math.round(socketWaitMs / rustCalls) : 0;
         const timingStr = backendInfo.rust
-          ? ` stepMs=${stepMs} jsMs=${jsMs} avgStep=${avgStep} avgJs=${avgJs} maxStep=${maxStepMs} maxJs=${maxJsMs} socketRoundtripMs=${socketRoundtripMs} socketWaitMs=${socketWaitMs} avgSocketRoundtrip=${avgSocketRoundtrip} avgSocketWait=${avgSocketWait} payloadMs=${buildPayloadMs} schedulerLagMs=${schedulerLagMs} droppedTicks=${droppedSimTicks}`
+          ? ` stepMs=${stepMs} jsMs=${jsMs} avgStep=${avgStep} avgJs=${avgJs} maxStep=${maxStepMs} maxJs=${maxJsMs} socketRoundtripMs=${socketRoundtripMs} socketWaitMs=${socketWaitMs} avgSocketRoundtrip=${avgSocketRoundtrip} avgSocketWait=${avgSocketWait} rustCalls=${rustCalls} synthFrames=${FRAMES_PER_BATCH} payloadMs=${buildPayloadMs} schedulerLagMs=${schedulerLagMs} droppedTicks=${droppedSimTicks}`
           : '';
         console.log('[sim] t=', last?.t.toFixed(1), 'flies=', last?.flies.length ?? 0, first ? `first=(${first.x?.toFixed(2)},${first.y?.toFixed(2)})` : '', 'clients=', wsClients.size, 'loopMs=', loopMs, timingStr);
       }

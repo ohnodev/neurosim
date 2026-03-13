@@ -112,10 +112,14 @@ impl BrainSim {
         let activity = vec![0.0f32; n];
 
         #[cfg(feature = "cuda")]
-        let gpu_state = gpu::GpuSimState::new(n, &adj, &activity);
-        #[cfg(feature = "cuda")]
         let cuda_only = std::env::var("NEUROSIM_MODE").as_deref() == Ok("cuda")
             || std::env::var("USE_CUDA").as_deref() == Ok("1");
+        #[cfg(feature = "cuda")]
+        let gpu_state = match gpu::GpuSimState::new(n, &adj, &activity) {
+            Some(g) => Some(g),
+            None if cuda_only => panic!("[brain-sim] CUDA mode required but GPU init failed"),
+            None => None,
+        };
 
         Self {
             n,
@@ -220,6 +224,8 @@ impl BrainSim {
                     None if self.cuda_only => panic!("[brain-sim] CUDA mode required but GPU step failed"),
                     None => self.run_step_cpu(decay_factor, tau_r, prop_cap_r),
                 }
+            } else if self.cuda_only {
+                panic!("[brain-sim] CUDA mode required but GPU state unavailable (init failed)");
             } else {
                 self.run_step_cpu(decay_factor, tau_r, prop_cap_r)
             };

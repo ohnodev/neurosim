@@ -71,6 +71,8 @@ pub struct BrainSim {
     activity: Vec<f32>,
     #[cfg(feature = "cuda")]
     gpu_state: Option<gpu::GpuSimState>,
+    #[cfg(feature = "cuda")]
+    cuda_only: bool,
 }
 
 #[napi]
@@ -110,6 +112,9 @@ impl BrainSim {
 
         #[cfg(feature = "cuda")]
         let gpu_state = gpu::GpuSimState::new(n, &adj, &activity);
+        #[cfg(feature = "cuda")]
+        let cuda_only = std::env::var("NEUROSIM_MODE").as_deref() == Ok("cuda")
+            || std::env::var("USE_CUDA").as_deref() == Ok("1");
 
         Self {
             n,
@@ -122,6 +127,8 @@ impl BrainSim {
             activity,
             #[cfg(feature = "cuda")]
             gpu_state,
+            #[cfg(feature = "cuda")]
+            cuda_only,
         }
     }
 
@@ -172,8 +179,6 @@ impl BrainSim {
         #[cfg(feature = "cuda")]
         {
             next = if let Some(ref mut gpu) = self.gpu_state {
-                let cuda_only = std::env::var("NEUROSIM_MODE").as_deref() == Ok("cuda")
-                    || std::env::var("USE_CUDA").as_deref() == Ok("1");
                 match gpu.step(
                     &self.activity,
                     decay_factor,
@@ -182,7 +187,7 @@ impl BrainSim {
                     ACTIVITY_MAX,
                 ) {
                     Some(gpu_next) => gpu_next,
-                    None if cuda_only => panic!("[brain-sim] CUDA mode required but GPU step failed"),
+                    None if self.cuda_only => panic!("[brain-sim] CUDA mode required but GPU step failed"),
                     None => self.run_step_cpu(decay_factor, tau_r, prop_cap_r),
                 }
             } else {

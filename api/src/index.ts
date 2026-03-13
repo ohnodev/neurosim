@@ -138,6 +138,8 @@ function startSim(): void {
     const loopStart = performance.now();
     let rustMs = 0;
     let jsMs = 0;
+    let maxRustMs = 0;
+    let maxJsMs = 0;
     const dt = 1 / SIM_FPS;
     const frames: { t: number; flies: ReturnType<typeof sims[0]['getState']>['fly'][]; activities: (Record<string, number> | undefined)[] }[] = [];
     for (let i = 0; i < FRAMES_PER_BATCH; i++) {
@@ -150,6 +152,8 @@ function startSim(): void {
         if (gt) {
           rustMs += gt.rustMs;
           jsMs += gt.jsMs;
+          if (gt.rustMs > maxRustMs) maxRustMs = gt.rustMs;
+          if (gt.jsMs > maxJsMs) maxJsMs = gt.jsMs;
         }
         if (state.eatenFoodId) {
           removeFood(state.eatenFoodId);
@@ -170,7 +174,12 @@ function startSim(): void {
       const last = frames[frames.length - 1];
       const first = last?.flies[0];
       const loopMs = Math.round(performance.now() - loopStart);
-      const timingStr = backendInfo.rust ? ` rustMs=${rustMs} jsMs=${jsMs} payloadMs=${buildPayloadMs}` : '';
+      const totalSteps = sims.length * FRAMES_PER_BATCH;
+      const avgRust = totalSteps ? Math.round(rustMs / totalSteps) : 0;
+      const avgJs = totalSteps ? Math.round(jsMs / totalSteps) : 0;
+      const timingStr = backendInfo.rust
+        ? ` rustMs=${rustMs} jsMs=${jsMs} avgRust=${avgRust} avgJs=${avgJs} maxRust=${maxRustMs} maxJs=${maxJsMs} payloadMs=${buildPayloadMs}`
+        : '';
       console.log('[sim] t=', last?.t.toFixed(1), 'flies=', last?.flies.length ?? 0, first ? `first=(${first.x?.toFixed(2)},${first.y?.toFixed(2)})` : '', 'clients=', wsClients.size, 'loopMs=', loopMs, timingStr);
     }
   }, BATCH_MS);

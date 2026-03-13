@@ -226,7 +226,7 @@ router.post('/verify-payment', async (req: Request, res: Response) => {
           break;
         }
       } catch (err: unknown) {
-        if (!(err instanceof TransactionReceiptNotFoundError) || attempt === maxAttempts - 1) {
+        if (!(err instanceof TransactionReceiptNotFoundError)) {
           throw err;
         }
       }

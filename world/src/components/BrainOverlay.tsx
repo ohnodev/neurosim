@@ -1,9 +1,10 @@
 /**
  * Thin container for the brain plot. All data/updates handled by brainPlotScene (outside React).
- * Mounts/disposes Plotly when visible toggles — frees memory when hidden (mobile optimization).
+ * Lazy-loads Plotly only when visible — keeps ~60MB heap when brain panel closed.
+ * Disposes on hide to free plot memory.
  */
 import React, { useEffect, useRef, useState } from 'react';
-import { initBrainPlot, type BrainPlotSceneRefs } from '../lib/brainPlotScene';
+import type { BrainPlotSceneRefs } from '../lib/brainPlotScene';
 
 interface BrainOverlayProps {
   visible?: boolean;
@@ -14,13 +15,25 @@ interface BrainOverlayProps {
 function BrainOverlayInner({ visible = true, embedded = false, followSimIndexRef }: BrainOverlayProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(true);
+  const disposeRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     if (!visible) return;
     const container = containerRef.current;
     if (!container) return;
     setLoading(true);
-    return initBrainPlot(container, { followSimIndexRef }, () => setLoading(false));
+    let disposed = false;
+    import('../lib/brainPlotScene').then(({ initBrainPlot }) => {
+      if (disposed) return;
+      disposeRef.current = initBrainPlot(container, { followSimIndexRef }, () => {
+        if (!disposed) setLoading(false);
+      });
+    });
+    return () => {
+      disposed = true;
+      disposeRef.current?.();
+      disposeRef.current = null;
+    };
   }, [visible, followSimIndexRef]);
 
   const containerStyle = embedded

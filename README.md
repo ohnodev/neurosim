@@ -14,7 +14,7 @@ Fly brain emulation using the FlyWire connectome — scaffold to build your own 
 
 ## Video
 
-<iframe width="560" height="315" src="https://www.youtube.com/embed/tV874dr02yQ" title="NeuroSim Explainer" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
+[![NeuroSim Explainer](https://img.youtube.com/vi/tV874dr02yQ/0.jpg)](https://www.youtube.com/watch?v=tV874dr02yQ "NeuroSim Explainer")
 
 ---
 
@@ -27,7 +27,7 @@ Fly brain emulation using the FlyWire connectome — scaffold to build your own 
 
 ## How It Works
 
-```
+```text
 ┌──────────────────────────────────────────┐
 │              Stimuli                     │
 │   Input signals that drive neurons       │

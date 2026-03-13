@@ -227,6 +227,8 @@ export default function FlyViewer() {
   );
 
   const onSelectFlySlot = useCallback((slot: number) => setSelectedFlyIndex(slot), []);
+  const onStatusPanelToggle = useCallback(() => setStatusPanelOpen((o) => !o), []);
+  const onBrainPanelToggle = useCallback(() => setBrainPanelOpen((o) => !o), []);
 
   const getFlyCardData = useCallback((slotIndex: number) => {
     const entry = flyCardDataRef.current.get(slotIndex);
@@ -445,7 +447,7 @@ export default function FlyViewer() {
                 ))}
             </div>
           </div>
-          <SidePanelToggle open={statusPanelOpen} onToggle={() => setStatusPanelOpen((o) => !o)} label="Status" position="left" />
+          <SidePanelToggle open={statusPanelOpen} onToggle={onStatusPanelToggle} label="Status" position="left" />
         </div>
         <div className="fly-viewer__side-strip fly-viewer__side-strip--right">
           <div className={`fly-viewer__brain-panel ${brainPanelOpen ? 'fly-viewer__brain-panel--open' : ''}`}>
@@ -463,7 +465,7 @@ export default function FlyViewer() {
               </div>
             </div>
           </div>
-          <SidePanelToggle open={brainPanelOpen} onToggle={() => setBrainPanelOpen((o) => !o)} label="Brain" position="right" />
+          <SidePanelToggle open={brainPanelOpen} onToggle={onBrainPanelToggle} label="Brain" position="right" />
         </div>
       </div>
     </SimRefsProvider>

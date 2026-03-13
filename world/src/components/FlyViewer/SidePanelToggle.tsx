@@ -1,5 +1,6 @@
+import React from 'react';
 
-export function SidePanelToggle({
+function SidePanelToggleInner({
   open,
   onToggle,
   label,
@@ -33,3 +34,5 @@ export function SidePanelToggle({
     </button>
   );
 }
+
+export const SidePanelToggle = React.memo(SidePanelToggleInner);

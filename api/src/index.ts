@@ -67,11 +67,35 @@ const FRAMES_PER_BATCH = Math.round(SIM_FPS * BATCH_MS / 1000);
 let connectionStep = 0;
 
 const wsClients = new Set<import('ws').WebSocket>();
+/** Per-client: which fly's activity to send (sim index). Default 0. */
+const clientViewFlyIndex = new Map<import('ws').WebSocket, number>();
 
 function broadcast(data: unknown): void {
   const payload = JSON.stringify(data);
   for (const ws of wsClients) {
     if (ws.readyState === 1) ws.send(payload);
+  }
+}
+
+/** Build per-client payload with only the viewed fly's activity to reduce payload size. */
+function buildClientPayload(
+  frames: { t: number; flies: ReturnType<typeof sims[0]['getState']>['fly'][]; activities: (Record<string, number> | undefined)[]; sources: WorldSource[] }[],
+): void {
+  const sources = getSources();
+  for (const ws of wsClients) {
+    if (ws.readyState !== 1) continue;
+    const viewIndex = Math.max(0, Math.min(sims.length - 1, clientViewFlyIndex.get(ws) ?? 0));
+    const clientFrames = frames.map((f) => ({
+      t: f.t,
+      flies: f.flies,
+      activity: f.activities[viewIndex] ?? {},
+      sources: f.sources,
+    }));
+    try {
+      ws.send(JSON.stringify({ frames: clientFrames, simRunning: true, sources }));
+    } catch (err) {
+      console.error('[ws] send error', err);
+    }
   }
 }
 
@@ -106,9 +130,9 @@ function startSim(): void {
         activities.push(state.activity);
         t = state.t;
       }
-      frames.push({ t, flies, activities, activity: activities[0], sources: getSources() });
+      frames.push({ t, flies, activities, sources: getSources() });
     }
-    broadcast({ frames, simRunning: true, sources: getSources() });
+    buildClientPayload(frames);
     connectionStep += 1;
     if (connectionStep % 15 === 0) {
       const last = frames[frames.length - 1];
@@ -305,22 +329,32 @@ const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
 
 wss.on('connection', (ws) => {
   wsClients.add(ws);
+  clientViewFlyIndex.set(ws, 0);
   console.log('[ws] client connected, total=', wsClients.size);
 
   const flies = sims.map((s) => s.getState().fly);
+  const viewIndex = Math.max(0, Math.min(sims.length - 1, 0));
   const activities = sims.map((s) => s.getState().activity);
   const firstState = sims[0]?.getState();
-    ws.send(JSON.stringify({
-    frames: [{ t: firstState?.t ?? 0, flies, activities, activity: activities[0], sources: getSources() }],
+  ws.send(JSON.stringify({
+    frames: [{ t: firstState?.t ?? 0, flies, activity: activities[viewIndex] ?? {}, sources: getSources() }],
     simRunning,
     sources: getSources(),
   }));
 
-  ws.on('message', () => {
-    /* Client sends no messages; sim runs server-side */
+  ws.on('message', (data) => {
+    try {
+      const msg = JSON.parse(data.toString());
+      if (typeof msg.viewFlyIndex === 'number') {
+        clientViewFlyIndex.set(ws, Math.max(0, msg.viewFlyIndex));
+      }
+    } catch {
+      /* ignore */
+    }
   });
 
   ws.on('close', () => {
+    clientViewFlyIndex.delete(ws);
     wsClients.delete(ws);
     console.log('[ws] client disconnected, total=', wsClients.size);
   });

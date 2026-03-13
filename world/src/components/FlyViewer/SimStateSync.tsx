@@ -1,5 +1,6 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import type { FlyState } from '../../lib/simWsClient';
+import { sendViewFlyIndex } from '../../lib/simWsClient';
 import { useSimRefs } from '../../lib/simDisplayContext';
 import { DEFAULT_FLY, resolveEffectiveSimIndex } from '../../lib/flyViewerUtils';
 import type { CameraMode } from '../../lib/threeScene';
@@ -24,6 +25,7 @@ export function SimStateSync({
   followSimIndexRef: React.MutableRefObject<number | undefined>;
 }) {
   const { latestFliesRef } = useSimRefs();
+  const lastSentViewFlyRef = useRef<number | null>(null);
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -32,6 +34,12 @@ export function SimStateSync({
       const simIndexForSelected = deployed[selectedFlyIndex];
 
       followSimIndexRef.current = effectiveSimIndex;
+
+      const viewIndex = effectiveSimIndex ?? 0;
+      if (lastSentViewFlyRef.current !== viewIndex) {
+        lastSentViewFlyRef.current = viewIndex;
+        sendViewFlyIndex(viewIndex);
+      }
 
       if (effectiveSimIndex == null && cameraModeRef.current === 'fly') {
         cameraModeRef.current = 'god';

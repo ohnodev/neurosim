@@ -97,9 +97,13 @@ function App() {
           </div>
         </header>
 
-        <div className="tabs">
+        <div className="tabs" role="tablist">
           <button
             type="button"
+            role="tab"
+            id="tab-connectome"
+            aria-selected={activeTab === 'connectome'}
+            aria-controls="panel-connectome"
             className={`tabs__btn ${activeTab === 'connectome' ? 'tabs__btn--active' : ''}`}
             onClick={() => setActiveTab('connectome')}
           >
@@ -107,6 +111,10 @@ function App() {
           </button>
           <button
             type="button"
+            role="tab"
+            id="tab-video"
+            aria-selected={activeTab === 'video'}
+            aria-controls="panel-video"
             className={`tabs__btn ${activeTab === 'video' ? 'tabs__btn--active' : ''}`}
             onClick={() => setActiveTab('video')}
           >
@@ -116,7 +124,7 @@ function App() {
 
         <div className="dashboard">
           {activeTab === 'connectome' && (
-            <>
+            <div id="panel-connectome" role="tabpanel" aria-labelledby="tab-connectome" className="dashboard__connectome-panel">
           <section className="dashboard__hero">
             <div className="hero__brain">
               <BrainPlot />
@@ -192,11 +200,11 @@ function App() {
             </div>
 
           </aside>
-            </>
+            </div>
           )}
 
           {activeTab === 'video' && (
-            <section className="youtube-section youtube-section--full">
+            <section id="panel-video" role="tabpanel" aria-labelledby="tab-video" className="youtube-section youtube-section--full">
               <div className="youtube-section-inner">
                 <h2 className="youtube-section-title">See NeuroSim in action</h2>
                 <p className="youtube-section-desc">

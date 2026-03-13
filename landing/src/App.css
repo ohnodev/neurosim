@@ -148,6 +148,23 @@
 }
 
 /* Dashboard layout */
+.dashboard__connectome-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+}
+
+@media (min-width: 1200px) {
+  .dashboard__connectome-panel {
+    flex-direction: row;
+    gap: 24px;
+    align-items: stretch;
+  }
+}
+
 .dashboard {
   position: relative;
   z-index: 10;

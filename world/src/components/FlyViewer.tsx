@@ -390,6 +390,11 @@ const SimStatusSlot = React.memo(React.forwardRef<HTMLDivElement>(function SimSt
   return <div ref={ref} />;
 }));
 
+/** Imperative debug panel slot - performance stats created by initThreeScene. */
+const DebugPanelSlot = React.memo(React.forwardRef<HTMLDivElement>(function DebugPanelSlot(_props, ref) {
+  return <div ref={ref} style={{ position: 'absolute', bottom: 0, left: 0 }} />;
+}));
+
 /** Status tab body. Uses throttled data (500ms) to reduce re-renders. */
 function StatusPanelStatusContent({
   deployed,
@@ -573,6 +578,7 @@ export default function FlyViewer() {
   const cameraModeRef = useRef<CameraMode>('god');
   const cameraToggleSlotRef = useRef<HTMLDivElement>(null);
   const simStatusSlotRef = useRef<HTMLDivElement>(null);
+  const debugPanelSlotRef = useRef<HTMLDivElement>(null);
   const updateCameraButtonRef = useRef<((mode: CameraMode) => void) | null>(null);
   const deployedRef = useRef<Record<number, number>>({});
   const selectedFlyIndexRef = useRef(0);
@@ -799,7 +805,8 @@ export default function FlyViewer() {
       },
       cameraToggleSlotRef.current,
       simStatusSlotRef.current,
-      simStatusRefs
+      simStatusRefs,
+      debugPanelSlotRef.current
     );
     updateCameraButtonRef.current = updateButton;
     return () => {
@@ -875,6 +882,9 @@ export default function FlyViewer() {
               selectedFlyIndex={selectedFlyIndex}
             />
             <SimStatusSlot ref={simStatusSlotRef} />
+          </div>
+          <div style={{ position: 'absolute', bottom: 12, left: 56, pointerEvents: 'auto' }}>
+            <DebugPanelSlot ref={debugPanelSlotRef} />
           </div>
         <button
           type="button"
@@ -1022,7 +1032,14 @@ export default function FlyViewer() {
             <div className="fly-viewer__brain-content">
               <div style={{ color: '#888', marginBottom: 6 }}>Brain activity — Fly {selectedFlyIndex + 1} (viewing)</div>
               <div className="fly-viewer__brain-plot">
-                <BrainOverlay followSimIndexRef={followSimIndexRef} visible={connected} embedded />
+                {brainPanelOpen && (
+                  <BrainOverlay
+                    followSimIndexRef={followSimIndexRef}
+                    visible={connected}
+                    neurons={neuronsData?.neurons}
+                    embedded
+                  />
+                )}
               </div>
             </div>
           </div>

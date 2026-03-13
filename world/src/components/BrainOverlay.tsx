@@ -1,23 +1,32 @@
 /**
- * Thin container for the brain plot. All data/updates handled by brainPlotScene (outside React).
+ * Lightweight Three.js 3D scatter for brain activity. No Plotly.
+ * Only mounted when panel is open; unmounts fully when closed.
  */
-import React, { useEffect, useRef } from 'react';
-import { initBrainPlot, type BrainPlotSceneRefs } from '../lib/brainPlotScene';
+import React, { useEffect, useMemo, useRef } from 'react';
+import { useSimRefs } from '../lib/simDisplayContext';
+import { initBrainPoints } from '../lib/brainPointsScene';
+import type { NeuronWithPosition } from '../../../shared/lib/brainTypes';
 
 interface BrainOverlayProps {
   visible?: boolean;
   embedded?: boolean;
-  followSimIndexRef: BrainPlotSceneRefs['followSimIndexRef'];
+  followSimIndexRef: React.MutableRefObject<number | undefined>;
+  neurons?: NeuronWithPosition[];
 }
 
-function BrainOverlayInner({ visible = true, embedded = false, followSimIndexRef }: BrainOverlayProps) {
+function BrainOverlayInner({ visible = true, embedded = false, followSimIndexRef, neurons }: BrainOverlayProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const { activityRef, activitiesRef } = useSimRefs();
+  const normalizedNeurons = useMemo(() => neurons ?? [], [neurons]);
 
   useEffect(() => {
+    if (!visible) return;
     const container = containerRef.current;
     if (!container) return;
-    return initBrainPlot(container, { followSimIndexRef });
-  }, [followSimIndexRef]);
+    return initBrainPoints(container, { activityRef, activitiesRef, followSimIndexRef }, normalizedNeurons);
+  }, [visible, activityRef, activitiesRef, followSimIndexRef, normalizedNeurons]);
+
+  if (!visible) return null;
 
   const containerStyle = embedded
     ? {
@@ -47,13 +56,7 @@ function BrainOverlayInner({ visible = true, embedded = false, followSimIndexRef
       };
 
   return (
-    <div
-      className="brain-overlay"
-      style={{
-        ...containerStyle,
-        ...(!visible ? { visibility: 'hidden' as const, pointerEvents: 'none' as const } : {}),
-      }}
-    >
+    <div className="brain-overlay" style={containerStyle}>
       <div style={{ position: 'absolute', top: 4, left: 8, fontSize: 10, color: '#888', zIndex: 1 }}>
         Brain activity
       </div>
@@ -64,7 +67,6 @@ function BrainOverlayInner({ visible = true, embedded = false, followSimIndexRef
           inset: 0,
           minWidth: 1,
           minHeight: 1,
-          touchAction: 'none',
         }}
       />
     </div>

@@ -24,7 +24,7 @@ export function SimRefsProvider({
   return <SimRefsContext.Provider value={value}>{children}</SimRefsContext.Provider>;
 }
 
-function useSimRefs(): SimRefs {
+export function useSimRefs(): SimRefs {
   const ctx = useContext(SimRefsContext);
   if (!ctx) throw new Error('useSimRefs must be used within SimRefsProvider');
   return ctx;

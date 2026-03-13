@@ -118,6 +118,53 @@ function createSimStatusBar(
   };
 }
 
+function createDebugPanel(
+  slot: HTMLElement,
+  renderer: THREE.WebGLRenderer,
+  intervalMs: number = 250
+): () => void {
+  const wrap = document.createElement('div');
+  wrap.className = 'fly-viewer__debug-panel';
+  wrap.style.cssText =
+    'font-family:var(--font-mono,monospace);font-size:10px;color:#8af;background:rgba(0,0,0,0.8);padding:8px 10px;border-radius:6px;border:1px solid rgba(100,140,255,0.3);line-height:1.5;min-width:160px';
+  slot.appendChild(wrap);
+
+  const formatBytes = (bytes: number) => {
+    if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${bytes} B`;
+  };
+
+  const update = () => {
+    const info = renderer.info;
+    const mem = info.memory;
+    const dpr = renderer.getPixelRatio();
+    const triangles = info.render?.triangles ?? 0;
+    const calls = info.render?.calls ?? 0;
+
+    let html = `<div style="color:#aaa;margin-bottom:4px">Debug</div>`;
+    html += `<div>Triangles: ${triangles.toLocaleString()}</div>`;
+    html += `<div>Draw calls: ${calls}</div>`;
+    html += `<div>DPR: ${dpr}</div>`;
+    if (mem) {
+      html += `<div>Geometries: ${mem.geometries}</div>`;
+      html += `<div>Textures: ${mem.textures}</div>`;
+    }
+    const perfMem = (performance as { memory?: { usedJSHeapSize: number } }).memory;
+    if (perfMem?.usedJSHeapSize != null) {
+      html += `<div>Heap: ${formatBytes(perfMem.usedJSHeapSize)}</div>`;
+    }
+    wrap.innerHTML = html;
+  };
+
+  const id = setInterval(update, intervalMs);
+  update();
+  return () => {
+    clearInterval(id);
+    wrap.remove();
+  };
+}
+
 function createCameraButton(
   slot: HTMLElement,
   cameraModeRef: { current: CameraMode }
@@ -147,13 +194,15 @@ export function initThreeScene(
   refs: ThreeSceneRefs,
   buttonSlot: HTMLElement | null,
   statusSlot: HTMLElement | null,
-  simStatusRefs: SimStatusRefs | null
+  simStatusRefs: SimStatusRefs | null,
+  debugSlot: HTMLElement | null = null
 ): { dispose: () => void; updateButton: (mode: CameraMode) => void } {
   const noop = () => {};
   if (!container) return { dispose: noop, updateButton: noop };
 
   let cameraButton: { el: HTMLButtonElement; update: (mode: CameraMode) => void } | null = null;
   let disposeStatus: (() => void) | null = null;
+  let disposeDebug: (() => void) | null = null;
   if (buttonSlot) {
     cameraButton = createCameraButton(buttonSlot, refs.cameraModeRef);
   }
@@ -177,6 +226,10 @@ export function initThreeScene(
   renderer.setSize(container.clientWidth, container.clientHeight);
   renderer.setPixelRatio(window.devicePixelRatio);
   container.appendChild(renderer.domElement);
+
+  if (debugSlot) {
+    disposeDebug = createDebugPanel(debugSlot, renderer, 250);
+  }
 
   const ambient = new THREE.AmbientLight(0xffffff, 0.8);
   scene.add(ambient);
@@ -232,7 +285,9 @@ export function initThreeScene(
   loader.load(
     '/models/low-poly_apple/scene.gltf',
     (gltf) => {
+      if (disposed) return;
       appleTemplate = gltf.scene.clone(true);
+      updateWorldSources(lastSources);
     },
     undefined,
     (err) => console.error('[threeScene] apple load error:', err)
@@ -274,7 +329,8 @@ export function initThreeScene(
       clone.scale.setScalar(1.2);
       return clone;
     }
-    const geom = new THREE.SphereGeometry(0.8, 24, 24);
+    const size = s.type === 'food' ? 0.9 : 0.8;
+    const geom = new THREE.BoxGeometry(size, size, size);
     const mat =
       s.type === 'food'
         ? new THREE.MeshStandardMaterial({ color: 0xe8a838 })
@@ -501,6 +557,7 @@ export function initThreeScene(
     container.removeChild(renderer.domElement);
     if (cameraButton) cameraButton.el.remove();
     if (disposeStatus) disposeStatus();
+    if (disposeDebug) disposeDebug();
     for (const inst of flyInstances) {
       disposeObject3D(inst.group);
     }

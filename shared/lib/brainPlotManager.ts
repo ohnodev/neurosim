@@ -184,6 +184,7 @@ export function createBrainPlotManager(
     xsIn: number[],
     ysIn: number[],
     zsIn: number[],
+    onReady?: () => void,
   ): void {
     if (el !== null) {
       if (import.meta.env?.DEV) {
@@ -278,6 +279,7 @@ export function createBrainPlotManager(
         plotReady = true;
         (el as unknown as { on?: (e: string, fn: (ev: Record<string, unknown>) => void) => void }).on?.('plotly_relayout', onRelayout);
         Plotly.Plots.resize(el);
+        onReady?.();
       }
     }).catch((err: unknown) => {
       if (import.meta.env?.DEV) {

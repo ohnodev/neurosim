@@ -288,15 +288,21 @@ impl BrainSim {
             }
         }
 
-        for v in &mut next {
-            *v = (*v).clamp(0.0, ACTIVITY_MAX);
-            if !v.is_finite() {
-                *v = 0.0;
+        let mut activity_sparse = HashMap::new();
+        for (i, v) in next.iter_mut().enumerate() {
+            let val = (*v).clamp(0.0, ACTIVITY_MAX);
+            let val = if val.is_finite() { val } else { 0.0 };
+            *v = val;
+            if val > ACTIVITY_THRESHOLD {
+                if let Some(id) = self.neuron_ids.get(i) {
+                    activity_sparse.insert(id.clone(), val.min(1.0) as f64);
+                }
             }
         }
 
         if fly.rest_time_left > 0.0 {
             next.fill(0.0);
+            activity_sparse.clear();
         }
 
         self.activity = next;
@@ -324,15 +330,6 @@ impl BrainSim {
         }
 
         let activity_out: Float32Array = self.activity.clone().into();
-
-        let mut activity_sparse = HashMap::new();
-        for (i, &v) in self.activity.iter().enumerate() {
-            if v > ACTIVITY_THRESHOLD && v.is_finite() {
-                if let Some(id) = self.neuron_ids.get(i) {
-                    activity_sparse.insert(id.clone(), v.min(1.0) as f64);
-                }
-            }
-        }
 
         StepResult {
             activity: activity_out,

@@ -21,6 +21,13 @@ struct SharedEdges {
 /// To invalidate: replace with None or restart process.
 static EDGE_CACHE: Mutex<Option<Arc<SharedEdges>>> = Mutex::new(None);
 
+#[cfg(all(test, feature = "cuda"))]
+fn clear_edge_cache_for_test() {
+    if let Ok(mut cache) = EDGE_CACHE.lock() {
+        *cache = None;
+    }
+}
+
 fn get_or_create_shared_edges(
     device: &Arc<CudaDevice>,
     n: usize,
@@ -57,6 +64,18 @@ fn get_or_create_shared_edges(
 }
 
 const KERNEL_SRC: &str = r#"
+/* Portable atomic add for float (works on all compute capabilities; native atomicAdd(float) needs SM 6.0+) */
+__device__ static void atomic_add_float(float* addr, float val) {
+    unsigned int* addr_as_ui = (unsigned int*)addr;
+    unsigned int old = *addr_as_ui;
+    unsigned int assumed;
+    do {
+        assumed = old;
+        float sum = __uint_as_float(old) + val;
+        old = atomicCAS(addr_as_ui, assumed, __float_as_uint(sum));
+    } while (assumed != old);
+}
+
 extern "C" __global__ void decay_kernel(
     const float* activity,
     float* next,
@@ -88,7 +107,7 @@ extern "C" __global__ void propagate_kernel(
     if (!isfinite(pre_act) || pre_act <= 0.0f) return;
     float v = fminf(pre_act * tau_r * w, prop_cap_r);
     if (isfinite(v)) {
-        atomicAdd(&next[post_idx], v);
+        atomic_add_float(&next[post_idx], v);
     }
 }
 
@@ -158,15 +177,35 @@ impl GpuSimState {
         activity_max: f32,
     ) -> Option<Vec<f32>> {
         if activity.len() != self.n {
+            eprintln!("[gpu] step failed: activity len {} != n {}", activity.len(), self.n);
             return None;
         }
-        self.device
-            .htod_sync_copy_into(activity, &mut self.activity)
-            .ok()?;
+        if let Err(e) = self.device.htod_sync_copy_into(activity, &mut self.activity) {
+            eprintln!("[gpu] step failed: htod_sync_copy_into error: {:?}", e);
+            return None;
+        }
 
-        let decay_fn = self.device.get_func("brain_sim", "decay_kernel")?;
-        let prop_fn = self.device.get_func("brain_sim", "propagate_kernel")?;
-        let clamp_fn = self.device.get_func("brain_sim", "clamp_kernel")?;
+        let decay_fn = match self.device.get_func("brain_sim", "decay_kernel") {
+            Some(f) => f,
+            None => {
+                eprintln!("[gpu] step failed: get_func decay_kernel returned None");
+                return None;
+            }
+        };
+        let prop_fn = match self.device.get_func("brain_sim", "propagate_kernel") {
+            Some(f) => f,
+            None => {
+                eprintln!("[gpu] step failed: get_func propagate_kernel returned None");
+                return None;
+            }
+        };
+        let clamp_fn = match self.device.get_func("brain_sim", "clamp_kernel") {
+            Some(f) => f,
+            None => {
+                eprintln!("[gpu] step failed: get_func clamp_kernel returned None");
+                return None;
+            }
+        };
 
         let n = self.n as i32;
         let n_edges = self.n_edges as i32;
@@ -176,37 +215,92 @@ impl GpuSimState {
         let clamp_cfg = LaunchConfig::for_num_elems(self.n as u32);
 
         unsafe {
-            decay_fn
-                .launch(
-                    decay_cfg,
-                    (
-                        &self.activity,
-                        &mut self.next,
-                        n,
-                        decay_factor,
-                    ),
-                )
-                .ok()?;
-            prop_fn
-                .launch(
-                    prop_cfg,
-                    (
-                        &self.activity,
-                        &mut self.next,
-                        &self.edges.edge_pre,
-                        &self.edges.edge_post,
-                        &self.edges.edge_weight,
-                        n_edges,
-                        tau_r,
-                        prop_cap_r,
-                    ),
-                )
-                .ok()?;
-            clamp_fn
-                .launch(clamp_cfg, (&mut self.next, n, activity_max))
-                .ok()?;
+            if let Err(e) = decay_fn.launch(
+                decay_cfg,
+                (&self.activity, &mut self.next, n, decay_factor),
+            ) {
+                eprintln!("[gpu] step failed: decay_kernel launch error: {:?}", e);
+                return None;
+            }
+            if let Err(e) = prop_fn.launch(
+                prop_cfg,
+                (
+                    &self.activity,
+                    &mut self.next,
+                    &self.edges.edge_pre,
+                    &self.edges.edge_post,
+                    &self.edges.edge_weight,
+                    n_edges,
+                    tau_r,
+                    prop_cap_r,
+                ),
+            ) {
+                eprintln!("[gpu] step failed: propagate_kernel launch error: {:?}", e);
+                return None;
+            }
+            if let Err(e) = clamp_fn.launch(clamp_cfg, (&mut self.next, n, activity_max)) {
+                eprintln!("[gpu] step failed: clamp_kernel launch error: {:?}", e);
+                return None;
+            }
         }
 
-        self.device.dtoh_sync_copy(&self.next).ok()
+        match self.device.dtoh_sync_copy(&self.next) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                eprintln!("[gpu] step failed: dtoh_sync_copy error: {:?}", e);
+                None
+            }
+        }
+    }
+}
+
+#[cfg(all(test, feature = "cuda"))]
+mod tests {
+    use super::*;
+
+    /// Minimal connectome: 8 neurons, a few edges.
+    fn minimal_adj() -> Vec<Vec<(u32, f32)>> {
+        vec![
+            vec![(1, 0.5), (2, 0.3)], // 0 -> 1, 2
+            vec![(2, 0.2)],
+            vec![(3, 0.4)],
+            vec![],
+            vec![(5, 0.1)],
+            vec![],
+            vec![(7, 0.3)],
+            vec![],
+        ]
+    }
+
+    #[test]
+    fn test_gpu_init_and_step_minimal() {
+        let adj = minimal_adj();
+        let n = adj.len();
+        let activity: Vec<f32> = vec![0.1; n];
+        let mut state = GpuSimState::new(n, &adj, &activity).expect("GPU init should succeed");
+        let result = state.step(&activity, 0.975, 0.004, 0.0004, 0.5);
+        assert!(result.is_some(), "step should succeed");
+        let out = result.unwrap();
+        assert_eq!(out.len(), n, "output len should match n");
+        for v in &out {
+            assert!(v.is_finite() && *v >= 0.0 && *v <= 0.5, "output should be finite and clamped");
+        }
+    }
+
+    #[test]
+    fn test_gpu_step_larger_connectome() {
+        clear_edge_cache_for_test();
+        let n: usize = 256;
+        let mut adj: Vec<Vec<(u32, f32)>> = (0..n).map(|_| Vec::new()).collect();
+        for i in 0..n.saturating_sub(1) {
+            adj[i].push(((i + 1) as u32, 0.2));
+        }
+        adj[n - 1].push((0, 0.2));
+        let activity: Vec<f32> = (0..n).map(|i| if i % 10 == 0 { 0.15 } else { 0.0 }).collect();
+        let mut state = GpuSimState::new(n, &adj, &activity).expect("GPU init should succeed");
+        let result = state.step(&activity, 0.975, 0.004, 0.0004, 0.5);
+        assert!(result.is_some(), "step should succeed with 256 neurons");
+        let out = result.unwrap();
+        assert_eq!(out.len(), n);
     }
 }

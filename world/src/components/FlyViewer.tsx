@@ -2,7 +2,7 @@ import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { WorldSource } from '../../../api/src/world';
 import { subscribeSim, type FlyState } from '../lib/simWsClient';
-import { type Snapshot, REST_DURATION_FALLBACK } from '../lib/flyInterpolation';
+import { type Snapshot, REST_DURATION_FALLBACK, MAX_SNAPSHOT_BUFFER } from '../lib/flyInterpolation';
 import { getApiBase } from '../lib/constants';
 import {
   apiKeys,
@@ -690,13 +690,12 @@ export default function FlyViewer() {
             buf.push({
               t: f.t,
               flies: f.flies,
-              activities: f.activities ?? [],
-              activity: f.activity ?? f.activities?.[0],
               sources: f.sources,
             });
           }
           const maxT = buf[buf.length - 1]?.t ?? 0;
           while (buf.length > 1 && (buf[0]?.t ?? 0) < maxT - 1) buf.shift();
+          while (buf.length > MAX_SNAPSHOT_BUFFER) buf.shift();
         } else {
           const fliesArr = Array.isArray(data.flies) ? data.flies : data.fly ? [data.fly] : null;
           if (fliesArr) {
@@ -705,18 +704,22 @@ export default function FlyViewer() {
             buf.push({
               t: newT,
               flies: fliesArr,
-              activities: Array.isArray(data.activities) ? data.activities : [],
-              activity: data.activity ?? data.activities?.[0],
             });
             const maxT = buf[buf.length - 1]?.t ?? 0;
             while (buf.length > 1 && (buf[0]?.t ?? 0) < maxT - 1) buf.shift();
+            while (buf.length > MAX_SNAPSHOT_BUFFER) buf.shift();
           }
         }
         const last = buf[buf.length - 1];
-        if (last) {
+        if (Array.isArray(data.frames) && data.frames.length > 0) {
+          const lastFrame = data.frames[data.frames.length - 1]!;
+          latestFliesRef.current = lastFrame.flies;
+          activityRef.current = lastFrame.activity ?? lastFrame.activities?.[0] ?? {};
+          activitiesRef.current = lastFrame.activities ?? [];
+        } else if (last) {
           latestFliesRef.current = last.flies;
-          activityRef.current = last.activity ?? last.activities?.[0] ?? {};
-          activitiesRef.current = last.activities ?? [];
+          activityRef.current = data.activity ?? data.activities?.[0] ?? {};
+          activitiesRef.current = Array.isArray(data.activities) ? data.activities : [];
         } else if (Array.isArray(data.flies)) {
           latestFliesRef.current = data.flies;
           activityRef.current = data.activity ?? data.activities?.[0] ?? {};

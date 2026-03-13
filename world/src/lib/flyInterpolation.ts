@@ -12,6 +12,8 @@ export interface Snapshot {
 export const REST_DURATION_FALLBACK = 4;
 /** One 1s batch = 30 frames; start animating after one full batch */
 export const MIN_FRAMES_TO_START = 30;
+/** Cap buffer to avoid unbounded memory (activities were removed from buffer; this is extra safety) */
+export const MAX_SNAPSHOT_BUFFER = 120;
 export const MAX_DELTA = 0.05;
 
 function lerp(a: number, b: number, alpha: number): number {

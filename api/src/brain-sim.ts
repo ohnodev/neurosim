@@ -169,11 +169,18 @@ export function createBrainSim(
   }
 
   if (rustCore) {
+    let lastRustMs = 0;
+    let lastJsMs = 0;
+
     function step(dt: number): SimState {
+      const stepStart = performance.now();
       if (fly.dead) {
         const t = fly.t + dt;
         fly = { ...fly, t };
+        const rustStart = performance.now();
         const act = rustCore!.step(dt, { x: fly.x, y: fly.y, z: fly.z, heading: fly.heading, t: fly.t, hunger: fly.hunger, health: fly.health ?? 100, restTimeLeft }, [], []);
+        lastRustMs = Math.round(performance.now() - rustStart);
+        lastJsMs = Math.round(performance.now() - stepStart - lastRustMs);
         return { t, fly, activity: activityToRecord(act.activity, neuronIds) };
       }
 
@@ -195,7 +202,9 @@ export function createBrainSim(
       };
       const sourcesInput = currentSources.map((s) => ({ x: s.x, y: s.y, radius: s.radius }));
 
+      const rustStart = performance.now();
       const result = rustCore!.step(dt, flyInput, sourcesInput, pendingInput);
+      lastRustMs = Math.round(performance.now() - rustStart);
       const { activity, motorLeft, motorRight, motorFwd } = result;
 
       const turnFromMotor = (motorRight - motorLeft);
@@ -239,6 +248,7 @@ export function createBrainSim(
             restDuration: REST_TIME,
             feeding: false,
           };
+          lastJsMs = Math.round(performance.now() - stepStart - lastRustMs);
           return { t, fly, activity: activityToRecord(activity, neuronIds), ...(eatenFoodId && { eatenFoodId }) };
         }
       }
@@ -347,12 +357,18 @@ export function createBrainSim(
         feeding: isEating,
       };
 
+      lastJsMs = Math.round(performance.now() - stepStart - lastRustMs);
+
       return {
         t,
         fly,
         activity: activityToRecord(activity, neuronIds),
         ...(eatenFoodId && { eatenFoodId }),
       };
+    }
+
+    function getTiming() {
+      return { rustMs: lastRustMs, jsMs: lastJsMs };
     }
 
     function inject(neurons: string[], strength = 0.8) {
@@ -382,6 +398,7 @@ export function createBrainSim(
       step,
       inject,
       getState,
+      getTiming,
       neuronIds,
       isRustSim: true,
       isGpuSim: !!(rustCore as { isUsingGpu?: boolean }).isUsingGpu,

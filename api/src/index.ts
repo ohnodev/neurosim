@@ -15,14 +15,24 @@ import { flushRewards } from './services/rewardDistributor.js';
 const PORT = Number(process.env.PORT) || 3001;
 const connectome = loadConnectome();
 
-/** Backend info: rust + GPU, probed at startup */
+/** Backend info: rust + GPU, probed at startup. CUDA-only mode: require GPU or refuse to start */
+const CUDA_ONLY = process.env.NEUROSIM_MODE === 'cuda' || process.env.USE_CUDA === '1';
 let backendInfo = { rust: false, gpu: false };
 try {
   const probe = createBrainSim(connectome, () => [], {});
   backendInfo = { rust: !!probe.isRustSim, gpu: !!(probe as { isGpuSim?: boolean }).isGpuSim };
+  if (CUDA_ONLY && !backendInfo.gpu) {
+    console.error('[backend] CUDA mode required (NEUROSIM_MODE=cuda or USE_CUDA=1) but GPU unavailable. Refusing to start.');
+    process.exit(1);
+  }
 } catch (e) {
+  if (CUDA_ONLY) {
+    console.error('[backend] CUDA mode required but probe failed:', e);
+    process.exit(1);
+  }
   console.warn('[backend] probe failed:', e);
 }
+console.log(`[backend] rust=${backendInfo.rust} gpu=${backendInfo.gpu} mode=${CUDA_ONLY ? 'cuda-only' : 'auto'}`);
 
 const GROUND_Z = 0.35;
 const INITIAL_SPREAD = 4;
@@ -122,6 +132,8 @@ function startSim(): void {
   }, 10_000);
   simIntervalId = setInterval(() => {
     const loopStart = performance.now();
+    let rustMs = 0;
+    let jsMs = 0;
     const dt = 1 / SIM_FPS;
     const frames: { t: number; flies: ReturnType<typeof sims[0]['getState']>['fly'][]; activities: (Record<string, number> | undefined)[]; activity?: Record<string, number>; sources: WorldSource[] }[] = [];
     for (let i = 0; i < FRAMES_PER_BATCH; i++) {
@@ -130,6 +142,11 @@ function startSim(): void {
       let t = 0;
       for (let j = 0; j < sims.length; j++) {
         const state = sims[j].step(dt);
+        const gt = (sims[j] as { getTiming?: () => { rustMs: number; jsMs: number } }).getTiming?.();
+        if (gt) {
+          rustMs += gt.rustMs;
+          jsMs += gt.jsMs;
+        }
         if (state.eatenFoodId) {
           removeFood(state.eatenFoodId);
           recordFoodCollected(j);
@@ -141,13 +158,16 @@ function startSim(): void {
       }
       frames.push({ t, flies, activities, sources: getSources() });
     }
+    const beforePayload = performance.now();
     buildClientPayload(frames);
+    const buildPayloadMs = Math.round(performance.now() - beforePayload);
     connectionStep += 1;
     if (connectionStep % 15 === 0) {
       const last = frames[frames.length - 1];
       const first = last?.flies[0];
       const loopMs = Math.round(performance.now() - loopStart);
-      console.log('[sim] t=', last?.t.toFixed(1), 'flies=', last?.flies.length ?? 0, first ? `first=(${first.x?.toFixed(2)},${first.y?.toFixed(2)})` : '', 'clients=', wsClients.size, 'loopMs=', loopMs);
+      const timingStr = backendInfo.rust ? ` rustMs=${rustMs} jsMs=${jsMs} payloadMs=${buildPayloadMs}` : '';
+      console.log('[sim] t=', last?.t.toFixed(1), 'flies=', last?.flies.length ?? 0, first ? `first=(${first.x?.toFixed(2)},${first.y?.toFixed(2)})` : '', 'clients=', wsClients.size, 'loopMs=', loopMs, timingStr);
     }
   }, BATCH_MS);
   rewardFlushIntervalId = setInterval(() => void flushRewards(), 60_000);

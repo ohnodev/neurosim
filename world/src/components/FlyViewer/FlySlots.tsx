@@ -100,6 +100,8 @@ export function FlySlotDead({
   selectedFlyIndex,
   onSelectSlot,
   setGraveyardByWallet,
+  setError,
+  sendToGraveyard,
   latestFliesRef,
 }: {
   index: number;
@@ -110,8 +112,11 @@ export function FlySlotDead({
   selectedFlyIndex: number;
   onSelectSlot: (slot: number) => void;
   setGraveyardByWallet: React.Dispatch<React.SetStateAction<Record<string, Set<number>>>>;
+  setError: React.Dispatch<React.SetStateAction<string | null>>;
+  sendToGraveyard: (slotIndex: number) => Promise<void>;
   latestFliesRef: React.MutableRefObject<FlyState[]>;
 }) {
+  const [sending, setSending] = useState(false);
   return (
     <div className="fly-viewer__fly-slot-dead">
       <span className="fly-viewer__fly-slot-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -121,25 +126,36 @@ export function FlySlotDead({
       <button
         type="button"
         className="fly-viewer__fly-slot-graveyard"
-        onClick={() => {
-          setGraveyardByWallet((prev) => {
-            const addr = address ?? '';
-            const set = new Set(prev[addr] ?? []);
-            set.add(index);
-            return { ...prev, [addr]: set };
-          });
-          const flies = latestFliesRef.current;
-          const next = FLY_SLOT_INDICES.find(
-            (j) =>
-              j !== index &&
-              !graveyardSlots.has(j) &&
-              deployed[j] != null &&
-              flies[deployed[j]!] != null
-          );
-          if (next != null && selectedFlyIndex === index) onSelectSlot(next);
+        disabled={sending}
+        onClick={async () => {
+          if (sending) return;
+          setSending(true);
+          try {
+            await sendToGraveyard(index);
+            setError(null);
+            setGraveyardByWallet((prev) => {
+              const addr = address ?? '';
+              const set = new Set(prev[addr] ?? []);
+              set.add(index);
+              return { ...prev, [addr]: set };
+            });
+            const flies = latestFliesRef.current;
+            const next = FLY_SLOT_INDICES.find(
+              (j) =>
+                j !== index &&
+                !graveyardSlots.has(j) &&
+                deployed[j] != null &&
+                flies[deployed[j]!] != null
+            );
+            if (next != null && selectedFlyIndex === index) onSelectSlot(next);
+          } catch (e) {
+            setError(e instanceof Error ? `Graveyard failed: ${e.message}` : 'Graveyard failed');
+          } finally {
+            setSending(false);
+          }
         }}
       >
-        Send to NeuroFly Graveyard
+        {sending ? 'Sending…' : 'Send to NeuroFly Graveyard'}
       </button>
     </div>
   );

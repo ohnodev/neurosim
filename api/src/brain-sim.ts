@@ -288,6 +288,7 @@ export async function createBrainSim(
         jsMs: lastJsMs,
         socketTotalMs: lastSocketTiming?.totalMs ?? 0,
         socketResponseWaitMs: lastSocketTiming?.responseWaitMs ?? 0,
+        socketBatchSize: lastSocketTiming?.batchSize ?? 1,
       };
     }
 

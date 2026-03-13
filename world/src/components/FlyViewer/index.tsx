@@ -330,6 +330,26 @@ export default function FlyViewer() {
     [address, queryClient, refetchDeployed]
   );
 
+  const sendToGraveyard = useCallback(
+    async (slotIndex: number) => {
+      if (!address) return;
+      const r = await fetch(`${getApiBase()}/api/deploy/send-to-graveyard`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ address: address.toLowerCase(), slotIndex }),
+      });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        throw new Error(err.error ?? 'Send to graveyard failed');
+      }
+      queryClient.invalidateQueries({ queryKey: apiKeys.myFlies(address!) });
+      queryClient.invalidateQueries({ queryKey: apiKeys.myDeployed(address!) });
+      queryClient.invalidateQueries({ queryKey: apiKeys.flyStats(address!) });
+      refetchDeployed();
+    },
+    [address, queryClient, refetchDeployed]
+  );
+
   return (
     <SimRefsProvider value={simRefs}>
       <SimStateSync
@@ -406,6 +426,7 @@ export default function FlyViewer() {
                   setGraveyardByWallet={setGraveyardByWallet}
                   setError={setDeployError}
                   deployFly={deployFly}
+                  sendToGraveyard={sendToGraveyard}
                   setBuyFlySlot={setBuyFlySlot}
                   getFlyCardData={getFlyCardData}
                   subscribeFlyCardTick={subscribeFlyCardTick}

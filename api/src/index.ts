@@ -8,8 +8,8 @@ import { createBrainSim } from './brain-sim.js';
 import * as socketClient from './brain-socket-client.js';
 import { getWorld, spawnFood, removeFood, getSources, type WorldSource } from './world.js';
 import claimsRouter from './routes/claims.js';
-import { getFlies } from './services/flyStore.js';
-import { getDeployments, addDeployment, clearForTesting } from './services/deployStore.js';
+import { getFlies, removeFlyAtSlot } from './services/flyStore.js';
+import { getDeployments, addDeployment, clearForTesting, deactivateDeployment } from './services/deployStore.js';
 import { recordFoodCollected, getStatsForAddress, getDistributedHistory, REWARD_PER_FOOD } from './services/rewardStore.js';
 import { flushRewards } from './services/rewardDistributor.js';
 
@@ -74,7 +74,7 @@ async function addFlyToSim(): Promise<number> {
 }
 
 async function restoreDeployFromStore(): Promise<void> {
-  const records = getDeployments();
+  const records = getDeployments().filter((r) => r.active !== false);
   for (const { address, slotIndex } of records) {
     const simIndex = await addFlyToSim();
     let map = deployedFlies.get(address);
@@ -172,6 +172,8 @@ function startSim(): void {
       let maxJsMs = 0;
       let socketRoundtripMs = 0;
       let socketWaitMs = 0;
+      let batchCalls = 0;
+      let batchSize = 0;
       const dtFrame = 1 / SIM_FPS;
       const batchDt = dtFrame * FRAMES_PER_BATCH;
       const frames: { t: number; flies: ReturnType<typeof sims[0]['getState']>['fly'][]; activities: (Record<string, number> | undefined)[] }[] = [];
@@ -184,22 +186,37 @@ function startSim(): void {
         activity?: Record<string, number>;
       }> = [];
 
+      const beforeStates = sims.map((s) => s.getState());
+      const states = await Promise.all(sims.map((s) => s.step(batchDt)));
       for (let j = 0; j < nSims; j++) {
-        const before = sims[j].getState();
-        const state = await sims[j].step(batchDt);
+        const before = beforeStates[j];
+        const state = states[j];
         const gt = (sims[j] as {
           getTiming?: () => {
             rustMs: number;
             jsMs: number;
             socketTotalMs?: number;
             socketResponseWaitMs?: number;
+            socketBatchSize?: number;
           };
         }).getTiming?.();
         if (gt) {
           stepMs += gt.rustMs;
           jsMs += gt.jsMs;
-          socketRoundtripMs += gt.socketTotalMs ?? 0;
-          socketWaitMs += gt.socketResponseWaitMs ?? 0;
+          const thisBatchSize = gt.socketBatchSize ?? 1;
+          if (thisBatchSize > 1) {
+            if (j === 0) {
+              socketRoundtripMs += gt.socketTotalMs ?? 0;
+              socketWaitMs += gt.socketResponseWaitMs ?? 0;
+              batchCalls += 1;
+              batchSize = thisBatchSize;
+            }
+          } else {
+            socketRoundtripMs += gt.socketTotalMs ?? 0;
+            socketWaitMs += gt.socketResponseWaitMs ?? 0;
+            batchCalls += 1;
+            if (batchSize < 1) batchSize = 1;
+          }
           if (gt.rustMs > maxStepMs) maxStepMs = gt.rustMs;
           if (gt.jsMs > maxJsMs) maxJsMs = gt.jsMs;
         }
@@ -244,10 +261,10 @@ function startSim(): void {
         const rustCalls = sims.length;
         const avgStep = rustCalls ? Math.round(stepMs / rustCalls) : 0;
         const avgJs = rustCalls ? Math.round(jsMs / rustCalls) : 0;
-        const avgSocketRoundtrip = rustCalls ? Math.round(socketRoundtripMs / rustCalls) : 0;
-        const avgSocketWait = rustCalls ? Math.round(socketWaitMs / rustCalls) : 0;
+        const avgSocketRoundtrip = batchCalls ? Math.round(socketRoundtripMs / batchCalls) : 0;
+        const avgSocketWait = batchCalls ? Math.round(socketWaitMs / batchCalls) : 0;
         const timingStr = backendInfo.rust
-          ? ` stepMs=${stepMs} jsMs=${jsMs} avgStep=${avgStep} avgJs=${avgJs} maxStep=${maxStepMs} maxJs=${maxJsMs} socketRoundtripMs=${socketRoundtripMs} socketWaitMs=${socketWaitMs} avgSocketRoundtrip=${avgSocketRoundtrip} avgSocketWait=${avgSocketWait} rustCalls=${rustCalls} synthFrames=${FRAMES_PER_BATCH} payloadMs=${buildPayloadMs} schedulerLagMs=${schedulerLagMs} droppedTicks=${droppedSimTicks}`
+          ? ` stepMs=${stepMs} jsMs=${jsMs} avgStep=${avgStep} avgJs=${avgJs} maxStep=${maxStepMs} maxJs=${maxJsMs} socketRoundtripMs=${socketRoundtripMs} socketWaitMs=${socketWaitMs} avgSocketRoundtrip=${avgSocketRoundtrip} avgSocketWait=${avgSocketWait} batchCalls=${batchCalls} batchSize=${batchSize} rustCalls=${rustCalls} synthFrames=${FRAMES_PER_BATCH} payloadMs=${buildPayloadMs} schedulerLagMs=${schedulerLagMs} droppedTicks=${droppedSimTicks}`
           : '';
         console.log('[sim] t=', last?.t.toFixed(1), 'flies=', last?.flies.length ?? 0, first ? `first=(${first.x?.toFixed(2)},${first.y?.toFixed(2)})` : '', 'clients=', wsClients.size, 'loopMs=', loopMs, timingStr);
       }
@@ -385,6 +402,35 @@ app.post('/api/deploy', async (req, res) => {
   } catch (err) {
     console.error('[deploy] error:', err);
     res.status(500).json({ error: 'Deploy failed' });
+  }
+});
+
+app.post('/api/deploy/send-to-graveyard', (req, res) => {
+  try {
+    const address = (req.body?.address as string)?.toLowerCase();
+    const slotIndex = typeof req.body?.slotIndex === 'number' ? req.body.slotIndex : parseInt(String(req.body?.slotIndex ?? ''), 10);
+    if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address) || !Number.isInteger(slotIndex) || slotIndex < 0 || slotIndex > 2) {
+      res.status(400).json({ error: 'Invalid address or slotIndex (0-2)' });
+      return;
+    }
+
+    const removed = removeFlyAtSlot(address, slotIndex);
+    if (!removed) {
+      res.status(400).json({ error: 'No fly in that slot' });
+      return;
+    }
+
+    const map = deployedFlies.get(address);
+    if (map) {
+      map.delete(slotIndex);
+      if (map.size === 0) deployedFlies.delete(address);
+    }
+    deactivateDeployment(address, slotIndex);
+    console.log('[graveyard]', address.slice(0, 10) + '…', 'slot', slotIndex, 'fly', removed.id);
+    res.json({ success: true, removedFlyId: removed.id, slotIndex });
+  } catch (err) {
+    console.error('[graveyard] error:', err);
+    res.status(500).json({ error: 'Failed to move fly to graveyard' });
   }
 });
 

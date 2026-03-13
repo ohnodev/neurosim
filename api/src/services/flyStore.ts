@@ -16,14 +16,34 @@ export interface NeuroFly {
   seed?: number;
 }
 
-let fliesByAddress: Record<string, NeuroFly[]> = {};
+export type FlySlot = NeuroFly | null;
+let fliesByAddress: Record<string, FlySlot[]> = {};
+const MAX_FLIES = 3;
 
 function load(): void {
   try {
     const raw = fs.readFileSync(fliesPath, 'utf-8');
     const data = JSON.parse(raw);
     if (data && typeof data === 'object') {
-      fliesByAddress = data;
+      const normalized: Record<string, FlySlot[]> = {};
+      for (const [addr, value] of Object.entries(data as Record<string, unknown>)) {
+        const arr = Array.isArray(value) ? value : [];
+        const slots: FlySlot[] = [null, null, null];
+        for (let i = 0; i < Math.min(MAX_FLIES, arr.length); i++) {
+          const item = arr[i];
+          if (
+            item &&
+            typeof item === 'object' &&
+            typeof (item as NeuroFly).id === 'string' &&
+            typeof (item as NeuroFly).method === 'string' &&
+            typeof (item as NeuroFly).claimedAt === 'string'
+          ) {
+            slots[i] = item as NeuroFly;
+          }
+        }
+        normalized[addr.toLowerCase()] = slots;
+      }
+      fliesByAddress = normalized;
     }
   } catch {
     fliesByAddress = {};
@@ -41,27 +61,46 @@ function save(): void {
 
 load();
 
-const MAX_FLIES = 3;
-
-export function getFlies(address: string): NeuroFly[] {
+export function getFlies(address: string): FlySlot[] {
   const addr = address.toLowerCase();
-  const list = fliesByAddress[addr] ?? [];
-  return Array.isArray(list) ? list : [];
+  const list = fliesByAddress[addr];
+  if (!Array.isArray(list)) return [null, null, null];
+  const out: FlySlot[] = [null, null, null];
+  for (let i = 0; i < MAX_FLIES; i++) out[i] = list[i] ?? null;
+  return out;
 }
 
 export function addFly(address: string, fly: Omit<NeuroFly, 'id'>): NeuroFly | null {
   const addr = address.toLowerCase();
   const existing = getFlies(addr);
-  if (existing.length >= MAX_FLIES) return null;
+  const emptySlot = existing.findIndex((f) => f == null);
+  if (emptySlot === -1) return null;
   const id = `${addr}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const full: NeuroFly = { ...fly, id };
-  fliesByAddress[addr] = [...existing, full];
+  existing[emptySlot] = full;
+  fliesByAddress[addr] = existing;
   save();
   return full;
 }
 
+export function removeFlyAtSlot(address: string, slotIndex: number): NeuroFly | null {
+  const addr = address.toLowerCase();
+  if (!Number.isInteger(slotIndex) || slotIndex < 0 || slotIndex >= MAX_FLIES) return null;
+  const existing = getFlies(addr);
+  const removed = existing[slotIndex];
+  if (!removed) return null;
+  existing[slotIndex] = null;
+  fliesByAddress[addr] = existing;
+  save();
+  return removed;
+}
+
+export function getActiveFlyCount(address: string): number {
+  return getFlies(address).filter(Boolean).length;
+}
+
 export function canClaimObelisk(address: string): boolean {
   const flies = getFlies(address);
-  const hasObelisk = flies.some((f) => f.method === 'obelisk');
-  return !hasObelisk && flies.length < MAX_FLIES;
+  const hasObelisk = flies.some((f) => f?.method === 'obelisk');
+  return !hasObelisk && flies.filter(Boolean).length < MAX_FLIES;
 }

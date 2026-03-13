@@ -27,6 +27,25 @@ describe('deploy API (no server)', () => {
       .send({ address: TEST_ADDR, slotIndex: 5 });
     expect(res.status).toBe(400);
   });
+
+  it('POST /api/deploy/send-to-graveyard frees slot for repurchase', async () => {
+    const addr = '0x00000000000000000000000000000000000000aa';
+    addFly(addr, { method: 'pay', claimedAt: new Date().toISOString(), seed: 11 });
+    addFly(addr, { method: 'pay', claimedAt: new Date().toISOString(), seed: 12 });
+    addFly(addr, { method: 'pay', claimedAt: new Date().toISOString(), seed: 13 });
+    expect(getFlies(addr).filter(Boolean).length).toBe(3);
+
+    const res = await request(app)
+      .post('/api/deploy/send-to-graveyard')
+      .send({ address: addr, slotIndex: 1 });
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(getFlies(addr).filter(Boolean).length).toBe(2);
+
+    const added = addFly(addr, { method: 'pay', claimedAt: new Date().toISOString(), seed: 14 });
+    expect(added).not.toBeNull();
+    expect(getFlies(addr).filter(Boolean).length).toBe(3);
+  });
 });
 
 describe('deploy flow: buy fly + deploy + sim updates', () => {

@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { decodeEventLog, TransactionReceiptNotFoundError } from 'viem';
 import { baseRpcClient } from '../services/baseRpcClient.js';
 import { tryClaim } from '../services/claimStore.js';
-import { getFlies, addFly, canClaimObelisk } from '../services/flyStore.js';
+import { getFlies, addFly, canClaimObelisk, getActiveFlyCount } from '../services/flyStore.js';
 import {
   OBELISK_NFT_ADDRESS,
   NEURO_TOKEN_ADDRESS,
@@ -121,7 +121,7 @@ router.get('/eligibility/:address', async (req: Request, res: Response) => {
     }
 
     const flies = getFlies(address);
-    if (flies.length >= 3) {
+    if (getActiveFlyCount(address) >= 3) {
       res.json({ method: 'full' as const, eligible: false, flyCount: 3 });
       return;
     }
@@ -137,11 +137,11 @@ router.get('/eligibility/:address', async (req: Request, res: Response) => {
     const canFree = hasObelisk && canClaimObelisk(address);
 
     if (canFree) {
-      res.json({ method: 'obelisk' as const, eligible: true, flyCount: flies.length });
+      res.json({ method: 'obelisk' as const, eligible: true, flyCount: getActiveFlyCount(address) });
       return;
     }
 
-    res.json({ method: 'pay' as const, eligible: true, flyCount: flies.length });
+    res.json({ method: 'pay' as const, eligible: true, flyCount: getActiveFlyCount(address) });
   } catch (err) {
     console.error('[claims] eligibility error:', err);
     res.status(500).json({ error: 'Failed to check eligibility' });

@@ -77,6 +77,11 @@ struct StepParams {
 }
 
 #[derive(Deserialize)]
+struct StepManyParams {
+    steps: Vec<StepParams>,
+}
+
+#[derive(Deserialize)]
 struct FlyJson {
     x: f64,
     y: f64,
@@ -112,6 +117,20 @@ struct StepResp {
     motor_left: f64,
     motor_right: f64,
     motor_fwd: f64,
+}
+
+#[derive(Serialize)]
+struct StepManyItemResp {
+    sim_id: u32,
+    activity_sparse: HashMap<String, f64>,
+    motor_left: f64,
+    motor_right: f64,
+    motor_fwd: f64,
+}
+
+#[derive(Serialize)]
+struct StepManyResp {
+    results: Vec<StepManyItemResp>,
 }
 
 #[derive(Serialize)]
@@ -168,6 +187,87 @@ fn handle(
             std::process::id()
         );
         serde_json::to_string(&CreateResp { sim_id: id })?
+    } else if line.contains("\"method\":\"step_many\"") {
+        let t0 = Instant::now();
+        let v: serde_json::Value = serde_json::from_str(line)?;
+        let p: StepManyParams = serde_json::from_value(v["params"].clone())?;
+        let parse_ms = t0.elapsed().as_millis();
+        let step_count = p.steps.len();
+        let mut g = sims.lock().unwrap();
+        let t1 = Instant::now();
+        let mut results = Vec::with_capacity(step_count);
+        let mut missing_sim: Option<u32> = None;
+        for step in p.steps {
+            let sim = g.get_mut(&step.sim_id);
+            let sim = match sim {
+                Some(sim) => sim,
+                None => {
+                    missing_sim = Some(step.sim_id);
+                    break;
+                }
+            };
+            let fly = FlyInput {
+                x: step.fly.x,
+                y: step.fly.y,
+                z: step.fly.z,
+                heading: step.fly.heading,
+                t: step.fly.t,
+                hunger: step.fly.hunger,
+                health: step.fly.health,
+                rest_time_left: step.fly.rest_time_left,
+            };
+            let srcs: Vec<SourceInput> = step
+                .sources
+                .iter()
+                .map(|x| SourceInput {
+                    x: x.x,
+                    y: x.y,
+                    radius: x.radius,
+                })
+                .collect();
+            let pend: Vec<PendingStimInput> = step
+                .pending
+                .iter()
+                .map(|x| PendingStimInput {
+                    neuron_ids: x.neuron_ids.clone(),
+                    strength: x.strength,
+                })
+                .collect();
+            let (_activity, activity_sparse, motor_left, motor_right, motor_fwd) =
+                sim.step(step.dt, fly, srcs, pend);
+            results.push(StepManyItemResp {
+                sim_id: step.sim_id,
+                activity_sparse,
+                motor_left,
+                motor_right,
+                motor_fwd,
+            });
+        }
+        if let Some(missing_id) = missing_sim {
+            serde_json::to_string(&ErrResp {
+                error: format!("sim {} not found", missing_id),
+            })?
+        } else {
+        let compute_ms = t1.elapsed().as_millis();
+        let t2 = Instant::now();
+        let out_json = serde_json::to_string(&StepManyResp { results })?;
+        let serialize_ms = t2.elapsed().as_millis();
+        let n = STEP_COUNT.fetch_add(1, Ordering::Relaxed);
+        if n % 20 == 0 {
+            eprintln!(
+                "[brain-service] req={} conn={} method=step_many sims={} parse_ms={} compute_ms={} serialize_ms={} total_ms={} pid={}",
+                req_id,
+                conn_id,
+                step_count,
+                parse_ms,
+                compute_ms,
+                serialize_ms,
+                t0.elapsed().as_millis(),
+                std::process::id()
+            );
+        }
+        out_json
+        }
     } else if line.contains("\"method\":\"step\"") {
         let t0 = Instant::now();
         let v: serde_json::Value = serde_json::from_str(line)?;

@@ -53,7 +53,7 @@ export async function fetchNeurons(): Promise<{ neurons: NeuronRaw[] }> {
   return { neurons: d.neurons };
 }
 
-export async function fetchMyFlies(address: string): Promise<ClaimedFly[]> {
+export async function fetchMyFlies(address: string): Promise<Array<ClaimedFly | null>> {
   const enc = encodeURIComponent(normalizeAddress(address));
   const url = `${getApiBase()}/api/claim/my-flies?address=${enc}`;
   let r: Response;
@@ -69,11 +69,12 @@ export async function fetchMyFlies(address: string): Promise<ClaimedFly[]> {
   }
   const data = await r.json();
   const raw = data.flies;
-  if (!Array.isArray(raw)) return [];
-  const out: ClaimedFly[] = [];
-  for (const item of raw) {
+  if (!Array.isArray(raw)) return [null, null, null];
+  const out: Array<ClaimedFly | null> = [null, null, null];
+  for (let i = 0; i < 3; i++) {
+    const item = raw[i];
     if (item != null && typeof item === 'object' && typeof item.id === 'string' && typeof item.method === 'string' && typeof item.claimedAt === 'string') {
-      out.push({ id: item.id, method: item.method, claimedAt: item.claimedAt });
+      out[i] = { id: item.id, method: item.method, claimedAt: item.claimedAt };
     }
   }
   return out;

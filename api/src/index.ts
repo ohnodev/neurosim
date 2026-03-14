@@ -18,6 +18,9 @@ const connectome = loadConnectome();
 const ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
 const MAX_SLOT_INDEX = 2;
 const VIEWER_NEURON_LIMIT = Math.max(1, Number(process.env.NEUROSIM_VIEWER_NEURON_LIMIT ?? 10_000));
+const CLIENT_ACTIVITY_LIMIT = Math.max(1, Number(process.env.NEUROSIM_CLIENT_ACTIVITY_LIMIT ?? 1_000));
+const CLIENT_ACTIVITY_TTL_MS = Math.max(250, Number(process.env.NEUROSIM_CLIENT_ACTIVITY_TTL_MS ?? 4_000));
+const CLIENT_ACTIVITY_FLOOR = Math.min(0.4, Math.max(0.01, Number(process.env.NEUROSIM_CLIENT_ACTIVITY_FLOOR ?? 0.08)));
 
 function fnv1a32(s: string): number {
   let h = 0x811c9dc5;
@@ -81,6 +84,8 @@ let rewardFlushIntervalId: ReturnType<typeof setInterval> | null = null;
 const sims: Awaited<ReturnType<typeof createBrainSim>>[] = [];
 /** address -> slotIndex -> simIndex */
 const deployedFlies = new Map<string, Map<number, number>>();
+/** Per-sim rolling activity memory so clients can receive rotating recent spikes. */
+const simActivityTrail: Array<Map<string, number>> = [];
 
 function parseAndValidateAddress(raw: unknown): string | null {
   if (Array.isArray(raw) || typeof raw !== 'string') return null;
@@ -112,6 +117,7 @@ function removeSimAtIndex(simIndex: number): { address: string; slotIndex: numbe
   if (simIndex < 0 || simIndex >= sims.length) return null;
   const deployment = findDeploymentBySimIndex(simIndex);
   sims.splice(simIndex, 1);
+  simActivityTrail.splice(simIndex, 1);
 
   for (const [address, slotMap] of deployedFlies) {
     for (const [slotIndex, mappedIndex] of slotMap) {
@@ -140,6 +146,7 @@ async function addFlyToSim(): Promise<number> {
     health: 100,
   });
   sims.push(sim);
+  simActivityTrail.push(new Map());
   return sims.length - 1;
 }
 
@@ -179,6 +186,8 @@ let droppedSimTicks = 0;
 const wsClients = new Set<import('ws').WebSocket>();
 /** Per-client: which fly's activity to send (sim index). Default 0. */
 const clientViewFlyIndex = new Map<import('ws').WebSocket, number>();
+/** Per-client cursor for rotating activity windows. */
+const clientActivityCursor = new Map<import('ws').WebSocket, number>();
 
 function broadcast(data: unknown): void {
   const payload = JSON.stringify(data);
@@ -191,19 +200,64 @@ function broadcast(data: unknown): void {
 function buildClientPayload(
   frames: { t: number; flies: ReturnType<typeof sims[0]['getState']>['fly'][]; activities: (Record<string, number> | undefined)[] }[],
 ): void {
+  const nowMs = Date.now();
   const sources = getSources();
   const clientFrames = frames.map((f) => ({ t: f.t, flies: f.flies }));
   const lastFrame = frames[frames.length - 1];
   for (const ws of wsClients) {
     if (ws.readyState !== 1) continue;
     const viewIndex = Math.max(0, Math.min(sims.length - 1, clientViewFlyIndex.get(ws) ?? 0));
-    const activity = lastFrame ? (lastFrame.activities[viewIndex] ?? {}) : {};
+    const activity = buildRotatingActivityWindow(
+      ws,
+      viewIndex,
+      lastFrame ? (lastFrame.activities[viewIndex] ?? {}) : {},
+      nowMs,
+    );
     try {
       ws.send(JSON.stringify({ frames: clientFrames, activity, sources, simRunning: true }));
     } catch (err) {
       console.error('[ws] send error', err);
     }
   }
+}
+
+function buildRotatingActivityWindow(
+  ws: import('ws').WebSocket,
+  simIndex: number,
+  latestActivity: Record<string, number>,
+  nowMs: number,
+): Record<string, number> {
+  const trail = simActivityTrail[simIndex] ?? null;
+  if (!trail) return latestActivity;
+
+  for (const [id, seenAt] of trail.entries()) {
+    if (nowMs - seenAt > CLIENT_ACTIVITY_TTL_MS) trail.delete(id);
+  }
+  for (const [id, value] of Object.entries(latestActivity)) {
+    if (value > 0) trail.set(id, nowMs);
+  }
+
+  const ids = Array.from(trail.keys());
+  if (ids.length === 0) return latestActivity;
+
+  const limit = Math.min(CLIENT_ACTIVITY_LIMIT, ids.length);
+  const hasOverflow = ids.length > limit;
+  const start = hasOverflow ? ((clientActivityCursor.get(ws) ?? 0) % ids.length) : 0;
+  const out: Record<string, number> = {};
+  for (let i = 0; i < limit; i++) {
+    const id = ids[(start + i) % ids.length]!;
+    const direct = latestActivity[id] ?? 0;
+    if (direct > 0) {
+      out[id] = 1;
+      continue;
+    }
+    const seenAt = trail.get(id) ?? nowMs;
+    const age = Math.max(0, nowMs - seenAt);
+    const normalized = 1 - age / CLIENT_ACTIVITY_TTL_MS;
+    if (normalized > 0) out[id] = Math.max(CLIENT_ACTIVITY_FLOOR, normalized);
+  }
+  if (hasOverflow) clientActivityCursor.set(ws, (start + limit) % ids.length);
+  return out;
 }
 
 function lerp(a: number, b: number, t: number): number {
@@ -274,6 +328,7 @@ function startSim(): void {
       const states = await Promise.all(
         sims.map((s, idx) => s.step(batchDt, { includeActivity: viewedSimIndexes.has(idx) })),
       );
+      const activityNowMs = Date.now();
       const deadSimIndexes: number[] = [];
       for (let j = 0; j < nSims; j++) {
         const before = beforeStates[j];
@@ -322,6 +377,12 @@ function startSim(): void {
           toT: state.t,
           activity: state.activity,
         });
+        if (state.activity && simActivityTrail[j]) {
+          const trail = simActivityTrail[j]!;
+          for (const [id, value] of Object.entries(state.activity)) {
+            if (value > 0) trail.set(id, activityNowMs);
+          }
+        }
         if (state.fly.dead || (state.fly.health ?? 100) <= 0) {
           deadSimIndexes.push(j);
         }
@@ -642,6 +703,7 @@ const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
 wss.on('connection', (ws) => {
   wsClients.add(ws);
   clientViewFlyIndex.set(ws, 0);
+  clientActivityCursor.set(ws, 0);
   console.log('[ws] client connected, total=', wsClients.size);
 
   const flies = sims.map((s) => s.getState().fly);
@@ -660,6 +722,7 @@ wss.on('connection', (ws) => {
       const msg = JSON.parse(data.toString());
       if (typeof msg.viewFlyIndex === 'number') {
         clientViewFlyIndex.set(ws, Math.max(0, msg.viewFlyIndex));
+        clientActivityCursor.set(ws, 0);
       }
     } catch {
       /* ignore */
@@ -667,6 +730,7 @@ wss.on('connection', (ws) => {
   });
 
   ws.on('close', () => {
+    clientActivityCursor.delete(ws);
     clientViewFlyIndex.delete(ws);
     wsClients.delete(ws);
     console.log('[ws] client disconnected, total=', wsClients.size);

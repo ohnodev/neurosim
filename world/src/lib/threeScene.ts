@@ -77,10 +77,13 @@ const LOW_LOD_WING_FLAP_SPEED = 0.03;
 const LOW_LOD_BODY_COLOR = 0x102a5a;
 const LOW_LOD_HEAD_COLOR = 0x111111;
 const LOW_LOD_WING_COLOR = 0xf5f7ff;
-const SKY_TOP_COLOR = '#6f8fbe';
-const SKY_HORIZON_COLOR = '#2f4d73';
-const SKY_BOTTOM_COLOR = '#0f1726';
+const SKY_TOP_COLOR = '#111a3a';
+const SKY_HORIZON_COLOR = '#060b1e';
+const SKY_BOTTOM_COLOR = '#020308';
 const SKY_DOME_RADIUS = ARENA_SIZE * 14;
+const SKY_STAR_COUNT = 120;
+const SKY_STAR_MIN_RADIUS = 0.6;
+const SKY_STAR_MAX_RADIUS = 1.6;
 /** Sim ground level (z=0.35); map to Three.js y=0 so fly rests on ground */
 const GROUND_Z = 0.35;
 
@@ -214,9 +217,9 @@ function createCameraButton(
   return { el: btn, update };
 }
 
-function createSkyGradientTexture(): THREE.CanvasTexture {
+function createSpaceSkyTexture(): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
-  canvas.width = 16;
+  canvas.width = 256;
   canvas.height = 256;
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('[threeScene] Failed to create sky gradient context');
@@ -226,6 +229,16 @@ function createSkyGradientTexture(): THREE.CanvasTexture {
   grad.addColorStop(1, SKY_BOTTOM_COLOR);
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
+  for (let i = 0; i < SKY_STAR_COUNT; i++) {
+    const x = Math.random() * canvas.width;
+    const y = Math.random() * canvas.height;
+    const r = SKY_STAR_MIN_RADIUS + Math.random() * (SKY_STAR_MAX_RADIUS - SKY_STAR_MIN_RADIUS);
+    const a = 0.35 + Math.random() * 0.55;
+    ctx.fillStyle = `rgba(255,255,255,${a.toFixed(3)})`;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.minFilter = THREE.LinearFilter;
@@ -292,7 +305,7 @@ export function initThreeScene(
   ground.receiveShadow = true;
   scene.add(ground);
 
-  const skyTex = createSkyGradientTexture();
+  const skyTex = createSpaceSkyTexture();
   const skyGeom = new THREE.SphereGeometry(SKY_DOME_RADIUS, 12, 8);
   const skyMat = new THREE.MeshBasicMaterial({
     map: skyTex,

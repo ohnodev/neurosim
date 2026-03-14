@@ -120,7 +120,6 @@ router.get('/eligibility/:address', async (req: Request, res: Response) => {
       return;
     }
 
-    const flies = getFlies(address);
     if (getActiveFlyCount(address) >= 3) {
       res.json({ method: 'full' as const, eligible: false, flyCount: 3 });
       return;

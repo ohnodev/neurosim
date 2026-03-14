@@ -62,6 +62,7 @@ export default function FlyViewer() {
   const followSimIndexRef = useRef<number | undefined>(undefined);
   const sourcesRef = useRef<WorldSource[]>([]);
   const flyCardDataRef = useRef<Map<number, { fly: FlyState; points: number }>>(new Map());
+  const prevWsFlyCountRef = useRef(0);
 
   const { data: worldData, isError: worldError } = useQuery({
     queryKey: apiKeys.world(),
@@ -95,11 +96,12 @@ export default function FlyViewer() {
     enabled: !!address,
   });
 
-  const { data: deployed = {}, refetch: refetchDeployed } = useQuery({
+  const { data: myDeployedData = { deployed: {}, graveyardSlots: [] }, refetch: refetchDeployed } = useQuery({
     queryKey: apiKeys.myDeployed(address ?? '__unauthenticated__'),
     queryFn: () => fetchMyDeployed(address!),
     enabled: !!address,
   });
+  const deployed = myDeployedData.deployed;
 
   const { data: rewardsHistory } = useQuery({
     queryKey: apiKeys.rewardsHistory(),
@@ -126,12 +128,8 @@ export default function FlyViewer() {
     return m;
   }, [flyStatsData?.stats]);
   const graveyardSlots = useMemo(() => {
-    const out = new Set<number>();
-    for (let i = 0; i < 3; i++) {
-      if ((myFlies[i] == null) && (statsBySlot[i] ?? 0) > 0) out.add(i);
-    }
-    return out;
-  }, [myFlies, statsBySlot]);
+    return new Set(myDeployedData.graveyardSlots);
+  }, [myDeployedData.graveyardSlots]);
 
   useEffect(() => {
     const unsub = subscribeSim((event) => {
@@ -141,10 +139,22 @@ export default function FlyViewer() {
           setError((prev) =>
             prev && /socket|connection|websocket|connect|closed/i.test(prev) ? null : prev
           );
-          const eff = resolveEffectiveSimIndex(latestFliesRef.current, deployed, selectedFlyIndex, deployedSlotKeys);
+          const currentDeployed = deployedRef.current;
+          const currentSelectedSlot = selectedFlyIndexRef.current;
+          const currentSlotKeys = Object.keys(currentDeployed)
+            .map((k) => parseInt(k, 10))
+            .filter((n) => !Number.isNaN(n) && currentDeployed[n] != null)
+            .sort((a, b) => a - b);
+          const eff = resolveEffectiveSimIndex(
+            latestFliesRef.current,
+            currentDeployed,
+            currentSelectedSlot,
+            currentSlotKeys,
+          );
           sendViewFlyIndex(eff ?? 0);
         } else if (event._event === 'closed') {
           setConnected(false);
+          prevWsFlyCountRef.current = 0;
         }
         return;
       }
@@ -203,10 +213,18 @@ export default function FlyViewer() {
           // Use incoming data.activities when data.activity is absent (legacy payload)
           activityRef.current = data.activities[0] ?? {};
         }
+        const currentFlyCount = latestFliesRef.current.length;
+        if (address && currentFlyCount < prevWsFlyCountRef.current) {
+          queryClient.invalidateQueries({ queryKey: apiKeys.myFlies(address) });
+          queryClient.invalidateQueries({ queryKey: apiKeys.myDeployed(address) });
+          queryClient.invalidateQueries({ queryKey: apiKeys.flyStats(address) });
+          void refetchDeployed();
+        }
+        prevWsFlyCountRef.current = currentFlyCount;
       }
     });
     return unsub;
-  }, [queryClient]);
+  }, [address, queryClient, refetchDeployed]);
 
   const flyCardTickListenersRef = useRef<Set<() => void>>(new Set());
   const subscribeFlyCardTick = useCallback((fn: () => void) => {

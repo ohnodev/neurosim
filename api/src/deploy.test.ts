@@ -37,7 +37,7 @@ describe('deploy API (no server)', () => {
 
     const res = await request(app)
       .post('/api/deploy/send-to-graveyard')
-      .send({ address: addr, slotIndex: 1 });
+      .send({ address: addr, requesterAddress: addr, slotIndex: 1 });
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(getFlies(addr).filter(Boolean).length).toBe(2);

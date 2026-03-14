@@ -26,6 +26,11 @@ export interface FlyStatsData {
   rewardPerPointWei: string;
 }
 
+export interface MyDeployedData {
+  deployed: Record<number, number>;
+  graveyardSlots: number[];
+}
+
 const FALLBACK_WEI = (1000n * 10n ** 18n).toString();
 
 export async function fetchWorld(): Promise<{ sources: WorldSource[] }> {
@@ -80,7 +85,7 @@ export async function fetchMyFlies(address: string): Promise<Array<ClaimedFly | 
   return out;
 }
 
-export async function fetchMyDeployed(address: string): Promise<Record<number, number>> {
+export async function fetchMyDeployed(address: string): Promise<MyDeployedData> {
   const enc = encodeURIComponent(normalizeAddress(address));
   const url = `${getApiBase()}/api/deploy/my-deployed?address=${enc}`;
   let r: Response;
@@ -96,16 +101,22 @@ export async function fetchMyDeployed(address: string): Promise<Record<number, n
   }
   const data = await r.json();
   const raw = data.deployed;
-  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return {};
   const out: Record<number, number> = {};
-  for (const k of Object.keys(raw)) {
-    const slot = parseInt(k, 10);
-    const val = raw[k];
-    if (!Number.isNaN(slot) && typeof val === 'number' && Number.isInteger(val)) {
-      out[slot] = val;
+  if (raw != null && typeof raw === 'object' && !Array.isArray(raw)) {
+    for (const k of Object.keys(raw)) {
+      const slot = parseInt(k, 10);
+      const val = raw[k];
+      if (!Number.isNaN(slot) && typeof val === 'number' && Number.isInteger(val)) {
+        out[slot] = val;
+      }
     }
   }
-  return out;
+  const graveyardRaw = data.graveyardSlots;
+  const graveyardSlots = Array.isArray(graveyardRaw)
+    ? graveyardRaw
+        .filter((n): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= 2)
+    : [];
+  return { deployed: out, graveyardSlots };
 }
 
 export async function fetchFlyStats(address: string): Promise<FlyStatsData> {

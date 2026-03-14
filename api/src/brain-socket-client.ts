@@ -31,6 +31,7 @@ let lastRequestTiming: {
   batchSize?: number;
 } | null = null;
 const TRACE_SOCKET_TIMING = process.env.NEUROSIM_SOCKET_TRACE === '1';
+const REQUEST_TIMEOUT_MS = Number(process.env.NEUROSIM_BRAIN_REQUEST_TIMEOUT_MS ?? 10_000);
 
 function getConnection(): Promise<{ sock: net.Socket; rl: ReturnType<typeof createInterface> }> {
   if (sharedSocket && sharedRl && !sharedSocket.destroyed) {
@@ -90,53 +91,72 @@ function sendRequest<T>(payload: JsonObj): Promise<T> {
     const afterConnect = performance.now();
     return new Promise<T>((resolve, reject) => {
       const msg = JSON.stringify(payload) + '\n';
-      const onError = (err: Error) => {
+      let settled = false;
+      let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+      const cleanup = () => {
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+          timeoutHandle = null;
+        }
+        rl.off('line', onLine);
+        sock.off('error', onError);
+      };
+      const failAndResetSocket = (err: Error) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
         sharedSocket = null;
         sharedRl = null;
         connectPromise = null;
-        sock.off('error', onError);
+        sock.destroy();
         reject(err);
       };
+      const onLine = (line: string) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        try {
+          const done = performance.now();
+          const timing = {
+            id: reqId,
+            connectWaitMs: Math.round(afterConnect - t0),
+            writeMs: Math.round(afterWrite - afterConnect),
+            responseWaitMs: Math.round(done - afterWrite),
+            totalMs: Math.round(done - t0),
+            method,
+            batchSize,
+          };
+          lastRequestTiming = timing;
+          if (TRACE_SOCKET_TIMING) {
+            console.log(
+              `[brain-socket] req=${timing.id} method=${timing.method}${timing.batchSize != null ? ` batchSize=${timing.batchSize}` : ''} connectWaitMs=${timing.connectWaitMs} writeMs=${timing.writeMs} responseWaitMs=${timing.responseWaitMs} totalMs=${timing.totalMs}`,
+            );
+          }
+          const out = JSON.parse(line) as T;
+          if ('error' in (out as { error?: string }) && (out as { error?: string }).error) {
+            reject(new Error((out as { error: string }).error));
+          } else {
+            resolve(out);
+          }
+        } catch (e) {
+          reject(e);
+        }
+      };
+      const onError = (err: Error) => {
+        failAndResetSocket(err);
+      };
+      let afterWrite = afterConnect;
+      timeoutHandle = setTimeout(() => {
+        failAndResetSocket(new Error(`brain socket request timeout after ${REQUEST_TIMEOUT_MS}ms`));
+      }, REQUEST_TIMEOUT_MS);
+      rl.on('line', onLine);
       sock.on('error', onError);
       sock.write(msg, (err) => {
         if (err) {
-          sock.off('error', onError);
-          sharedSocket = null;
-          sharedRl = null;
-          connectPromise = null;
-          reject(err);
+          failAndResetSocket(err);
           return;
         }
-        const afterWrite = performance.now();
-        rl.once('line', (line) => {
-          sock.off('error', onError);
-          try {
-            const done = performance.now();
-            const timing = {
-              id: reqId,
-              connectWaitMs: Math.round(afterConnect - t0),
-              writeMs: Math.round(afterWrite - afterConnect),
-              responseWaitMs: Math.round(done - afterWrite),
-              totalMs: Math.round(done - t0),
-              method,
-              batchSize,
-            };
-            lastRequestTiming = timing;
-            if (TRACE_SOCKET_TIMING) {
-              console.log(
-                `[brain-socket] req=${timing.id} method=${timing.method}${timing.batchSize != null ? ` batchSize=${timing.batchSize}` : ''} connectWaitMs=${timing.connectWaitMs} writeMs=${timing.writeMs} responseWaitMs=${timing.responseWaitMs} totalMs=${timing.totalMs}`,
-              );
-            }
-            const out = JSON.parse(line) as T;
-            if ('error' in (out as { error?: string }) && (out as { error?: string }).error) {
-              reject(new Error((out as { error: string }).error));
-            } else {
-              resolve(out);
-            }
-          } catch (e) {
-            reject(e);
-          }
-        });
+        afterWrite = performance.now();
       });
     });
   });

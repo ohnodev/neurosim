@@ -51,6 +51,11 @@ function save(): void {
 
 load();
 
+/**
+ * Returns a shallow copy of all `DeploymentRecord` entries in `deployments`,
+ * including inactive rows; callers should filter with `active !== false` when
+ * they need only active deployments.
+ */
 export function getDeployments(): DeploymentRecord[] {
   return [...deployments];
 }

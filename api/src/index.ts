@@ -74,15 +74,20 @@ function removeSimAtIndex(simIndex: number): { address: string; slotIndex: numbe
     for (const [slotIndex, mappedIndex] of slotMap) {
       if (mappedIndex > simIndex) slotMap.set(slotIndex, mappedIndex - 1);
     }
-    if (slotMap.size === 0) deployedFlies.delete(address);
   }
-
   if (deployment) {
     const slotMap = deployedFlies.get(deployment.address);
     slotMap?.delete(deployment.slotIndex);
     if (slotMap && slotMap.size === 0) deployedFlies.delete(deployment.address);
   }
   return deployment;
+}
+
+function parseRequesterAddress(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const normalized = raw.trim().toLowerCase();
+  if (!/^0x[a-fA-F0-9]{40}$/.test(normalized)) return null;
+  return normalized;
 }
 
 async function addFlyToSim(): Promise<number> {
@@ -460,10 +465,30 @@ app.post('/api/deploy', async (req, res) => {
 app.post('/api/deploy/send-to-graveyard', (req, res) => {
   try {
     const address = (req.body?.address as string)?.toLowerCase();
+    const requesterAddress = parseRequesterAddress(
+      req.body?.requesterAddress ?? req.header('x-wallet-address')
+    );
     const slotIndex = typeof req.body?.slotIndex === 'number' ? req.body.slotIndex : parseInt(String(req.body?.slotIndex ?? ''), 10);
     if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address) || !Number.isInteger(slotIndex) || slotIndex < 0 || slotIndex > 2) {
       res.status(400).json({ error: 'Invalid address or slotIndex (0-2)' });
       return;
+    }
+    if (!requesterAddress || requesterAddress !== address) {
+      res.status(403).json({ error: 'Requester does not own target address' });
+      return;
+    }
+    if (!getFlies(address)[slotIndex]) {
+      res.status(400).json({ error: 'No fly in that slot' });
+      return;
+    }
+
+    const simIndex = deployedFlies.get(address)?.get(slotIndex);
+    if (simIndex != null) {
+      const removedSim = removeSimAtIndex(simIndex);
+      if (!removedSim || removedSim.address !== address || removedSim.slotIndex !== slotIndex) {
+        res.status(500).json({ error: 'Failed to remove live simulation state' });
+        return;
+      }
     }
 
     const removed = removeFlyAtSlot(address, slotIndex);
@@ -472,11 +497,6 @@ app.post('/api/deploy/send-to-graveyard', (req, res) => {
       return;
     }
 
-    const map = deployedFlies.get(address);
-    if (map) {
-      map.delete(slotIndex);
-      if (map.size === 0) deployedFlies.delete(address);
-    }
     deactivateDeployment(address, slotIndex);
     console.log('[graveyard]', address.slice(0, 10) + '…', 'slot', slotIndex, 'fly', removed.id);
     res.json({ success: true, removedFlyId: removed.id, slotIndex });
@@ -530,7 +550,14 @@ app.get('/api/deploy/my-deployed', (req, res) => {
     if (map) {
       for (const [slot, idx] of map) deployed[slot] = idx;
     }
-    res.json({ deployed });
+    const graveyardSlots = Array.from(
+      new Set(
+        getDeployments()
+          .filter((d) => d.address === address && d.active === false)
+          .map((d) => d.slotIndex),
+      ),
+    );
+    res.json({ deployed, graveyardSlots });
   } catch (err) {
     console.error('[deploy] my-deployed error:', err);
     res.status(500).json({ error: 'Failed to get deployed flies' });

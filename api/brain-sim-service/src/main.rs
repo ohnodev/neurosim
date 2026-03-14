@@ -193,6 +193,8 @@ fn handle(
         let p: StepManyParams = serde_json::from_value(v["params"].clone())?;
         let parse_ms = t0.elapsed().as_millis();
         let step_count = p.steps.len();
+        // This service currently processes one socket request at a time per process,
+        // so a single batch lock does not reduce real concurrency in this execution model.
         let mut g = sims.lock().unwrap();
         let t1 = Instant::now();
         let mut results = Vec::with_capacity(step_count);
@@ -243,6 +245,8 @@ fn handle(
                 motor_fwd,
             });
         }
+        // Atomic semantics are intentional: if any sim_id in step_many is missing,
+        // we return an error for the full batch so API/client can retry coherently.
         if let Some(missing_id) = missing_sim {
             serde_json::to_string(&ErrResp {
                 error: format!("sim {} not found", missing_id),

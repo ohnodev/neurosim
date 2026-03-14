@@ -77,6 +77,10 @@ const LOW_LOD_WING_FLAP_SPEED = 0.03;
 const LOW_LOD_BODY_COLOR = 0x102a5a;
 const LOW_LOD_HEAD_COLOR = 0x111111;
 const LOW_LOD_WING_COLOR = 0xf5f7ff;
+const SKY_TOP_COLOR = '#6f8fbe';
+const SKY_HORIZON_COLOR = '#2f4d73';
+const SKY_BOTTOM_COLOR = '#0f1726';
+const SKY_DOME_RADIUS = ARENA_SIZE * 14;
 /** Sim ground level (z=0.35); map to Three.js y=0 so fly rests on ground */
 const GROUND_Z = 0.35;
 
@@ -210,6 +214,26 @@ function createCameraButton(
   return { el: btn, update };
 }
 
+function createSkyGradientTexture(): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 16;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('[threeScene] Failed to create sky gradient context');
+  const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  grad.addColorStop(0, SKY_TOP_COLOR);
+  grad.addColorStop(0.58, SKY_HORIZON_COLOR);
+  grad.addColorStop(1, SKY_BOTTOM_COLOR);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.minFilter = THREE.LinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = false;
+  return tex;
+}
+
 export function initThreeScene(
   container: HTMLElement | null,
   refs: ThreeSceneRefs,
@@ -237,6 +261,7 @@ export function initThreeScene(
   };
 
   const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x060913);
   const camera = new THREE.PerspectiveCamera(50, container.clientWidth / container.clientHeight, 0.1, 1000);
   camera.position.set(8, 6, 8);
 
@@ -266,6 +291,17 @@ export function initThreeScene(
   ground.rotation.x = -Math.PI / 2;
   ground.receiveShadow = true;
   scene.add(ground);
+
+  const skyTex = createSkyGradientTexture();
+  const skyGeom = new THREE.SphereGeometry(SKY_DOME_RADIUS, 12, 8);
+  const skyMat = new THREE.MeshBasicMaterial({
+    map: skyTex,
+    side: THREE.BackSide,
+    depthWrite: false,
+  });
+  const skyDome = new THREE.Mesh(skyGeom, skyMat);
+  skyDome.position.set(0, ARENA_SIZE * 0.4, 0);
+  scene.add(skyDome);
 
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.maxDistance = 1000;
@@ -629,6 +665,9 @@ export function initThreeScene(
     renderer.dispose();
     groundGeom.dispose();
     groundMat.dispose();
+    skyGeom.dispose();
+    skyMat.dispose();
+    skyTex.dispose();
     container.removeChild(renderer.domElement);
     if (cameraButton) cameraButton.el.remove();
     if (disposeStatus) disposeStatus();

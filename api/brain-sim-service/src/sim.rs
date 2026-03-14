@@ -84,10 +84,14 @@ impl BrainSim {
         let cuda_only = std::env::var("NEUROSIM_MODE").as_deref() == Ok("cuda")
             || std::env::var("USE_CUDA").as_deref() == Ok("1");
         #[cfg(feature = "cuda")]
-        let gpu_state = match GpuSimState::new(n, &adj, &activity) {
-            Some(g) => Some(g),
-            None if cuda_only => panic!("[brain-service] CUDA required but GPU init failed"),
-            None => None,
+        let gpu_state = if cuda_only {
+            match GpuSimState::new(n, &adj, &activity) {
+                Some(g) => Some(g),
+                None => panic!("[brain-service] CUDA required but GPU init failed"),
+            }
+        } else {
+            // CPU mode: never probe CUDA to avoid cudarc dynamic-load panics on non-GPU hosts.
+            None
         };
         Self {
             n,

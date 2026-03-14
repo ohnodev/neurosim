@@ -296,10 +296,6 @@ export default function FlyViewer() {
   }, [deployed, selectedFlyIndex, connected]);
 
   useEffect(() => {
-    deployingSlotsRef.current = deployingSlots;
-  }, [deployingSlots]);
-
-  useEffect(() => {
     const container = document.createElement('div');
     container.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;z-index:0';
     document.body.insertBefore(container, document.body.firstChild);

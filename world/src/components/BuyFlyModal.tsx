@@ -73,6 +73,11 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
     };
   }, [isOpen, onClose]);
 
+  useEffect(() => {
+    // Clear server-derived pricing between modal sessions to avoid stale display.
+    setServerRequiredAmountWei(null);
+  }, [isOpen]);
+
   const isOnBaseChain = chainId === base.id;
 
   const transferAmountWei = serverRequiredAmountWei ?? FLY_NEURO_AMOUNT_FALLBACK;
@@ -101,7 +106,9 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
       const balanceData: BalanceCheck = balanceRes.ok
         ? await balanceRes.json().catch(() => ({} as BalanceCheck))
         : {};
-      const serverRequiredAmount = parseNonNegativeWei(balanceData.flyNeuroRequiredWei);
+      const parsedRequiredAmount = parseNonNegativeWei(balanceData.flyNeuroRequiredWei);
+      const serverRequiredAmount =
+        parsedRequiredAmount != null && parsedRequiredAmount > 0n ? parsedRequiredAmount : null;
       if (mountedRef.current) setServerRequiredAmountWei(serverRequiredAmount);
       const resolvedTransferAmount = serverRequiredAmount ?? FLY_NEURO_AMOUNT_FALLBACK;
       const balanceWei = parseNonNegativeWei(balanceData.neuroBalanceWei);

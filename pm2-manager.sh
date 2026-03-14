@@ -52,7 +52,8 @@ module.exports = {
       error_file: '$LOGS_DIR/neurosim-brain.log',
       merge_logs: false,
       log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
-      env: { NEUROSIM_BRAIN_SOCKET: '/tmp/neurosim-brain.sock', USE_CUDA: '0', NEUROSIM_MODE: 'cpu', NEUROSIM_CONNECTOME_PATH: '$SCRIPT_DIR/data/connectome-subset.json' },
+      env_file: '$API_DIR/.env',
+      env: { NEUROSIM_BRAIN_SOCKET: '/tmp/neurosim-brain.sock', NEUROSIM_CONNECTOME_PATH: '$SCRIPT_DIR/data/connectome-subset.json' },
     },
     {
       name: '$SERVICE',
@@ -111,7 +112,7 @@ stop_service() {
 
 restart_service() {
     create_logs_dir
-    log_info "Building $BRAIN_SERVICE (GPU)..."
+    log_info "Building $BRAIN_SERVICE..."
     (cd "$BRAIN_SERVICE_DIR" && cargo build --release 2>/dev/null) || \
     (cd "$BRAIN_SERVICE_DIR" && cargo build --release --no-default-features 2>/dev/null) || \
     { log_warning "Brain build failed, using existing binary"; }

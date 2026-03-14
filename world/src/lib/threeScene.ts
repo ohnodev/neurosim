@@ -275,13 +275,23 @@ export function initThreeScene(
     initialized: boolean;
     wingActions: THREE.AnimationAction[];
   }[] = [];
-  const lowPolyBodyGeom = new THREE.BoxGeometry(0.45, 0.2, 0.65);
+  const lowPolyBodyGeom = new THREE.BoxGeometry(0.32, 0.3, 0.62);
   const lowPolyHeadGeom = new THREE.BoxGeometry(0.2, 0.16, 0.2);
   const lowPolyWingGeom = new THREE.BoxGeometry(0.42, 0.03, 0.2);
-  const lowPolyFlyMat = new THREE.MeshStandardMaterial({
+  const lowPolyBodyMat = new THREE.MeshStandardMaterial({
     color: 0x102a5a,
     roughness: 0.95,
     metalness: 0.03,
+  });
+  const lowPolyHeadMat = new THREE.MeshStandardMaterial({
+    color: 0x111111,
+    roughness: 0.95,
+    metalness: 0.02,
+  });
+  const lowPolyWingMat = new THREE.MeshStandardMaterial({
+    color: 0xf5f7ff,
+    roughness: 0.9,
+    metalness: 0.02,
   });
 
   const loader = new GLTFLoader();
@@ -373,15 +383,15 @@ export function initThreeScene(
 
   function createLowPolyFlyProxy(): THREE.Group {
     const g = new THREE.Group();
-    const body = new THREE.Mesh(lowPolyBodyGeom, lowPolyFlyMat);
-    const head = new THREE.Mesh(lowPolyHeadGeom, lowPolyFlyMat);
-    const wingL = new THREE.Mesh(lowPolyWingGeom, lowPolyFlyMat);
-    const wingR = new THREE.Mesh(lowPolyWingGeom, lowPolyFlyMat);
+    const body = new THREE.Mesh(lowPolyBodyGeom, lowPolyBodyMat);
+    const head = new THREE.Mesh(lowPolyHeadGeom, lowPolyHeadMat);
+    const wingL = new THREE.Mesh(lowPolyWingGeom, lowPolyWingMat);
+    const wingR = new THREE.Mesh(lowPolyWingGeom, lowPolyWingMat);
     head.position.set(0, 0.02, -0.38);
     wingL.position.set(-0.28, 0.12, -0.04);
     wingR.position.set(0.28, 0.12, -0.04);
-    wingL.rotation.z = 0.22;
-    wingR.rotation.z = -0.22;
+    wingL.rotation.z = -0.42;
+    wingR.rotation.z = 0.42;
     g.add(body, head, wingL, wingR);
     return g;
   }
@@ -623,7 +633,9 @@ export function initThreeScene(
     lowPolyBodyGeom.dispose();
     lowPolyHeadGeom.dispose();
     lowPolyWingGeom.dispose();
-    lowPolyFlyMat.dispose();
+    lowPolyBodyMat.dispose();
+    lowPolyHeadMat.dispose();
+    lowPolyWingMat.dispose();
   };
   return { dispose, updateButton };
 }

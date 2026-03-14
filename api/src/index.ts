@@ -115,6 +115,11 @@ async function restoreDeployFromStore(): Promise<void> {
     console.log('[deploy] restored', records.length, 'deployments from store');
   }
 }
+try {
+  await restoreDeployFromStore();
+} catch (err) {
+  console.error('[deploy] restore error:', err);
+}
 let simRunning = false;
 let simIntervalId: ReturnType<typeof setInterval> | null = null;
 /** 250ms interval; client keeps 1s buffer for smooth interpolation */
@@ -489,8 +494,13 @@ app.get('/api/rewards/history', (req, res) => {
 
 app.get('/api/deploy/my-deployed', (req, res) => {
   try {
-    const address = (req.query.address as string)?.toLowerCase();
-    if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address)) {
+    const rawAddress = req.query.address;
+    if (Array.isArray(rawAddress) || typeof rawAddress !== 'string') {
+      res.status(400).json({ error: 'Invalid address' });
+      return;
+    }
+    const address = rawAddress.toLowerCase();
+    if (!/^0x[a-fA-F0-9]{40}$/.test(address)) {
       res.status(400).json({ error: 'Invalid address' });
       return;
     }
@@ -516,8 +526,13 @@ app.get('/api/deploy/my-deployed', (req, res) => {
 
 app.get('/api/deploy/graveyard', (req, res) => {
   try {
-    const address = (req.query.address as string)?.toLowerCase();
-    if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address)) {
+    const rawAddress = req.query.address;
+    if (Array.isArray(rawAddress) || typeof rawAddress !== 'string') {
+      res.status(400).json({ error: 'Invalid address' });
+      return;
+    }
+    const address = rawAddress.toLowerCase();
+    if (!/^0x[a-fA-F0-9]{40}$/.test(address)) {
       res.status(400).json({ error: 'Invalid address' });
       return;
     }

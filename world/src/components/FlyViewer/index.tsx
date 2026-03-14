@@ -134,7 +134,7 @@ export default function FlyViewer() {
   }, [myDeployedData.graveyardSlots]);
 
   const { data: graveyardData } = useQuery({
-    queryKey: [...apiKeys.all, 'graveyard', address ?? '__unauthenticated__', graveyardPage],
+    queryKey: apiKeys.graveyard(address ?? '__unauthenticated__', graveyardPage),
     queryFn: () => fetchGraveyard(address!, graveyardPage, 3),
     enabled: !!address && fliesTab === 'graveyard',
   });
@@ -158,6 +158,10 @@ export default function FlyViewer() {
             currentDeployed,
             currentSelectedSlot,
             currentSlotKeys,
+          );
+          prevWsFlyCountRef.current = Math.max(
+            currentSlotKeys.length,
+            latestFliesRef.current.length,
           );
           sendViewFlyIndex(eff ?? 0);
         } else if (event._event === 'closed') {
@@ -225,6 +229,7 @@ export default function FlyViewer() {
           queryClient.invalidateQueries({ queryKey: apiKeys.myFlies(address) });
           queryClient.invalidateQueries({ queryKey: apiKeys.myDeployed(address) });
           queryClient.invalidateQueries({ queryKey: apiKeys.flyStats(address) });
+          queryClient.invalidateQueries({ queryKey: apiKeys.graveyard(address) });
           void refetchDeployed();
         }
         prevWsFlyCountRef.current = currentFlyCount;

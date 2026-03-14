@@ -12,6 +12,10 @@ export const apiKeys = {
   myFlies: (address: string) => [...apiKeys.all, 'my-flies', normalizeAddress(address)] as const,
   myDeployed: (address: string) => [...apiKeys.all, 'my-deployed', normalizeAddress(address)] as const,
   flyStats: (address: string) => [...apiKeys.all, 'fly-stats', normalizeAddress(address)] as const,
+  graveyard: (address: string, page?: number) =>
+    page == null
+      ? [...apiKeys.all, 'graveyard', normalizeAddress(address)] as const
+      : [...apiKeys.all, 'graveyard', normalizeAddress(address), page] as const,
   rewardsHistory: () => [...apiKeys.all, 'rewards-history'] as const,
 };
 
@@ -182,12 +186,16 @@ export async function fetchGraveyard(address: string, page: number, pageSize = 3
   const data = await r.json();
   const items: GraveyardFlyEntry[] = Array.isArray(data.items)
     ? data.items
-        .filter((item: unknown) => item != null && typeof item === 'object')
+        .filter((item: unknown) => {
+          if (item == null || typeof item !== 'object') return false;
+          const v = item as Record<string, unknown>;
+          return typeof v.slotIndex === 'number' && Number.isInteger(v.slotIndex) && v.slotIndex >= 0 && v.slotIndex <= 2;
+        })
         .map((item: unknown) => {
           const v = item as Record<string, unknown>;
           return {
             flyId: typeof v.flyId === 'string' ? v.flyId : 'unknown',
-            slotIndex: typeof v.slotIndex === 'number' ? v.slotIndex : 0,
+            slotIndex: v.slotIndex as number,
             feedCount: typeof v.feedCount === 'number' ? v.feedCount : 0,
             rewardWei: typeof v.rewardWei === 'string' ? v.rewardWei : '0',
             timeBirthed: typeof v.timeBirthed === 'string' ? v.timeBirthed : undefined,

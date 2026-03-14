@@ -353,13 +353,8 @@ export default function FlyViewer() {
       if (!r.ok) throw new Error(data.error ?? 'Deploy failed');
       return data as { simIndex?: number };
     },
-    onMutate: (slotIndex) => {
+    onMutate: () => {
       setError((prev) => (prev && prev.startsWith('Deploy failed') ? null : prev));
-      setDeployingSlots((prev) => {
-        const next = new Set(prev);
-        next.add(slotIndex);
-        return next;
-      });
     },
     onSuccess: (data, slotIndex) => {
       if (!address) return;
@@ -385,17 +380,21 @@ export default function FlyViewer() {
       setError(err instanceof Error ? `Deploy failed: ${err.message}` : 'Deploy failed');
     },
     onSettled: (_, __, slotIndex) => {
-      setDeployingSlots((prev) => {
-        const next = new Set(prev);
-        next.delete(slotIndex);
-        return next;
-      });
+      const next = new Set(deployingSlotsRef.current);
+      next.delete(slotIndex);
+      deployingSlotsRef.current = next;
+      setDeployingSlots(next);
     },
   });
 
   const deployFly = useCallback(
     (slotIndex: number) => {
-      if (deployingSlotsRef.current.has(slotIndex)) return;
+      const inFlight = deployingSlotsRef.current;
+      if (inFlight.has(slotIndex)) return;
+      const next = new Set(inFlight);
+      next.add(slotIndex);
+      deployingSlotsRef.current = next;
+      setDeployingSlots(next);
       void deployMutation.mutate(slotIndex);
     },
     [deployMutation]

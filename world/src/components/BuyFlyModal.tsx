@@ -24,13 +24,13 @@ interface BalanceCheck {
   flyNeuroRequiredWei?: string;
 }
 
-function parsePositiveWei(raw: string | undefined): bigint | null {
+function parseNonNegativeWei(raw: string | undefined): bigint | null {
   if (raw == null) return null;
   const s = String(raw).trim();
-  if (!s || s === '0') return null;
+  if (s === '') return null;
   try {
     const n = BigInt(s);
-    return n > 0n ? n : null;
+    return n >= 0n ? n : null;
   } catch {
     return null;
   }
@@ -51,6 +51,7 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
   const notification = useNotification();
   const [busy, setBusy] = useState<'neuro' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [serverRequiredAmountWei, setServerRequiredAmountWei] = useState<bigint | null>(null);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -74,8 +75,8 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
 
   const isOnBaseChain = chainId === base.id;
 
-  const fallbackAmountWei = FLY_NEURO_AMOUNT_FALLBACK;
-  const formattedAmount = formatNeuroAmount(fallbackAmountWei.toString());
+  const transferAmountWei = serverRequiredAmountWei ?? FLY_NEURO_AMOUNT_FALLBACK;
+  const formattedTransferAmount = formatNeuroAmount(transferAmountWei.toString());
 
   const handleSwitchToBase = useCallback(async () => {
     if (!ready || !wallets.length) return;
@@ -100,10 +101,12 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
       const balanceData: BalanceCheck = balanceRes.ok
         ? await balanceRes.json().catch(() => ({} as BalanceCheck))
         : {};
-      const requiredAmount = parsePositiveWei(balanceData.flyNeuroRequiredWei) ?? fallbackAmountWei;
-      const balanceWei = parsePositiveWei(balanceData.neuroBalanceWei);
-      if (balanceWei != null && balanceWei < requiredAmount) {
-        setError(`Insufficient $NEURO. You need ${formatNeuroAmount(requiredAmount.toString())} $NEURO to buy a fly.`);
+      const serverRequiredAmount = parseNonNegativeWei(balanceData.flyNeuroRequiredWei);
+      if (mountedRef.current) setServerRequiredAmountWei(serverRequiredAmount);
+      const resolvedTransferAmount = serverRequiredAmount ?? FLY_NEURO_AMOUNT_FALLBACK;
+      const balanceWei = parseNonNegativeWei(balanceData.neuroBalanceWei);
+      if (balanceWei != null && balanceWei < resolvedTransferAmount) {
+        setError(`Insufficient $NEURO. You need ${formatNeuroAmount(resolvedTransferAmount.toString())} $NEURO to buy a fly.`);
         return;
       }
 
@@ -112,7 +115,7 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
         address: NEURO_TOKEN_ADDRESS,
         abi: ERC20_TRANSFER_ABI,
         functionName: 'transfer',
-        args: [CLAIM_RECEIVER_ADDRESS, requiredAmount],
+        args: [CLAIM_RECEIVER_ADDRESS, resolvedTransferAmount],
         chain: base,
       });
       notification.show('Transaction sent, pending...', 'info');
@@ -152,7 +155,7 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
     } finally {
       if (mountedRef.current) setBusy(null);
     }
-  }, [walletClient, address, isOnBaseChain, queryClient, notification, onSuccess, onClose, fallbackAmountWei]);
+  }, [walletClient, address, isOnBaseChain, queryClient, notification, onSuccess, onClose]);
 
   if (!isOpen) return null;
 
@@ -181,7 +184,7 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
         <div className="neurosim-claim__card">
           <h2 id="buy-fly-title" className="neurosim-claim__title">Buy NeuroFly #{slotIndex + 1}</h2>
           <p className="neurosim-claim__subtitle">
-            Pay with {formattedAmount} $NEURO to buy a fly
+            Pay with {formattedTransferAmount} $NEURO to buy a fly
           </p>
           {error && (
             <div className="neuroflies__error">
@@ -216,7 +219,7 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
                 onClick={handleBuyNeuro}
                 disabled={!!busy || !walletClient || !address}
               >
-                {busy === 'neuro' ? 'Confirming...' : `Pay with ${formattedAmount} $NEURO`}
+                {busy === 'neuro' ? 'Confirming...' : `Pay with ${formattedTransferAmount} $NEURO`}
               </button>
             )}
           </div>

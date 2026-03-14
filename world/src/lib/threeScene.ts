@@ -82,6 +82,8 @@ const SCENE_BG_COLOR = 0x000000;
 const NEURAL_NODE_COLOR = 0x7f8cff;
 const NEURAL_EDGE_COLOR = 0x354473;
 const NEURAL_SECONDARY_NODE_COLOR = 0x5f6f88;
+const NEURAL_EDGE_MIN_DISTANCE = 20;
+const NEURAL_EDGE_MAX_DISTANCE = 98;
 /** Sim ground level (z=0.35); map to Three.js y=0 so fly rests on ground */
 const GROUND_Z = 0.35;
 
@@ -277,7 +279,7 @@ function createNeuralBackdrop(): {
   for (let i = 0; i < points.length; i++) {
     for (let j = i + 1; j < points.length; j++) {
       const d = points[i]!.distanceTo(points[j]!);
-      if (d > 98 || d < 20) continue;
+      if (d > NEURAL_EDGE_MAX_DISTANCE || d < NEURAL_EDGE_MIN_DISTANCE) continue;
       edgePositions.push(
         points[i]!.x, points[i]!.y, points[i]!.z,
         points[j]!.x, points[j]!.y, points[j]!.z
@@ -741,6 +743,7 @@ export function initThreeScene(
     renderer.dispose();
     groundGeom.dispose();
     groundMat.dispose();
+    scene.remove(neuralBackdrop.group);
     neuralBackdrop.dispose();
     container.removeChild(renderer.domElement);
     if (cameraButton) cameraButton.el.remove();

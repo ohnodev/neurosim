@@ -52,7 +52,7 @@ module.exports = {
       error_file: '$LOGS_DIR/neurosim-brain.log',
       merge_logs: false,
       log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
-      env: { NEUROSIM_BRAIN_SOCKET: '/tmp/neurosim-brain.sock', USE_CUDA: '1', NEUROSIM_CONNECTOME_PATH: '$SCRIPT_DIR/data/connectome-subset.json' },
+      env: { NEUROSIM_BRAIN_SOCKET: '/tmp/neurosim-brain.sock', USE_CUDA: '0', NEUROSIM_MODE: 'cpu', NEUROSIM_CONNECTOME_PATH: '$SCRIPT_DIR/data/connectome-subset.json' },
     },
     {
       name: '$SERVICE',

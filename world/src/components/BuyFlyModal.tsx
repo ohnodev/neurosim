@@ -53,6 +53,7 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
   const [error, setError] = useState<string | null>(null);
   const [serverRequiredAmountWei, setServerRequiredAmountWei] = useState<bigint | null>(null);
   const mountedRef = useRef(true);
+  const isOpenRef = useRef(false);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -74,8 +75,11 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
   }, [isOpen, onClose]);
 
   useEffect(() => {
-    // Clear server-derived pricing between modal sessions to avoid stale display.
-    setServerRequiredAmountWei(null);
+    isOpenRef.current = isOpen;
+    if (!isOpen) setServerRequiredAmountWei(null);
+    return () => {
+      isOpenRef.current = false;
+    };
   }, [isOpen]);
 
   const isOnBaseChain = chainId === base.id;
@@ -99,6 +103,7 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
 
   const handleBuyNeuro = useCallback(async () => {
     if (!walletClient || !address || !isOnBaseChain) return;
+    const canUpdateState = () => mountedRef.current && isOpenRef.current;
     setBusy('neuro');
     setError(null);
     try {
@@ -109,11 +114,14 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
       const parsedRequiredAmount = parseNonNegativeWei(balanceData.flyNeuroRequiredWei);
       const serverRequiredAmount =
         parsedRequiredAmount != null && parsedRequiredAmount > 0n ? parsedRequiredAmount : null;
-      if (mountedRef.current) setServerRequiredAmountWei(serverRequiredAmount);
+      if (canUpdateState()) setServerRequiredAmountWei(serverRequiredAmount);
+      if (!canUpdateState()) return;
       const resolvedTransferAmount = serverRequiredAmount ?? FLY_NEURO_AMOUNT_FALLBACK;
       const balanceWei = parseNonNegativeWei(balanceData.neuroBalanceWei);
       if (balanceWei != null && balanceWei < resolvedTransferAmount) {
-        setError(`Insufficient $NEURO. You need ${formatNeuroAmount(resolvedTransferAmount.toString())} $NEURO to buy a fly.`);
+        if (canUpdateState()) {
+          setError(`Insufficient $NEURO. You need ${formatNeuroAmount(resolvedTransferAmount.toString())} $NEURO to buy a fly.`);
+        }
         return;
       }
 
@@ -130,17 +138,19 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
       const maxAttempts = 5;
       const baseDelay = 1000;
       const verify = async (attempt = 0): Promise<void> => {
-        if (!mountedRef.current) return;
+        if (!canUpdateState()) return;
         notification.update('Verifying payment...', 'info');
         const res = await fetch(`${apiBase}/api/claim/verify-payment`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ txHash: hash, userAddress: address.toLowerCase() }),
         });
+        if (!canUpdateState()) return;
         const data = await res.json().catch(() => ({}));
         if (res.ok) {
           if (address) queryClient.invalidateQueries({ queryKey: apiKeys.myFlies(address) });
           onSuccess();
+          if (!canUpdateState()) return;
           notification.update('NeuroFly added!', 'success');
           setTimeout(() => notification.hide(), 2000);
           onClose();
@@ -150,17 +160,19 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
         if (retryable && attempt < maxAttempts) {
           const delay = Math.min(baseDelay * Math.pow(2, attempt), 8000);
           await new Promise((r) => setTimeout(r, delay));
-          if (mountedRef.current) return verify(attempt + 1);
+          if (canUpdateState()) return verify(attempt + 1);
+          return;
         }
+        if (!canUpdateState()) return;
         notification.update(SUPPORT_MESSAGE, 'error');
         setTimeout(() => notification.hide(), 5000);
         throw new Error(data.error ?? 'Verification failed');
       };
       await verify();
     } catch (err) {
-      if (mountedRef.current) setError(parseWalletError(err));
+      if (canUpdateState()) setError(parseWalletError(err));
     } finally {
-      if (mountedRef.current) setBusy(null);
+      if (canUpdateState()) setBusy(null);
     }
   }, [walletClient, address, isOnBaseChain, queryClient, notification, onSuccess, onClose]);
 

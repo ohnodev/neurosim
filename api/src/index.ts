@@ -231,7 +231,7 @@ function startSim(): void {
       console.log('[world] spawned food', f.id, 'at', f.x.toFixed(1), f.y.toFixed(1));
       broadcast({ simRunning, sources: getSources() });
     }
-  }, 10_000);
+  }, 5_000);
   simIntervalId = setInterval(async () => {
     if (simTickInFlight) {
       droppedSimTicks += 1;
@@ -309,7 +309,10 @@ function startSim(): void {
         }
         if (state.eatenFoodId) {
           removeFood(state.eatenFoodId);
-          recordFoodCollected(j);
+          const deployment = findDeploymentBySimIndex(j);
+          if (deployment) {
+            recordFoodCollected(deployment.address, deployment.slotIndex);
+          }
           console.log('[world] fly', j, 'ate food', state.eatenFoodId);
         }
         transitions.push({

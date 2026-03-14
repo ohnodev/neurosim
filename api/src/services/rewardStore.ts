@@ -16,8 +16,8 @@ import { dataPath } from '../lib/dataPath.js';
 const rewardsPath = dataPath('rewards-state.json');
 const deadLetterPath = dataPath('dead-letter.json');
 
-/** 100 $NEURO (18 decimals) per food collected */
-export const REWARD_PER_FOOD = 100n * 10n ** 18n;
+/** 50 $NEURO (18 decimals) per food collected */
+export const REWARD_PER_FOOD = 50n * 10n ** 18n;
 
 /** Number of NeuroFly slots per address */
 export const MAX_SLOTS = 3;
@@ -177,17 +177,12 @@ function getOrCreateStats(address: string, slotIndex: number, flyId: string): Ne
 }
 
 /**
- * Record that the fly at simIndex collected food. Resolves owner and fly id, adds reward, increments feedCount for that fly.
+ * Record that an active deployed fly collected food.
+ * Uses runtime deployment mapping (address + slot) instead of persisted deployment array index.
  */
-export function recordFoodCollected(simIndex: number): void {
-  const deployments = getDeployments();
-  const record = deployments[simIndex];
-  if (!record) return;
-  if (record.active === false) return;
-
-  const { address, slotIndex } = record;
+export function recordFoodCollected(address: string, slotIndex: number): void {
   const addr = address.toLowerCase();
-  const flyId = record.flyId ?? getFlies(addr)[slotIndex]?.id;
+  const flyId = getFlies(addr)[slotIndex]?.id;
   if (!flyId) return;
 
   const stats = getOrCreateStats(addr, slotIndex, flyId);

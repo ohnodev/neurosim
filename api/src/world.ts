@@ -14,6 +14,7 @@ export interface WorldSource {
 
 const ARENA = 24;
 const GROUND_Z = 0.35;
+const MAX_FOOD_SOURCES = 4;
 
 const sources: WorldSource[] = [];
 let nextFoodId = 1;
@@ -23,7 +24,7 @@ function randomInRange(min: number, max: number): number {
 }
 
 export function spawnFood(): WorldSource | null {
-  if (sources.filter((s) => s.type === 'food').length >= 2) return null;
+  if (sources.filter((s) => s.type === 'food').length >= MAX_FOOD_SOURCES) return null;
   const id = `food${nextFoodId++}`;
   const source: WorldSource = {
     id,

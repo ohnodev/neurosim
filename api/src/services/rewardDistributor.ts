@@ -39,6 +39,7 @@ function isPermanentError(err: unknown): boolean {
 }
 
 let flushing = false;
+let warnedMissingWallet = false;
 
 /**
  * Flush pending rewards to recipients via ERC20 transfer.
@@ -47,7 +48,14 @@ let flushing = false;
 export async function flushRewards(): Promise<void> {
   if (flushing) return;
   const wallet = getNeurosimWallet();
-  if (!wallet?.account) return;
+  if (!wallet?.account) {
+    if (!warnedMissingWallet) {
+      warnedMissingWallet = true;
+      console.warn('[rewardDistributor] flush skipped: NEUROSIM_PRIVATE_KEY not configured');
+    }
+    return;
+  }
+  warnedMissingWallet = false;
 
   flushing = true;
   try {

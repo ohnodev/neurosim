@@ -56,6 +56,7 @@ const WING_ANIM_NAMES = ['wing-leftAction', 'wing-rightAction'];
 const PULL_CLOSER_RATE = 1.1;
 const FLY_VIEW_DISTANCE = 3;
 const FLY_SCALE = 0.08;
+const LOW_LOD_FLY_SCALE = 0.16;
 const FLY_LOD_DISTANCE = 12;
 const FLY_LOD_DISTANCE_SQ = FLY_LOD_DISTANCE * FLY_LOD_DISTANCE;
 const LOW_LOD_WING_BASE_ANGLE = 0.42;
@@ -413,7 +414,7 @@ export function initThreeScene(
       clone.scale.setScalar(FLY_SCALE);
       const lowPoly = createLowPolyFlyProxy();
       const lowPolyGroup = lowPoly.group;
-      lowPolyGroup.scale.setScalar(FLY_SCALE);
+      lowPolyGroup.scale.setScalar(LOW_LOD_FLY_SCALE);
       lowPolyGroup.visible = false;
       const root = new THREE.Group();
       root.add(clone);

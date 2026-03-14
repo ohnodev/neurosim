@@ -47,6 +47,7 @@ export default function FlyViewer() {
   const [statusTab, setStatusTab] = useState<'status' | 'rewards'>('status');
   const [brainPanelOpen, setBrainPanelOpen] = useState(() => !isMobileViewport());
   const [deployingSlots, setDeployingSlots] = useState<Set<number>>(new Set());
+  const deployingSlotsRef = useRef<Set<number>>(new Set());
 
   const snapshotBufferRef = useRef<Snapshot[]>([]);
   const latestFliesRef = useRef<FlyState[]>([]);
@@ -295,6 +296,10 @@ export default function FlyViewer() {
   }, [deployed, selectedFlyIndex, connected]);
 
   useEffect(() => {
+    deployingSlotsRef.current = deployingSlots;
+  }, [deployingSlots]);
+
+  useEffect(() => {
     const container = document.createElement('div');
     container.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;z-index:0';
     document.body.insertBefore(container, document.body.firstChild);
@@ -390,6 +395,7 @@ export default function FlyViewer() {
 
   const deployFly = useCallback(
     (slotIndex: number) => {
+      if (deployingSlotsRef.current.has(slotIndex)) return;
       void deployMutation.mutate(slotIndex);
     },
     [deployMutation]

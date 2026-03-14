@@ -53,6 +53,7 @@ export function BuyFlyModal({
   }, [isOpen, onClose]);
 
   const isOnBaseChain = chainId === base.id;
+  const formattedAmount = formatNeuroAmount(FLY_NEURO_AMOUNT_FALLBACK.toString());
 
   const handleSwitchToBase = async () => {
     if (!ready || !wallets.length) return;
@@ -89,8 +90,6 @@ export function BuyFlyModal({
   };
 
   if (!isOpen) return null;
-
-  const neuroDisabled = false;
 
   const modalContent = !address ? (
     <div
@@ -140,7 +139,7 @@ export function BuyFlyModal({
             Buy NeuroFly #{slotIndex + 1}
           </h2>
           <p className="neurosim-claim__subtitle">
-            {`Pay ${formatNeuroAmount(FLY_NEURO_AMOUNT_FALLBACK.toString())} $NEURO to buy a fly`}
+            {`Pay ${formattedAmount} $NEURO to buy a fly`}
           </p>
           {txSentNonRetryable && (
             <div className="neuroflies__error">
@@ -183,9 +182,9 @@ export function BuyFlyModal({
                 type="button"
                 className="neurosim-claim__btn neurosim-claim__btn--primary"
                 onClick={handleBuyNeuro}
-                disabled={!!busy || !!txSentNonRetryable || !walletClient || !address || neuroDisabled}
+                disabled={!!busy || !!txSentNonRetryable || !walletClient || !address}
               >
-                {busy === 'neuro' ? 'Confirming...' : `Pay with ${formatNeuroAmount(FLY_NEURO_AMOUNT_FALLBACK.toString())} $NEURO`}
+                {busy === 'neuro' ? 'Confirming...' : `Pay with ${formattedAmount} $NEURO`}
               </button>
             )}
           </div>

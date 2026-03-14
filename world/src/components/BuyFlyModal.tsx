@@ -74,8 +74,8 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
 
   const isOnBaseChain = chainId === base.id;
 
-  const transferAmount = FLY_NEURO_AMOUNT_FALLBACK;
-  const displayAmountLabel = formatNeuroAmount(transferAmount.toString());
+  const fallbackAmountWei = FLY_NEURO_AMOUNT_FALLBACK;
+  const formattedAmount = formatNeuroAmount(fallbackAmountWei.toString());
 
   const handleSwitchToBase = useCallback(async () => {
     if (!ready || !wallets.length) return;
@@ -100,9 +100,9 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
       const balanceData: BalanceCheck = balanceRes.ok
         ? await balanceRes.json().catch(() => ({} as BalanceCheck))
         : {};
-      const requiredAmount = parsePositiveWei(balanceData.flyNeuroRequiredWei) ?? transferAmount;
-      const balanceWei = parsePositiveWei(balanceData.neuroBalanceWei) ?? 0n;
-      if (balanceWei < requiredAmount) {
+      const requiredAmount = parsePositiveWei(balanceData.flyNeuroRequiredWei) ?? fallbackAmountWei;
+      const balanceWei = parsePositiveWei(balanceData.neuroBalanceWei);
+      if (balanceWei != null && balanceWei < requiredAmount) {
         setError(`Insufficient $NEURO. You need ${formatNeuroAmount(requiredAmount.toString())} $NEURO to buy a fly.`);
         return;
       }
@@ -152,11 +152,9 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
     } finally {
       if (mountedRef.current) setBusy(null);
     }
-  }, [walletClient, address, isOnBaseChain, queryClient, notification, onSuccess, onClose, transferAmount]);
+  }, [walletClient, address, isOnBaseChain, queryClient, notification, onSuccess, onClose, fallbackAmountWei]);
 
   if (!isOpen) return null;
-
-  const neuroDisabled = false;
 
   const modalContent = !address ? (
     <div className="neurosim-claim-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="connect-wallet-title">
@@ -183,7 +181,7 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
         <div className="neurosim-claim__card">
           <h2 id="buy-fly-title" className="neurosim-claim__title">Buy NeuroFly #{slotIndex + 1}</h2>
           <p className="neurosim-claim__subtitle">
-            Pay with {displayAmountLabel} $NEURO to buy a fly
+            Pay with {formattedAmount} $NEURO to buy a fly
           </p>
           {error && (
             <div className="neuroflies__error">
@@ -216,9 +214,9 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
                 type="button"
                 className="neurosim-claim__btn neurosim-claim__btn--primary"
                 onClick={handleBuyNeuro}
-                disabled={!!busy || !walletClient || !address || neuroDisabled}
+                disabled={!!busy || !walletClient || !address}
               >
-                {busy === 'neuro' ? 'Confirming...' : `Pay with ${displayAmountLabel} $NEURO`}
+                {busy === 'neuro' ? 'Confirming...' : `Pay with ${formattedAmount} $NEURO`}
               </button>
             )}
           </div>

@@ -162,7 +162,6 @@ export default function FlyViewer() {
           sendViewFlyIndex(eff ?? 0);
         } else if (event._event === 'closed') {
           setConnected(false);
-          prevWsFlyCountRef.current = 0;
         }
         return;
       }

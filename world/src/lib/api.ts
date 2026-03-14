@@ -124,7 +124,13 @@ export async function fetchMyDeployed(address: string): Promise<MyDeployedData> 
     for (const k of Object.keys(raw)) {
       const slot = parseInt(k, 10);
       const val = raw[k];
-      if (!Number.isNaN(slot) && typeof val === 'number' && Number.isInteger(val)) {
+      if (
+        !Number.isNaN(slot) &&
+        slot >= 0 &&
+        slot <= 2 &&
+        typeof val === 'number' &&
+        Number.isInteger(val)
+      ) {
         out[slot] = val;
       }
     }

@@ -185,6 +185,13 @@ impl GpuSimState {
         pending_indices: &[u32],
         pending_strength: &[f32],
     ) -> Option<GpuStepResult> {
+        if !dt_sec.is_finite() || dt_sec <= 0.0 {
+            eprintln!(
+                "[brain-service][gpu] invalid dt_sec={} (requires finite > 0); n={} ne={}",
+                dt_sec, self.n, self.ne
+            );
+            return None;
+        }
         let decay = self.dev.get_func("bs", "decay_g_kernel")?;
         let recurrent = self.dev.get_func("bs", "recurrent_kernel")?;
         let add_uniform = self.dev.get_func("bs", "add_uniform_kernel")?;
@@ -241,7 +248,17 @@ impl GpuSimState {
                     .ok()?;
             }
         }
-        if !pending_indices.is_empty() && pending_indices.len() == pending_strength.len() {
+        if pending_indices.len() != pending_strength.len() {
+            eprintln!(
+                "[brain-service][gpu] pending length mismatch: idx_len={} strength_len={} n={} g_len={}",
+                pending_indices.len(),
+                pending_strength.len(),
+                n,
+                self.n
+            );
+            return None;
+        }
+        if !pending_indices.is_empty() {
             let pending_idx_dev = self.dev.htod_sync_copy(pending_indices).ok()?;
             let pending_strength_dev = self.dev.htod_sync_copy(pending_strength).ok()?;
             unsafe {

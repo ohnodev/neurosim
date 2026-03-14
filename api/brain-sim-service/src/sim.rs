@@ -114,6 +114,14 @@ impl BrainSim {
         motor_unknown: Vec<u32>,
         viewer_indices: Vec<u32>,
     ) -> Self {
+        if edges_pre.len() != edges_post.len() || edges_pre.len() != edges_weight.len() {
+            panic!(
+                "mismatched edge vector lengths: edges_pre={}, edges_post={}, edges_weight={}",
+                edges_pre.len(),
+                edges_post.len(),
+                edges_weight.len()
+            );
+        }
         let n = neuron_ids.len();
         let id_to_idx: HashMap<String, u32> = neuron_ids
             .iter()
@@ -332,7 +340,9 @@ impl BrainSim {
                             } else if self.cuda_only {
                                 panic!("[brain-service] CUDA required but GPU state sync failed");
                             } else {
-                                self.gpu_state = None;
+                                eprintln!(
+                                    "[brain-service] GPU host_state sync failed; keeping GPU authoritative and retaining gpu_state"
+                                );
                             }
                             self.spikes = spikes;
                             (recurrent_ms, lif_ms)
@@ -341,8 +351,9 @@ impl BrainSim {
                             panic!("[brain-service] CUDA required but GPU step failed")
                         }
                         None => {
-                            self.gpu_state = None;
-                            self.run_step_cpu(dt, &fly, &sources, &pending)
+                            panic!(
+                                "[brain-service] GPU step failed in fallback mode; refusing unsafe CPU fallback without authoritative host sync"
+                            );
                         }
                     }
                 } else if self.cuda_only {

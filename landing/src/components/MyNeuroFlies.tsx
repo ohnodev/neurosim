@@ -4,32 +4,30 @@ import { base } from 'viem/chains';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
 import { useNotification } from '../contexts/NotificationContext';
 import { getApiBase } from '../lib/constants';
-import { fetchClaimConfig, fetchBalanceCheck, formatNeuroAmount } from '../lib/claimApi';
 import { parseWalletError } from '../../../shared/lib/parseWalletError';
-import { CABAL_BUY_NEURO_URL, ERC20_TRANSFER_ABI } from '../../../shared/lib/claimConstants';
+import {
+  CABAL_BUY_NEURO_URL,
+  CLAIM_RECEIVER_ADDRESS,
+  ERC20_TRANSFER_ABI,
+  FLY_NEURO_AMOUNT_FALLBACK,
+  NEURO_TOKEN_ADDRESS,
+} from '../../../shared/lib/claimConstants';
 import { BuyFlyModal } from './BuyFlyModal';
 
 interface NeuroFly {
   id: string;
-  method: 'obelisk' | 'pay';
+  method: 'pay' | 'obelisk';
   claimedAt: string;
 }
 
 const SUPPORT_MESSAGE = 'Please contact support via our Telegram channel for help.';
 
-/** Default fly price in wei when API does not provide it (10k $NEURO, 18 decimals). */
-const DEFAULT_FLY_NEURO_WEI = 10_000n * 10n ** 18n;
-
-async function fetchMyFliesAndEligibility(address: string) {
+async function fetchMyFlies(address: string) {
   const apiBase = getApiBase();
   const addr = address.toLowerCase();
-  const [fliesRes, eligRes] = await Promise.all([
-    fetch(`${apiBase}/api/claim/my-flies?address=${addr}`).then((r) => r.json()),
-    fetch(`${apiBase}/api/claim/eligibility/${addr}`).then((r) => r.json()),
-  ]);
+  const fliesRes = await fetch(`${apiBase}/api/claim/my-flies?address=${addr}`).then((r) => r.json());
   const flies: NeuroFly[] = fliesRes.flies ?? [];
-  const method = (eligRes.method as 'obelisk' | 'pay' | 'full') ?? 'pay';
-  return { flies, method };
+  return flies;
 }
 
 async function fetchFlyStats(address: string): Promise<{ stats: { slotIndex: number; feedCount: number }[] }> {
@@ -43,26 +41,17 @@ export function MyNeuroFlies() {
   const { isConnected, address, walletClient } = usePrivyWallet();
   const queryClient = useQueryClient();
   const notification = useNotification();
-  const [busy, setBusy] = useState<'obelisk' | 'neuro' | null>(null);
+  const [busy, setBusy] = useState<'neuro' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const mountedRef = useRef(true);
 
-  const { data: config } = useQuery({
-    queryKey: ['claim-config'],
-    queryFn: fetchClaimConfig,
-    staleTime: 60_000,
-  });
-
-  const { data, isLoading } = useQuery({
+  const { data } = useQuery({
     queryKey: ['my-flies', address ?? ''],
-    queryFn: () => fetchMyFliesAndEligibility(address!),
+    queryFn: () => fetchMyFlies(address!),
     enabled: !!isConnected && !!address,
   });
 
-  const flies = data?.flies ?? [];
-  const eligibility = data
-    ? { method: data.method, loading: false }
-    : { method: 'pay' as const, loading: isLoading };
+  const flies = data ?? [];
   const { data: flyStatsData } = useQuery({
     queryKey: ['fly-stats', address ?? ''],
     queryFn: () => fetchFlyStats(address!),
@@ -89,31 +78,6 @@ export function MyNeuroFlies() {
     }
   };
 
-  const handleClaimFree = async () => {
-    if (!address) {
-      const msg = 'Address missing';
-      if (mountedRef.current) setError(msg);
-      throw new Error(msg);
-    }
-    setBusy('obelisk');
-    setError(null);
-    try {
-      const res = await fetch(`${getApiBase()}/api/claim/free`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ address: address.toLowerCase() }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? 'Claim failed');
-      invalidateMyFlies();
-    } catch (err) {
-      if (mountedRef.current) setError(err instanceof Error ? err.message : 'Claim failed');
-      throw err;
-    } finally {
-      if (mountedRef.current) setBusy(null);
-    }
-  };
-
   const handleBuyNeuro = async () => {
     if (!walletClient) {
       const msg = 'Wallet client missing';
@@ -125,41 +89,17 @@ export function MyNeuroFlies() {
       if (mountedRef.current) setError(msg);
       throw new Error(msg);
     }
-    if (!config?.neuroTokenAddress || !config?.claimReceiverAddress) {
-      const msg = 'Claim receiver config missing';
-      if (mountedRef.current) setError(msg);
-      throw new Error(msg);
-    }
-    const zero = '0x0000000000000000000000000000000000000000';
-    if (config.neuroTokenAddress === zero || config.claimReceiverAddress === zero) {
-      const msg = 'Claim not configured';
-      if (mountedRef.current) setError(msg);
-      throw new Error(msg);
-    }
     setBusy('neuro');
     setError(null);
     let submittedHash: string | null = null;
     try {
-      const bal = await fetchBalanceCheck(address);
-      if (!bal) {
-        const msg = 'Unable to verify balance';
-        if (mountedRef.current) setError(msg);
-        throw new Error(msg);
-      }
-      const resolvedAmountWei = BigInt(
-        config.flyNeuroAmountWei ?? bal.flyNeuroRequiredWei ?? DEFAULT_FLY_NEURO_WEI.toString()
-      );
-      if (BigInt(bal.neuroBalanceWei ?? 0) < resolvedAmountWei) {
-        const msg = `Insufficient $NEURO. You need ${formatNeuroAmount(resolvedAmountWei.toString())} $NEURO to buy a fly.`;
-        if (mountedRef.current) setError(msg);
-        throw new Error(msg);
-      }
+      const resolvedAmountWei = FLY_NEURO_AMOUNT_FALLBACK;
       submittedHash = await walletClient.writeContract({
         account: address,
-        address: config.neuroTokenAddress,
+        address: NEURO_TOKEN_ADDRESS,
         abi: ERC20_TRANSFER_ABI,
         functionName: 'transfer',
-        args: [config.claimReceiverAddress, resolvedAmountWei],
+        args: [CLAIM_RECEIVER_ADDRESS, resolvedAmountWei],
         chain: base,
       });
       notification.show('Transaction sent, pending...', 'info');
@@ -267,8 +207,6 @@ export function MyNeuroFlies() {
         onClose={() => setBuyFlySlot(null)}
         slotIndex={buyFlySlot ?? 0}
         onSuccess={invalidateMyFlies}
-        eligibility={eligibility}
-        onClaimFree={handleClaimFree}
         onBuyNeuro={handleBuyNeuro}
         busy={busy}
       />

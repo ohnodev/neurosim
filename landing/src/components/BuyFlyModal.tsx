@@ -1,22 +1,19 @@
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { useQuery } from '@tanstack/react-query';
 import { usePrivy, useWallets } from '@privy-io/react-auth';
 import { base } from 'viem/chains';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
-import { fetchClaimConfig, formatNeuroAmount } from '../lib/claimApi';
+import { formatNeuroAmount } from '../lib/claimApi';
 import { parseWalletError } from '../../../shared/lib/parseWalletError';
-import { CABAL_BUY_NEURO_URL } from '../../../shared/lib/claimConstants';
+import { CABAL_BUY_NEURO_URL, FLY_NEURO_AMOUNT_FALLBACK } from '../../../shared/lib/claimConstants';
 
 interface BuyFlyModalProps {
   isOpen: boolean;
   onClose: () => void;
   slotIndex: number;
   onSuccess: () => void;
-  eligibility: { method: 'obelisk' | 'pay' | 'full'; loading: boolean };
-  onClaimFree: () => Promise<void>;
   onBuyNeuro: () => Promise<void>;
-  busy: 'obelisk' | 'neuro' | null;
+  busy: 'neuro' | null;
 }
 
 export function BuyFlyModal({
@@ -24,8 +21,6 @@ export function BuyFlyModal({
   onClose,
   slotIndex,
   onSuccess,
-  eligibility,
-  onClaimFree,
   onBuyNeuro,
   busy,
 }: BuyFlyModalProps) {
@@ -36,13 +31,6 @@ export function BuyFlyModal({
   const [error, setError] = useState<string | null>(null);
   const [txSentNonRetryable, setTxSentNonRetryable] = useState(false);
   const [submittedTxHash, setSubmittedTxHash] = useState<string | null>(null);
-
-  const { data: config } = useQuery({
-    queryKey: ['claim-config'],
-    queryFn: fetchClaimConfig,
-    staleTime: 60_000,
-    enabled: isOpen,
-  });
 
   useEffect(() => {
     mountedRef.current = true;
@@ -80,17 +68,6 @@ export function BuyFlyModal({
     }
   };
 
-  const handleClaimFree = async () => {
-    setError(null);
-    try {
-      await onClaimFree();
-      onSuccess();
-      onClose();
-    } catch (err) {
-      if (mountedRef.current) setError(err instanceof Error ? err.message : 'Claim failed');
-    }
-  };
-
   const handleBuyNeuro = async () => {
     setError(null);
     setTxSentNonRetryable(false);
@@ -113,12 +90,7 @@ export function BuyFlyModal({
 
   if (!isOpen) return null;
 
-  const ZERO = '0x0000000000000000000000000000000000000000';
-  const neuroDisabled =
-    !config?.neuroTokenAddress ||
-    config.neuroTokenAddress === ZERO ||
-    !config?.claimReceiverAddress ||
-    config.claimReceiverAddress === ZERO;
+  const neuroDisabled = false;
 
   const modalContent = !address ? (
     <div
@@ -168,7 +140,7 @@ export function BuyFlyModal({
             Buy NeuroFly #{slotIndex + 1}
           </h2>
           <p className="neurosim-claim__subtitle">
-            {config?.flyNeuroAmountWei ? `Pay ${formatNeuroAmount(config.flyNeuroAmountWei)} $NEURO to buy a fly` : 'Pay with $NEURO to buy a fly'}
+            {`Pay ${formatNeuroAmount(FLY_NEURO_AMOUNT_FALLBACK.toString())} $NEURO to buy a fly`}
           </p>
           {txSentNonRetryable && (
             <div className="neuroflies__error">
@@ -207,26 +179,14 @@ export function BuyFlyModal({
                 Switch to Base
               </button>
             ) : (
-              <>
-                {eligibility.method === 'obelisk' && (
-                  <button
-                    type="button"
-                    className="neurosim-claim__btn neurosim-claim__btn--primary"
-                    onClick={handleClaimFree}
-                    disabled={!!busy || !!txSentNonRetryable || eligibility.loading}
-                  >
-                    {busy === 'obelisk' ? 'Claiming...' : 'Claim free (Obelisk)'}
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="neurosim-claim__btn neurosim-claim__btn--primary"
-                  onClick={handleBuyNeuro}
-                  disabled={!!busy || !!txSentNonRetryable || !walletClient || !address || neuroDisabled}
-                >
-                  {busy === 'neuro' ? 'Confirming...' : (config?.flyNeuroAmountWei ? `Pay with ${formatNeuroAmount(config.flyNeuroAmountWei)} $NEURO` : 'Pay with $NEURO')}
-                </button>
-              </>
+              <button
+                type="button"
+                className="neurosim-claim__btn neurosim-claim__btn--primary"
+                onClick={handleBuyNeuro}
+                disabled={!!busy || !!txSentNonRetryable || !walletClient || !address || neuroDisabled}
+              >
+                {busy === 'neuro' ? 'Confirming...' : `Pay with ${formatNeuroAmount(FLY_NEURO_AMOUNT_FALLBACK.toString())} $NEURO`}
+              </button>
             )}
           </div>
         </div>

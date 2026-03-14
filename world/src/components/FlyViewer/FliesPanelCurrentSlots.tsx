@@ -9,11 +9,10 @@ import {
   FlySlotDead,
   FlySlotDeploy,
   FlySlotDeploying,
-  FlySlotGraveyard,
   FlyStatusCardMemo,
 } from './FlySlots';
 
-type SlotType = 'graveyard' | 'buy' | 'deploy' | 'deploying' | 'connecting' | 'dead' | 'active';
+type SlotType = 'buy' | 'deploy' | 'deploying' | 'connecting' | 'dead' | 'active';
 
 export function FliesPanelCurrentSlots(props: {
   deployed: Record<number, number>;
@@ -49,26 +48,25 @@ export function FliesPanelCurrentSlots(props: {
         const types: Record<string, SlotType> = { slot0: 'buy', slot1: 'buy', slot2: 'buy' };
         for (let i = 0; i < 3; i++) {
           const inGraveyard = graveyardSlots.has(i);
-          const hasFly = myFlies[i] != null;
+          // Graveyard means this slot can be repurchased in Current tab.
+          const hasFly = !inGraveyard && myFlies[i] != null;
           const isDeploying = deployingSlots.has(i);
           const simIdx = deployed[i];
           const isDeployed = simIdx != null;
           const hasSimFly = isDeployed && flies[simIdx] != null;
           const simFly = hasSimFly ? flies[simIdx]! : DEFAULT_FLY;
           const isDead = hasSimFly && simFly.dead;
-          const t: SlotType = inGraveyard
-            ? 'graveyard'
-            : !hasFly
-              ? 'buy'
-              : isDeploying
-                ? 'deploying'
-                : !isDeployed
-                  ? 'deploy'
-                  : isDeployed && !hasSimFly
-                    ? 'connecting'
-                    : isDead
-                      ? 'dead'
-                      : 'active';
+          const t: SlotType = !hasFly
+            ? 'buy'
+            : isDeploying
+              ? 'deploying'
+              : !isDeployed
+                ? 'deploy'
+                : isDeployed && !hasSimFly
+                  ? 'connecting'
+                  : isDead
+                    ? 'dead'
+                    : 'active';
           types[`slot${i}`] = t;
         }
         return types;
@@ -81,8 +79,6 @@ export function FliesPanelCurrentSlots(props: {
     const slotType = slotTypes[`slot${i}`];
     const isEmpty = myFlies.every((f) => f == null) && i === 0;
     switch (slotType) {
-      case 'graveyard':
-        return <FlySlotGraveyard index={i} />;
       case 'buy':
         return <FlySlotBuy index={i} isEmpty={isEmpty} setBuyFlySlot={setBuyFlySlot} />;
       case 'deploy':

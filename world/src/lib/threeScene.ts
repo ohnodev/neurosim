@@ -77,13 +77,11 @@ const LOW_LOD_WING_FLAP_SPEED = 0.03;
 const LOW_LOD_BODY_COLOR = 0x102a5a;
 const LOW_LOD_HEAD_COLOR = 0x111111;
 const LOW_LOD_WING_COLOR = 0xf5f7ff;
-const SKY_TOP_COLOR = '#111a3a';
-const SKY_HORIZON_COLOR = '#060b1e';
-const SKY_BOTTOM_COLOR = '#020308';
-const SKY_DOME_RADIUS = ARENA_SIZE * 14;
-const SKY_STAR_COUNT = 120;
-const SKY_STAR_MIN_RADIUS = 0.6;
-const SKY_STAR_MAX_RADIUS = 1.6;
+const SCENE_BG_COLOR = 0x000000;
+const CELESTIAL_BLOB_COLOR = 0x5f6f88;
+const CELESTIAL_BLOB_COLOR_B = 0x2f3a4d;
+const CELESTIAL_RING_COLOR = 0x888f9c;
+const CELESTIAL_STAR_COLOR = 0x7f8cff;
 /** Sim ground level (z=0.35); map to Three.js y=0 so fly rests on ground */
 const GROUND_Z = 0.35;
 
@@ -217,34 +215,57 @@ function createCameraButton(
   return { el: btn, update };
 }
 
-function createSpaceSkyTexture(): THREE.CanvasTexture {
-  const canvas = document.createElement('canvas');
-  canvas.width = 256;
-  canvas.height = 256;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error('[threeScene] Failed to create sky gradient context');
-  const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
-  grad.addColorStop(0, SKY_TOP_COLOR);
-  grad.addColorStop(0.58, SKY_HORIZON_COLOR);
-  grad.addColorStop(1, SKY_BOTTOM_COLOR);
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  for (let i = 0; i < SKY_STAR_COUNT; i++) {
-    const x = Math.random() * canvas.width;
-    const y = Math.random() * canvas.height;
-    const r = SKY_STAR_MIN_RADIUS + Math.random() * (SKY_STAR_MAX_RADIUS - SKY_STAR_MIN_RADIUS);
-    const a = 0.35 + Math.random() * 0.55;
-    ctx.fillStyle = `rgba(255,255,255,${a.toFixed(3)})`;
-    ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fill();
+function createCelestialBackdrop(): { group: THREE.Group; dispose: () => void } {
+  const group = new THREE.Group();
+  const icosa = new THREE.IcosahedronGeometry(1, 0);
+  const ring = new THREE.TorusGeometry(1.8, 0.22, 8, 18);
+  const star = new THREE.BoxGeometry(1, 1, 1);
+  const matA = new THREE.MeshBasicMaterial({ color: CELESTIAL_BLOB_COLOR });
+  const matB = new THREE.MeshBasicMaterial({ color: CELESTIAL_BLOB_COLOR_B });
+  const ringMat = new THREE.MeshBasicMaterial({ color: CELESTIAL_RING_COLOR });
+  const starMat = new THREE.MeshBasicMaterial({ color: CELESTIAL_STAR_COLOR });
+
+  const saturnCore = new THREE.Mesh(icosa, matA);
+  saturnCore.position.set(120, 90, -260);
+  saturnCore.scale.set(18, 18, 18);
+  const saturnRing = new THREE.Mesh(ring, ringMat);
+  saturnRing.position.copy(saturnCore.position);
+  saturnRing.rotation.set(Math.PI * 0.42, Math.PI * 0.2, 0);
+  saturnRing.scale.set(14, 14, 3.8);
+  group.add(saturnCore, saturnRing);
+
+  const moonA = new THREE.Mesh(icosa, matB);
+  moonA.position.set(-190, 120, -300);
+  moonA.scale.set(10, 10, 10);
+  group.add(moonA);
+
+  const moonB = new THREE.Mesh(icosa, matA);
+  moonB.position.set(210, 70, 180);
+  moonB.scale.set(8, 8, 8);
+  group.add(moonB);
+
+  for (let i = 0; i < 14; i++) {
+    const s = new THREE.Mesh(star, starMat);
+    const x = -280 + (i * 41) % 560;
+    const y = 70 + (i * 29) % 160;
+    const z = i % 2 === 0 ? -320 - i * 6 : 260 + i * 5;
+    s.position.set(x, y, z);
+    const scale = 1.2 + (i % 4) * 0.55;
+    s.scale.setScalar(scale);
+    group.add(s);
   }
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.minFilter = THREE.LinearFilter;
-  tex.magFilter = THREE.LinearFilter;
-  tex.generateMipmaps = false;
-  return tex;
+
+  const dispose = () => {
+    icosa.dispose();
+    ring.dispose();
+    star.dispose();
+    matA.dispose();
+    matB.dispose();
+    ringMat.dispose();
+    starMat.dispose();
+  };
+
+  return { group, dispose };
 }
 
 export function initThreeScene(
@@ -274,7 +295,7 @@ export function initThreeScene(
   };
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x060913);
+  scene.background = new THREE.Color(SCENE_BG_COLOR);
   const camera = new THREE.PerspectiveCamera(50, container.clientWidth / container.clientHeight, 0.1, 1000);
   camera.position.set(8, 6, 8);
 
@@ -305,16 +326,8 @@ export function initThreeScene(
   ground.receiveShadow = true;
   scene.add(ground);
 
-  const skyTex = createSpaceSkyTexture();
-  const skyGeom = new THREE.SphereGeometry(SKY_DOME_RADIUS, 12, 8);
-  const skyMat = new THREE.MeshBasicMaterial({
-    map: skyTex,
-    side: THREE.BackSide,
-    depthWrite: false,
-  });
-  const skyDome = new THREE.Mesh(skyGeom, skyMat);
-  skyDome.position.set(0, ARENA_SIZE * 0.4, 0);
-  scene.add(skyDome);
+  const celestial = createCelestialBackdrop();
+  scene.add(celestial.group);
 
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.maxDistance = 1000;
@@ -678,9 +691,7 @@ export function initThreeScene(
     renderer.dispose();
     groundGeom.dispose();
     groundMat.dispose();
-    skyGeom.dispose();
-    skyMat.dispose();
-    skyTex.dispose();
+    celestial.dispose();
     container.removeChild(renderer.domElement);
     if (cameraButton) cameraButton.el.remove();
     if (disposeStatus) disposeStatus();

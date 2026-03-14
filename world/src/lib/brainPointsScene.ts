@@ -103,6 +103,7 @@ export function initBrainPoints(
   let disposed = false;
   let animationId: number;
   let lastActivityRef: Record<string, number> | null = null;
+  let lastFollowSimIndex: number | undefined = refs.followSimIndexRef.current;
   let lastColorUpdateTime = 0;
   let lastFrameTime = 0;
   const decayActivity = new Map<string, number>();
@@ -147,11 +148,19 @@ export function initBrainPoints(
   function animate(timestamp?: number): void {
     if (disposed) return;
     animationId = requestAnimationFrame(animate);
+    const nowMs = timestamp ?? performance.now();
+    const currentFollowSimIndex = refs.followSimIndexRef.current;
+    if (currentFollowSimIndex !== lastFollowSimIndex) {
+      decayActivity.clear();
+      lastColorUpdateTime = 0;
+      lastFrameTime = nowMs;
+      lastActivityRef = null;
+      lastFollowSimIndex = currentFollowSimIndex;
+    }
     const deltaSeconds = lastFrameTime === 0 ? 0 : ((timestamp ?? performance.now()) - lastFrameTime) / 1000;
-    lastFrameTime = timestamp ?? performance.now();
+    lastFrameTime = nowMs;
     if (points) {
       points.rotation.y += ROTATE_SPEED * deltaSeconds;
-      const nowMs = timestamp ?? performance.now();
       const activity = getActivity();
       if (activity !== lastActivityRef || nowMs - lastColorUpdateTime >= COLOR_UPDATE_INTERVAL_MS) {
         updateColors(nowMs);

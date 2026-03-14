@@ -256,15 +256,37 @@ function buildRotatingActivityWindow(
     }
   }
 
-  const ids = Array.from(trail.keys());
+  const ids = Array.from(
+    new Set<string>([
+      ...trail.keys(),
+      ...Object.keys(latestActivity),
+      ...Object.keys(latestInputActivity),
+    ]),
+  );
   if (ids.length === 0) return latestActivity;
 
+  const activeNow = Array.from(
+    new Set<string>([
+      ...Object.keys(latestActivity).filter((id) => (latestActivity[id] ?? 0) > 0),
+      ...Object.keys(latestInputActivity).filter((id) => (latestInputActivity[id] ?? 0) > 0),
+    ]),
+  );
+  const activeSet = new Set(activeNow);
+  const rotatingPool = ids.filter((id) => !activeSet.has(id));
+
   const limit = Math.min(CLIENT_ACTIVITY_LIMIT, ids.length);
-  const hasOverflow = ids.length > limit;
-  const start = hasOverflow ? ((clientActivityCursor.get(ws) ?? 0) % ids.length) : 0;
+  const activeSelected = activeNow.slice(0, limit);
+  const remaining = Math.max(0, limit - activeSelected.length);
+  const hasPoolOverflow = rotatingPool.length > remaining;
+  const start = hasPoolOverflow ? ((clientActivityCursor.get(ws) ?? 0) % rotatingPool.length) : 0;
+  const selected: string[] = [...activeSelected];
+  for (let i = 0; i < remaining; i++) {
+    if (rotatingPool.length === 0) break;
+    selected.push(rotatingPool[(start + i) % rotatingPool.length]!);
+  }
+
   const out: Record<string, number> = {};
-  for (let i = 0; i < limit; i++) {
-    const id = ids[(start + i) % ids.length]!;
+  for (const id of selected) {
     const direct = latestActivity[id] ?? 0;
     if (direct > 0) {
       out[id] = 1;
@@ -282,7 +304,9 @@ function buildRotatingActivityWindow(
     const decayed = entry.value * normalized;
     if (decayed > 0) out[id] = Math.max(CLIENT_ACTIVITY_FLOOR, decayed);
   }
-  if (hasOverflow) clientActivityCursor.set(ws, (start + limit) % ids.length);
+  if (hasPoolOverflow && rotatingPool.length > 0) {
+    clientActivityCursor.set(ws, (start + remaining) % rotatingPool.length);
+  }
   return out;
 }
 
@@ -808,6 +832,7 @@ if (process.env.VITEST !== 'true') {
 export function resetDeployStateForTesting(): void {
   deployedFlies.clear();
   sims.splice(0, sims.length);
+  simActivityTrail.splice(0, simActivityTrail.length);
   clearForTesting();
 }
 

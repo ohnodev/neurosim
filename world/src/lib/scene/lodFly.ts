@@ -20,6 +20,7 @@ export interface LowLodFlyResources {
   headMat: THREE.MeshStandardMaterial;
   wingMat: THREE.MeshStandardMaterial;
   config: LowLodFlyConfig;
+  disposed: boolean;
 }
 
 export interface LowLodFlyProxy {
@@ -49,6 +50,7 @@ export function createLowLodFlyResources(config: LowLodFlyConfig): LowLodFlyReso
       metalness: 0.02,
     }),
     config,
+    disposed: false,
   };
 }
 
@@ -96,6 +98,8 @@ export function applyLowLodWingPose(
 }
 
 export function disposeLowLodFlyResources(resources: LowLodFlyResources): void {
+  if (resources.disposed) return;
+  resources.disposed = true;
   resources.bodyGeom.dispose();
   resources.headGeom.dispose();
   resources.wingGeom.dispose();

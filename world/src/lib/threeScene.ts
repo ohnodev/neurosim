@@ -66,7 +66,11 @@ const FLY_SCALE = 0.08;
 const LOW_LOD_FLY_SCALE = 0.3;
 const LOW_LOD_HEIGHT_OFFSET = 0.04;
 const FLY_LOD_DISTANCE = 20;
-const FLY_LOD_DISTANCE_SQ = FLY_LOD_DISTANCE * FLY_LOD_DISTANCE;
+const FLY_LOD_HYSTERESIS = 2;
+const FLY_LOD_DISTANCE_IN = FLY_LOD_DISTANCE;
+const FLY_LOD_DISTANCE_OUT = FLY_LOD_DISTANCE + FLY_LOD_HYSTERESIS;
+const FLY_LOD_DISTANCE_IN_SQ = FLY_LOD_DISTANCE_IN * FLY_LOD_DISTANCE_IN;
+const FLY_LOD_DISTANCE_OUT_SQ = FLY_LOD_DISTANCE_OUT * FLY_LOD_DISTANCE_OUT;
 const LOW_LOD_WING_BASE_ANGLE = 0.52;
 const LOW_LOD_WING_FLAP_AMPLITUDE = 0.43;
 const LOW_LOD_WING_FLAP_SPEED = 0.03;
@@ -395,7 +399,6 @@ export function initThreeScene(
       const inst = flyInstances.pop()!;
       fliesGroup.remove(inst.group);
       disposeObject3D(inst.detailGroup);
-      disposeObject3D(inst.lowLod.group);
     }
     while (flyInstances.length < count && flyTemplate && flyClips.length > 0) {
       const clone = cloneWithOwnResources(flyTemplate) as THREE.Group;
@@ -530,7 +533,9 @@ export function initThreeScene(
       inst.group.rotation.y = inst.heading;
 
       const distSq = camera.position.distanceToSquared(inst.group.position);
-      const shouldShowDetail = distSq <= FLY_LOD_DISTANCE_SQ;
+      const shouldShowDetail = inst.detailVisible
+        ? distSq <= FLY_LOD_DISTANCE_OUT_SQ
+        : distSq <= FLY_LOD_DISTANCE_IN_SQ;
       if (shouldShowDetail !== inst.detailVisible) {
         inst.detailVisible = shouldShowDetail;
         inst.detailGroup.visible = shouldShowDetail;
@@ -624,7 +629,8 @@ export function initThreeScene(
     if (disposeStatus) disposeStatus();
     if (disposeDebug) disposeDebug();
     for (const inst of flyInstances) {
-      disposeObject3D(inst.group);
+      fliesGroup.remove(inst.group);
+      disposeObject3D(inst.detailGroup);
     }
     for (const c of sourcesGroup.children.slice()) {
       sourcesGroup.remove(c);

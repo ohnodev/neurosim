@@ -123,6 +123,10 @@ impl GpuSimState {
         refrac_init: &[u16],
         spikes_init: &[u8],
     ) -> Option<Self> {
+        if edges_pre.len() != edges_post.len() || edges_pre.len() != edges_weight.len() {
+            return None;
+        }
+        let ne = edges_pre.len();
         let dev = DEVICE
             .get_or_init(|| {
                 let d = CudaDevice::new(0).ok()?;
@@ -151,7 +155,7 @@ impl GpuSimState {
         let spikes_prev = dev.htod_sync_copy(spikes_init).ok()?;
         let spikes_next = dev.alloc_zeros(n).ok()?;
         Some(Self {
-            ne: edges_pre.len(),
+            ne,
             dev,
             n,
             edge_pre,
@@ -187,12 +191,14 @@ impl GpuSimState {
         let syn_decay = (-dt_ms / 5.0).exp();
         let mem_alpha = dt_ms / 20.0;
         let refrac_steps = ((2.2f32 / dt_ms).ceil().max(1.0)) as u16;
-        let t_recurrent = Instant::now();
 
         unsafe {
             decay
                 .launch(LaunchConfig::for_num_elems(self.n as u32), (&mut self.g, n, syn_decay))
                 .ok()?;
+        }
+        let t_recurrent = Instant::now();
+        unsafe {
             recurrent.launch(
                 LaunchConfig::for_num_elems(self.ne as u32),
                 (
@@ -279,5 +285,12 @@ impl GpuSimState {
             recurrent_ms,
             lif_ms,
         })
+    }
+
+    pub fn host_state(&self) -> Option<(Vec<f32>, Vec<f32>, Vec<u16>)> {
+        let v = self.dev.dtoh_sync_copy(&self.v).ok()?;
+        let g = self.dev.dtoh_sync_copy(&self.g).ok()?;
+        let refrac = self.dev.dtoh_sync_copy(&self.refrac).ok()?;
+        Some((v, g, refrac))
     }
 }

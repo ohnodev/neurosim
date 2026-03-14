@@ -81,9 +81,9 @@ fn refractory_prevents_every_step_spiking() {
     }
 
     assert!(!spike_steps.is_empty(), "stimulated neuron should spike at least once");
-    // Refractory is > 2 steps at dt=1ms, so spikes should not happen every step.
+    // Refractory is ceil(2.2/1.0)=3 steps at dt=1ms.
     for window in spike_steps.windows(2) {
-        assert!(window[1] - window[0] >= 2);
+        assert!(window[1] - window[0] >= 3);
     }
 }
 

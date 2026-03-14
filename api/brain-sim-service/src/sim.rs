@@ -329,6 +329,15 @@ impl BrainSim {
                             recurrent_ms,
                             lif_ms,
                         }) => {
+                            if let Some((v, g, refractory)) = gpu.host_state() {
+                                self.v = v;
+                                self.g = g;
+                                self.refractory = refractory;
+                            } else if self.cuda_only {
+                                panic!("[brain-service] CUDA required but GPU state sync failed");
+                            } else {
+                                self.gpu_state = None;
+                            }
                             self.spikes = spikes;
                             (recurrent_ms, lif_ms)
                         }

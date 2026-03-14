@@ -16,8 +16,8 @@ import { dataPath } from '../lib/dataPath.js';
 const rewardsPath = dataPath('rewards-state.json');
 const deadLetterPath = dataPath('dead-letter.json');
 
-/** 1,000 $NEURO (18 decimals) per food collected */
-export const REWARD_PER_FOOD = 1_000n * 10n ** 18n;
+/** 100 $NEURO (18 decimals) per food collected */
+export const REWARD_PER_FOOD = 100n * 10n ** 18n;
 
 /** Number of NeuroFly slots per address */
 export const MAX_SLOTS = 3;

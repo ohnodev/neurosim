@@ -3,12 +3,12 @@
  * Neuron positions → points, activity → vertex colors, auto-rotate.
  */
 import * as THREE from 'three';
-import { computeColor } from '../../../shared/lib/brainPlotColors';
 import type { NeuronWithPosition } from '../../../shared/lib/brainTypes';
 
 const COLOR_SCALE: [number, string][] = [
-  [0, '#888888'],
-  [0.3, '#4a7de8'],
+  [0, '#070b16'],
+  [0.2, '#1f365f'],
+  [0.4, '#4a7de8'],
   [0.5, '#e8b84a'],
   [0.7, '#e85a4a'],
   [1, '#ff8c7a'],
@@ -63,6 +63,17 @@ export interface BrainPointsRefs {
 
 const ROTATE_SPEED = 0.15;
 const ZOOM = 0.45; // Ortho extent (smaller = zoomed in)
+const ACTIVITY_DECAY_MS = 450;
+const COLOR_UPDATE_INTERVAL_MS = 50;
+
+function computeNeuronColorValue(activityValue: number, side: string): number {
+  const a = activityValue;
+  if (a <= 0) return 0;
+  const s = side.toLowerCase();
+  if (s === 'left') return 0.3 + a * 0.4;
+  if (s === 'right') return 0.7 + a * 0.3;
+  return 0.5 + a * 0.2;
+}
 
 export function initBrainPoints(
   container: HTMLElement,
@@ -92,7 +103,10 @@ export function initBrainPoints(
   let disposed = false;
   let animationId: number;
   let lastActivityRef: Record<string, number> | null = null;
+  let lastFollowSimIndex: number | undefined = refs.followSimIndexRef.current;
+  let lastColorUpdateTime = 0;
   let lastFrameTime = 0;
+  const decayActivity = new Map<string, number>();
 
   function getActivity(): Record<string, number> {
     const idx = refs.followSimIndexRef.current;
@@ -101,12 +115,30 @@ export function initBrainPoints(
     return refs.activityRef.current;
   }
 
-  function updateColors(): void {
+  function updateColors(nowMs: number): void {
     if (!colorAttr || !points || disposed) return;
     const activity = getActivity();
     lastActivityRef = activity;
+    const decayFactor = lastColorUpdateTime > 0
+      ? Math.exp(-(nowMs - lastColorUpdateTime) / ACTIVITY_DECAY_MS)
+      : 0;
+    if (decayActivity.size > 0) {
+      for (const [id, prev] of decayActivity.entries()) {
+        const next = prev * decayFactor;
+        if (next < 0.01) decayActivity.delete(id);
+        else decayActivity.set(id, next);
+      }
+    }
+    for (const [id, v] of Object.entries(activity)) {
+      if (v > 0) {
+        const prev = decayActivity.get(id) ?? 0;
+        decayActivity.set(id, Math.max(prev, Math.min(1, v)));
+      }
+    }
+    lastColorUpdateTime = nowMs;
     for (let i = 0; i < ids.length; i++) {
-      const v = computeColor(activity, ids[i]!, sides[i] ?? '');
+      const a = decayActivity.get(ids[i]!) ?? 0;
+      const v = computeNeuronColorValue(a, sides[i] ?? '');
       const [r, g, b] = colormapLookup(v);
       colorAttr.setXYZ(i, r, g, b);
     }
@@ -116,12 +148,23 @@ export function initBrainPoints(
   function animate(timestamp?: number): void {
     if (disposed) return;
     animationId = requestAnimationFrame(animate);
+    const nowMs = timestamp ?? performance.now();
+    const currentFollowSimIndex = refs.followSimIndexRef.current;
+    if (currentFollowSimIndex !== lastFollowSimIndex) {
+      decayActivity.clear();
+      lastColorUpdateTime = 0;
+      lastFrameTime = nowMs;
+      lastActivityRef = null;
+      lastFollowSimIndex = currentFollowSimIndex;
+    }
     const deltaSeconds = lastFrameTime === 0 ? 0 : ((timestamp ?? performance.now()) - lastFrameTime) / 1000;
-    lastFrameTime = timestamp ?? performance.now();
+    lastFrameTime = nowMs;
     if (points) {
       points.rotation.y += ROTATE_SPEED * deltaSeconds;
       const activity = getActivity();
-      if (activity !== lastActivityRef) updateColors();
+      if (activity !== lastActivityRef || nowMs - lastColorUpdateTime >= COLOR_UPDATE_INTERVAL_MS) {
+        updateColors(nowMs);
+      }
     }
     renderer.render(scene, camera);
   }
@@ -181,16 +224,18 @@ export function initBrainPoints(
     geometry.setAttribute('color', colorAttr);
 
     const material = new THREE.PointsMaterial({
-      size: 0.03,
+      size: 0.04,
       vertexColors: true,
       sizeAttenuation: true,
-      transparent: false,
+      transparent: true,
+      opacity: 0.98,
+      depthWrite: false,
     });
 
     points = new THREE.Points(geometry, material);
     scene.add(points);
     lastActivityRef = null;
-    updateColors();
+    updateColors(performance.now());
   }
   onReady?.();
 

@@ -18,6 +18,10 @@ const connectome = loadConnectome();
 const ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
 const MAX_SLOT_INDEX = 2;
 const VIEWER_NEURON_LIMIT = Math.max(1, Number(process.env.NEUROSIM_VIEWER_NEURON_LIMIT ?? 10_000));
+const CLIENT_ACTIVITY_LIMIT = Math.max(1, Number(process.env.NEUROSIM_CLIENT_ACTIVITY_LIMIT ?? 1_000));
+const CLIENT_ACTIVITY_TTL_MS = Math.max(250, Number(process.env.NEUROSIM_CLIENT_ACTIVITY_TTL_MS ?? 4_000));
+const CLIENT_ACTIVITY_FLOOR = Math.min(0.4, Math.max(0.01, Number(process.env.NEUROSIM_CLIENT_ACTIVITY_FLOOR ?? 0.08)));
+const CLIENT_INPUT_ACTIVITY_DEFAULT = Math.min(0.9, Math.max(CLIENT_ACTIVITY_FLOOR, Number(process.env.NEUROSIM_CLIENT_INPUT_ACTIVITY ?? 0.55)));
 
 function fnv1a32(s: string): number {
   let h = 0x811c9dc5;
@@ -81,6 +85,8 @@ let rewardFlushIntervalId: ReturnType<typeof setInterval> | null = null;
 const sims: Awaited<ReturnType<typeof createBrainSim>>[] = [];
 /** address -> slotIndex -> simIndex */
 const deployedFlies = new Map<string, Map<number, number>>();
+/** Per-sim rolling activity memory so clients can receive rotating recent spikes/inputs. */
+const simActivityTrail: Array<Map<string, { seenAt: number; value: number }>> = [];
 
 function parseAndValidateAddress(raw: unknown): string | null {
   if (Array.isArray(raw) || typeof raw !== 'string') return null;
@@ -112,6 +118,7 @@ function removeSimAtIndex(simIndex: number): { address: string; slotIndex: numbe
   if (simIndex < 0 || simIndex >= sims.length) return null;
   const deployment = findDeploymentBySimIndex(simIndex);
   sims.splice(simIndex, 1);
+  simActivityTrail.splice(simIndex, 1);
 
   for (const [address, slotMap] of deployedFlies) {
     for (const [slotIndex, mappedIndex] of slotMap) {
@@ -140,6 +147,7 @@ async function addFlyToSim(): Promise<number> {
     health: 100,
   });
   sims.push(sim);
+  simActivityTrail.push(new Map());
   return sims.length - 1;
 }
 
@@ -179,6 +187,8 @@ let droppedSimTicks = 0;
 const wsClients = new Set<import('ws').WebSocket>();
 /** Per-client: which fly's activity to send (sim index). Default 0. */
 const clientViewFlyIndex = new Map<import('ws').WebSocket, number>();
+/** Per-client cursor for rotating activity windows. */
+const clientActivityCursor = new Map<import('ws').WebSocket, number>();
 
 function broadcast(data: unknown): void {
   const payload = JSON.stringify(data);
@@ -189,21 +199,115 @@ function broadcast(data: unknown): void {
 
 /** Build per-client payload. Activity and sources sent once per batch (client only uses last). */
 function buildClientPayload(
-  frames: { t: number; flies: ReturnType<typeof sims[0]['getState']>['fly'][]; activities: (Record<string, number> | undefined)[] }[],
+  frames: {
+    t: number;
+    flies: ReturnType<typeof sims[0]['getState']>['fly'][];
+    activities: (Record<string, number> | undefined)[];
+    inputActivities: (Record<string, number> | undefined)[];
+  }[],
 ): void {
+  const nowMs = Date.now();
   const sources = getSources();
   const clientFrames = frames.map((f) => ({ t: f.t, flies: f.flies }));
   const lastFrame = frames[frames.length - 1];
   for (const ws of wsClients) {
     if (ws.readyState !== 1) continue;
     const viewIndex = Math.max(0, Math.min(sims.length - 1, clientViewFlyIndex.get(ws) ?? 0));
-    const activity = lastFrame ? (lastFrame.activities[viewIndex] ?? {}) : {};
+    const activity = buildRotatingActivityWindow(
+      ws,
+      viewIndex,
+      lastFrame ? (lastFrame.activities[viewIndex] ?? {}) : {},
+      lastFrame ? (lastFrame.inputActivities[viewIndex] ?? {}) : {},
+      nowMs,
+    );
     try {
       ws.send(JSON.stringify({ frames: clientFrames, activity, sources, simRunning: true }));
     } catch (err) {
       console.error('[ws] send error', err);
     }
   }
+}
+
+function buildRotatingActivityWindow(
+  ws: import('ws').WebSocket,
+  simIndex: number,
+  latestActivity: Record<string, number>,
+  latestInputActivity: Record<string, number>,
+  nowMs: number,
+): Record<string, number> {
+  const trail = simActivityTrail[simIndex] ?? null;
+  if (!trail) return latestActivity;
+
+  for (const [id, entry] of trail.entries()) {
+    if (nowMs - entry.seenAt > CLIENT_ACTIVITY_TTL_MS) trail.delete(id);
+  }
+  for (const [id, value] of Object.entries(latestActivity)) {
+    if (value > 0) {
+      trail.set(id, { seenAt: nowMs, value: 1 });
+    }
+  }
+  for (const [id, value] of Object.entries(latestInputActivity)) {
+    if (value > 0) {
+      const prev = trail.get(id);
+      trail.set(id, {
+        seenAt: nowMs,
+        value: Math.max(prev?.value ?? 0, Math.max(CLIENT_ACTIVITY_FLOOR, Math.min(0.95, value || CLIENT_INPUT_ACTIVITY_DEFAULT))),
+      });
+    }
+  }
+
+  const ids = Array.from(
+    new Set<string>([
+      ...trail.keys(),
+      ...Object.keys(latestActivity),
+      ...Object.keys(latestInputActivity),
+    ]),
+  );
+  if (ids.length === 0) return latestActivity;
+
+  const activeNow = Array.from(
+    new Set<string>([
+      ...Object.keys(latestActivity).filter((id) => (latestActivity[id] ?? 0) > 0),
+      ...Object.keys(latestInputActivity).filter((id) => (latestInputActivity[id] ?? 0) > 0),
+    ]),
+  );
+  const activeSet = new Set(activeNow);
+  const rotatingPool = ids.filter((id) => !activeSet.has(id));
+
+  const limit = Math.min(CLIENT_ACTIVITY_LIMIT, ids.length);
+  const activeSelected = activeNow.slice(0, limit);
+  const remaining = Math.max(0, limit - activeSelected.length);
+  const hasPoolOverflow = rotatingPool.length > remaining;
+  const start = hasPoolOverflow ? ((clientActivityCursor.get(ws) ?? 0) % rotatingPool.length) : 0;
+  const selected: string[] = [...activeSelected];
+  for (let i = 0; i < remaining; i++) {
+    if (rotatingPool.length === 0) break;
+    selected.push(rotatingPool[(start + i) % rotatingPool.length]!);
+  }
+
+  const out: Record<string, number> = {};
+  for (const id of selected) {
+    const direct = latestActivity[id] ?? 0;
+    if (direct > 0) {
+      out[id] = 1;
+      continue;
+    }
+    const directInput = latestInputActivity[id] ?? 0;
+    if (directInput > 0) {
+      out[id] = Math.max(CLIENT_ACTIVITY_FLOOR, Math.min(0.95, directInput));
+      continue;
+    }
+    const entry = trail.get(id);
+    if (!entry) continue;
+    const age = Math.max(0, nowMs - entry.seenAt);
+    const normalized = 1 - age / CLIENT_ACTIVITY_TTL_MS;
+    const decayed = entry.value * normalized;
+    if (decayed > 0) out[id] = Math.max(CLIENT_ACTIVITY_FLOOR, decayed);
+  }
+  if (hasPoolOverflow && rotatingPool.length > 0) {
+    clientActivityCursor.set(ws, (start + remaining) % rotatingPool.length);
+  }
+  return out;
 }
 
 function lerp(a: number, b: number, t: number): number {
@@ -253,7 +357,12 @@ function startSim(): void {
       let batchSize = 0;
       const dtFrame = 1 / SIM_FPS;
       const batchDt = dtFrame * FRAMES_PER_BATCH;
-      const frames: { t: number; flies: ReturnType<typeof sims[0]['getState']>['fly'][]; activities: (Record<string, number> | undefined)[] }[] = [];
+      const frames: {
+        t: number;
+        flies: ReturnType<typeof sims[0]['getState']>['fly'][];
+        activities: (Record<string, number> | undefined)[];
+        inputActivities: (Record<string, number> | undefined)[];
+      }[] = [];
 
       const transitions: Array<{
         fromFly: ReturnType<typeof sims[0]['getState']>['fly'];
@@ -261,6 +370,7 @@ function startSim(): void {
         fromT: number;
         toT: number;
         activity?: Record<string, number>;
+        inputActivity?: Record<string, number>;
       }> = [];
 
       const beforeStates = sims.map((s) => s.getState());
@@ -274,6 +384,7 @@ function startSim(): void {
       const states = await Promise.all(
         sims.map((s, idx) => s.step(batchDt, { includeActivity: viewedSimIndexes.has(idx) })),
       );
+      const activityNowMs = Date.now();
       const deadSimIndexes: number[] = [];
       for (let j = 0; j < nSims; j++) {
         const before = beforeStates[j];
@@ -321,7 +432,26 @@ function startSim(): void {
           fromT: before.t,
           toT: state.t,
           activity: state.activity,
+          inputActivity: state.inputActivity,
         });
+        if (state.activity && simActivityTrail[j]) {
+          const trail = simActivityTrail[j]!;
+          for (const [id, value] of Object.entries(state.activity)) {
+            if (value > 0) trail.set(id, { seenAt: activityNowMs, value: 1 });
+          }
+        }
+        if (state.inputActivity && simActivityTrail[j]) {
+          const trail = simActivityTrail[j]!;
+          for (const [id, value] of Object.entries(state.inputActivity)) {
+            if (value > 0) {
+              const prev = trail.get(id);
+              trail.set(id, {
+                seenAt: activityNowMs,
+                value: Math.max(prev?.value ?? 0, Math.max(CLIENT_ACTIVITY_FLOOR, Math.min(0.95, value || CLIENT_INPUT_ACTIVITY_DEFAULT))),
+              });
+            }
+          }
+        }
         if (state.fly.dead || (state.fly.health ?? 100) <= 0) {
           deadSimIndexes.push(j);
         }
@@ -359,8 +489,9 @@ function startSim(): void {
           health: lerp(tr.fromFly.health ?? 100, tr.toFly.health ?? 100, alpha),
         }));
         const activities = transitions.map((tr) => (i === FRAMES_PER_BATCH ? tr.activity : undefined));
+        const inputActivities = transitions.map((tr) => (i === FRAMES_PER_BATCH ? tr.inputActivity : undefined));
         const t = transitions.length ? lerp(transitions[0].fromT, transitions[0].toT, alpha) : 0;
-        frames.push({ t, flies, activities });
+        frames.push({ t, flies, activities, inputActivities });
       }
       const beforePayload = performance.now();
       buildClientPayload(frames);
@@ -642,6 +773,7 @@ const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
 wss.on('connection', (ws) => {
   wsClients.add(ws);
   clientViewFlyIndex.set(ws, 0);
+  clientActivityCursor.set(ws, 0);
   console.log('[ws] client connected, total=', wsClients.size);
 
   const flies = sims.map((s) => s.getState().fly);
@@ -660,6 +792,7 @@ wss.on('connection', (ws) => {
       const msg = JSON.parse(data.toString());
       if (typeof msg.viewFlyIndex === 'number') {
         clientViewFlyIndex.set(ws, Math.max(0, msg.viewFlyIndex));
+        clientActivityCursor.set(ws, 0);
       }
     } catch {
       /* ignore */
@@ -667,6 +800,7 @@ wss.on('connection', (ws) => {
   });
 
   ws.on('close', () => {
+    clientActivityCursor.delete(ws);
     clientViewFlyIndex.delete(ws);
     wsClients.delete(ws);
     console.log('[ws] client disconnected, total=', wsClients.size);
@@ -698,6 +832,7 @@ if (process.env.VITEST !== 'true') {
 export function resetDeployStateForTesting(): void {
   deployedFlies.clear();
   sims.splice(0, sims.length);
+  simActivityTrail.splice(0, simActivityTrail.length);
   clearForTesting();
 }
 

@@ -62,6 +62,7 @@ const MIN_MOVEMENT_SQ = 1e-8; // Update heading on any movement so reversals res
 const WING_ANIM_NAMES = ['wing-leftAction', 'wing-rightAction'];
 const PULL_CLOSER_RATE = 1.1;
 const FLY_VIEW_DISTANCE = 3;
+const CAMERA_MAX_DISTANCE = 850;
 const FLY_SCALE = 0.08;
 const LOW_LOD_FLY_SCALE = 0.3;
 const LOW_LOD_HEIGHT_OFFSET = 0.04;
@@ -77,6 +78,12 @@ const LOW_LOD_WING_FLAP_SPEED = 0.03;
 const LOW_LOD_BODY_COLOR = 0x102a5a;
 const LOW_LOD_HEAD_COLOR = 0x111111;
 const LOW_LOD_WING_COLOR = 0xf5f7ff;
+const SCENE_BG_COLOR = 0x000000;
+const NEURAL_NODE_COLOR = 0x7f8cff;
+const NEURAL_EDGE_COLOR = 0x354473;
+const NEURAL_SECONDARY_NODE_COLOR = 0x5f6f88;
+const NEURAL_EDGE_MIN_DISTANCE = 20;
+const NEURAL_EDGE_MAX_DISTANCE = 98;
 /** Sim ground level (z=0.35); map to Three.js y=0 so fly rests on ground */
 const GROUND_Z = 0.35;
 
@@ -210,6 +217,95 @@ function createCameraButton(
   return { el: btn, update };
 }
 
+function createNeuralBackdrop(): {
+  group: THREE.Group;
+  pulseNodes: Array<{
+    mesh: THREE.Mesh;
+    material: THREE.MeshBasicMaterial;
+    baseScale: number;
+    phase: number;
+    speed: number;
+  }>;
+  dispose: () => void;
+} {
+  const group = new THREE.Group();
+  const nodeGeom = new THREE.IcosahedronGeometry(1, 0);
+  const pulseNodes: Array<{
+    mesh: THREE.Mesh;
+    material: THREE.MeshBasicMaterial;
+    baseScale: number;
+    phase: number;
+    speed: number;
+  }> = [];
+  const points: THREE.Vector3[] = [];
+  const NODE_COUNT = 54;
+  const SHELL_RADIUS = 190;
+  const SHELL_CENTER_Y = 26;
+
+  for (let i = 0; i < NODE_COUNT; i++) {
+    // Fibonacci-sphere distribution for a true surrounding neural shell.
+    const t = (i + 0.5) / NODE_COUNT;
+    const phi = Math.acos(1 - 2 * t);
+    const theta = Math.PI * (3 - Math.sqrt(5)) * i;
+    const radialJitter = 1 + 0.08 * Math.sin(i * 1.31) + 0.05 * Math.cos(i * 0.77);
+    const radius = SHELL_RADIUS * radialJitter;
+    const x = Math.cos(theta) * Math.sin(phi) * radius;
+    const y = SHELL_CENTER_Y + Math.cos(phi) * radius * 0.56;
+    const z = Math.sin(theta) * Math.sin(phi) * radius;
+    const p = new THREE.Vector3(x, y, z);
+    points.push(p);
+
+    const isPrimary = i % 3 !== 0;
+    const mat = new THREE.MeshBasicMaterial({
+      color: isPrimary ? NEURAL_NODE_COLOR : NEURAL_SECONDARY_NODE_COLOR,
+      transparent: true,
+      opacity: isPrimary ? 0.35 : 0.25,
+    });
+    const node = new THREE.Mesh(nodeGeom, mat);
+    node.position.copy(p);
+    const baseScale = isPrimary ? 1.8 : 1.35;
+    node.scale.setScalar(baseScale);
+    group.add(node);
+    pulseNodes.push({
+      mesh: node,
+      material: mat,
+      baseScale,
+      phase: i * 0.41,
+      speed: 1.4 + (i % 5) * 0.22,
+    });
+  }
+
+  const edgePositions: number[] = [];
+  for (let i = 0; i < points.length; i++) {
+    for (let j = i + 1; j < points.length; j++) {
+      const d = points[i]!.distanceTo(points[j]!);
+      if (d > NEURAL_EDGE_MAX_DISTANCE || d < NEURAL_EDGE_MIN_DISTANCE) continue;
+      edgePositions.push(
+        points[i]!.x, points[i]!.y, points[i]!.z,
+        points[j]!.x, points[j]!.y, points[j]!.z
+      );
+    }
+  }
+  const edgeGeom = new THREE.BufferGeometry();
+  edgeGeom.setAttribute('position', new THREE.Float32BufferAttribute(edgePositions, 3));
+  const edgeMat = new THREE.LineBasicMaterial({
+    color: NEURAL_EDGE_COLOR,
+    transparent: true,
+    opacity: 0.28,
+  });
+  const edges = new THREE.LineSegments(edgeGeom, edgeMat);
+  group.add(edges);
+
+  const dispose = () => {
+    nodeGeom.dispose();
+    edgeGeom.dispose();
+    edgeMat.dispose();
+    for (const n of pulseNodes) n.material.dispose();
+  };
+
+  return { group, pulseNodes, dispose };
+}
+
 export function initThreeScene(
   container: HTMLElement | null,
   refs: ThreeSceneRefs,
@@ -237,6 +333,7 @@ export function initThreeScene(
   };
 
   const scene = new THREE.Scene();
+  scene.background = new THREE.Color(SCENE_BG_COLOR);
   const camera = new THREE.PerspectiveCamera(50, container.clientWidth / container.clientHeight, 0.1, 1000);
   camera.position.set(8, 6, 8);
 
@@ -261,14 +358,24 @@ export function initThreeScene(
   scene.add(dirLight);
 
   const groundGeom = new THREE.PlaneGeometry(ARENA_SIZE, ARENA_SIZE);
-  const groundMat = new THREE.MeshStandardMaterial({ color: 0x2d5a27, roughness: 0.9, metalness: 0.05 });
+  const groundMat = new THREE.MeshStandardMaterial({
+    color: 0x2d5a27,
+    roughness: 0.9,
+    metalness: 0.05,
+    side: THREE.DoubleSide,
+    transparent: false,
+    opacity: 1,
+  });
   const ground = new THREE.Mesh(groundGeom, groundMat);
   ground.rotation.x = -Math.PI / 2;
   ground.receiveShadow = true;
   scene.add(ground);
 
+  const neuralBackdrop = createNeuralBackdrop();
+  scene.add(neuralBackdrop.group);
+
   const controls = new OrbitControls(camera, renderer.domElement);
-  controls.maxDistance = 1000;
+  controls.maxDistance = CAMERA_MAX_DISTANCE;
   controls.target.set(0, 0, 0);
 
   const sourcesGroup = new THREE.Group();
@@ -605,6 +712,13 @@ export function initThreeScene(
     }
 
     controls.update(cappedDelta);
+    const nowSeconds = (timestamp ?? performance.now()) / 1000;
+    for (const p of neuralBackdrop.pulseNodes) {
+      const pulse = 0.5 + 0.5 * Math.sin(nowSeconds * p.speed + p.phase);
+      const scale = p.baseScale * (0.82 + pulse * 0.3);
+      p.mesh.scale.setScalar(scale);
+      p.material.opacity = 0.12 + pulse * 0.34;
+    }
     renderer.render(scene, camera);
   }
 
@@ -629,6 +743,8 @@ export function initThreeScene(
     renderer.dispose();
     groundGeom.dispose();
     groundMat.dispose();
+    scene.remove(neuralBackdrop.group);
+    neuralBackdrop.dispose();
     container.removeChild(renderer.domElement);
     if (cameraButton) cameraButton.el.remove();
     if (disposeStatus) disposeStatus();

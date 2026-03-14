@@ -10,7 +10,7 @@ import { getWorld, spawnFood, removeFood, getSources, type WorldSource } from '.
 import claimsRouter from './routes/claims.js';
 import { getFlies, removeFlyAtSlot } from './services/flyStore.js';
 import { getDeployments, addDeployment, clearForTesting, deactivateDeployment } from './services/deployStore.js';
-import { recordFoodCollected, getStatsForAddress, getDistributedHistory, REWARD_PER_FOOD } from './services/rewardStore.js';
+import { recordFoodCollected, getStatsForAddress, getDistributedHistory, REWARD_PER_FOOD, getNeuroFlyStats } from './services/rewardStore.js';
 import { flushRewards } from './services/rewardDistributor.js';
 
 const PORT = Number(process.env.PORT) || 3001;
@@ -81,13 +81,6 @@ function removeSimAtIndex(simIndex: number): { address: string; slotIndex: numbe
     if (slotMap && slotMap.size === 0) deployedFlies.delete(deployment.address);
   }
   return deployment;
-}
-
-function parseRequesterAddress(raw: unknown): string | null {
-  if (typeof raw !== 'string') return null;
-  const normalized = raw.trim().toLowerCase();
-  if (!/^0x[a-fA-F0-9]{40}$/.test(normalized)) return null;
-  return normalized;
 }
 
 async function addFlyToSim(): Promise<number> {
@@ -462,50 +455,6 @@ app.post('/api/deploy', async (req, res) => {
   }
 });
 
-app.post('/api/deploy/send-to-graveyard', (req, res) => {
-  try {
-    const address = (req.body?.address as string)?.toLowerCase();
-    const requesterAddress = parseRequesterAddress(
-      req.body?.requesterAddress ?? req.header('x-wallet-address')
-    );
-    const slotIndex = typeof req.body?.slotIndex === 'number' ? req.body.slotIndex : parseInt(String(req.body?.slotIndex ?? ''), 10);
-    if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address) || !Number.isInteger(slotIndex) || slotIndex < 0 || slotIndex > 2) {
-      res.status(400).json({ error: 'Invalid address or slotIndex (0-2)' });
-      return;
-    }
-    if (!requesterAddress || requesterAddress !== address) {
-      res.status(403).json({ error: 'Requester does not own target address' });
-      return;
-    }
-    if (!getFlies(address)[slotIndex]) {
-      res.status(400).json({ error: 'No fly in that slot' });
-      return;
-    }
-
-    const simIndex = deployedFlies.get(address)?.get(slotIndex);
-    if (simIndex != null) {
-      const removedSim = removeSimAtIndex(simIndex);
-      if (!removedSim || removedSim.address !== address || removedSim.slotIndex !== slotIndex) {
-        res.status(500).json({ error: 'Failed to remove live simulation state' });
-        return;
-      }
-    }
-
-    const removed = removeFlyAtSlot(address, slotIndex);
-    if (!removed) {
-      res.status(400).json({ error: 'No fly in that slot' });
-      return;
-    }
-
-    deactivateDeployment(address, slotIndex);
-    console.log('[graveyard]', address.slice(0, 10) + '…', 'slot', slotIndex, 'fly', removed.id);
-    res.json({ success: true, removedFlyId: removed.id, slotIndex });
-  } catch (err) {
-    console.error('[graveyard] error:', err);
-    res.status(500).json({ error: 'Failed to move fly to graveyard' });
-  }
-});
-
 app.get('/api/rewards/stats', (req, res) => {
   try {
     const rawAddress = req.query.address;
@@ -550,10 +499,11 @@ app.get('/api/deploy/my-deployed', (req, res) => {
     if (map) {
       for (const [slot, idx] of map) deployed[slot] = idx;
     }
+    const currentFlies = getFlies(address);
     const graveyardSlots = Array.from(
       new Set(
         getDeployments()
-          .filter((d) => d.address === address && d.active === false)
+          .filter((d) => d.address === address && d.active === false && currentFlies[d.slotIndex] == null)
           .map((d) => d.slotIndex),
       ),
     );
@@ -561,6 +511,54 @@ app.get('/api/deploy/my-deployed', (req, res) => {
   } catch (err) {
     console.error('[deploy] my-deployed error:', err);
     res.status(500).json({ error: 'Failed to get deployed flies' });
+  }
+});
+
+app.get('/api/deploy/graveyard', (req, res) => {
+  try {
+    const address = (req.query.address as string)?.toLowerCase();
+    if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address)) {
+      res.status(400).json({ error: 'Invalid address' });
+      return;
+    }
+    const pageRaw = Number(req.query.page ?? 1);
+    const pageSizeRaw = Number(req.query.pageSize ?? 3);
+    const page = Number.isInteger(pageRaw) && pageRaw > 0 ? pageRaw : 1;
+    const pageSize = Number.isInteger(pageSizeRaw) && pageSizeRaw > 0
+      ? Math.min(pageSizeRaw, 20)
+      : 3;
+
+    const all = getDeployments()
+      .filter((d) => d.address === address && d.active === false)
+      .sort((a, b) => {
+        const ta = new Date(a.deactivatedAt ?? a.timeDeployed ?? 0).getTime();
+        const tb = new Date(b.deactivatedAt ?? b.timeDeployed ?? 0).getTime();
+        return tb - ta;
+      })
+      .map((d) => {
+        const flyId = d.flyId ?? `${address}-slot-${d.slotIndex}`;
+        const stats = d.flyId ? getNeuroFlyStats(address, d.slotIndex, d.flyId) : undefined;
+        const feedCount = stats?.feedCount ?? 0;
+        return {
+          flyId,
+          slotIndex: d.slotIndex,
+          feedCount,
+          rewardWei: (BigInt(feedCount) * REWARD_PER_FOOD).toString(),
+          timeBirthed: stats?.timeBirthed,
+          timeDeployed: d.timeDeployed ?? stats?.timeDeployed,
+          removedAt: d.deactivatedAt ?? null,
+        };
+      });
+    const total = all.length;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const clampedPage = Math.min(page, totalPages);
+    const start = (clampedPage - 1) * pageSize;
+    const items = all.slice(start, start + pageSize);
+
+    res.json({ items, page: clampedPage, pageSize, total, totalPages });
+  } catch (err) {
+    console.error('[deploy] graveyard error:', err);
+    res.status(500).json({ error: 'Failed to get graveyard flies' });
   }
 });
 

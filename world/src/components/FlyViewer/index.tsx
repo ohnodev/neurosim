@@ -11,6 +11,7 @@ import {
   fetchMyFlies,
   fetchMyDeployed,
   fetchFlyStats,
+  fetchGraveyard,
   type NeuronRaw,
 } from '../../lib/api';
 import { BrainOverlay } from '../BrainOverlay';
@@ -41,6 +42,7 @@ export default function FlyViewer() {
   const [fliesPanelOpen, setFliesPanelOpen] = useState(() => !isMobileViewport());
   const [buyFlySlot, setBuyFlySlot] = useState<number | null>(null);
   const [fliesTab, setFliesTab] = useState<'current' | 'graveyard'>('current');
+  const [graveyardPage, setGraveyardPage] = useState(1);
   const [statusPanelOpen, setStatusPanelOpen] = useState(() => !isMobileViewport());
   const [statusTab, setStatusTab] = useState<'status' | 'rewards'>('status');
   const [brainPanelOpen, setBrainPanelOpen] = useState(() => !isMobileViewport());
@@ -130,6 +132,12 @@ export default function FlyViewer() {
   const graveyardSlots = useMemo(() => {
     return new Set(myDeployedData.graveyardSlots);
   }, [myDeployedData.graveyardSlots]);
+
+  const { data: graveyardData } = useQuery({
+    queryKey: [...apiKeys.all, 'graveyard', address ?? '__unauthenticated__', graveyardPage],
+    queryFn: () => fetchGraveyard(address!, graveyardPage, 3),
+    enabled: !!address && fliesTab === 'graveyard',
+  });
 
   useEffect(() => {
     const unsub = subscribeSim((event) => {
@@ -400,7 +408,10 @@ export default function FlyViewer() {
                 <button
                   type="button"
                   className={`fly-viewer__flies-tab ${fliesTab === 'current' ? 'fly-viewer__flies-tab--active' : ''}`}
-                  onClick={() => setFliesTab('current')}
+                  onClick={() => {
+                    setFliesTab('current');
+                    setGraveyardPage(1);
+                  }}
                 >
                   <img src="/fly.svg" alt="" width={14} height={14} className="fly-viewer__tab-icon" aria-hidden />
                   Current
@@ -408,7 +419,10 @@ export default function FlyViewer() {
                 <button
                   type="button"
                   className={`fly-viewer__flies-tab ${fliesTab === 'graveyard' ? 'fly-viewer__flies-tab--active' : ''}`}
-                  onClick={() => setFliesTab('graveyard')}
+                  onClick={() => {
+                    setFliesTab('graveyard');
+                    setGraveyardPage(1);
+                  }}
                 >
                   <img src="/tombstone.svg" alt="" width={14} height={14} className="fly-viewer__tab-icon fly-viewer__tab-icon--tombstone" aria-hidden />
                   Graveyard
@@ -431,9 +445,11 @@ export default function FlyViewer() {
                 />
               ) : (
                 <FliesPanelGraveyardSlots
-                  graveyardSlots={graveyardSlots}
-                  statsBySlot={statsBySlot}
-                  rewardPerPointWei={flyStatsData?.rewardPerPointWei}
+                  entries={graveyardData?.items ?? []}
+                  page={graveyardData?.page ?? graveyardPage}
+                  totalPages={graveyardData?.totalPages ?? 1}
+                  total={graveyardData?.total ?? 0}
+                  onPageChange={setGraveyardPage}
                 />
               )}
             </div>

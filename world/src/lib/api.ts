@@ -31,6 +31,24 @@ export interface MyDeployedData {
   graveyardSlots: number[];
 }
 
+export interface GraveyardFlyEntry {
+  flyId: string;
+  slotIndex: number;
+  feedCount: number;
+  rewardWei: string;
+  timeBirthed?: string;
+  timeDeployed?: string;
+  removedAt?: string | null;
+}
+
+export interface GraveyardPageData {
+  items: GraveyardFlyEntry[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+}
+
 const FALLBACK_WEI = (1000n * 10n ** 18n).toString();
 
 export async function fetchWorld(): Promise<{ sources: WorldSource[] }> {
@@ -146,4 +164,37 @@ export async function fetchFlyStats(address: string): Promise<FlyStatsData> {
   const rp = data.rewardPerPointWei;
   const rewardPerPointWei = typeof rp === 'string' && rp.length > 0 ? rp : FALLBACK_WEI;
   return { stats, rewardPerPointWei };
+}
+
+export async function fetchGraveyard(address: string, page: number, pageSize = 3): Promise<GraveyardPageData> {
+  const enc = encodeURIComponent(normalizeAddress(address));
+  const p = Math.max(1, Math.floor(page || 1));
+  const ps = Math.max(1, Math.min(20, Math.floor(pageSize || 3)));
+  const url = `${getApiBase()}/api/deploy/graveyard?address=${enc}&page=${p}&pageSize=${ps}`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`Graveyard fetch failed: ${r.status} ${r.statusText}`);
+  const data = await r.json();
+  const items: GraveyardFlyEntry[] = Array.isArray(data.items)
+    ? data.items
+        .filter((item: unknown) => item != null && typeof item === 'object')
+        .map((item: unknown) => {
+          const v = item as Record<string, unknown>;
+          return {
+            flyId: typeof v.flyId === 'string' ? v.flyId : 'unknown',
+            slotIndex: typeof v.slotIndex === 'number' ? v.slotIndex : 0,
+            feedCount: typeof v.feedCount === 'number' ? v.feedCount : 0,
+            rewardWei: typeof v.rewardWei === 'string' ? v.rewardWei : '0',
+            timeBirthed: typeof v.timeBirthed === 'string' ? v.timeBirthed : undefined,
+            timeDeployed: typeof v.timeDeployed === 'string' ? v.timeDeployed : undefined,
+            removedAt: typeof v.removedAt === 'string' || v.removedAt == null ? (v.removedAt as string | null) : null,
+          };
+        })
+    : [];
+  return {
+    items,
+    page: typeof data.page === 'number' ? data.page : p,
+    pageSize: typeof data.pageSize === 'number' ? data.pageSize : ps,
+    total: typeof data.total === 'number' ? data.total : items.length,
+    totalPages: typeof data.totalPages === 'number' ? data.totalPages : 1,
+  };
 }

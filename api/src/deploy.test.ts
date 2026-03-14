@@ -3,6 +3,7 @@ import request from 'supertest';
 import WebSocket from 'ws';
 import { app, httpServer, startSim, stopSim, resetDeployStateForTesting } from './index.js';
 import { addFly, getFlies } from './services/flyStore.js';
+import { addDeployment, deactivateDeployment } from './services/deployStore.js';
 
 const TEST_ADDR = '0x0000000000000000000000000000000000000001';
 
@@ -28,23 +29,29 @@ describe('deploy API (no server)', () => {
     expect(res.status).toBe(400);
   });
 
-  it('POST /api/deploy/send-to-graveyard frees slot for repurchase', async () => {
+  it('GET /api/deploy/graveyard returns paginated inactive flies', async () => {
     const addr = '0x00000000000000000000000000000000000000aa';
-    addFly(addr, { method: 'pay', claimedAt: new Date().toISOString(), seed: 11 });
-    addFly(addr, { method: 'pay', claimedAt: new Date().toISOString(), seed: 12 });
-    addFly(addr, { method: 'pay', claimedAt: new Date().toISOString(), seed: 13 });
-    expect(getFlies(addr).filter(Boolean).length).toBe(3);
+    addFly(addr, { method: 'pay', claimedAt: new Date().toISOString(), seed: 21 });
+    addFly(addr, { method: 'pay', claimedAt: new Date().toISOString(), seed: 22 });
+    addFly(addr, { method: 'pay', claimedAt: new Date().toISOString(), seed: 23 });
+    addDeployment(addr, 0);
+    deactivateDeployment(addr, 0);
+    addDeployment(addr, 1);
+    deactivateDeployment(addr, 1);
+    addDeployment(addr, 2);
+    deactivateDeployment(addr, 2);
 
-    const res = await request(app)
-      .post('/api/deploy/send-to-graveyard')
-      .send({ address: addr, requesterAddress: addr, slotIndex: 1 });
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-    expect(getFlies(addr).filter(Boolean).length).toBe(2);
+    const page1 = await request(app).get(`/api/deploy/graveyard?address=${addr}&page=1&pageSize=2`);
+    expect(page1.status).toBe(200);
+    expect(Array.isArray(page1.body.items)).toBe(true);
+    expect(page1.body.items.length).toBe(2);
+    expect(page1.body.total).toBeGreaterThanOrEqual(3);
+    expect(page1.body.totalPages).toBeGreaterThanOrEqual(2);
 
-    const added = addFly(addr, { method: 'pay', claimedAt: new Date().toISOString(), seed: 14 });
-    expect(added).not.toBeNull();
-    expect(getFlies(addr).filter(Boolean).length).toBe(3);
+    const page2 = await request(app).get(`/api/deploy/graveyard?address=${addr}&page=2&pageSize=2`);
+    expect(page2.status).toBe(200);
+    expect(Array.isArray(page2.body.items)).toBe(true);
+    expect(page2.body.items.length).toBeGreaterThanOrEqual(1);
   });
 });
 

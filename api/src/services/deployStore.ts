@@ -18,6 +18,7 @@ export interface DeploymentRecord {
   flyId?: string;
   timeDeployed?: string;
   active?: boolean;
+  deactivatedAt?: string;
 }
 
 let deployments: DeploymentRecord[] = [];
@@ -27,12 +28,13 @@ function load(): void {
     const raw = fs.readFileSync(deployPath, 'utf-8');
     const data = JSON.parse(raw);
     const arr = Array.isArray(data?.deployments) ? data.deployments : [];
-    deployments = arr.map((d: { address: string; slotIndex: number; flyId?: string; timeDeployed?: string; active?: boolean }) => ({
+    deployments = arr.map((d: { address: string; slotIndex: number; flyId?: string; timeDeployed?: string; active?: boolean; deactivatedAt?: string }) => ({
       address: d.address?.toLowerCase() ?? d.address,
       slotIndex: d.slotIndex,
       flyId: d.flyId,
       timeDeployed: d.timeDeployed,
       active: d.active ?? true,
+      deactivatedAt: d.deactivatedAt,
     }));
   } catch {
     deployments = [];
@@ -76,6 +78,7 @@ export function addDeployment(address: string, slotIndex: number): void {
     flyId,
     timeDeployed: new Date().toISOString(),
     active: true,
+    deactivatedAt: undefined,
   });
   save();
 }
@@ -85,6 +88,7 @@ export function deactivateDeployment(address: string, slotIndex: number): void {
   const rec = deployments.find((d) => d.active !== false && d.address === addr && d.slotIndex === slotIndex);
   if (!rec) return;
   rec.active = false;
+  rec.deactivatedAt = new Date().toISOString();
   save();
 }
 

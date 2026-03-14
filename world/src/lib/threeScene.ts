@@ -9,6 +9,13 @@ import { lerpFlyState } from './flyInterpolation';
 import type { Snapshot } from './flyInterpolation';
 import type { FlyState } from './simWsClient';
 import type { WorldSource } from '../../../api/src/world';
+import {
+  applyLowLodWingPose,
+  createLowLodFlyProxy,
+  createLowLodFlyResources,
+  disposeLowLodFlyResources,
+  type LowLodFlyProxy,
+} from './scene/lodFly';
 
 export interface InterpolationDebugStats {
   fps: number;
@@ -58,11 +65,14 @@ const FLY_VIEW_DISTANCE = 3;
 const FLY_SCALE = 0.08;
 const LOW_LOD_FLY_SCALE = 0.3;
 const LOW_LOD_HEIGHT_OFFSET = 0.04;
-const FLY_LOD_DISTANCE = 1;
+const FLY_LOD_DISTANCE = 20;
 const FLY_LOD_DISTANCE_SQ = FLY_LOD_DISTANCE * FLY_LOD_DISTANCE;
 const LOW_LOD_WING_BASE_ANGLE = 0.52;
 const LOW_LOD_WING_FLAP_AMPLITUDE = 0.43;
 const LOW_LOD_WING_FLAP_SPEED = 0.03;
+const LOW_LOD_BODY_COLOR = 0x102a5a;
+const LOW_LOD_HEAD_COLOR = 0x111111;
+const LOW_LOD_WING_COLOR = 0xf5f7ff;
 /** Sim ground level (z=0.35); map to Three.js y=0 so fly rests on ground */
 const GROUND_Z = 0.35;
 
@@ -270,9 +280,7 @@ export function initThreeScene(
   const flyInstances: {
     group: THREE.Group;
     detailGroup: THREE.Group;
-    lowPolyGroup: THREE.Group;
-    lowPolyWingPivotL: THREE.Group;
-    lowPolyWingPivotR: THREE.Group;
+    lowLod: LowLodFlyProxy;
     mixer: THREE.AnimationMixer;
     prevPos: { x: number; y: number };
     heading: number;
@@ -283,23 +291,16 @@ export function initThreeScene(
     initialized: boolean;
     wingActions: THREE.AnimationAction[];
   }[] = [];
-  const lowPolyBodyGeom = new THREE.BoxGeometry(0.32, 0.3, 0.62);
-  const lowPolyHeadGeom = new THREE.BoxGeometry(0.2, 0.16, 0.2);
-  const lowPolyWingGeom = new THREE.BoxGeometry(0.42, 0.03, 0.2);
-  const lowPolyBodyMat = new THREE.MeshStandardMaterial({
-    color: 0x102a5a,
-    roughness: 0.95,
-    metalness: 0.03,
-  });
-  const lowPolyHeadMat = new THREE.MeshStandardMaterial({
-    color: 0x111111,
-    roughness: 0.95,
-    metalness: 0.02,
-  });
-  const lowPolyWingMat = new THREE.MeshStandardMaterial({
-    color: 0xf5f7ff,
-    roughness: 0.9,
-    metalness: 0.02,
+  const lowLodResources = createLowLodFlyResources({
+    bodySize: [0.32, 0.3, 0.62],
+    headSize: [0.2, 0.16, 0.2],
+    wingSize: [0.42, 0.03, 0.2],
+    bodyColor: LOW_LOD_BODY_COLOR,
+    headColor: LOW_LOD_HEAD_COLOR,
+    wingColor: LOW_LOD_WING_COLOR,
+    wingBaseAngle: LOW_LOD_WING_BASE_ANGLE,
+    wingFlapAmplitude: LOW_LOD_WING_FLAP_AMPLITUDE,
+    wingFlapSpeed: LOW_LOD_WING_FLAP_SPEED,
   });
 
   const loader = new GLTFLoader();
@@ -389,46 +390,23 @@ export function initThreeScene(
     }
   }
 
-  function createLowPolyFlyProxy(): { group: THREE.Group; wingPivotL: THREE.Group; wingPivotR: THREE.Group } {
-    const g = new THREE.Group();
-    const body = new THREE.Mesh(lowPolyBodyGeom, lowPolyBodyMat);
-    const head = new THREE.Mesh(lowPolyHeadGeom, lowPolyHeadMat);
-    const wingL = new THREE.Mesh(lowPolyWingGeom, lowPolyWingMat);
-    const wingR = new THREE.Mesh(lowPolyWingGeom, lowPolyWingMat);
-    const wingPivotL = new THREE.Group();
-    const wingPivotR = new THREE.Group();
-    head.position.set(0, 0.02, -0.38);
-    wingPivotL.position.set(-0.12, 0.12, -0.04);
-    wingPivotR.position.set(0.12, 0.12, -0.04);
-    // Offset meshes from pivot so wing root stays anchored to body while tip sweeps an arc.
-    wingL.position.set(-0.21, 0, 0);
-    wingR.position.set(0.21, 0, 0);
-    wingPivotL.rotation.z = -LOW_LOD_WING_BASE_ANGLE;
-    wingPivotR.rotation.z = LOW_LOD_WING_BASE_ANGLE;
-    wingPivotL.add(wingL);
-    wingPivotR.add(wingR);
-    g.add(body, head, wingPivotL, wingPivotR);
-    return { group: g, wingPivotL, wingPivotR };
-  }
-
   function ensureFlyCount(count: number) {
     while (flyInstances.length > count) {
       const inst = flyInstances.pop()!;
       fliesGroup.remove(inst.group);
       disposeObject3D(inst.detailGroup);
-      disposeObject3D(inst.lowPolyGroup);
+      disposeObject3D(inst.lowLod.group);
     }
     while (flyInstances.length < count && flyTemplate && flyClips.length > 0) {
       const clone = cloneWithOwnResources(flyTemplate) as THREE.Group;
       clone.scale.setScalar(FLY_SCALE);
-      const lowPoly = createLowPolyFlyProxy();
-      const lowPolyGroup = lowPoly.group;
-      lowPolyGroup.scale.setScalar(LOW_LOD_FLY_SCALE);
-      lowPolyGroup.position.y = LOW_LOD_HEIGHT_OFFSET;
-      lowPolyGroup.visible = false;
+      const lowLod = createLowLodFlyProxy(lowLodResources);
+      lowLod.group.scale.setScalar(LOW_LOD_FLY_SCALE);
+      lowLod.group.position.y = LOW_LOD_HEIGHT_OFFSET;
+      lowLod.group.visible = false;
       const root = new THREE.Group();
       root.add(clone);
-      root.add(lowPolyGroup);
+      root.add(lowLod.group);
       const instMixer = new THREE.AnimationMixer(clone);
       const instWingActions = WING_ANIM_NAMES.map((name) => {
         const clip = flyClips.find((c) => c.name === name);
@@ -438,9 +416,7 @@ export function initThreeScene(
       flyInstances.push({
         group: root,
         detailGroup: clone,
-        lowPolyGroup,
-        lowPolyWingPivotL: lowPoly.wingPivotL,
-        lowPolyWingPivotR: lowPoly.wingPivotR,
+        lowLod,
         mixer: instMixer,
         prevPos: { x: 0, y: 0 },
         heading: 0,
@@ -558,7 +534,7 @@ export function initThreeScene(
       if (shouldShowDetail !== inst.detailVisible) {
         inst.detailVisible = shouldShowDetail;
         inst.detailGroup.visible = shouldShowDetail;
-        inst.lowPolyGroup.visible = !shouldShowDetail;
+        inst.lowLod.group.visible = !shouldShowDetail;
         if (!shouldShowDetail) {
           inst.wasFlying = false;
           for (const action of inst.wingActions) action.stop();
@@ -579,14 +555,13 @@ export function initThreeScene(
         inst.mixer.update(cappedDelta);
       } else {
         inst.lowLodWasFlying = lowLodIsFlying;
-        if (inst.lowLodWasFlying) {
-          const flap = Math.sin(((timestamp ?? performance.now()) + i * 37) * LOW_LOD_WING_FLAP_SPEED) * LOW_LOD_WING_FLAP_AMPLITUDE;
-          inst.lowPolyWingPivotL.rotation.z = -LOW_LOD_WING_BASE_ANGLE + flap;
-          inst.lowPolyWingPivotR.rotation.z = LOW_LOD_WING_BASE_ANGLE - flap;
-        } else {
-          inst.lowPolyWingPivotL.rotation.z = -LOW_LOD_WING_BASE_ANGLE;
-          inst.lowPolyWingPivotR.rotation.z = LOW_LOD_WING_BASE_ANGLE;
-        }
+        applyLowLodWingPose(
+          inst.lowLod,
+          lowLodResources,
+          inst.lowLodWasFlying,
+          timestamp ?? performance.now(),
+          i * 37
+        );
       }
     }
 
@@ -661,12 +636,7 @@ export function initThreeScene(
       disposeObject3D(appleTemplate);
       appleTemplate = null;
     }
-    lowPolyBodyGeom.dispose();
-    lowPolyHeadGeom.dispose();
-    lowPolyWingGeom.dispose();
-    lowPolyBodyMat.dispose();
-    lowPolyHeadMat.dispose();
-    lowPolyWingMat.dispose();
+    disposeLowLodFlyResources(lowLodResources);
   };
   return { dispose, updateButton };
 }

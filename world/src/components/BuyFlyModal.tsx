@@ -161,10 +161,17 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
                   ? [...current]
                   : [null, null, null];
                 while (next.length < 3) next.push(null);
+                const isValidSlotIndex = Number.isInteger(slotIndex) && slotIndex >= 0 && slotIndex < 3;
                 const fly = (data as VerifyPaymentSuccess).fly;
-                if (fly && typeof fly.id === 'string' && typeof fly.method === 'string' && typeof fly.claimedAt === 'string') {
+                if (
+                  isValidSlotIndex &&
+                  fly &&
+                  typeof fly.id === 'string' &&
+                  typeof fly.method === 'string' &&
+                  typeof fly.claimedAt === 'string'
+                ) {
                   next[slotIndex] = fly;
-                } else if (next[slotIndex] == null) {
+                } else if (isValidSlotIndex && next[slotIndex] == null) {
                   next[slotIndex] = {
                     id: `pending-${Date.now()}`,
                     method: 'pay',
@@ -179,10 +186,17 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
               (current: unknown) => {
                 if (current && typeof current === 'object') {
                   const c = current as { deployed?: Record<number, number>; graveyardSlots?: number[] };
+                  const isValidSlotIndex = Number.isInteger(slotIndex) && slotIndex >= 0 && slotIndex < 3;
+                  const nextDeployed = c.deployed && typeof c.deployed === 'object'
+                    ? { ...c.deployed }
+                    : {};
+                  if (isValidSlotIndex) {
+                    delete nextDeployed[slotIndex];
+                  }
                   const nextGraveyard = Array.isArray(c.graveyardSlots)
                     ? c.graveyardSlots.filter((s) => s !== slotIndex)
                     : [];
-                  return { ...c, graveyardSlots: nextGraveyard };
+                  return { ...c, deployed: nextDeployed, graveyardSlots: nextGraveyard };
                 }
                 return { deployed: {}, graveyardSlots: [] };
               }

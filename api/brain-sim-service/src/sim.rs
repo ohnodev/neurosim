@@ -4,16 +4,12 @@ use std::time::Instant;
 
 #[cfg(feature = "cuda")]
 use crate::gpu::{GpuSimState, GpuStepResult};
+use crate::model_constants::{
+    RECURRENT_SCALE, REFRACT_MS, TAU_MEM_MS, TAU_SYN_MS, V_RESET, V_REST, V_THRESH,
+};
 
 const STIM_RATE_HZ: f64 = 200.0;
 const SENSORY_SCALE: f64 = 0.18;
-const V_REST: f32 = -52.0;
-const V_RESET: f32 = -52.0;
-const V_THRESH: f32 = -45.0;
-const TAU_MEM_MS: f32 = 20.0;
-const TAU_SYN_MS: f32 = 5.0;
-const RECURRENT_SCALE: f32 = 0.275;
-const REFRACT_MS: f64 = 2.2;
 const ACTIVITY_THRESHOLD: u8 = 1;
 const MOTOR_SCALE: f64 = 0.002;
 // Ignore near-zero food distance to avoid singular-like gain when the fly is

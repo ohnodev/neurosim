@@ -6,6 +6,8 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Instant;
 
+use crate::model_constants::{RECURRENT_SCALE, REFRACT_MS, TAU_MEM_MS, TAU_SYN_MS, V_RESET, V_REST, V_THRESH};
+
 static DEVICE: OnceLock<Option<Arc<CudaDevice>>> = OnceLock::new();
 
 const K: &str = r#"
@@ -126,6 +128,9 @@ impl GpuSimState {
         if edges_pre.len() != edges_post.len() || edges_pre.len() != edges_weight.len() {
             return None;
         }
+        if v_init.len() != n || g_init.len() != n || refrac_init.len() != n || spikes_init.len() != n {
+            return None;
+        }
         let ne = edges_pre.len();
         let dev = DEVICE
             .get_or_init(|| {
@@ -188,9 +193,9 @@ impl GpuSimState {
         let n = self.n as i32;
         let ne = self.ne as i32;
         let dt_ms = dt_sec * 1000.0;
-        let syn_decay = (-dt_ms / 5.0).exp();
-        let mem_alpha = dt_ms / 20.0;
-        let refrac_steps = ((2.2f32 / dt_ms).ceil().max(1.0)) as u16;
+        let syn_decay = (-dt_ms / TAU_SYN_MS).exp();
+        let mem_alpha = dt_ms / TAU_MEM_MS;
+        let refrac_steps = (((REFRACT_MS as f32) / dt_ms).ceil().max(1.0)) as u16;
 
         unsafe {
             decay
@@ -209,7 +214,7 @@ impl GpuSimState {
                     &self.edge_weight,
                     ne,
                     n,
-                    0.275f32,
+                    RECURRENT_SCALE,
                 ),
             )
             .ok()?;
@@ -267,18 +272,16 @@ impl GpuSimState {
                     mem_alpha,
                     // Intentional: this model uses v_rest == v_reset for direct
                     // reset to baseline after spikes/refractory.
-                    -52.0f32,
-                    -52.0f32,
-                    -45.0f32,
+                    V_REST,
+                    V_RESET,
+                    V_THRESH,
                     refrac_steps,
                 ),
             )
             .ok()?;
         }
         let spikes = self.dev.dtoh_sync_copy(&self.spikes_next).ok()?;
-        self.dev
-            .htod_sync_copy_into(&spikes, &mut self.spikes_prev)
-            .ok()?;
+        std::mem::swap(&mut self.spikes_prev, &mut self.spikes_next);
         let lif_ms = t_lif.elapsed().as_secs_f64() * 1000.0;
         Some(GpuStepResult {
             spikes,

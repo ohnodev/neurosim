@@ -9,6 +9,13 @@ import { lerpFlyState } from './flyInterpolation';
 import type { Snapshot } from './flyInterpolation';
 import type { FlyState } from './simWsClient';
 import type { WorldSource } from '../../../api/src/world';
+import {
+  applyLowLodWingPose,
+  createLowLodFlyProxy,
+  createLowLodFlyResources,
+  disposeLowLodFlyResources,
+  type LowLodFlyProxy,
+} from './scene/lodFly';
 
 export interface InterpolationDebugStats {
   fps: number;
@@ -56,6 +63,20 @@ const WING_ANIM_NAMES = ['wing-leftAction', 'wing-rightAction'];
 const PULL_CLOSER_RATE = 1.1;
 const FLY_VIEW_DISTANCE = 3;
 const FLY_SCALE = 0.08;
+const LOW_LOD_FLY_SCALE = 0.3;
+const LOW_LOD_HEIGHT_OFFSET = 0.04;
+const FLY_LOD_DISTANCE = 20;
+const FLY_LOD_HYSTERESIS = 2;
+const FLY_LOD_DISTANCE_IN = FLY_LOD_DISTANCE;
+const FLY_LOD_DISTANCE_OUT = FLY_LOD_DISTANCE + FLY_LOD_HYSTERESIS;
+const FLY_LOD_DISTANCE_IN_SQ = FLY_LOD_DISTANCE_IN * FLY_LOD_DISTANCE_IN;
+const FLY_LOD_DISTANCE_OUT_SQ = FLY_LOD_DISTANCE_OUT * FLY_LOD_DISTANCE_OUT;
+const LOW_LOD_WING_BASE_ANGLE = 0.52;
+const LOW_LOD_WING_FLAP_AMPLITUDE = 0.43;
+const LOW_LOD_WING_FLAP_SPEED = 0.03;
+const LOW_LOD_BODY_COLOR = 0x102a5a;
+const LOW_LOD_HEAD_COLOR = 0x111111;
+const LOW_LOD_WING_COLOR = 0xf5f7ff;
 /** Sim ground level (z=0.35); map to Three.js y=0 so fly rests on ground */
 const GROUND_Z = 0.35;
 
@@ -260,17 +281,31 @@ export function initThreeScene(
   let flyClips: THREE.AnimationClip[] = [];
   const applePool: THREE.Object3D[] = [];
   let appleTemplate: THREE.Object3D | null = null;
-  const mixers: THREE.AnimationMixer[] = [];
   const flyInstances: {
     group: THREE.Group;
+    detailGroup: THREE.Group;
+    lowLod: LowLodFlyProxy;
     mixer: THREE.AnimationMixer;
     prevPos: { x: number; y: number };
     heading: number;
     targetHeading: number;
     wasFlying: boolean;
+    lowLodWasFlying: boolean;
+    detailVisible: boolean;
     initialized: boolean;
     wingActions: THREE.AnimationAction[];
   }[] = [];
+  const lowLodResources = createLowLodFlyResources({
+    bodySize: [0.32, 0.3, 0.62],
+    headSize: [0.2, 0.16, 0.2],
+    wingSize: [0.42, 0.03, 0.2],
+    bodyColor: LOW_LOD_BODY_COLOR,
+    headColor: LOW_LOD_HEAD_COLOR,
+    wingColor: LOW_LOD_WING_COLOR,
+    wingBaseAngle: LOW_LOD_WING_BASE_ANGLE,
+    wingFlapAmplitude: LOW_LOD_WING_FLAP_AMPLITUDE,
+    wingFlapSpeed: LOW_LOD_WING_FLAP_SPEED,
+  });
 
   const loader = new GLTFLoader();
   loader.load(
@@ -362,34 +397,36 @@ export function initThreeScene(
   function ensureFlyCount(count: number) {
     while (flyInstances.length > count) {
       const inst = flyInstances.pop()!;
-      const mixIdx = mixers.indexOf(inst.mixer);
-      if (mixIdx >= 0) mixers.splice(mixIdx, 1);
       fliesGroup.remove(inst.group);
-      inst.group.traverse((o) => {
-        if (o instanceof THREE.Mesh) {
-          o.geometry?.dispose();
-          if (Array.isArray(o.material)) o.material.forEach((m) => { m.dispose(); });
-          else o.material?.dispose();
-        }
-      });
+      disposeObject3D(inst.detailGroup);
     }
     while (flyInstances.length < count && flyTemplate && flyClips.length > 0) {
       const clone = cloneWithOwnResources(flyTemplate) as THREE.Group;
       clone.scale.setScalar(FLY_SCALE);
+      const lowLod = createLowLodFlyProxy(lowLodResources);
+      lowLod.group.scale.setScalar(LOW_LOD_FLY_SCALE);
+      lowLod.group.position.y = LOW_LOD_HEIGHT_OFFSET;
+      lowLod.group.visible = false;
+      const root = new THREE.Group();
+      root.add(clone);
+      root.add(lowLod.group);
       const instMixer = new THREE.AnimationMixer(clone);
-      mixers.push(instMixer);
       const instWingActions = WING_ANIM_NAMES.map((name) => {
         const clip = flyClips.find((c) => c.name === name);
         return clip ? instMixer.clipAction(clip) : (null as unknown as THREE.AnimationAction);
       }).filter(Boolean) as THREE.AnimationAction[];
-      fliesGroup.add(clone);
+      fliesGroup.add(root);
       flyInstances.push({
-        group: clone,
+        group: root,
+        detailGroup: clone,
+        lowLod,
         mixer: instMixer,
         prevPos: { x: 0, y: 0 },
         heading: 0,
         targetHeading: 0,
         wasFlying: false,
+        lowLodWasFlying: false,
+        detailVisible: true,
         initialized: false,
         wingActions: instWingActions,
       });
@@ -467,6 +504,7 @@ export function initThreeScene(
       const z = state.z ?? 0;
       const wasFlying = inst.wasFlying;
       const isFlying = wasFlying ? z > FLY_THRESHOLD_DOWN : z > FLY_THRESHOLD_UP;
+      const lowLodIsFlying = inst.lowLodWasFlying ? z > FLY_THRESHOLD_DOWN : z > FLY_THRESHOLD_UP;
 
       const dx = x - inst.prevPos.x;
       const dy = y - inst.prevPos.y;
@@ -494,19 +532,48 @@ export function initThreeScene(
       inst.group.position.set(x, visualZ, y);
       inst.group.rotation.y = inst.heading;
 
-      if (isFlying !== inst.wasFlying) {
-        inst.wasFlying = isFlying;
-        for (const action of inst.wingActions) {
-          if (isFlying) {
-            action.reset().setLoop(THREE.LoopRepeat, Infinity).setEffectiveTimeScale(2).play();
-          } else {
-            action.stop();
-          }
+      const distSq = camera.position.distanceToSquared(inst.group.position);
+      const shouldShowDetail = inst.detailVisible
+        ? distSq <= FLY_LOD_DISTANCE_OUT_SQ
+        : distSq <= FLY_LOD_DISTANCE_IN_SQ;
+      if (shouldShowDetail !== inst.detailVisible) {
+        inst.detailVisible = shouldShowDetail;
+        inst.lowLod.group.visible = !shouldShowDetail;
+        if (!shouldShowDetail) {
+          inst.detailGroup.visible = false;
+          if (inst.detailGroup.parent === inst.group) inst.group.remove(inst.detailGroup);
+          inst.wasFlying = false;
+          for (const action of inst.wingActions) action.stop();
+        } else {
+          if (inst.detailGroup.parent !== inst.group) inst.group.add(inst.detailGroup);
+          inst.detailGroup.visible = true;
+          inst.lowLodWasFlying = false;
         }
       }
-    }
 
-    for (const m of mixers) m.update(cappedDelta);
+      if (inst.detailVisible) {
+        if (isFlying !== inst.wasFlying) {
+          inst.wasFlying = isFlying;
+          for (const action of inst.wingActions) {
+            if (isFlying) {
+              action.reset().setLoop(THREE.LoopRepeat, Infinity).setEffectiveTimeScale(2).play();
+            } else {
+              action.stop();
+            }
+          }
+        }
+        inst.mixer.update(cappedDelta);
+      } else {
+        applyLowLodWingPose(
+          inst.lowLod,
+          lowLodResources,
+          lowLodIsFlying,
+          timestamp ?? performance.now(),
+          i * 37
+        );
+        inst.lowLodWasFlying = lowLodIsFlying;
+      }
+    }
 
     if (refs.cameraModeRef.current === 'fly') {
       const idx = refs.followSimIndexRef.current ?? -1;
@@ -567,7 +634,8 @@ export function initThreeScene(
     if (disposeStatus) disposeStatus();
     if (disposeDebug) disposeDebug();
     for (const inst of flyInstances) {
-      disposeObject3D(inst.group);
+      fliesGroup.remove(inst.group);
+      disposeObject3D(inst.detailGroup);
     }
     for (const c of sourcesGroup.children.slice()) {
       sourcesGroup.remove(c);
@@ -579,6 +647,7 @@ export function initThreeScene(
       disposeObject3D(appleTemplate);
       appleTemplate = null;
     }
+    disposeLowLodFlyResources(lowLodResources);
   };
   return { dispose, updateButton };
 }

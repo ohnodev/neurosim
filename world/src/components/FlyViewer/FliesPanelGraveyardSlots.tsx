@@ -15,16 +15,23 @@ function FliesPanelGraveyardSlotsInner({
   total: number;
   onPageChange: (nextPage: number) => void;
 }) {
+  const slotCount = 3;
+  const visibleEntries = entries.slice(0, slotCount);
+  const slots: Array<GraveyardFlyEntry | null> = Array.from({ length: slotCount }, (_, i) => visibleEntries[i] ?? null);
+
   return (
     <>
       <div className="fly-viewer__graveyard-title">NeuroFly Graveyard</div>
-      {entries.length === 0 ? (
-        <div className="fly-viewer__fly-slot fly-viewer__fly-slot--graveyard fly-viewer__fly-slot--graveyard-empty">
-          <img src="/tombstone.svg" alt="" width={18} height={18} className="fly-viewer__graveyard-icon" aria-hidden />
-          <span className="fly-viewer__fly-slot-label" style={{ color: '#555' }}>No flies in graveyard yet</span>
-        </div>
-      ) : (
-        entries.map((entry, idx) => {
+      {slots.map((entry, idx) => {
+        if (!entry) {
+          return (
+            <div key={`graveyard-empty-${idx}`} className="fly-viewer__fly-slot fly-viewer__fly-slot--graveyard fly-viewer__fly-slot--graveyard-empty">
+              <img src="/tombstone.svg" alt="" width={18} height={18} className="fly-viewer__graveyard-icon" aria-hidden />
+              <span className="fly-viewer__fly-slot-label" style={{ color: '#555' }}>No fly in this slot</span>
+            </div>
+          );
+        }
+
           const pts = entry.feedCount ?? 0;
           const slotLabel = entry.slotIndex + 1;
           let wei = 0n;
@@ -46,8 +53,7 @@ function FliesPanelGraveyardSlotsInner({
             </div>
           </div>
         );
-        })
-      )}
+      })}
       <div className="fly-viewer__graveyard-pager">
         <button
           type="button"

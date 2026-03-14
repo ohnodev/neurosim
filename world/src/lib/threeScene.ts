@@ -355,7 +355,14 @@ export function initThreeScene(
   scene.add(dirLight);
 
   const groundGeom = new THREE.PlaneGeometry(ARENA_SIZE, ARENA_SIZE);
-  const groundMat = new THREE.MeshStandardMaterial({ color: 0x2d5a27, roughness: 0.9, metalness: 0.05 });
+  const groundMat = new THREE.MeshStandardMaterial({
+    color: 0x2d5a27,
+    roughness: 0.9,
+    metalness: 0.05,
+    side: THREE.DoubleSide,
+    transparent: false,
+    opacity: 1,
+  });
   const ground = new THREE.Mesh(groundGeom, groundMat);
   ground.rotation.x = -Math.PI / 2;
   ground.receiveShadow = true;

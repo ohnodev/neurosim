@@ -62,6 +62,7 @@ const MIN_MOVEMENT_SQ = 1e-8; // Update heading on any movement so reversals res
 const WING_ANIM_NAMES = ['wing-leftAction', 'wing-rightAction'];
 const PULL_CLOSER_RATE = 1.1;
 const FLY_VIEW_DISTANCE = 3;
+const CAMERA_MAX_DISTANCE = 850;
 const FLY_SCALE = 0.08;
 const LOW_LOD_FLY_SCALE = 0.3;
 const LOW_LOD_HEIGHT_OFFSET = 0.04;
@@ -372,7 +373,7 @@ export function initThreeScene(
   scene.add(neuralBackdrop.group);
 
   const controls = new OrbitControls(camera, renderer.domElement);
-  controls.maxDistance = 1000;
+  controls.maxDistance = CAMERA_MAX_DISTANCE;
   controls.target.set(0, 0, 0);
 
   const sourcesGroup = new THREE.Group();

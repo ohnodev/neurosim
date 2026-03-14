@@ -1,67 +1,96 @@
 import React from 'react';
 import { formatEth } from '../../lib/utils';
+import type { GraveyardFlyEntry } from '../../lib/api';
 
 function FliesPanelGraveyardSlotsInner({
-  graveyardSlots,
-  statsBySlot,
-  rewardPerPointWei,
+  entries,
+  page,
+  totalPages,
+  total,
+  onPageChange,
 }: {
-  graveyardSlots: Set<number>;
-  statsBySlot: Record<number, number>;
-  rewardPerPointWei: string | undefined;
+  entries: GraveyardFlyEntry[];
+  page: number;
+  totalPages: number;
+  total: number;
+  onPageChange: (nextPage: number) => void;
 }) {
   return (
     <>
       <div className="fly-viewer__graveyard-title">NeuroFly Graveyard</div>
-      {[0, 1, 2].map((i) => {
-        const inGraveyard = graveyardSlots.has(i);
-        const pts = statsBySlot[i] ?? 0;
-        let wei = 0n;
-        if (rewardPerPointWei && pts > 0) {
+      {entries.length === 0 ? (
+        <div className="fly-viewer__fly-slot fly-viewer__fly-slot--graveyard fly-viewer__fly-slot--graveyard-empty">
+          <img src="/tombstone.svg" alt="" width={18} height={18} className="fly-viewer__graveyard-icon" aria-hidden />
+          <span className="fly-viewer__fly-slot-label" style={{ color: '#555' }}>No flies in graveyard yet</span>
+        </div>
+      ) : (
+        entries.map((entry, idx) => {
+          const pts = entry.feedCount ?? 0;
+          const slotLabel = entry.slotIndex + 1;
+          let wei = 0n;
           try {
-            const parsed = BigInt(rewardPerPointWei);
-            wei = parsed * BigInt(pts);
+            wei = BigInt(entry.rewardWei ?? '0');
           } catch {
             wei = 0n;
           }
-        }
-        const ethStr = pts > 0 ? formatEth(wei) : '0';
+          const ethStr = pts > 0 ? formatEth(wei) : '0';
+          const removedLabel = entry.removedAt ? new Date(entry.removedAt).toLocaleString() : 'unknown';
         return (
-          <div key={i} className={`fly-viewer__fly-slot fly-viewer__fly-slot--graveyard ${!inGraveyard ? 'fly-viewer__fly-slot--graveyard-empty' : ''}`}>
-            {inGraveyard ? (
-              <>
-                <img src="/fly.svg" alt="" width={20} height={20} className="fly-viewer__fly-slot-icon" aria-hidden />
-                <img src="/tombstone.svg" alt="" width={18} height={18} className="fly-viewer__graveyard-icon" aria-hidden />
-                <div className="fly-viewer__graveyard-fly-info">
-                  <span className="fly-viewer__fly-slot-label">Fly {i + 1}</span>
-                  <span className="fly-viewer__graveyard-stats">{pts} pts · {ethStr} $NEURO</span>
-                </div>
-              </>
-            ) : (
-              <>
-                <img src="/tombstone.svg" alt="" width={18} height={18} className="fly-viewer__graveyard-icon" aria-hidden />
-                <span className="fly-viewer__fly-slot-label" style={{ color: '#555' }}>—</span>
-              </>
-            )}
+          <div key={`${entry.flyId}-${idx}`} className="fly-viewer__fly-slot fly-viewer__fly-slot--graveyard">
+            <img src="/fly.svg" alt="" width={20} height={20} className="fly-viewer__fly-slot-icon" aria-hidden />
+            <img src="/tombstone.svg" alt="" width={18} height={18} className="fly-viewer__graveyard-icon" aria-hidden />
+            <div className="fly-viewer__graveyard-fly-info">
+              <span className="fly-viewer__fly-slot-label">Fly {slotLabel}</span>
+              <span className="fly-viewer__graveyard-stats">{pts} pts · {ethStr} $NEURO</span>
+              <span className="fly-viewer__graveyard-time">Removed: {removedLabel}</span>
+            </div>
           </div>
         );
-      })}
+        })
+      )}
+      <div className="fly-viewer__graveyard-pager">
+        <button
+          type="button"
+          className="fly-viewer__graveyard-page-btn"
+          disabled={page <= 1}
+          onClick={() => onPageChange(Math.max(1, page - 1))}
+        >
+          Prev
+        </button>
+        <span className="fly-viewer__graveyard-page-label">
+          Page {page} / {Math.max(1, totalPages)} · {total} total
+        </span>
+        <button
+          type="button"
+          className="fly-viewer__graveyard-page-btn"
+          disabled={page >= totalPages}
+          onClick={() => onPageChange(Math.min(totalPages, page + 1))}
+        >
+          Next
+        </button>
+      </div>
     </>
   );
 }
 
 function graveyardPropsEqual(
-  prev: { graveyardSlots: Set<number>; statsBySlot: Record<number, number>; rewardPerPointWei: string | undefined },
-  next: { graveyardSlots: Set<number>; statsBySlot: Record<number, number>; rewardPerPointWei: string | undefined }
+  prev: { entries: GraveyardFlyEntry[]; page: number; totalPages: number; total: number; onPageChange: (nextPage: number) => void },
+  next: { entries: GraveyardFlyEntry[]; page: number; totalPages: number; total: number; onPageChange: (nextPage: number) => void }
 ): boolean {
-  if (prev.rewardPerPointWei !== next.rewardPerPointWei) return false;
-  if (prev.graveyardSlots !== next.graveyardSlots) {
-    if (prev.graveyardSlots.size !== next.graveyardSlots.size) return false;
-    for (const i of prev.graveyardSlots) if (!next.graveyardSlots.has(i)) return false;
-  }
-  const slots = [0, 1, 2];
-  for (const i of slots) {
-    if ((prev.statsBySlot[i] ?? 0) !== (next.statsBySlot[i] ?? 0)) return false;
+  if (prev.page !== next.page || prev.totalPages !== next.totalPages || prev.total !== next.total) return false;
+  if (prev.entries.length !== next.entries.length) return false;
+  for (let i = 0; i < prev.entries.length; i++) {
+    const a = prev.entries[i];
+    const b = next.entries[i];
+    if (
+      a.flyId !== b.flyId ||
+      a.slotIndex !== b.slotIndex ||
+      a.feedCount !== b.feedCount ||
+      a.rewardWei !== b.rewardWei ||
+      a.removedAt !== b.removedAt
+    ) {
+      return false;
+    }
   }
   return true;
 }

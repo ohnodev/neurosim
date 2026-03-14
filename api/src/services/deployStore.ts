@@ -17,6 +17,8 @@ export interface DeploymentRecord {
   /** Identifies which fly is deployed; new fly in same slot => 0 points until deployed */
   flyId?: string;
   timeDeployed?: string;
+  active?: boolean;
+  deactivatedAt?: string;
 }
 
 let deployments: DeploymentRecord[] = [];
@@ -26,11 +28,13 @@ function load(): void {
     const raw = fs.readFileSync(deployPath, 'utf-8');
     const data = JSON.parse(raw);
     const arr = Array.isArray(data?.deployments) ? data.deployments : [];
-    deployments = arr.map((d: { address: string; slotIndex: number; flyId?: string; timeDeployed?: string }) => ({
+    deployments = arr.map((d: { address: string; slotIndex: number; flyId?: string; timeDeployed?: string; active?: boolean; deactivatedAt?: string }) => ({
       address: d.address?.toLowerCase() ?? d.address,
       slotIndex: d.slotIndex,
       flyId: d.flyId,
       timeDeployed: d.timeDeployed,
+      active: d.active ?? true,
+      deactivatedAt: d.deactivatedAt,
     }));
   } catch {
     deployments = [];
@@ -49,13 +53,18 @@ function save(): void {
 
 load();
 
+/**
+ * Returns a shallow copy of all `DeploymentRecord` entries in `deployments`,
+ * including inactive rows; callers should filter with `active !== false` when
+ * they need only active deployments.
+ */
 export function getDeployments(): DeploymentRecord[] {
   return [...deployments];
 }
 
 export function addDeployment(address: string, slotIndex: number): void {
   const addr = address.toLowerCase();
-  if (deployments.some((d) => d.address === addr && d.slotIndex === slotIndex)) return;
+  if (deployments.some((d) => d.active !== false && d.address === addr && d.slotIndex === slotIndex)) return;
   const flies = getFlies(addr);
   // Flies array index = slot (flies appended in claim order: first claim => slot 0, etc.)
   const fly = flies[slotIndex];
@@ -68,7 +77,18 @@ export function addDeployment(address: string, slotIndex: number): void {
     slotIndex,
     flyId,
     timeDeployed: new Date().toISOString(),
+    active: true,
+    deactivatedAt: undefined,
   });
+  save();
+}
+
+export function deactivateDeployment(address: string, slotIndex: number): void {
+  const addr = address.toLowerCase();
+  const rec = deployments.find((d) => d.active !== false && d.address === addr && d.slotIndex === slotIndex);
+  if (!rec) return;
+  rec.active = false;
+  rec.deactivatedAt = new Date().toISOString();
   save();
 }
 

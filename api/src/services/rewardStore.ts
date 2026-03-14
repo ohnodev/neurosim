@@ -162,7 +162,7 @@ function getOrCreateStats(address: string, slotIndex: number, flyId: string): Ne
   const flies = getFlies(addr);
   const fly = flies[slotIndex];
   const deployRecords = getDeployments();
-  const deployRecord = deployRecords.find((d) => d.address === addr && d.slotIndex === slotIndex);
+  const deployRecord = deployRecords.find((d) => d.active !== false && d.address === addr && d.slotIndex === slotIndex);
 
   const stats: NeuroFlyStats = {
     address: addr,
@@ -183,6 +183,7 @@ export function recordFoodCollected(simIndex: number): void {
   const deployments = getDeployments();
   const record = deployments[simIndex];
   if (!record) return;
+  if (record.active === false) return;
 
   const { address, slotIndex } = record;
   const addr = address.toLowerCase();

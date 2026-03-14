@@ -3,6 +3,7 @@ import request from 'supertest';
 import WebSocket from 'ws';
 import { app, httpServer, startSim, stopSim, resetDeployStateForTesting } from './index.js';
 import { addFly, getFlies } from './services/flyStore.js';
+import { addDeployment, deactivateDeployment } from './services/deployStore.js';
 
 const TEST_ADDR = '0x0000000000000000000000000000000000000001';
 
@@ -26,6 +27,31 @@ describe('deploy API (no server)', () => {
       .post('/api/deploy')
       .send({ address: TEST_ADDR, slotIndex: 5 });
     expect(res.status).toBe(400);
+  });
+
+  it('GET /api/deploy/graveyard returns paginated inactive flies', async () => {
+    const addr = '0x00000000000000000000000000000000000000aa';
+    addFly(addr, { method: 'pay', claimedAt: new Date().toISOString(), seed: 21 });
+    addFly(addr, { method: 'pay', claimedAt: new Date().toISOString(), seed: 22 });
+    addFly(addr, { method: 'pay', claimedAt: new Date().toISOString(), seed: 23 });
+    addDeployment(addr, 0);
+    deactivateDeployment(addr, 0);
+    addDeployment(addr, 1);
+    deactivateDeployment(addr, 1);
+    addDeployment(addr, 2);
+    deactivateDeployment(addr, 2);
+
+    const page1 = await request(app).get(`/api/deploy/graveyard?address=${addr}&page=1&pageSize=2`);
+    expect(page1.status).toBe(200);
+    expect(Array.isArray(page1.body.items)).toBe(true);
+    expect(page1.body.items.length).toBe(2);
+    expect(page1.body.total).toBeGreaterThanOrEqual(3);
+    expect(page1.body.totalPages).toBeGreaterThanOrEqual(2);
+
+    const page2 = await request(app).get(`/api/deploy/graveyard?address=${addr}&page=2&pageSize=2`);
+    expect(page2.status).toBe(200);
+    expect(Array.isArray(page2.body.items)).toBe(true);
+    expect(page2.body.items.length).toBeGreaterThanOrEqual(1);
   });
 });
 

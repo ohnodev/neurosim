@@ -17,18 +17,16 @@ type SlotType = 'graveyard' | 'buy' | 'deploy' | 'connecting' | 'dead' | 'active
 export function FliesPanelCurrentSlots(props: {
   deployed: Record<number, number>;
   selectedFlyIndex: number;
-  myFlies: ClaimedFly[];
+  myFlies: Array<ClaimedFly | null>;
   graveyardSlots: Set<number>;
   statsBySlot: Record<number, number>;
   address: string | undefined;
   onSelectSlot: (slot: number) => void;
-  setGraveyardByWallet: React.Dispatch<React.SetStateAction<Record<string, Set<number>>>>;
   setError: React.Dispatch<React.SetStateAction<string | null>>;
   deployFly: (slotIndex: number) => Promise<void>;
   setBuyFlySlot: (v: number | null) => void;
   getFlyCardData: (slotIndex: number) => { fly: FlyState; points: number };
   subscribeFlyCardTick: (fn: () => void) => () => void;
-  latestFliesRef: React.MutableRefObject<FlyState[]>;
 }) {
   const {
     deployed,
@@ -36,15 +34,12 @@ export function FliesPanelCurrentSlots(props: {
     myFlies,
     graveyardSlots,
     statsBySlot,
-    address,
     onSelectSlot,
-    setGraveyardByWallet,
     setError,
     deployFly,
     setBuyFlySlot,
     getFlyCardData,
     subscribeFlyCardTick,
-    latestFliesRef,
   } = props;
 
   const slotTypes = useSimDisplayDataSelector(
@@ -71,7 +66,7 @@ export function FliesPanelCurrentSlots(props: {
 
   const renderSlot = (i: number) => {
     const slotType = slotTypes[`slot${i}`];
-    const isEmpty = myFlies.length === 0 && i === 0;
+    const isEmpty = myFlies.every((f) => f == null) && i === 0;
     switch (slotType) {
       case 'graveyard':
         return <FlySlotGraveyard index={i} />;
@@ -86,13 +81,6 @@ export function FliesPanelCurrentSlots(props: {
           <FlySlotDead
             index={i}
             statsBySlot={statsBySlot}
-            address={address}
-            graveyardSlots={graveyardSlots}
-            deployed={deployed}
-            selectedFlyIndex={selectedFlyIndex}
-            onSelectSlot={onSelectSlot}
-            setGraveyardByWallet={setGraveyardByWallet}
-            latestFliesRef={latestFliesRef}
           />
         );
       case 'active':

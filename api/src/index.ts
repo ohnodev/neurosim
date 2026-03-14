@@ -8,13 +8,15 @@ import { createBrainSim } from './brain-sim.js';
 import * as socketClient from './brain-socket-client.js';
 import { getWorld, spawnFood, removeFood, getSources, type WorldSource } from './world.js';
 import claimsRouter from './routes/claims.js';
-import { getFlies } from './services/flyStore.js';
-import { getDeployments, addDeployment, clearForTesting } from './services/deployStore.js';
-import { recordFoodCollected, getStatsForAddress, getDistributedHistory, REWARD_PER_FOOD } from './services/rewardStore.js';
+import { getFlies, removeFlyAtSlot } from './services/flyStore.js';
+import { getDeployments, addDeployment, clearForTesting, deactivateDeployment } from './services/deployStore.js';
+import { recordFoodCollected, getStatsForAddress, getDistributedHistory, REWARD_PER_FOOD, getNeuroFlyStats } from './services/rewardStore.js';
 import { flushRewards } from './services/rewardDistributor.js';
 
 const PORT = Number(process.env.PORT) || 3001;
 const connectome = loadConnectome();
+const ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
+const MAX_SLOT_INDEX = 2;
 
 /** Brain sim uses Unix socket only. Probe connects to brain-service; retry a few times for PM2 start-order. */
 const CUDA_ONLY = process.env.NEUROSIM_MODE === 'cuda' || process.env.USE_CUDA === '1';
@@ -56,6 +58,50 @@ const sims: Awaited<ReturnType<typeof createBrainSim>>[] = [];
 /** address -> slotIndex -> simIndex */
 const deployedFlies = new Map<string, Map<number, number>>();
 
+function parseAndValidateAddress(raw: unknown): string | null {
+  if (Array.isArray(raw) || typeof raw !== 'string') return null;
+  const address = raw.toLowerCase();
+  if (!ADDRESS_RE.test(address)) return null;
+  return address;
+}
+
+function isValidSlotIndex(slotIndex: unknown): slotIndex is number {
+  return (
+    typeof slotIndex === 'number' &&
+    Number.isFinite(slotIndex) &&
+    Number.isInteger(slotIndex) &&
+    slotIndex >= 0 &&
+    slotIndex <= MAX_SLOT_INDEX
+  );
+}
+
+function findDeploymentBySimIndex(simIndex: number): { address: string; slotIndex: number } | null {
+  for (const [address, slotMap] of deployedFlies) {
+    for (const [slotIndex, mappedIndex] of slotMap) {
+      if (mappedIndex === simIndex) return { address, slotIndex };
+    }
+  }
+  return null;
+}
+
+function removeSimAtIndex(simIndex: number): { address: string; slotIndex: number } | null {
+  if (simIndex < 0 || simIndex >= sims.length) return null;
+  const deployment = findDeploymentBySimIndex(simIndex);
+  sims.splice(simIndex, 1);
+
+  for (const [address, slotMap] of deployedFlies) {
+    for (const [slotIndex, mappedIndex] of slotMap) {
+      if (mappedIndex > simIndex) slotMap.set(slotIndex, mappedIndex - 1);
+    }
+  }
+  if (deployment) {
+    const slotMap = deployedFlies.get(deployment.address);
+    slotMap?.delete(deployment.slotIndex);
+    if (slotMap && slotMap.size === 0) deployedFlies.delete(deployment.address);
+  }
+  return deployment;
+}
+
 async function addFlyToSim(): Promise<number> {
   const angle = (2 * Math.PI * sims.length) / Math.max(1, sims.length + 1);
   const x = INITIAL_SPREAD * Math.cos(angle);
@@ -74,7 +120,9 @@ async function addFlyToSim(): Promise<number> {
 }
 
 async function restoreDeployFromStore(): Promise<void> {
-  const records = getDeployments();
+  const records = getDeployments().filter(
+    (r) => r.active !== false && isValidSlotIndex(r.slotIndex)
+  );
   for (const { address, slotIndex } of records) {
     const simIndex = await addFlyToSim();
     let map = deployedFlies.get(address);
@@ -87,6 +135,11 @@ async function restoreDeployFromStore(): Promise<void> {
   if (records.length > 0) {
     console.log('[deploy] restored', records.length, 'deployments from store');
   }
+}
+try {
+  await restoreDeployFromStore();
+} catch (err) {
+  console.error('[deploy] restore error:', err);
 }
 let simRunning = false;
 let simIntervalId: ReturnType<typeof setInterval> | null = null;
@@ -172,6 +225,8 @@ function startSim(): void {
       let maxJsMs = 0;
       let socketRoundtripMs = 0;
       let socketWaitMs = 0;
+      let batchCalls = 0;
+      let batchSize = 0;
       const dtFrame = 1 / SIM_FPS;
       const batchDt = dtFrame * FRAMES_PER_BATCH;
       const frames: { t: number; flies: ReturnType<typeof sims[0]['getState']>['fly'][]; activities: (Record<string, number> | undefined)[] }[] = [];
@@ -184,22 +239,38 @@ function startSim(): void {
         activity?: Record<string, number>;
       }> = [];
 
+      const beforeStates = sims.map((s) => s.getState());
+      const states = await Promise.all(sims.map((s) => s.step(batchDt)));
+      const deadSimIndexes: number[] = [];
       for (let j = 0; j < nSims; j++) {
-        const before = sims[j].getState();
-        const state = await sims[j].step(batchDt);
+        const before = beforeStates[j];
+        const state = states[j];
         const gt = (sims[j] as {
           getTiming?: () => {
             rustMs: number;
             jsMs: number;
             socketTotalMs?: number;
             socketResponseWaitMs?: number;
+            socketBatchSize?: number;
           };
         }).getTiming?.();
         if (gt) {
           stepMs += gt.rustMs;
           jsMs += gt.jsMs;
-          socketRoundtripMs += gt.socketTotalMs ?? 0;
-          socketWaitMs += gt.socketResponseWaitMs ?? 0;
+          const thisBatchSize = gt.socketBatchSize ?? 1;
+          if (thisBatchSize > 1) {
+            if (j === 0) {
+              socketRoundtripMs += gt.socketTotalMs ?? 0;
+              socketWaitMs += gt.socketResponseWaitMs ?? 0;
+              batchCalls += 1;
+              batchSize = thisBatchSize;
+            }
+          } else {
+            socketRoundtripMs += gt.socketTotalMs ?? 0;
+            socketWaitMs += gt.socketResponseWaitMs ?? 0;
+            batchCalls += 1;
+            if (batchSize < 1) batchSize = 1;
+          }
           if (gt.rustMs > maxStepMs) maxStepMs = gt.rustMs;
           if (gt.jsMs > maxJsMs) maxJsMs = gt.jsMs;
         }
@@ -215,6 +286,28 @@ function startSim(): void {
           toT: state.t,
           activity: state.activity,
         });
+        if (state.fly.dead || (state.fly.health ?? 100) <= 0) {
+          deadSimIndexes.push(j);
+        }
+      }
+
+      if (deadSimIndexes.length > 0) {
+        const uniqueDead = [...new Set(deadSimIndexes)].sort((a, b) => b - a);
+        for (const simIndex of uniqueDead) {
+          const removed = removeSimAtIndex(simIndex);
+          if (!removed) continue;
+          const graveyarded = removeFlyAtSlot(removed.address, removed.slotIndex);
+          deactivateDeployment(removed.address, removed.slotIndex);
+          console.log(
+            '[graveyard:auto]',
+            removed.address.slice(0, 10) + '…',
+            'slot',
+            removed.slotIndex,
+            'sim',
+            simIndex,
+            graveyarded ? `fly ${graveyarded.id}` : 'fly <already removed>'
+          );
+        }
       }
 
       for (let i = 1; i <= FRAMES_PER_BATCH; i++) {
@@ -244,10 +337,10 @@ function startSim(): void {
         const rustCalls = sims.length;
         const avgStep = rustCalls ? Math.round(stepMs / rustCalls) : 0;
         const avgJs = rustCalls ? Math.round(jsMs / rustCalls) : 0;
-        const avgSocketRoundtrip = rustCalls ? Math.round(socketRoundtripMs / rustCalls) : 0;
-        const avgSocketWait = rustCalls ? Math.round(socketWaitMs / rustCalls) : 0;
+        const avgSocketRoundtrip = batchCalls ? Math.round(socketRoundtripMs / batchCalls) : 0;
+        const avgSocketWait = batchCalls ? Math.round(socketWaitMs / batchCalls) : 0;
         const timingStr = backendInfo.rust
-          ? ` stepMs=${stepMs} jsMs=${jsMs} avgStep=${avgStep} avgJs=${avgJs} maxStep=${maxStepMs} maxJs=${maxJsMs} socketRoundtripMs=${socketRoundtripMs} socketWaitMs=${socketWaitMs} avgSocketRoundtrip=${avgSocketRoundtrip} avgSocketWait=${avgSocketWait} rustCalls=${rustCalls} synthFrames=${FRAMES_PER_BATCH} payloadMs=${buildPayloadMs} schedulerLagMs=${schedulerLagMs} droppedTicks=${droppedSimTicks}`
+          ? ` stepMs=${stepMs} jsMs=${jsMs} avgStep=${avgStep} avgJs=${avgJs} maxStep=${maxStepMs} maxJs=${maxJsMs} socketRoundtripMs=${socketRoundtripMs} socketWaitMs=${socketWaitMs} avgSocketRoundtrip=${avgSocketRoundtrip} avgSocketWait=${avgSocketWait} batchCalls=${batchCalls} batchSize=${batchSize} rustCalls=${rustCalls} synthFrames=${FRAMES_PER_BATCH} payloadMs=${buildPayloadMs} schedulerLagMs=${schedulerLagMs} droppedTicks=${droppedSimTicks}`
           : '';
         console.log('[sim] t=', last?.t.toFixed(1), 'flies=', last?.flies.length ?? 0, first ? `first=(${first.x?.toFixed(2)},${first.y?.toFixed(2)})` : '', 'clients=', wsClients.size, 'loopMs=', loopMs, timingStr);
       }
@@ -357,9 +450,9 @@ app.use('/api/claim', claimsRouter);
 
 app.post('/api/deploy', async (req, res) => {
   try {
-    const address = (req.body?.address as string)?.toLowerCase();
+    const address = parseAndValidateAddress(req.body?.address);
     const slotIndex = typeof req.body?.slotIndex === 'number' ? req.body.slotIndex : parseInt(String(req.body?.slotIndex ?? ''), 10);
-    if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address) || !Number.isInteger(slotIndex) || slotIndex < 0 || slotIndex > 2) {
+    if (!address || !isValidSlotIndex(slotIndex)) {
       res.status(400).json({ error: 'Invalid address or slotIndex (0-2)' });
       return;
     }
@@ -390,13 +483,8 @@ app.post('/api/deploy', async (req, res) => {
 
 app.get('/api/rewards/stats', (req, res) => {
   try {
-    const rawAddress = req.query.address;
-    if (Array.isArray(rawAddress) || typeof rawAddress !== 'string') {
-      res.status(400).json({ error: 'Invalid address' });
-      return;
-    }
-    const address = rawAddress.toLowerCase();
-    if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address)) {
+    const address = parseAndValidateAddress(req.query.address);
+    if (!address) {
       res.status(400).json({ error: 'Invalid address' });
       return;
     }
@@ -422,8 +510,8 @@ app.get('/api/rewards/history', (req, res) => {
 
 app.get('/api/deploy/my-deployed', (req, res) => {
   try {
-    const address = (req.query.address as string)?.toLowerCase();
-    if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address)) {
+    const address = parseAndValidateAddress(req.query.address);
+    if (!address) {
       res.status(400).json({ error: 'Invalid address' });
       return;
     }
@@ -432,10 +520,74 @@ app.get('/api/deploy/my-deployed', (req, res) => {
     if (map) {
       for (const [slot, idx] of map) deployed[slot] = idx;
     }
-    res.json({ deployed });
+    const currentFlies = getFlies(address);
+    const graveyardSlots = Array.from(
+      new Set(
+        getDeployments()
+          .filter(
+            (d) =>
+              d.address === address &&
+              d.active === false &&
+              isValidSlotIndex(d.slotIndex) &&
+              currentFlies[d.slotIndex] == null
+          )
+          .map((d) => d.slotIndex),
+      ),
+    );
+    res.json({ deployed, graveyardSlots });
   } catch (err) {
     console.error('[deploy] my-deployed error:', err);
     res.status(500).json({ error: 'Failed to get deployed flies' });
+  }
+});
+
+app.get('/api/deploy/graveyard', (req, res) => {
+  try {
+    const address = parseAndValidateAddress(req.query.address);
+    if (!address) {
+      res.status(400).json({ error: 'Invalid address' });
+      return;
+    }
+    const pageRaw = Number(req.query.page ?? 1);
+    const pageSizeRaw = Number(req.query.pageSize ?? 3);
+    const page = Number.isInteger(pageRaw) && pageRaw > 0 ? pageRaw : 1;
+    const pageSize = Number.isInteger(pageSizeRaw) && pageSizeRaw > 0
+      ? Math.min(pageSizeRaw, 20)
+      : 3;
+
+    const all = getDeployments()
+      .filter(
+        (d) => d.address === address && d.active === false && isValidSlotIndex(d.slotIndex)
+      )
+      .sort((a, b) => {
+        const ta = new Date(a.deactivatedAt ?? a.timeDeployed ?? 0).getTime();
+        const tb = new Date(b.deactivatedAt ?? b.timeDeployed ?? 0).getTime();
+        return tb - ta;
+      })
+      .map((d) => {
+        const flyId = d.flyId ?? `${address}-slot-${d.slotIndex}`;
+        const stats = d.flyId ? getNeuroFlyStats(address, d.slotIndex, d.flyId) : undefined;
+        const feedCount = stats?.feedCount ?? 0;
+        return {
+          flyId,
+          slotIndex: d.slotIndex,
+          feedCount,
+          rewardWei: (BigInt(feedCount) * REWARD_PER_FOOD).toString(),
+          timeBirthed: stats?.timeBirthed,
+          timeDeployed: d.timeDeployed ?? stats?.timeDeployed,
+          removedAt: d.deactivatedAt ?? null,
+        };
+      });
+    const total = all.length;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const clampedPage = Math.min(page, totalPages);
+    const start = (clampedPage - 1) * pageSize;
+    const items = all.slice(start, start + pageSize);
+
+    res.json({ items, page: clampedPage, pageSize, total, totalPages });
+  } catch (err) {
+    console.error('[deploy] graveyard error:', err);
+    res.status(500).json({ error: 'Failed to get graveyard flies' });
   }
 });
 

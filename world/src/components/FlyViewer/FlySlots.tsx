@@ -4,8 +4,6 @@ import { flyCardDataEqual } from '../../lib/flyViewerUtils';
 import { getHealthColor, getHungerColor } from '../../lib/utils';
 import { REST_DURATION_FALLBACK } from '../../lib/flyInterpolation';
 
-const FLY_SLOT_INDICES = [0, 1, 2] as const;
-
 function clampPct(n: number): number {
   return Math.min(100, Math.max(0, Number.isFinite(n) ? n : 0));
 }
@@ -94,23 +92,9 @@ export function FlySlotConnecting({ index }: { index: number }) {
 export function FlySlotDead({
   index,
   statsBySlot,
-  address,
-  graveyardSlots,
-  deployed,
-  selectedFlyIndex,
-  onSelectSlot,
-  setGraveyardByWallet,
-  latestFliesRef,
 }: {
   index: number;
   statsBySlot: Record<number, number>;
-  address: string | undefined;
-  graveyardSlots: Set<number>;
-  deployed: Record<number, number>;
-  selectedFlyIndex: number;
-  onSelectSlot: (slot: number) => void;
-  setGraveyardByWallet: React.Dispatch<React.SetStateAction<Record<string, Set<number>>>>;
-  latestFliesRef: React.MutableRefObject<FlyState[]>;
 }) {
   return (
     <div className="fly-viewer__fly-slot-dead">
@@ -118,29 +102,7 @@ export function FlySlotDead({
         Fly {index + 1} (dead)
         <span style={{ fontSize: 9, color: '#8a8', fontFamily: 'monospace' }}>{statsBySlot[index] ?? 0} pts</span>
       </span>
-      <button
-        type="button"
-        className="fly-viewer__fly-slot-graveyard"
-        onClick={() => {
-          setGraveyardByWallet((prev) => {
-            const addr = address ?? '';
-            const set = new Set(prev[addr] ?? []);
-            set.add(index);
-            return { ...prev, [addr]: set };
-          });
-          const flies = latestFliesRef.current;
-          const next = FLY_SLOT_INDICES.find(
-            (j) =>
-              j !== index &&
-              !graveyardSlots.has(j) &&
-              deployed[j] != null &&
-              flies[deployed[j]!] != null
-          );
-          if (next != null && selectedFlyIndex === index) onSelectSlot(next);
-        }}
-      >
-        Send to NeuroFly Graveyard
-      </button>
+      <span style={{ fontSize: 10, color: '#888' }}>Moving to graveyard automatically...</span>
     </div>
   );
 }

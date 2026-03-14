@@ -11,6 +11,7 @@ import {
   fetchMyFlies,
   fetchMyDeployed,
   fetchFlyStats,
+  fetchGraveyard,
   type NeuronRaw,
 } from '../../lib/api';
 import { BrainOverlay } from '../BrainOverlay';
@@ -41,11 +42,7 @@ export default function FlyViewer() {
   const [fliesPanelOpen, setFliesPanelOpen] = useState(() => !isMobileViewport());
   const [buyFlySlot, setBuyFlySlot] = useState<number | null>(null);
   const [fliesTab, setFliesTab] = useState<'current' | 'graveyard'>('current');
-  const [graveyardByWallet, setGraveyardByWallet] = useState<Record<string, Set<number>>>(() => ({}));
-  const graveyardSlots = useMemo(
-    () => graveyardByWallet[address ?? ''] ?? new Set(),
-    [graveyardByWallet, address]
-  );
+  const [graveyardPage, setGraveyardPage] = useState(1);
   const [statusPanelOpen, setStatusPanelOpen] = useState(() => !isMobileViewport());
   const [statusTab, setStatusTab] = useState<'status' | 'rewards'>('status');
   const [brainPanelOpen, setBrainPanelOpen] = useState(() => !isMobileViewport());
@@ -67,6 +64,7 @@ export default function FlyViewer() {
   const followSimIndexRef = useRef<number | undefined>(undefined);
   const sourcesRef = useRef<WorldSource[]>([]);
   const flyCardDataRef = useRef<Map<number, { fly: FlyState; points: number }>>(new Map());
+  const prevWsFlyCountRef = useRef(0);
 
   const { data: worldData, isError: worldError } = useQuery({
     queryKey: apiKeys.world(),
@@ -100,11 +98,12 @@ export default function FlyViewer() {
     enabled: !!address,
   });
 
-  const { data: deployed = {}, refetch: refetchDeployed } = useQuery({
+  const { data: myDeployedData = { deployed: {}, graveyardSlots: [] }, refetch: refetchDeployed } = useQuery({
     queryKey: apiKeys.myDeployed(address ?? '__unauthenticated__'),
     queryFn: () => fetchMyDeployed(address!),
     enabled: !!address,
   });
+  const deployed = myDeployedData.deployed;
 
   const { data: rewardsHistory } = useQuery({
     queryKey: apiKeys.rewardsHistory(),
@@ -130,6 +129,15 @@ export default function FlyViewer() {
     for (const s of flyStatsData?.stats ?? []) m[s.slotIndex] = s.feedCount;
     return m;
   }, [flyStatsData?.stats]);
+  const graveyardSlots = useMemo(() => {
+    return new Set(myDeployedData.graveyardSlots);
+  }, [myDeployedData.graveyardSlots]);
+
+  const { data: graveyardData } = useQuery({
+    queryKey: apiKeys.graveyard(address ?? '__unauthenticated__', graveyardPage),
+    queryFn: () => fetchGraveyard(address!, graveyardPage, 3),
+    enabled: !!address && fliesTab === 'graveyard',
+  });
 
   useEffect(() => {
     const unsub = subscribeSim((event) => {
@@ -139,7 +147,22 @@ export default function FlyViewer() {
           setError((prev) =>
             prev && /socket|connection|websocket|connect|closed/i.test(prev) ? null : prev
           );
-          const eff = resolveEffectiveSimIndex(latestFliesRef.current, deployed, selectedFlyIndex, deployedSlotKeys);
+          const currentDeployed = deployedRef.current;
+          const currentSelectedSlot = selectedFlyIndexRef.current;
+          const currentSlotKeys = Object.keys(currentDeployed)
+            .map((k) => parseInt(k, 10))
+            .filter((n) => !Number.isNaN(n) && currentDeployed[n] != null)
+            .sort((a, b) => a - b);
+          const eff = resolveEffectiveSimIndex(
+            latestFliesRef.current,
+            currentDeployed,
+            currentSelectedSlot,
+            currentSlotKeys,
+          );
+          prevWsFlyCountRef.current = Math.max(
+            currentSlotKeys.length,
+            latestFliesRef.current.length,
+          );
           sendViewFlyIndex(eff ?? 0);
         } else if (event._event === 'closed') {
           setConnected(false);
@@ -201,10 +224,19 @@ export default function FlyViewer() {
           // Use incoming data.activities when data.activity is absent (legacy payload)
           activityRef.current = data.activities[0] ?? {};
         }
+        const currentFlyCount = latestFliesRef.current.length;
+        if (address && currentFlyCount < prevWsFlyCountRef.current) {
+          queryClient.invalidateQueries({ queryKey: apiKeys.myFlies(address) });
+          queryClient.invalidateQueries({ queryKey: apiKeys.myDeployed(address) });
+          queryClient.invalidateQueries({ queryKey: apiKeys.flyStats(address) });
+          queryClient.invalidateQueries({ queryKey: apiKeys.graveyard(address) });
+          void refetchDeployed();
+        }
+        prevWsFlyCountRef.current = currentFlyCount;
       }
     });
     return unsub;
-  }, [queryClient]);
+  }, [address, queryClient, refetchDeployed]);
 
   const flyCardTickListenersRef = useRef<Set<() => void>>(new Set());
   const subscribeFlyCardTick = useCallback((fn: () => void) => {
@@ -380,7 +412,10 @@ export default function FlyViewer() {
                 <button
                   type="button"
                   className={`fly-viewer__flies-tab ${fliesTab === 'current' ? 'fly-viewer__flies-tab--active' : ''}`}
-                  onClick={() => setFliesTab('current')}
+                  onClick={() => {
+                    setFliesTab('current');
+                    setGraveyardPage(1);
+                  }}
                 >
                   <img src="/fly.svg" alt="" width={14} height={14} className="fly-viewer__tab-icon" aria-hidden />
                   Current
@@ -388,7 +423,10 @@ export default function FlyViewer() {
                 <button
                   type="button"
                   className={`fly-viewer__flies-tab ${fliesTab === 'graveyard' ? 'fly-viewer__flies-tab--active' : ''}`}
-                  onClick={() => setFliesTab('graveyard')}
+                  onClick={() => {
+                    setFliesTab('graveyard');
+                    setGraveyardPage(1);
+                  }}
                 >
                   <img src="/tombstone.svg" alt="" width={14} height={14} className="fly-viewer__tab-icon fly-viewer__tab-icon--tombstone" aria-hidden />
                   Graveyard
@@ -403,19 +441,19 @@ export default function FlyViewer() {
                   statsBySlot={statsBySlot}
                   address={address}
                   onSelectSlot={onSelectFlySlot}
-                  setGraveyardByWallet={setGraveyardByWallet}
                   setError={setDeployError}
                   deployFly={deployFly}
                   setBuyFlySlot={setBuyFlySlot}
                   getFlyCardData={getFlyCardData}
                   subscribeFlyCardTick={subscribeFlyCardTick}
-                  latestFliesRef={latestFliesRef}
                 />
               ) : (
                 <FliesPanelGraveyardSlots
-                  graveyardSlots={graveyardSlots}
-                  statsBySlot={statsBySlot}
-                  rewardPerPointWei={flyStatsData?.rewardPerPointWei}
+                  entries={graveyardData?.items ?? []}
+                  page={graveyardData?.page ?? graveyardPage}
+                  totalPages={graveyardData?.totalPages ?? 1}
+                  total={graveyardData?.total ?? 0}
+                  onPageChange={setGraveyardPage}
                 />
               )}
             </div>

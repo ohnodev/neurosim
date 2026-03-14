@@ -7,6 +7,7 @@
     "fly-brain:setup": "./scripts/setup-fly-brain.sh",
     "fly-brain:run": "node scripts/run-fly-brain.mjs",
     "download-dataset": "./scripts/download-dataset.sh",
+    "generate:viewer-connectome": "node scripts/generate-viewer-connectome.mjs",
     "api:dev": "cd api && npm run dev",
     "world:dev": "cd world && npm run dev",
     "landing:dev": "cd landing && npm run dev",
@@ -18,6 +19,7 @@
     "test:api": "cd api && npm run test",
     "test:smoke": "node scripts/smoke-test.mjs",
     "test:smoothness": "node scripts/check-smoothness.mjs",
+    "bench:brain-service": "node scripts/benchmark-brain-service.mjs",
     "ngrok": "ngrok http 3001 ${NGROK_DOMAIN:+--domain=$NGROK_DOMAIN}"
   },
   "devDependencies": {

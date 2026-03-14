@@ -31,9 +31,10 @@ fn main() {
     let template = connectome::load_connectome(Path::new(&connectome_path))
         .expect("load connectome");
     eprintln!(
-        "[brain-service] connectome loaded: {} neurons, {} connections",
+        "[brain-service] connectome loaded: {} neurons, {} connections, viewer_subset={}",
         template.neuron_ids.len(),
-        template.connections.len()
+        template.edges_pre.len(),
+        template.viewer_subset_indices.len()
     );
 
     let socket_path = std::env::var("NEUROSIM_BRAIN_SOCKET")
@@ -71,6 +72,7 @@ fn main() {
 struct StepParams {
     sim_id: u32,
     dt: f64,
+    include_activity: Option<bool>,
     fly: FlyJson,
     sources: Vec<SourceJson>,
     pending: Vec<PendingJson>,
@@ -117,6 +119,11 @@ struct StepResp {
     motor_left: f64,
     motor_right: f64,
     motor_fwd: f64,
+    compute_ms: f64,
+    kernel_ms: f64,
+    recurrent_ms: f64,
+    lif_ms: f64,
+    readout_ms: f64,
 }
 
 #[derive(Serialize)]
@@ -126,6 +133,11 @@ struct StepManyItemResp {
     motor_left: f64,
     motor_right: f64,
     motor_fwd: f64,
+    compute_ms: f64,
+    kernel_ms: f64,
+    recurrent_ms: f64,
+    lif_ms: f64,
+    readout_ms: f64,
 }
 
 #[derive(Serialize)]
@@ -166,13 +178,16 @@ fn handle(
         );
         r#"{"ok":true}"#.to_string()
     } else if line.contains("\"method\":\"create\"") {
-        let sim = BrainSim::new(
+        let sim = BrainSim::new_with_viewer(
             template.neuron_ids.clone(),
-            template.connections.clone(),
+            template.edges_pre.clone(),
+            template.edges_post.clone(),
+            template.edges_weight.clone(),
             template.sensory_indices.clone(),
             template.motor_left.clone(),
             template.motor_right.clone(),
             template.motor_unknown.clone(),
+            template.viewer_subset_indices.clone(),
         );
         let mut g = next_id.lock().unwrap();
         let id = *g;
@@ -196,8 +211,12 @@ fn handle(
         // This service currently processes one socket request at a time per process,
         // so a single batch lock does not reduce real concurrency in this execution model.
         let mut g = sims.lock().unwrap();
-        let t1 = Instant::now();
         let mut results = Vec::with_capacity(step_count);
+        let mut kernel_ms_sum: f64 = 0.0;
+        let mut recurrent_ms_sum: f64 = 0.0;
+        let mut lif_ms_sum: f64 = 0.0;
+        let mut readout_ms_sum: f64 = 0.0;
+        let mut compute_ms_sum: f64 = 0.0;
         let mut missing_sim: Option<u32> = None;
         for step in p.steps {
             let sim = g.get_mut(&step.sim_id);
@@ -235,14 +254,25 @@ fn handle(
                     strength: x.strength,
                 })
                 .collect();
-            let (_activity, activity_sparse, motor_left, motor_right, motor_fwd) =
-                sim.step(step.dt, fly, srcs, pend);
+            let include_activity = step.include_activity.unwrap_or(true);
+            let (_activity, activity_sparse, motor_left, motor_right, motor_fwd, timing) =
+                sim.step_with_options(step.dt, fly, srcs, pend, include_activity);
+            compute_ms_sum += timing.compute_ms;
+            kernel_ms_sum += timing.kernel_ms;
+            recurrent_ms_sum += timing.recurrent_ms;
+            lif_ms_sum += timing.lif_ms;
+            readout_ms_sum += timing.readout_ms;
             results.push(StepManyItemResp {
                 sim_id: step.sim_id,
                 activity_sparse,
                 motor_left,
                 motor_right,
                 motor_fwd,
+                compute_ms: timing.compute_ms,
+                kernel_ms: timing.kernel_ms,
+                recurrent_ms: timing.recurrent_ms,
+                lif_ms: timing.lif_ms,
+                readout_ms: timing.readout_ms,
             });
         }
         // Atomic semantics are intentional: if any sim_id in step_many is missing,
@@ -252,19 +282,22 @@ fn handle(
                 error: format!("sim {} not found", missing_id),
             })?
         } else {
-        let compute_ms = t1.elapsed().as_millis();
         let t2 = Instant::now();
         let out_json = serde_json::to_string(&StepManyResp { results })?;
         let serialize_ms = t2.elapsed().as_millis();
         let n = STEP_COUNT.fetch_add(1, Ordering::Relaxed);
         if n % 20 == 0 {
             eprintln!(
-                "[brain-service] req={} conn={} method=step_many sims={} parse_ms={} compute_ms={} serialize_ms={} total_ms={} pid={}",
+                "[brain-service] req={} conn={} method=step_many sims={} parse_ms={} compute_ms={:.3} kernel_ms={:.3} recurrent_ms={:.3} lif_ms={:.3} readout_ms={:.3} serialize_ms={} total_ms={} pid={}",
                 req_id,
                 conn_id,
                 step_count,
                 parse_ms,
-                compute_ms,
+                compute_ms_sum,
+                kernel_ms_sum,
+                recurrent_ms_sum,
+                lif_ms_sum,
+                readout_ms_sum,
                 serialize_ms,
                 t0.elapsed().as_millis(),
                 std::process::id()
@@ -318,27 +351,36 @@ fn handle(
                 strength: x.strength,
             })
             .collect();
-        let t1 = Instant::now();
-        let (_activity, activity_sparse, motor_left, motor_right, motor_fwd) =
-            sim.step(p.dt, fly, srcs, pend);
-        let compute_ms = t1.elapsed().as_millis();
+        let include_activity = p.include_activity.unwrap_or(true);
+        let (_activity, activity_sparse, motor_left, motor_right, motor_fwd, timing) =
+            sim.step_with_options(p.dt, fly, srcs, pend, include_activity);
+        let compute_ms = timing.compute_ms;
         let t2 = Instant::now();
         let out_json = serde_json::to_string(&StepResp {
             activity_sparse,
             motor_left,
             motor_right,
             motor_fwd,
+            compute_ms: timing.compute_ms,
+            kernel_ms: timing.kernel_ms,
+            recurrent_ms: timing.recurrent_ms,
+            lif_ms: timing.lif_ms,
+            readout_ms: timing.readout_ms,
         })?;
         let serialize_ms = t2.elapsed().as_millis();
         let n = STEP_COUNT.fetch_add(1, Ordering::Relaxed);
         if n % 60 == 0 {
             eprintln!(
-                "[brain-service] req={} conn={} method=step sim_id={} parse_ms={} compute_ms={} serialize_ms={} total_ms={} pid={}",
+                "[brain-service] req={} conn={} method=step sim_id={} parse_ms={} compute_ms={:.3} kernel_ms={:.3} recurrent_ms={:.3} lif_ms={:.3} readout_ms={:.3} serialize_ms={} total_ms={} pid={}",
                 req_id,
                 conn_id,
                 p.sim_id,
                 parse_ms,
                 compute_ms,
+                timing.kernel_ms,
+                timing.recurrent_ms,
+                timing.lif_ms,
+                timing.readout_ms,
                 serialize_ms,
                 t0.elapsed().as_millis(),
                 std::process::id()

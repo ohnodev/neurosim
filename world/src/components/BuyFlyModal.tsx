@@ -6,7 +6,7 @@ import { base } from 'viem/chains';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
 import { useNotification } from '../contexts/NotificationContext';
 import { getApiBase } from '../lib/constants';
-import { apiKeys } from '../lib/api';
+import { apiKeys, type ClaimedFly } from '../lib/api';
 import { parseWalletError } from '../../../shared/lib/parseWalletError';
 import {
   CABAL_BUY_NEURO_URL,
@@ -22,6 +22,11 @@ const SUPPORT_MESSAGE = 'Please contact support via our Telegram channel for hel
 interface BalanceCheck {
   neuroBalanceWei?: string;
   flyNeuroRequiredWei?: string;
+}
+
+interface VerifyPaymentSuccess {
+  success: boolean;
+  fly?: ClaimedFly;
 }
 
 function parseNonNegativeWei(raw: string | undefined): bigint | null {
@@ -146,9 +151,61 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
           body: JSON.stringify({ txHash: hash, userAddress: address.toLowerCase() }),
         });
         if (!canUpdateState()) return;
-        const data = await res.json().catch(() => ({}));
-        if (res.ok) {
-          if (address) queryClient.invalidateQueries({ queryKey: apiKeys.myFlies(address) });
+        const data = await res.json().catch(() => ({} as { success?: boolean; error?: string; fly?: unknown }));
+        if (res.ok && data.success === true) {
+          if (address) {
+            queryClient.setQueryData(
+              apiKeys.myFlies(address),
+              (current: unknown): Array<ClaimedFly | null> => {
+                const next = Array.isArray(current)
+                  ? [...current]
+                  : [null, null, null];
+                while (next.length < 3) next.push(null);
+                const isValidSlotIndex = Number.isInteger(slotIndex) && slotIndex >= 0 && slotIndex < 3;
+                const fly = (data as VerifyPaymentSuccess).fly;
+                if (
+                  isValidSlotIndex &&
+                  fly &&
+                  typeof fly.id === 'string' &&
+                  typeof fly.method === 'string' &&
+                  typeof fly.claimedAt === 'string'
+                ) {
+                  next[slotIndex] = fly;
+                } else if (isValidSlotIndex) {
+                  next[slotIndex] = {
+                    id: `pending-${Date.now()}`,
+                    method: 'pay',
+                    claimedAt: new Date().toISOString(),
+                  };
+                }
+                return next.slice(0, 3);
+              }
+            );
+            queryClient.setQueryData(
+              apiKeys.myDeployed(address),
+              (current: unknown) => {
+                if (current && typeof current === 'object') {
+                  const c = current as { deployed?: Record<number, number>; graveyardSlots?: number[] };
+                  const isValidSlotIndex = Number.isInteger(slotIndex) && slotIndex >= 0 && slotIndex < 3;
+                  const nextDeployed = c.deployed && typeof c.deployed === 'object'
+                    ? { ...c.deployed }
+                    : {};
+                  if (isValidSlotIndex) {
+                    delete nextDeployed[slotIndex];
+                  }
+                  const nextGraveyard = Array.isArray(c.graveyardSlots)
+                    ? c.graveyardSlots.filter((s) => s !== slotIndex)
+                    : [];
+                  return { ...c, deployed: nextDeployed, graveyardSlots: nextGraveyard };
+                }
+                return { deployed: {}, graveyardSlots: [] };
+              }
+            );
+            queryClient.invalidateQueries({ queryKey: apiKeys.myFlies(address) });
+            queryClient.invalidateQueries({ queryKey: apiKeys.myDeployed(address) });
+            queryClient.invalidateQueries({ queryKey: apiKeys.flyStats(address) });
+            queryClient.invalidateQueries({ queryKey: apiKeys.graveyard(address) });
+          }
           onSuccess();
           if (!canUpdateState()) return;
           notification.update('NeuroFly added!', 'success');
@@ -156,7 +213,10 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
           onClose();
           return;
         }
-        const retryable = data.error === 'Transaction not found' || data.error === 'Verification failed';
+        const errorMessage = typeof data.error === 'string'
+          ? data.error
+          : (res.ok && data.success !== true ? 'Verification failed' : undefined);
+        const retryable = errorMessage === 'Transaction not found' || errorMessage === 'Verification failed';
         if (retryable && attempt < maxAttempts) {
           const delay = Math.min(baseDelay * Math.pow(2, attempt), 8000);
           await new Promise((r) => setTimeout(r, delay));
@@ -166,7 +226,7 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
         if (!canUpdateState()) return;
         notification.update(SUPPORT_MESSAGE, 'error');
         setTimeout(() => notification.hide(), 5000);
-        throw new Error(data.error ?? 'Verification failed');
+        throw new Error(errorMessage ?? 'Verification failed');
       };
       await verify();
     } catch (err) {
@@ -174,7 +234,7 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
     } finally {
       if (canUpdateState()) setBusy(null);
     }
-  }, [walletClient, address, isOnBaseChain, queryClient, notification, onSuccess, onClose]);
+  }, [walletClient, address, isOnBaseChain, queryClient, notification, onSuccess, onClose, slotIndex]);
 
   if (!isOpen) return null;
 

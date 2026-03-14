@@ -64,16 +64,29 @@ export async function createBrainSim(
     let lastRustMs = 0;
     let lastJsMs = 0;
     let lastSocketTiming: ReturnType<typeof socketClient.getLastRequestTiming> = null;
+    let lastRustTiming: {
+      computeMs?: number;
+      kernelMs?: number;
+      recurrentMs?: number;
+      lifMs?: number;
+      readoutMs?: number;
+    } = {};
     let lastActivitySparse: Record<string, number> = {};
 
     async function runRustStep(
       dt: number,
       pendingInput: Array<{ neuronIds: string[]; strength: number }>,
+      includeActivity = true,
     ): Promise<{
       activitySparse: Record<string, number>;
       motorLeft: number;
       motorRight: number;
       motorFwd: number;
+      computeMs?: number;
+      kernelMs?: number;
+      recurrentMs?: number;
+      lifMs?: number;
+      readoutMs?: number;
     }> {
       const flyInput = {
         x: fly.x,
@@ -89,20 +102,29 @@ export async function createBrainSim(
       return socketClient.stepSim({
         simId,
         dt,
+        includeActivity,
         fly: flyInput,
         sources: sourcesInput,
         pending: pendingInput,
       });
     }
 
-    async function step(dt: number): Promise<SimState> {
+    async function step(dt: number, options?: { includeActivity?: boolean }): Promise<SimState> {
+      const includeActivity = options?.includeActivity ?? true;
       const stepStart = performance.now();
       if (fly.dead) {
         const t = fly.t + dt;
         fly = { ...fly, t };
-        const act = await runRustStep(dt, []);
+        const act = await runRustStep(dt, [], includeActivity);
         lastActivitySparse = act.activitySparse;
         lastRustMs = Math.round(performance.now() - stepStart);
+        lastRustTiming = {
+          computeMs: act.computeMs,
+          kernelMs: act.kernelMs,
+          recurrentMs: act.recurrentMs,
+          lifMs: act.lifMs,
+          readoutMs: act.readoutMs,
+        };
         const activityRec = Object.keys(act.activitySparse).length ? act.activitySparse : undefined;
         return { t, fly, activity: activityRec };
       }
@@ -114,9 +136,16 @@ export async function createBrainSim(
       const pendingInput = toApply.map((p) => ({ neuronIds: p.neurons, strength: p.strength }));
 
       const rustStart = performance.now();
-      const result = await runRustStep(dt, pendingInput);
+      const result = await runRustStep(dt, pendingInput, includeActivity);
       lastRustMs = Math.round(performance.now() - rustStart);
       lastSocketTiming = socketClient.getLastRequestTiming();
+      lastRustTiming = {
+        computeMs: result.computeMs,
+        kernelMs: result.kernelMs,
+        recurrentMs: result.recurrentMs,
+        lifMs: result.lifMs,
+        readoutMs: result.readoutMs,
+      };
       const { activitySparse, motorLeft, motorRight, motorFwd } = result;
       lastActivitySparse = activitySparse;
 
@@ -289,6 +318,11 @@ export async function createBrainSim(
         socketTotalMs: lastSocketTiming?.totalMs ?? 0,
         socketResponseWaitMs: lastSocketTiming?.responseWaitMs ?? 0,
         socketBatchSize: lastSocketTiming?.batchSize ?? 1,
+        rustComputeMs: lastRustTiming.computeMs ?? 0,
+        rustKernelMs: lastRustTiming.kernelMs ?? 0,
+        rustRecurrentMs: lastRustTiming.recurrentMs ?? 0,
+        rustLifMs: lastRustTiming.lifMs ?? 0,
+        rustReadoutMs: lastRustTiming.readoutMs ?? 0,
       };
     }
 

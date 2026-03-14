@@ -17,6 +17,30 @@ const PORT = Number(process.env.PORT) || 3001;
 const connectome = loadConnectome();
 const ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
 const MAX_SLOT_INDEX = 2;
+const VIEWER_NEURON_LIMIT = Math.max(1, Number(process.env.NEUROSIM_VIEWER_NEURON_LIMIT ?? 10_000));
+
+function fnv1a32(s: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i) & 0xff;
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h >>> 0;
+}
+
+function computeViewerSubsetIndices(total: number): number[] {
+  if (total <= VIEWER_NEURON_LIMIT) return Array.from({ length: total }, (_, i) => i);
+  const ranked = connectome.neurons
+    .map((n, i) => ({ i, h: fnv1a32(n.root_id) }))
+    .sort((a, b) => (a.h - b.h) || (a.i - b.i))
+    .slice(0, VIEWER_NEURON_LIMIT)
+    .map((x) => x.i)
+    .sort((a, b) => a - b);
+  return ranked;
+}
+
+const viewerNeuronIndices = computeViewerSubsetIndices(connectome.neurons.length);
+const viewerNeuronIndexSet = new Set<number>(viewerNeuronIndices);
 
 /** Brain sim uses Unix socket only. Probe connects to brain-service; retry a few times for PM2 start-order. */
 const CUDA_ONLY = process.env.NEUROSIM_MODE === 'cuda' || process.env.USE_CUDA === '1';
@@ -207,7 +231,7 @@ function startSim(): void {
       console.log('[world] spawned food', f.id, 'at', f.x.toFixed(1), f.y.toFixed(1));
       broadcast({ simRunning, sources: getSources() });
     }
-  }, 10_000);
+  }, 5_000);
   simIntervalId = setInterval(async () => {
     if (simTickInFlight) {
       droppedSimTicks += 1;
@@ -240,7 +264,16 @@ function startSim(): void {
       }> = [];
 
       const beforeStates = sims.map((s) => s.getState());
-      const states = await Promise.all(sims.map((s) => s.step(batchDt)));
+      const viewedSimIndexes = new Set<number>();
+      if (wsClients.size > 0) {
+        for (const ws of wsClients) {
+          const idx = Math.max(0, Math.min(sims.length - 1, clientViewFlyIndex.get(ws) ?? 0));
+          viewedSimIndexes.add(idx);
+        }
+      }
+      const states = await Promise.all(
+        sims.map((s, idx) => s.step(batchDt, { includeActivity: viewedSimIndexes.has(idx) })),
+      );
       const deadSimIndexes: number[] = [];
       for (let j = 0; j < nSims; j++) {
         const before = beforeStates[j];
@@ -276,7 +309,10 @@ function startSim(): void {
         }
         if (state.eatenFoodId) {
           removeFood(state.eatenFoodId);
-          recordFoodCollected(j);
+          const deployment = findDeploymentBySimIndex(j);
+          if (deployment) {
+            recordFoodCollected(deployment.address, deployment.slotIndex);
+          }
           console.log('[world] fly', j, 'ate food', state.eatenFoodId);
         }
         transitions.push({
@@ -431,8 +467,11 @@ if (DEBUG_POSITIONS_ENABLED) {
   });
 }
 
-app.get('/api/neurons', (_, res) => {
-  const neurons = connectome.neurons.map((n) => ({
+app.get('/api/neurons', (req, res) => {
+  const full = req.query.full === '1';
+  const neurons = connectome.neurons
+    .filter((_, i) => full || viewerNeuronIndexSet.has(i))
+    .map((n) => ({
     root_id: n.root_id,
     role: n.role,
     side: n.side,
@@ -441,7 +480,13 @@ app.get('/api/neurons', (_, res) => {
     ...(n.y != null && { y: n.y }),
     ...(n.z != null && { z: n.z }),
   }));
-  res.json({ neurons });
+  res.json({
+    neurons,
+    full,
+    viewerNeuronLimit: VIEWER_NEURON_LIMIT,
+    viewerNeuronCount: viewerNeuronIndices.length,
+    totalNeuronCount: connectome.neurons.length,
+  });
 });
 
 app.get('/api/world', (_, res) => res.json(getWorld()));
@@ -637,7 +682,14 @@ if (process.env.VITEST !== 'true') {
     startSim();
     console.log('NeuroSim API http://localhost:' + PORT);
     console.log('WebSocket ws://localhost:' + PORT + '/ws');
-    console.log('Connectome:', connectome.neurons.length, 'neurons,', connectome.connections.length, 'connections');
+    console.log(
+      'Connectome:',
+      connectome.neurons.length,
+      'neurons,',
+      connectome.connections.length,
+      'connections, viewer subset:',
+      viewerNeuronIndices.length,
+    );
     console.log('[sim] auto-started with 0 flies; users deploy flies via POST /api/deploy');
   });
 }

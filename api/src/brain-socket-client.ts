@@ -199,6 +199,7 @@ function flushStepBatch(): void {
           strength: item.strength ?? 0,
         };
       }),
+      include_activity: params.include_activity ?? true,
     };
   });
 
@@ -266,6 +267,7 @@ export interface CreateParams {
 export interface StepParams {
   simId: number;
   dt: number;
+  includeActivity?: boolean;
   fly: {
     x: number;
     y: number;
@@ -286,11 +288,17 @@ export interface StepResult {
   motorLeft: number;
   motorRight: number;
   motorFwd: number;
+  computeMs?: number;
+  kernelMs?: number;
+  recurrentMs?: number;
+  lifMs?: number;
+  readoutMs?: number;
 }
 
 export interface StepManyItem {
   simId: number;
   dt: number;
+  includeActivity?: boolean;
   fly: {
     x: number;
     y: number;
@@ -311,6 +319,11 @@ export interface StepManyResultItem {
   motorLeft: number;
   motorRight: number;
   motorFwd: number;
+  computeMs?: number;
+  kernelMs?: number;
+  recurrentMs?: number;
+  lifMs?: number;
+  readoutMs?: number;
 }
 
 /** Lightweight handshake: verify brain-service is reachable. */
@@ -330,6 +343,11 @@ export async function stepSim(params: StepParams): Promise<StepResult> {
     motor_left: number;
     motor_right: number;
     motor_fwd: number;
+    compute_ms?: number;
+    kernel_ms?: number;
+    recurrent_ms?: number;
+    lif_ms?: number;
+    readout_ms?: number;
   }>({
     method: 'step',
     params: {
@@ -347,6 +365,7 @@ export async function stepSim(params: StepParams): Promise<StepResult> {
       },
       sources: params.sources,
       pending: params.pending,
+      include_activity: params.includeActivity ?? true,
     },
   });
   return {
@@ -355,6 +374,11 @@ export async function stepSim(params: StepParams): Promise<StepResult> {
     motorLeft: res.motor_left,
     motorRight: res.motor_right,
     motorFwd: res.motor_fwd,
+    computeMs: res.compute_ms,
+    kernelMs: res.kernel_ms,
+    recurrentMs: res.recurrent_ms,
+    lifMs: res.lif_ms,
+    readoutMs: res.readout_ms,
   };
 }
 
@@ -368,6 +392,11 @@ export async function stepMany(
       motor_left: number;
       motor_right: number;
       motor_fwd: number;
+      compute_ms?: number;
+      kernel_ms?: number;
+      recurrent_ms?: number;
+      lif_ms?: number;
+      readout_ms?: number;
     }>;
   }>({
     method: 'step_many',
@@ -390,6 +419,7 @@ export async function stepMany(
           neuron_ids: p.neuronIds,
           strength: p.strength,
         })),
+        include_activity: item.includeActivity ?? true,
       })),
     },
   });
@@ -401,6 +431,11 @@ export async function stepMany(
       motorLeft: item.motor_left,
       motorRight: item.motor_right,
       motorFwd: item.motor_fwd,
+      computeMs: item.compute_ms,
+      kernelMs: item.kernel_ms,
+      recurrentMs: item.recurrent_ms,
+      lifMs: item.lif_ms,
+      readoutMs: item.readout_ms,
     });
   }
   return out;

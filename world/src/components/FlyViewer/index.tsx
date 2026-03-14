@@ -498,7 +498,11 @@ export default function FlyViewer() {
             onClose={() => setBuyFlySlot(null)}
             slotIndex={buyFlySlot}
             onSuccess={() => {
-              if (address) queryClient.invalidateQueries({ queryKey: apiKeys.myFlies(address) });
+              if (!address) return;
+              queryClient.invalidateQueries({ queryKey: apiKeys.myFlies(address) });
+              queryClient.invalidateQueries({ queryKey: apiKeys.myDeployed(address) });
+              queryClient.invalidateQueries({ queryKey: apiKeys.flyStats(address) });
+              queryClient.invalidateQueries({ queryKey: apiKeys.graveyard(address) });
             }}
           />
         )}

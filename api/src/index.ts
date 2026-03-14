@@ -15,6 +15,8 @@ import { flushRewards } from './services/rewardDistributor.js';
 
 const PORT = Number(process.env.PORT) || 3001;
 const connectome = loadConnectome();
+const ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
+const MAX_SLOT_INDEX = 2;
 
 /** Brain sim uses Unix socket only. Probe connects to brain-service; retry a few times for PM2 start-order. */
 const CUDA_ONLY = process.env.NEUROSIM_MODE === 'cuda' || process.env.USE_CUDA === '1';
@@ -55,6 +57,23 @@ let rewardFlushIntervalId: ReturnType<typeof setInterval> | null = null;
 const sims: Awaited<ReturnType<typeof createBrainSim>>[] = [];
 /** address -> slotIndex -> simIndex */
 const deployedFlies = new Map<string, Map<number, number>>();
+
+function parseAndValidateAddress(raw: unknown): string | null {
+  if (Array.isArray(raw) || typeof raw !== 'string') return null;
+  const address = raw.toLowerCase();
+  if (!ADDRESS_RE.test(address)) return null;
+  return address;
+}
+
+function isValidSlotIndex(slotIndex: unknown): slotIndex is number {
+  return (
+    typeof slotIndex === 'number' &&
+    Number.isFinite(slotIndex) &&
+    Number.isInteger(slotIndex) &&
+    slotIndex >= 0 &&
+    slotIndex <= MAX_SLOT_INDEX
+  );
+}
 
 function findDeploymentBySimIndex(simIndex: number): { address: string; slotIndex: number } | null {
   for (const [address, slotMap] of deployedFlies) {
@@ -101,7 +120,9 @@ async function addFlyToSim(): Promise<number> {
 }
 
 async function restoreDeployFromStore(): Promise<void> {
-  const records = getDeployments().filter((r) => r.active !== false);
+  const records = getDeployments().filter(
+    (r) => r.active !== false && isValidSlotIndex(r.slotIndex)
+  );
   for (const { address, slotIndex } of records) {
     const simIndex = await addFlyToSim();
     let map = deployedFlies.get(address);
@@ -429,9 +450,9 @@ app.use('/api/claim', claimsRouter);
 
 app.post('/api/deploy', async (req, res) => {
   try {
-    const address = (req.body?.address as string)?.toLowerCase();
+    const address = parseAndValidateAddress(req.body?.address);
     const slotIndex = typeof req.body?.slotIndex === 'number' ? req.body.slotIndex : parseInt(String(req.body?.slotIndex ?? ''), 10);
-    if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address) || !Number.isInteger(slotIndex) || slotIndex < 0 || slotIndex > 2) {
+    if (!address || !isValidSlotIndex(slotIndex)) {
       res.status(400).json({ error: 'Invalid address or slotIndex (0-2)' });
       return;
     }
@@ -462,13 +483,8 @@ app.post('/api/deploy', async (req, res) => {
 
 app.get('/api/rewards/stats', (req, res) => {
   try {
-    const rawAddress = req.query.address;
-    if (Array.isArray(rawAddress) || typeof rawAddress !== 'string') {
-      res.status(400).json({ error: 'Invalid address' });
-      return;
-    }
-    const address = rawAddress.toLowerCase();
-    if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address)) {
+    const address = parseAndValidateAddress(req.query.address);
+    if (!address) {
       res.status(400).json({ error: 'Invalid address' });
       return;
     }
@@ -494,13 +510,8 @@ app.get('/api/rewards/history', (req, res) => {
 
 app.get('/api/deploy/my-deployed', (req, res) => {
   try {
-    const rawAddress = req.query.address;
-    if (Array.isArray(rawAddress) || typeof rawAddress !== 'string') {
-      res.status(400).json({ error: 'Invalid address' });
-      return;
-    }
-    const address = rawAddress.toLowerCase();
-    if (!/^0x[a-fA-F0-9]{40}$/.test(address)) {
+    const address = parseAndValidateAddress(req.query.address);
+    if (!address) {
       res.status(400).json({ error: 'Invalid address' });
       return;
     }
@@ -513,7 +524,13 @@ app.get('/api/deploy/my-deployed', (req, res) => {
     const graveyardSlots = Array.from(
       new Set(
         getDeployments()
-          .filter((d) => d.address === address && d.active === false && currentFlies[d.slotIndex] == null)
+          .filter(
+            (d) =>
+              d.address === address &&
+              d.active === false &&
+              isValidSlotIndex(d.slotIndex) &&
+              currentFlies[d.slotIndex] == null
+          )
           .map((d) => d.slotIndex),
       ),
     );
@@ -526,13 +543,8 @@ app.get('/api/deploy/my-deployed', (req, res) => {
 
 app.get('/api/deploy/graveyard', (req, res) => {
   try {
-    const rawAddress = req.query.address;
-    if (Array.isArray(rawAddress) || typeof rawAddress !== 'string') {
-      res.status(400).json({ error: 'Invalid address' });
-      return;
-    }
-    const address = rawAddress.toLowerCase();
-    if (!/^0x[a-fA-F0-9]{40}$/.test(address)) {
+    const address = parseAndValidateAddress(req.query.address);
+    if (!address) {
       res.status(400).json({ error: 'Invalid address' });
       return;
     }
@@ -544,7 +556,9 @@ app.get('/api/deploy/graveyard', (req, res) => {
       : 3;
 
     const all = getDeployments()
-      .filter((d) => d.address === address && d.active === false)
+      .filter(
+        (d) => d.address === address && d.active === false && isValidSlotIndex(d.slotIndex)
+      )
       .sort((a, b) => {
         const ta = new Date(a.deactivatedAt ?? a.timeDeployed ?? 0).getTime();
         const tb = new Date(b.deactivatedAt ?? b.timeDeployed ?? 0).getTime();

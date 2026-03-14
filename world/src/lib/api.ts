@@ -126,6 +126,7 @@ export async function fetchMyDeployed(address: string): Promise<MyDeployedData> 
   const out: Record<number, number> = {};
   if (raw != null && typeof raw === 'object' && !Array.isArray(raw)) {
     for (const k of Object.keys(raw)) {
+      if (!/^\d+$/.test(k)) continue;
       const slot = parseInt(k, 10);
       const val = raw[k];
       if (
@@ -206,9 +207,21 @@ export async function fetchGraveyard(address: string, page: number, pageSize = 3
     : [];
   return {
     items,
-    page: typeof data.page === 'number' ? data.page : p,
-    pageSize: typeof data.pageSize === 'number' ? data.pageSize : ps,
-    total: typeof data.total === 'number' ? data.total : items.length,
-    totalPages: typeof data.totalPages === 'number' ? data.totalPages : 1,
+    page:
+      typeof data.page === 'number' && Number.isFinite(data.page) && Number.isInteger(data.page) && data.page >= 1
+        ? data.page
+        : p,
+    pageSize:
+      typeof data.pageSize === 'number' && Number.isFinite(data.pageSize) && Number.isInteger(data.pageSize) && data.pageSize >= 1
+        ? data.pageSize
+        : ps,
+    total:
+      typeof data.total === 'number' && Number.isFinite(data.total) && data.total >= 0
+        ? Math.floor(data.total)
+        : items.length,
+    totalPages:
+      typeof data.totalPages === 'number' && Number.isFinite(data.totalPages) && Number.isInteger(data.totalPages) && data.totalPages >= 1
+        ? data.totalPages
+        : 1,
   };
 }

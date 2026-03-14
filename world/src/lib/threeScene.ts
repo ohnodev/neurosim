@@ -543,6 +543,8 @@ export function initThreeScene(
         if (!shouldShowDetail) {
           inst.wasFlying = false;
           for (const action of inst.wingActions) action.stop();
+        } else {
+          inst.lowLodWasFlying = false;
         }
       }
 
@@ -559,14 +561,14 @@ export function initThreeScene(
         }
         inst.mixer.update(cappedDelta);
       } else {
-        inst.lowLodWasFlying = lowLodIsFlying;
         applyLowLodWingPose(
           inst.lowLod,
           lowLodResources,
-          inst.lowLodWasFlying,
+          lowLodIsFlying,
           timestamp ?? performance.now(),
           i * 37
         );
+        inst.lowLodWasFlying = lowLodIsFlying;
       }
     }
 

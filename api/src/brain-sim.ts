@@ -11,6 +11,7 @@ export interface SimState {
   t: number;
   fly: FlyState;
   activity?: Record<string, number>;
+  inputActivity?: Record<string, number>;
   eatenFoodId?: string;
 }
 
@@ -35,6 +36,28 @@ const FLY_TIME_MAX = 6;
 const GROUND_Z = 0.35;
 const FLIGHT_Z = 1.5;
 const ON_GROUND_THRESH = 0.6;
+const STIM_RATE_HZ = 200;
+const SENSORY_SCALE = 0.18;
+const MIN_FOOD_DISTANCE = 1;
+
+function estimateSensoryInputStrength(dt: number, fly: FlyState, sources: WorldSource[]): number {
+  const hungry = (fly.hunger ?? 100) <= 90;
+  const full = (fly.hunger ?? 100) > 90;
+  let foodModulation = 0;
+  for (const s of sources) {
+    const dist = Math.hypot(s.x - fly.x, s.y - fly.y);
+    if (dist < MIN_FOOD_DISTANCE) continue;
+    const invDist = 1 / (1 + dist * 0.1);
+    foodModulation += invDist * (1 - (fly.hunger ?? 100) / 100);
+  }
+  const rateHz = hungry && foodModulation > 0
+    ? Math.min(STIM_RATE_HZ, 50 + foodModulation * STIM_RATE_HZ)
+    : full
+      ? 30
+      : 50;
+  return Math.min(0.5, (rateHz / STIM_RATE_HZ) * SENSORY_SCALE * (dt / (1 / 30)));
+}
+
 export async function createBrainSim(
   connectome: Connectome,
   worldSources: WorldSource[] | (() => WorldSource[]) = [],
@@ -43,6 +66,9 @@ export async function createBrainSim(
   const getSources = (): WorldSource[] =>
     typeof worldSources === 'function' ? worldSources() : worldSources;
   const neuronIds = connectome.neurons.map((n) => n.root_id);
+  const sensoryNeuronIds = connectome.neurons
+    .filter((n) => String(n.role ?? '').toLowerCase() === 'sensory')
+    .map((n) => n.root_id);
   const pendingStimuli: { neurons: string[]; strength: number }[] = [];
   let flyTimeLeftSec = FLY_TIME_MAX;
   let restTimeLeft = 0;
@@ -134,6 +160,25 @@ export async function createBrainSim(
 
       const toApply = pendingStimuli.splice(0, pendingStimuli.length);
       const pendingInput = toApply.map((p) => ({ neuronIds: p.neurons, strength: p.strength }));
+      const inputActivityRec: Record<string, number> | undefined = includeActivity
+        ? (() => {
+            const out: Record<string, number> = {};
+            const sensoryStrength = estimateSensoryInputStrength(dt, fly, currentSources);
+            if (sensoryStrength > 0 && sensoryNeuronIds.length > 0) {
+              for (const id of sensoryNeuronIds) {
+                out[id] = Math.max(out[id] ?? 0, sensoryStrength);
+              }
+            }
+            for (const p of pendingInput) {
+              const v = Math.max(0.1, Math.min(1, Number(p.strength) || 0));
+              for (const id of p.neuronIds) {
+                if (!id) continue;
+                out[id] = Math.max(out[id] ?? 0, v);
+              }
+            }
+            return Object.keys(out).length > 0 ? out : undefined;
+          })()
+        : undefined;
 
       const rustStart = performance.now();
       const result = await runRustStep(dt, pendingInput, includeActivity);
@@ -192,7 +237,13 @@ export async function createBrainSim(
           };
           const activityRec = Object.keys(activitySparse).length ? activitySparse : undefined;
           lastJsMs = Math.round(performance.now() - stepStart - lastRustMs);
-          return { t, fly, activity: activityRec, ...(eatenFoodId && { eatenFoodId }) };
+          return {
+            t,
+            fly,
+            activity: activityRec,
+            inputActivity: inputActivityRec,
+            ...(eatenFoodId && { eatenFoodId }),
+          };
         }
       }
 
@@ -307,6 +358,7 @@ export async function createBrainSim(
         t,
         fly,
         activity: activityRec,
+        inputActivity: inputActivityRec,
         ...(eatenFoodId && { eatenFoodId }),
       };
     }

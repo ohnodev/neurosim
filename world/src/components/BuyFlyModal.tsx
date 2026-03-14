@@ -24,6 +24,11 @@ interface BalanceCheck {
   flyNeuroRequiredWei?: string;
 }
 
+interface VerifyPaymentSuccess {
+  success: boolean;
+  fly?: { id: string; method: string; claimedAt: string };
+}
+
 function parseNonNegativeWei(raw: string | undefined): bigint | null {
   if (raw == null) return null;
   const s = String(raw).trim();
@@ -148,7 +153,45 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
         if (!canUpdateState()) return;
         const data = await res.json().catch(() => ({}));
         if (res.ok) {
-          if (address) queryClient.invalidateQueries({ queryKey: apiKeys.myFlies(address) });
+          if (address) {
+            queryClient.setQueryData(
+              apiKeys.myFlies(address),
+              (current: unknown): Array<{ id: string; method: string; claimedAt: string } | null> => {
+                const next = Array.isArray(current)
+                  ? [...current]
+                  : [null, null, null];
+                while (next.length < 3) next.push(null);
+                const fly = (data as VerifyPaymentSuccess).fly;
+                if (fly && typeof fly.id === 'string' && typeof fly.method === 'string' && typeof fly.claimedAt === 'string') {
+                  next[slotIndex] = fly;
+                } else if (next[slotIndex] == null) {
+                  next[slotIndex] = {
+                    id: `pending-${Date.now()}`,
+                    method: 'pay',
+                    claimedAt: new Date().toISOString(),
+                  };
+                }
+                return next.slice(0, 3);
+              }
+            );
+            queryClient.setQueryData(
+              apiKeys.myDeployed(address),
+              (current: unknown) => {
+                if (current && typeof current === 'object') {
+                  const c = current as { deployed?: Record<number, number>; graveyardSlots?: number[] };
+                  const nextGraveyard = Array.isArray(c.graveyardSlots)
+                    ? c.graveyardSlots.filter((s) => s !== slotIndex)
+                    : [];
+                  return { ...c, graveyardSlots: nextGraveyard };
+                }
+                return { deployed: {}, graveyardSlots: [] };
+              }
+            );
+            queryClient.invalidateQueries({ queryKey: apiKeys.myFlies(address) });
+            queryClient.invalidateQueries({ queryKey: apiKeys.myDeployed(address) });
+            queryClient.invalidateQueries({ queryKey: apiKeys.flyStats(address) });
+            queryClient.invalidateQueries({ queryKey: apiKeys.graveyard(address) });
+          }
           onSuccess();
           if (!canUpdateState()) return;
           notification.update('NeuroFly added!', 'success');

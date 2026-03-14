@@ -4,6 +4,7 @@ import { base } from 'viem/chains';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
 import { useNotification } from '../contexts/NotificationContext';
 import { getApiBase } from '../lib/constants';
+import { fetchBalanceCheck, formatNeuroAmount } from '../lib/claimApi';
 import { parseWalletError } from '../../../shared/lib/parseWalletError';
 import {
   CABAL_BUY_NEURO_URL,
@@ -93,7 +94,21 @@ export function MyNeuroFlies() {
     setError(null);
     let submittedHash: string | null = null;
     try {
-      const resolvedAmountWei = FLY_NEURO_AMOUNT_FALLBACK;
+      const balance = await fetchBalanceCheck(address);
+      if (!balance) {
+        const msg = 'Unable to verify balance';
+        if (mountedRef.current) setError(msg);
+        throw new Error(msg);
+      }
+      const resolvedAmountWei = balance.flyNeuroRequiredWei
+        ? BigInt(balance.flyNeuroRequiredWei)
+        : FLY_NEURO_AMOUNT_FALLBACK;
+      const neuroBalanceWei = BigInt(balance.neuroBalanceWei || '0');
+      if (neuroBalanceWei < resolvedAmountWei) {
+        const msg = `Insufficient $NEURO. You need ${formatNeuroAmount(resolvedAmountWei.toString())} $NEURO to buy a fly.`;
+        if (mountedRef.current) setError(msg);
+        throw new Error(msg);
+      }
       submittedHash = await walletClient.writeContract({
         account: address,
         address: NEURO_TOKEN_ADDRESS,

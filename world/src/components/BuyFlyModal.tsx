@@ -19,6 +19,23 @@ import {
 
 const SUPPORT_MESSAGE = 'Please contact support via our Telegram channel for help.';
 
+interface BalanceCheck {
+  neuroBalanceWei?: string;
+  flyNeuroRequiredWei?: string;
+}
+
+function parsePositiveWei(raw: string | undefined): bigint | null {
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  if (!s || s === '0') return null;
+  try {
+    const n = BigInt(s);
+    return n > 0n ? n : null;
+  } catch {
+    return null;
+  }
+}
+
 interface BuyFlyModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -79,12 +96,23 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
     setBusy('neuro');
     setError(null);
     try {
+      const balanceRes = await fetch(`${getApiBase()}/api/claim/balance-check?address=${address.toLowerCase()}`);
+      const balanceData: BalanceCheck = balanceRes.ok
+        ? await balanceRes.json().catch(() => ({} as BalanceCheck))
+        : {};
+      const requiredAmount = parsePositiveWei(balanceData.flyNeuroRequiredWei) ?? transferAmount;
+      const balanceWei = parsePositiveWei(balanceData.neuroBalanceWei) ?? 0n;
+      if (balanceWei < requiredAmount) {
+        setError(`Insufficient $NEURO. You need ${formatNeuroAmount(requiredAmount.toString())} $NEURO to buy a fly.`);
+        return;
+      }
+
       const hash = await walletClient.writeContract({
         account: address,
         address: NEURO_TOKEN_ADDRESS,
         abi: ERC20_TRANSFER_ABI,
         functionName: 'transfer',
-        args: [CLAIM_RECEIVER_ADDRESS, transferAmount],
+        args: [CLAIM_RECEIVER_ADDRESS, requiredAmount],
         chain: base,
       });
       notification.show('Transaction sent, pending...', 'info');

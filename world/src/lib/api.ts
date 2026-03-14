@@ -53,7 +53,7 @@ export interface GraveyardPageData {
   totalPages: number;
 }
 
-const FALLBACK_WEI = (1000n * 10n ** 18n).toString();
+const FALLBACK_WEI = (100n * 10n ** 18n).toString();
 
 export async function fetchWorld(): Promise<{ sources: WorldSource[] }> {
   const r = await fetch(`${getApiBase()}/api/world`);

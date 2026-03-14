@@ -1,5 +1,5 @@
-import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useRef, useState, useEffect, useMemo, useCallback } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { WorldSource } from '../../../../api/src/world';
 import { subscribeSim, sendViewFlyIndex, type FlyState } from '../../lib/simWsClient';
 import { type Snapshot, MAX_SNAPSHOT_BUFFER, trimSnapshotBuffer } from '../../lib/flyInterpolation';
@@ -46,6 +46,8 @@ export default function FlyViewer() {
   const [statusPanelOpen, setStatusPanelOpen] = useState(() => !isMobileViewport());
   const [statusTab, setStatusTab] = useState<'status' | 'rewards'>('status');
   const [brainPanelOpen, setBrainPanelOpen] = useState(() => !isMobileViewport());
+  const [deployingSlots, setDeployingSlots] = useState<Set<number>>(new Set());
+  const deployingSlotsRef = useRef<Set<number>>(new Set());
 
   const snapshotBufferRef = useRef<Snapshot[]>([]);
   const latestFliesRef = useRef<FlyState[]>([]);
@@ -335,31 +337,63 @@ export default function FlyViewer() {
     []
   );
 
-  const setDeployError = useCallback<React.Dispatch<React.SetStateAction<string | null>>>((value) => {
-    setError((prev) => {
-      const next = typeof value === 'function' ? value(prev) : value;
-      if (next === null) return typeof prev === 'string' && prev.startsWith('Deploy failed') ? null : prev;
-      return next.startsWith('Deploy failed') ? next : prev;
-    });
-  }, []);
-
-  const deployFly = useCallback(
-    async (slotIndex: number) => {
-      if (!address) return;
+  const deployMutation = useMutation({
+    mutationFn: async (slotIndex: number): Promise<{ simIndex?: number }> => {
+      if (!address) throw new Error('Wallet not connected');
       const r = await fetch(`${getApiBase()}/api/deploy`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ address: address.toLowerCase(), slotIndex }),
       });
-      if (!r.ok) {
-        const err = await r.json().catch(() => ({}));
-        throw new Error(err.error ?? 'Deploy failed');
-      }
-      queryClient.invalidateQueries({ queryKey: apiKeys.myDeployed(address!) });
-      queryClient.invalidateQueries({ queryKey: apiKeys.flyStats(address!) });
-      refetchDeployed();
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error ?? 'Deploy failed');
+      return data as { simIndex?: number };
     },
-    [address, queryClient, refetchDeployed]
+    onMutate: () => {
+      setError((prev) => (prev && prev.startsWith('Deploy failed') ? null : prev));
+    },
+    onSuccess: (data, slotIndex) => {
+      if (!address) return;
+      if (typeof data.simIndex === 'number') {
+        queryClient.setQueryData(apiKeys.myDeployed(address), (current: unknown) => {
+          if (current && typeof current === 'object') {
+            const c = current as { deployed?: Record<number, number>; graveyardSlots?: number[] };
+            return {
+              ...c,
+              deployed: { ...(c.deployed ?? {}), [slotIndex]: data.simIndex! },
+              graveyardSlots: c.graveyardSlots ?? [],
+            };
+          }
+          return { deployed: { [slotIndex]: data.simIndex! }, graveyardSlots: [] };
+        });
+      } else {
+        queryClient.invalidateQueries({ queryKey: apiKeys.myDeployed(address) });
+      }
+      queryClient.invalidateQueries({ queryKey: apiKeys.flyStats(address) });
+      void refetchDeployed();
+    },
+    onError: (err) => {
+      setError(err instanceof Error ? `Deploy failed: ${err.message}` : 'Deploy failed');
+    },
+    onSettled: (_, __, slotIndex) => {
+      const next = new Set(deployingSlotsRef.current);
+      next.delete(slotIndex);
+      deployingSlotsRef.current = next;
+      setDeployingSlots(next);
+    },
+  });
+
+  const deployFly = useCallback(
+    (slotIndex: number) => {
+      const inFlight = deployingSlotsRef.current;
+      if (inFlight.has(slotIndex)) return;
+      const next = new Set(inFlight);
+      next.add(slotIndex);
+      deployingSlotsRef.current = next;
+      setDeployingSlots(next);
+      void deployMutation.mutate(slotIndex);
+    },
+    [deployMutation]
   );
 
   return (
@@ -438,10 +472,9 @@ export default function FlyViewer() {
                   selectedFlyIndex={selectedFlyIndex}
                   myFlies={myFlies}
                   graveyardSlots={graveyardSlots}
+                  deployingSlots={deployingSlots}
                   statsBySlot={statsBySlot}
-                  address={address}
                   onSelectSlot={onSelectFlySlot}
-                  setError={setDeployError}
                   deployFly={deployFly}
                   setBuyFlySlot={setBuyFlySlot}
                   getFlyCardData={getFlyCardData}

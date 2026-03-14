@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
 import { usePrivy, useWallets } from '@privy-io/react-auth';
 import { base } from 'viem/chains';
 import { usePrivyWallet } from '../lib/usePrivyWallet';
@@ -8,43 +8,31 @@ import { useNotification } from '../contexts/NotificationContext';
 import { getApiBase } from '../lib/constants';
 import { apiKeys } from '../lib/api';
 import { parseWalletError } from '../../../shared/lib/parseWalletError';
-import { CABAL_BUY_NEURO_URL, ERC20_TRANSFER_ABI, FLY_NEURO_AMOUNT_FALLBACK, formatNeuroAmount } from '../../../shared/lib/claimConstants';
+import {
+  CABAL_BUY_NEURO_URL,
+  CLAIM_RECEIVER_ADDRESS,
+  ERC20_TRANSFER_ABI,
+  FLY_NEURO_AMOUNT_FALLBACK,
+  formatNeuroAmount,
+  NEURO_TOKEN_ADDRESS,
+} from '../../../shared/lib/claimConstants';
 
 const SUPPORT_MESSAGE = 'Please contact support via our Telegram channel for help.';
 
-interface ClaimConfig {
-  neuroTokenAddress: `0x${string}`;
-  claimReceiverAddress: `0x${string}`;
-  flyNeuroAmountWei: string;
-}
-
 interface BalanceCheck {
-  flyNeuroRequiredWei?: string;
   neuroBalanceWei?: string;
+  flyNeuroRequiredWei?: string;
 }
 
-/** Parse raw wei string to positive BigInt; returns null for empty, whitespace, "0", or invalid. */
-function parsePositiveWei(raw: string | undefined): bigint | null {
+function parseNonNegativeWei(raw: string | undefined): bigint | null {
   if (raw == null) return null;
   const s = String(raw).trim();
-  if (s === '' || s === '0') return null;
+  if (s === '') return null;
   try {
     const n = BigInt(s);
-    return n > 0n ? n : null;
+    return n >= 0n ? n : null;
   } catch {
     return null;
-  }
-}
-
-async function fetchConfig(): Promise<ClaimConfig> {
-  const r = await fetch(`${getApiBase()}/api/claim/config`);
-  if (!r.ok) {
-    throw new Error(`Claim config failed: ${r.status} ${r.statusText}`);
-  }
-  try {
-    return (await r.json()) as ClaimConfig;
-  } catch (e) {
-    throw new Error('Failed to parse claim config');
   }
 }
 
@@ -63,25 +51,9 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
   const notification = useNotification();
   const [busy, setBusy] = useState<'neuro' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [serverRequiredAmountWei, setServerRequiredAmountWei] = useState<bigint | null>(null);
   const mountedRef = useRef(true);
-
-  const { data: config } = useQuery({
-    queryKey: ['claim-config'],
-    queryFn: fetchConfig,
-    staleTime: 60_000,
-    enabled: isOpen,
-  });
-
-  const { data: balanceCheck } = useQuery({
-    queryKey: ['claim-balance-check', address],
-    queryFn: async (): Promise<BalanceCheck> => {
-      const r = await fetch(`${getApiBase()}/api/claim/balance-check?address=${address?.toLowerCase()}`);
-      if (!r.ok) return {};
-      return (await r.json()) as BalanceCheck;
-    },
-    staleTime: 30_000,
-    enabled: isOpen && !!address && chainId === base.id,
-  });
+  const isOpenRef = useRef(false);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -102,15 +74,18 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
     };
   }, [isOpen, onClose]);
 
+  useEffect(() => {
+    isOpenRef.current = isOpen;
+    if (!isOpen) setServerRequiredAmountWei(null);
+    return () => {
+      isOpenRef.current = false;
+    };
+  }, [isOpen]);
+
   const isOnBaseChain = chainId === base.id;
 
-  const displayAmountWei =
-    balanceCheck?.flyNeuroRequiredWei != null && parsePositiveWei(balanceCheck.flyNeuroRequiredWei) !== null
-      ? balanceCheck.flyNeuroRequiredWei
-      : config?.flyNeuroAmountWei != null && parsePositiveWei(config.flyNeuroAmountWei) !== null
-        ? config.flyNeuroAmountWei
-        : FLY_NEURO_AMOUNT_FALLBACK.toString();
-  const displayAmountLabel = formatNeuroAmount(displayAmountWei);
+  const transferAmountWei = serverRequiredAmountWei ?? FLY_NEURO_AMOUNT_FALLBACK;
+  const formattedTransferAmount = formatNeuroAmount(transferAmountWei.toString());
 
   const handleSwitchToBase = useCallback(async () => {
     if (!ready || !wallets.length) return;
@@ -127,50 +102,35 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
   }, [ready, wallets, address]);
 
   const handleBuyNeuro = useCallback(async () => {
-    if (!walletClient || !address || !config?.neuroTokenAddress || !config?.claimReceiverAddress || !isOnBaseChain) return;
-    const zero = '0x0000000000000000000000000000000000000000';
-    if (config.neuroTokenAddress === zero || config.claimReceiverAddress === zero) {
-      setError('Claim not configured');
-      return;
-    }
+    if (!walletClient || !address || !isOnBaseChain) return;
+    const canUpdateState = () => mountedRef.current && isOpenRef.current;
     setBusy('neuro');
     setError(null);
     try {
-      const balRes = await fetch(`${getApiBase()}/api/claim/balance-check?address=${address.toLowerCase()}`);
-      let bal: BalanceCheck | null = null;
-      if (balRes.ok) {
-        try {
-          bal = (await balRes.json()) as BalanceCheck;
-        } catch {
-          if (import.meta.env?.DEV) console.warn('[BuyFlyModal] balance-check response was not valid JSON');
+      const balanceRes = await fetch(`${getApiBase()}/api/claim/balance-check?address=${address.toLowerCase()}`);
+      const balanceData: BalanceCheck = balanceRes.ok
+        ? await balanceRes.json().catch(() => ({} as BalanceCheck))
+        : {};
+      const parsedRequiredAmount = parseNonNegativeWei(balanceData.flyNeuroRequiredWei);
+      const serverRequiredAmount =
+        parsedRequiredAmount != null && parsedRequiredAmount > 0n ? parsedRequiredAmount : null;
+      if (canUpdateState()) setServerRequiredAmountWei(serverRequiredAmount);
+      if (!canUpdateState()) return;
+      const resolvedTransferAmount = serverRequiredAmount ?? FLY_NEURO_AMOUNT_FALLBACK;
+      const balanceWei = parseNonNegativeWei(balanceData.neuroBalanceWei);
+      if (balanceWei != null && balanceWei < resolvedTransferAmount) {
+        if (canUpdateState()) {
+          setError(`Insufficient $NEURO. You need ${formatNeuroAmount(resolvedTransferAmount.toString())} $NEURO to buy a fly.`);
         }
-      }
-      const transferAmount =
-        parsePositiveWei(bal?.flyNeuroRequiredWei) ??
-        parsePositiveWei(config.flyNeuroAmountWei) ??
-        FLY_NEURO_AMOUNT_FALLBACK;
-      if (transferAmount <= 0n) {
-        const msg = 'Invalid fly price from API';
-        if (import.meta.env?.DEV) console.debug('[BuyFlyModal] no valid amount from balance-check, config, or fallback');
-        if (mountedRef.current) setError(msg);
-        throw new Error(msg);
-      }
-      if (import.meta.env?.DEV) {
-        if (parsePositiveWei(bal?.flyNeuroRequiredWei) !== null) console.debug('[BuyFlyModal] amount source: balance-check');
-        else if (parsePositiveWei(config.flyNeuroAmountWei) !== null) console.debug('[BuyFlyModal] amount source: config (balance-check missing or invalid)');
-        else console.debug('[BuyFlyModal] amount source: FLY_NEURO_AMOUNT_FALLBACK');
-      }
-      const balanceWei = parsePositiveWei(bal?.neuroBalanceWei) ?? 0n;
-      if (balanceWei < transferAmount) {
-        if (mountedRef.current) setError(`Insufficient $NEURO. You need ${formatNeuroAmount(transferAmount.toString())} $NEURO to buy a fly.`);
         return;
       }
+
       const hash = await walletClient.writeContract({
         account: address,
-        address: config.neuroTokenAddress,
+        address: NEURO_TOKEN_ADDRESS,
         abi: ERC20_TRANSFER_ABI,
         functionName: 'transfer',
-        args: [config.claimReceiverAddress, transferAmount],
+        args: [CLAIM_RECEIVER_ADDRESS, resolvedTransferAmount],
         chain: base,
       });
       notification.show('Transaction sent, pending...', 'info');
@@ -178,17 +138,19 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
       const maxAttempts = 5;
       const baseDelay = 1000;
       const verify = async (attempt = 0): Promise<void> => {
-        if (!mountedRef.current) return;
+        if (!canUpdateState()) return;
         notification.update('Verifying payment...', 'info');
         const res = await fetch(`${apiBase}/api/claim/verify-payment`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ txHash: hash, userAddress: address.toLowerCase() }),
         });
+        if (!canUpdateState()) return;
         const data = await res.json().catch(() => ({}));
         if (res.ok) {
           if (address) queryClient.invalidateQueries({ queryKey: apiKeys.myFlies(address) });
           onSuccess();
+          if (!canUpdateState()) return;
           notification.update('NeuroFly added!', 'success');
           setTimeout(() => notification.hide(), 2000);
           onClose();
@@ -198,27 +160,23 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
         if (retryable && attempt < maxAttempts) {
           const delay = Math.min(baseDelay * Math.pow(2, attempt), 8000);
           await new Promise((r) => setTimeout(r, delay));
-          if (mountedRef.current) return verify(attempt + 1);
+          if (canUpdateState()) return verify(attempt + 1);
+          return;
         }
+        if (!canUpdateState()) return;
         notification.update(SUPPORT_MESSAGE, 'error');
         setTimeout(() => notification.hide(), 5000);
         throw new Error(data.error ?? 'Verification failed');
       };
       await verify();
     } catch (err) {
-      if (mountedRef.current) setError(parseWalletError(err));
+      if (canUpdateState()) setError(parseWalletError(err));
     } finally {
-      if (mountedRef.current) setBusy(null);
+      if (canUpdateState()) setBusy(null);
     }
-  }, [walletClient, address, config, isOnBaseChain, queryClient, notification, onSuccess, onClose]);
+  }, [walletClient, address, isOnBaseChain, queryClient, notification, onSuccess, onClose]);
 
   if (!isOpen) return null;
-
-  const neuroDisabled =
-    !config?.neuroTokenAddress ||
-    config.neuroTokenAddress === '0x0000000000000000000000000000000000000000' ||
-    !config?.claimReceiverAddress ||
-    config.claimReceiverAddress === '0x0000000000000000000000000000000000000000';
 
   const modalContent = !address ? (
     <div className="neurosim-claim-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="connect-wallet-title">
@@ -245,7 +203,7 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
         <div className="neurosim-claim__card">
           <h2 id="buy-fly-title" className="neurosim-claim__title">Buy NeuroFly #{slotIndex + 1}</h2>
           <p className="neurosim-claim__subtitle">
-            Pay with {displayAmountLabel} $NEURO to buy a fly
+            Pay with {formattedTransferAmount} $NEURO to buy a fly
           </p>
           {error && (
             <div className="neuroflies__error">
@@ -278,9 +236,9 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
                 type="button"
                 className="neurosim-claim__btn neurosim-claim__btn--primary"
                 onClick={handleBuyNeuro}
-                disabled={!!busy || !walletClient || !address || neuroDisabled}
+                disabled={!!busy || !walletClient || !address}
               >
-                {busy === 'neuro' ? 'Confirming...' : `Pay with ${displayAmountLabel} $NEURO`}
+                {busy === 'neuro' ? 'Confirming...' : `Pay with ${formattedTransferAmount} $NEURO`}
               </button>
             )}
           </div>

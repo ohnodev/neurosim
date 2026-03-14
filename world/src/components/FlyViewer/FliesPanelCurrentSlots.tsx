@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import { useCallback } from 'react';
 import type { FlyState } from '../../lib/simWsClient';
 import { useSimDisplayDataSelector } from '../../lib/simDisplayContext';
 import { DEFAULT_FLY } from '../../lib/flyViewerUtils';
@@ -8,22 +8,22 @@ import {
   FlySlotConnecting,
   FlySlotDead,
   FlySlotDeploy,
+  FlySlotDeploying,
   FlySlotGraveyard,
   FlyStatusCardMemo,
 } from './FlySlots';
 
-type SlotType = 'graveyard' | 'buy' | 'deploy' | 'connecting' | 'dead' | 'active';
+type SlotType = 'graveyard' | 'buy' | 'deploy' | 'deploying' | 'connecting' | 'dead' | 'active';
 
 export function FliesPanelCurrentSlots(props: {
   deployed: Record<number, number>;
   selectedFlyIndex: number;
   myFlies: Array<ClaimedFly | null>;
   graveyardSlots: Set<number>;
+  deployingSlots: Set<number>;
   statsBySlot: Record<number, number>;
-  address: string | undefined;
   onSelectSlot: (slot: number) => void;
-  setError: React.Dispatch<React.SetStateAction<string | null>>;
-  deployFly: (slotIndex: number) => Promise<void>;
+  deployFly: (slotIndex: number) => void;
   setBuyFlySlot: (v: number | null) => void;
   getFlyCardData: (slotIndex: number) => { fly: FlyState; points: number };
   subscribeFlyCardTick: (fn: () => void) => () => void;
@@ -33,9 +33,9 @@ export function FliesPanelCurrentSlots(props: {
     selectedFlyIndex,
     myFlies,
     graveyardSlots,
+    deployingSlots,
     statsBySlot,
     onSelectSlot,
-    setError,
     deployFly,
     setBuyFlySlot,
     getFlyCardData,
@@ -50,17 +50,30 @@ export function FliesPanelCurrentSlots(props: {
         for (let i = 0; i < 3; i++) {
           const inGraveyard = graveyardSlots.has(i);
           const hasFly = myFlies[i] != null;
+          const isDeploying = deployingSlots.has(i);
           const simIdx = deployed[i];
           const isDeployed = simIdx != null;
           const hasSimFly = isDeployed && flies[simIdx] != null;
           const simFly = hasSimFly ? flies[simIdx]! : DEFAULT_FLY;
           const isDead = hasSimFly && simFly.dead;
-          const t: SlotType = inGraveyard ? 'graveyard' : !hasFly ? 'buy' : !isDeployed ? 'deploy' : isDeployed && !hasSimFly ? 'connecting' : isDead ? 'dead' : 'active';
+          const t: SlotType = inGraveyard
+            ? 'graveyard'
+            : !hasFly
+              ? 'buy'
+              : isDeploying
+                ? 'deploying'
+                : !isDeployed
+                  ? 'deploy'
+                  : isDeployed && !hasSimFly
+                    ? 'connecting'
+                    : isDead
+                      ? 'dead'
+                      : 'active';
           types[`slot${i}`] = t;
         }
         return types;
       },
-      [graveyardSlots, myFlies, deployed]
+      [graveyardSlots, myFlies, deployingSlots, deployed]
     )
   );
 
@@ -73,7 +86,9 @@ export function FliesPanelCurrentSlots(props: {
       case 'buy':
         return <FlySlotBuy index={i} isEmpty={isEmpty} setBuyFlySlot={setBuyFlySlot} />;
       case 'deploy':
-        return <FlySlotDeploy index={i} deployFly={deployFly} setError={setError} />;
+        return <FlySlotDeploy index={i} deployFly={deployFly} disabled={deployingSlots.has(i)} />;
+      case 'deploying':
+        return <FlySlotDeploying index={i} />;
       case 'connecting':
         return <FlySlotConnecting index={i} />;
       case 'dead':

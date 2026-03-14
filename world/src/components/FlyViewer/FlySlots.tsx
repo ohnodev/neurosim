@@ -45,30 +45,18 @@ export const FlySlotBuy = React.memo(FlySlotBuyInner);
 function FlySlotDeployInner({
   index,
   deployFly,
-  setError,
+  disabled,
 }: {
   index: number;
-  deployFly: (slotIndex: number) => Promise<void>;
-  setError: React.Dispatch<React.SetStateAction<string | null>>;
+  deployFly: (slotIndex: number) => void;
+  disabled?: boolean;
 }) {
-  const [isDeploying, setIsDeploying] = useState(false);
   return (
     <button
       type="button"
       className="fly-viewer__fly-slot-empty"
-      disabled={isDeploying}
-      onClick={async () => {
-        if (isDeploying) return;
-        setIsDeploying(true);
-        try {
-          await deployFly(index);
-          setError(null);
-        } catch (e) {
-          setError(e instanceof Error ? `Deploy failed: ${e.message}` : 'Deploy failed');
-        } finally {
-          setIsDeploying(false);
-        }
-      }}
+      disabled={!!disabled}
+      onClick={() => deployFly(index)}
     >
       <img src="/fly.svg" alt="" width={28} height={28} className="fly-viewer__fly-slot-icon" aria-hidden />
       <span className="fly-viewer__fly-slot-label">Fly {index + 1}</span>
@@ -78,6 +66,16 @@ function FlySlotDeployInner({
 }
 
 export const FlySlotDeploy = React.memo(FlySlotDeployInner);
+
+export function FlySlotDeploying({ index }: { index: number }) {
+  return (
+    <div className="fly-viewer__fly-slot-empty fly-viewer__fly-slot--connecting">
+      <img src="/fly.svg" alt="" width={28} height={28} className="fly-viewer__fly-slot-icon" aria-hidden />
+      <span className="fly-viewer__fly-slot-label">Fly {index + 1}</span>
+      <span style={{ fontSize: 9, color: '#888' }}>Deploying…</span>
+    </div>
+  );
+}
 
 export function FlySlotConnecting({ index }: { index: number }) {
   return (

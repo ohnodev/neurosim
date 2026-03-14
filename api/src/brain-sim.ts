@@ -41,8 +41,8 @@ const SENSORY_SCALE = 0.18;
 const MIN_FOOD_DISTANCE = 1;
 
 function estimateSensoryInputStrength(dt: number, fly: FlyState, sources: WorldSource[]): number {
+  if (sources.length === 0) return 0;
   const hungry = (fly.hunger ?? 100) <= 90;
-  const full = (fly.hunger ?? 100) > 90;
   let foodModulation = 0;
   for (const s of sources) {
     const dist = Math.hypot(s.x - fly.x, s.y - fly.y);
@@ -50,11 +50,10 @@ function estimateSensoryInputStrength(dt: number, fly: FlyState, sources: WorldS
     const invDist = 1 / (1 + dist * 0.1);
     foodModulation += invDist * (1 - (fly.hunger ?? 100) / 100);
   }
-  const rateHz = hungry && foodModulation > 0
+  if (foodModulation <= 0) return 0;
+  const rateHz = hungry
     ? Math.min(STIM_RATE_HZ, 50 + foodModulation * STIM_RATE_HZ)
-    : full
-      ? 30
-      : 50;
+    : 30;
   return Math.min(0.5, (rateHz / STIM_RATE_HZ) * SENSORY_SCALE * (dt / (1 / 30)));
 }
 
@@ -98,6 +97,8 @@ export async function createBrainSim(
       readoutMs?: number;
     } = {};
     let lastActivitySparse: Record<string, number> = {};
+    let lastInputActivity: Record<string, number> | undefined;
+    let lastEatenFoodId: string | undefined;
 
     async function runRustStep(
       dt: number,
@@ -143,6 +144,8 @@ export async function createBrainSim(
         fly = { ...fly, t };
         const act = await runRustStep(dt, [], includeActivity);
         lastActivitySparse = act.activitySparse;
+        lastInputActivity = undefined;
+        lastEatenFoodId = undefined;
         lastRustMs = Math.round(performance.now() - stepStart);
         lastRustTiming = {
           computeMs: act.computeMs,
@@ -152,7 +155,7 @@ export async function createBrainSim(
           readoutMs: act.readoutMs,
         };
         const activityRec = Object.keys(act.activitySparse).length ? act.activitySparse : undefined;
-        return { t, fly, activity: activityRec };
+        return { t, fly, activity: activityRec, inputActivity: lastInputActivity, eatenFoodId: lastEatenFoodId };
       }
 
       const currentSources = getSources();
@@ -179,6 +182,7 @@ export async function createBrainSim(
             return Object.keys(out).length > 0 ? out : undefined;
           })()
         : undefined;
+      lastInputActivity = inputActivityRec;
 
       const rustStart = performance.now();
       const result = await runRustStep(dt, pendingInput, includeActivity);
@@ -236,6 +240,7 @@ export async function createBrainSim(
             feeding: false,
           };
           const activityRec = Object.keys(activitySparse).length ? activitySparse : undefined;
+          lastEatenFoodId = eatenFoodId;
           lastJsMs = Math.round(performance.now() - stepStart - lastRustMs);
           return {
             t,
@@ -352,6 +357,7 @@ export async function createBrainSim(
       };
 
       const activityRec = Object.keys(activitySparse).length ? activitySparse : undefined;
+      lastEatenFoodId = eatenFoodId;
       lastJsMs = Math.round(performance.now() - stepStart - lastRustMs);
 
       return {
@@ -393,7 +399,13 @@ export async function createBrainSim(
         restDuration: REST_TIME,
         feeding: fly.feeding ?? false,
       };
-      return { t: fly.t, fly: flyWithMeta, activity: activityRec };
+      return {
+        t: fly.t,
+        fly: flyWithMeta,
+        activity: activityRec,
+        inputActivity: lastInputActivity,
+        ...(lastEatenFoodId && { eatenFoodId: lastEatenFoodId }),
+      };
     }
 
     return {

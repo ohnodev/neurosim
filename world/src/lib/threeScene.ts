@@ -58,6 +58,9 @@ const FLY_VIEW_DISTANCE = 3;
 const FLY_SCALE = 0.08;
 const FLY_LOD_DISTANCE = 12;
 const FLY_LOD_DISTANCE_SQ = FLY_LOD_DISTANCE * FLY_LOD_DISTANCE;
+const LOW_LOD_WING_BASE_ANGLE = 0.42;
+const LOW_LOD_WING_FLAP_AMPLITUDE = 0.16;
+const LOW_LOD_WING_FLAP_SPEED = 0.018;
 /** Sim ground level (z=0.35); map to Three.js y=0 so fly rests on ground */
 const GROUND_Z = 0.35;
 
@@ -266,6 +269,8 @@ export function initThreeScene(
     group: THREE.Group;
     detailGroup: THREE.Group;
     lowPolyGroup: THREE.Group;
+    lowPolyWingL: THREE.Mesh;
+    lowPolyWingR: THREE.Mesh;
     mixer: THREE.AnimationMixer;
     prevPos: { x: number; y: number };
     heading: number;
@@ -381,7 +386,7 @@ export function initThreeScene(
     }
   }
 
-  function createLowPolyFlyProxy(): THREE.Group {
+  function createLowPolyFlyProxy(): { group: THREE.Group; wingL: THREE.Mesh; wingR: THREE.Mesh } {
     const g = new THREE.Group();
     const body = new THREE.Mesh(lowPolyBodyGeom, lowPolyBodyMat);
     const head = new THREE.Mesh(lowPolyHeadGeom, lowPolyHeadMat);
@@ -390,10 +395,10 @@ export function initThreeScene(
     head.position.set(0, 0.02, -0.38);
     wingL.position.set(-0.28, 0.12, -0.04);
     wingR.position.set(0.28, 0.12, -0.04);
-    wingL.rotation.z = -0.42;
-    wingR.rotation.z = 0.42;
+    wingL.rotation.z = -LOW_LOD_WING_BASE_ANGLE;
+    wingR.rotation.z = LOW_LOD_WING_BASE_ANGLE;
     g.add(body, head, wingL, wingR);
-    return g;
+    return { group: g, wingL, wingR };
   }
 
   function ensureFlyCount(count: number) {
@@ -406,7 +411,8 @@ export function initThreeScene(
     while (flyInstances.length < count && flyTemplate && flyClips.length > 0) {
       const clone = cloneWithOwnResources(flyTemplate) as THREE.Group;
       clone.scale.setScalar(FLY_SCALE);
-      const lowPolyGroup = createLowPolyFlyProxy();
+      const lowPoly = createLowPolyFlyProxy();
+      const lowPolyGroup = lowPoly.group;
       lowPolyGroup.scale.setScalar(FLY_SCALE);
       lowPolyGroup.visible = false;
       const root = new THREE.Group();
@@ -422,6 +428,8 @@ export function initThreeScene(
         group: root,
         detailGroup: clone,
         lowPolyGroup,
+        lowPolyWingL: lowPoly.wingL,
+        lowPolyWingR: lowPoly.wingR,
         mixer: instMixer,
         prevPos: { x: 0, y: 0 },
         heading: 0,
@@ -556,6 +564,10 @@ export function initThreeScene(
           }
         }
         inst.mixer.update(cappedDelta);
+      } else {
+        const flap = Math.sin(((timestamp ?? performance.now()) + i * 37) * LOW_LOD_WING_FLAP_SPEED) * LOW_LOD_WING_FLAP_AMPLITUDE;
+        inst.lowPolyWingL.rotation.z = -LOW_LOD_WING_BASE_ANGLE + flap;
+        inst.lowPolyWingR.rotation.z = LOW_LOD_WING_BASE_ANGLE - flap;
       }
     }
 

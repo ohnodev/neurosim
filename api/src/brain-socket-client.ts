@@ -199,6 +199,7 @@ function flushStepBatch(): void {
           strength: item.strength ?? 0,
         };
       }),
+      include_activity: params.include_activity ?? true,
     };
   });
 
@@ -266,6 +267,7 @@ export interface CreateParams {
 export interface StepParams {
   simId: number;
   dt: number;
+  includeActivity?: boolean;
   fly: {
     x: number;
     y: number;
@@ -296,6 +298,7 @@ export interface StepResult {
 export interface StepManyItem {
   simId: number;
   dt: number;
+  includeActivity?: boolean;
   fly: {
     x: number;
     y: number;
@@ -362,6 +365,7 @@ export async function stepSim(params: StepParams): Promise<StepResult> {
       },
       sources: params.sources,
       pending: params.pending,
+      include_activity: params.includeActivity ?? true,
     },
   });
   return {
@@ -415,6 +419,7 @@ export async function stepMany(
           neuron_ids: p.neuronIds,
           strength: p.strength,
         })),
+        include_activity: item.includeActivity ?? true,
       })),
     },
   });

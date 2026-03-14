@@ -46,6 +46,7 @@ struct ConnectomeJson {
 
 pub struct ConnectomeTemplate {
     pub neuron_ids: Vec<String>,
+    pub viewer_subset_indices: Vec<u32>,
     pub edges_pre: Vec<u32>,
     pub edges_post: Vec<u32>,
     pub edges_weight: Vec<f32>,
@@ -53,6 +54,41 @@ pub struct ConnectomeTemplate {
     pub motor_left: Vec<u32>,
     pub motor_right: Vec<u32>,
     pub motor_unknown: Vec<u32>,
+}
+
+fn viewer_subset_limit() -> usize {
+    std::env::var("NEUROSIM_VIEWER_NEURON_LIMIT")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(10_000)
+        .max(1)
+}
+
+fn fnv1a32(s: &str) -> u32 {
+    let mut h: u32 = 0x811c9dc5;
+    for b in s.as_bytes() {
+        h ^= *b as u32;
+        h = h.wrapping_mul(0x01000193);
+    }
+    h
+}
+
+fn compute_viewer_subset_indices(neuron_ids: &[String], limit: usize) -> Vec<u32> {
+    if neuron_ids.is_empty() {
+        return Vec::new();
+    }
+    if neuron_ids.len() <= limit {
+        return (0..neuron_ids.len() as u32).collect();
+    }
+    let mut ranked: Vec<(u32, u32)> = neuron_ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| (fnv1a32(id), i as u32))
+        .collect();
+    ranked.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    let mut out: Vec<u32> = ranked.into_iter().take(limit).map(|(_, idx)| idx).collect();
+    out.sort_unstable();
+    out
 }
 
 pub fn load_connectome(path: &Path) -> Result<ConnectomeTemplate, Box<dyn std::error::Error + Send + Sync>> {
@@ -110,6 +146,7 @@ pub fn load_connectome(path: &Path) -> Result<ConnectomeTemplate, Box<dyn std::e
         sugar_grn
     };
 
+    let viewer_subset_indices = compute_viewer_subset_indices(&neuron_ids, viewer_subset_limit());
     let mut edges_pre = Vec::with_capacity(data.connections.len());
     let mut edges_post = Vec::with_capacity(data.connections.len());
     let mut edges_weight = Vec::with_capacity(data.connections.len());
@@ -125,6 +162,7 @@ pub fn load_connectome(path: &Path) -> Result<ConnectomeTemplate, Box<dyn std::e
 
     Ok(ConnectomeTemplate {
         neuron_ids,
+        viewer_subset_indices,
         edges_pre,
         edges_post,
         edges_weight,

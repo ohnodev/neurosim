@@ -31,9 +31,10 @@ fn main() {
     let template = connectome::load_connectome(Path::new(&connectome_path))
         .expect("load connectome");
     eprintln!(
-        "[brain-service] connectome loaded: {} neurons, {} connections",
+        "[brain-service] connectome loaded: {} neurons, {} connections, viewer_subset={}",
         template.neuron_ids.len(),
-        template.edges_pre.len()
+        template.edges_pre.len(),
+        template.viewer_subset_indices.len()
     );
 
     let socket_path = std::env::var("NEUROSIM_BRAIN_SOCKET")
@@ -71,6 +72,7 @@ fn main() {
 struct StepParams {
     sim_id: u32,
     dt: f64,
+    include_activity: Option<bool>,
     fly: FlyJson,
     sources: Vec<SourceJson>,
     pending: Vec<PendingJson>,
@@ -176,7 +178,7 @@ fn handle(
         );
         r#"{"ok":true}"#.to_string()
     } else if line.contains("\"method\":\"create\"") {
-        let sim = BrainSim::new(
+        let sim = BrainSim::new_with_viewer(
             template.neuron_ids.clone(),
             template.edges_pre.clone(),
             template.edges_post.clone(),
@@ -185,6 +187,7 @@ fn handle(
             template.motor_left.clone(),
             template.motor_right.clone(),
             template.motor_unknown.clone(),
+            template.viewer_subset_indices.clone(),
         );
         let mut g = next_id.lock().unwrap();
         let id = *g;
@@ -251,8 +254,9 @@ fn handle(
                     strength: x.strength,
                 })
                 .collect();
+            let include_activity = step.include_activity.unwrap_or(true);
             let (_activity, activity_sparse, motor_left, motor_right, motor_fwd, timing) =
-                sim.step(step.dt, fly, srcs, pend);
+                sim.step_with_options(step.dt, fly, srcs, pend, include_activity);
             compute_ms_sum += timing.compute_ms;
             kernel_ms_sum += timing.kernel_ms;
             recurrent_ms_sum += timing.recurrent_ms;
@@ -347,8 +351,9 @@ fn handle(
                 strength: x.strength,
             })
             .collect();
+        let include_activity = p.include_activity.unwrap_or(true);
         let (_activity, activity_sparse, motor_left, motor_right, motor_fwd, timing) =
-            sim.step(p.dt, fly, srcs, pend);
+            sim.step_with_options(p.dt, fly, srcs, pend, include_activity);
         let compute_ms = timing.compute_ms;
         let t2 = Instant::now();
         let out_json = serde_json::to_string(&StepResp {

@@ -32,6 +32,8 @@ pub struct BrainSim {
     g: Vec<f32>,
     refractory: Vec<u16>,
     spikes: Vec<u8>,
+    viewer_indices: Vec<u32>,
+    max_activity_entries: usize,
     #[cfg(feature = "cuda")]
     gpu_state: Option<GpuSimState>,
     #[cfg(feature = "cuda")]
@@ -69,6 +71,14 @@ pub struct StepTiming {
 }
 
 impl BrainSim {
+    fn readout_activity_cap() -> usize {
+        let parsed = std::env::var("NEUROSIM_ACTIVITY_CAP")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(10_000);
+        parsed.max(1)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         neuron_ids: Vec<String>,
@@ -80,6 +90,31 @@ impl BrainSim {
         motor_right: Vec<u32>,
         motor_unknown: Vec<u32>,
     ) -> Self {
+        Self::new_with_viewer(
+            neuron_ids,
+            edges_pre,
+            edges_post,
+            edges_weight,
+            sensory_indices,
+            motor_left,
+            motor_right,
+            motor_unknown,
+            Vec::new(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_viewer(
+        neuron_ids: Vec<String>,
+        edges_pre: Vec<u32>,
+        edges_post: Vec<u32>,
+        edges_weight: Vec<f32>,
+        sensory_indices: Vec<u32>,
+        motor_left: Vec<u32>,
+        motor_right: Vec<u32>,
+        motor_unknown: Vec<u32>,
+        viewer_indices: Vec<u32>,
+    ) -> Self {
         let n = neuron_ids.len();
         let id_to_idx: HashMap<String, u32> = neuron_ids
             .iter()
@@ -90,6 +125,20 @@ impl BrainSim {
         let g = vec![0.0f32; n];
         let refractory = vec![0u16; n];
         let spikes = vec![0u8; n];
+        let mut sanitized_viewer: Vec<u32> = if viewer_indices.is_empty() {
+            (0..n as u32).collect()
+        } else {
+            viewer_indices
+                .into_iter()
+                .filter(|&i| (i as usize) < n)
+                .collect()
+        };
+        sanitized_viewer.sort_unstable();
+        sanitized_viewer.dedup();
+        if sanitized_viewer.is_empty() {
+            sanitized_viewer = (0..n as u32).collect();
+        }
+        let max_activity_entries = Self::readout_activity_cap();
         #[cfg(feature = "cuda")]
         let cuda_only = std::env::var("NEUROSIM_MODE").as_deref() == Ok("cuda")
             || std::env::var("USE_CUDA").as_deref() == Ok("1");
@@ -117,6 +166,8 @@ impl BrainSim {
             g,
             refractory,
             spikes,
+            viewer_indices: sanitized_viewer,
+            max_activity_entries,
             #[cfg(feature = "cuda")]
             gpu_state,
             #[cfg(feature = "cuda")]
@@ -235,6 +286,17 @@ impl BrainSim {
         sources: Vec<SourceInput>,
         pending: Vec<PendingStimInput>,
     ) -> (Vec<f32>, HashMap<String, f64>, f64, f64, f64, StepTiming) {
+        self.step_with_options(dt, fly, sources, pending, true)
+    }
+
+    pub fn step_with_options(
+        &mut self,
+        dt: f64,
+        fly: FlyInput,
+        sources: Vec<SourceInput>,
+        pending: Vec<PendingStimInput>,
+        include_activity: bool,
+    ) -> (Vec<f32>, HashMap<String, f64>, f64, f64, f64, StepTiming) {
         let t_compute = Instant::now();
         let (recurrent_ms, lif_ms) = {
             #[cfg(feature = "cuda")]
@@ -290,19 +352,28 @@ impl BrainSim {
         let t_readout = Instant::now();
 
         let mut activity_sparse = HashMap::new();
-        let mut activity = vec![0.0f32; self.n];
-        for i in 0..self.n {
-            if self.spikes[i] >= ACTIVITY_THRESHOLD {
-                activity[i] = 1.0;
-                if let Some(id) = self.neuron_ids.get(i) {
-                    activity_sparse.insert(id.clone(), 1.0);
+        let mut activity: Vec<f32> = Vec::new();
+        if include_activity {
+            activity = vec![0.0f32; self.n];
+            let cap = self.max_activity_entries;
+            for &idx in &self.viewer_indices {
+                let i = idx as usize;
+                if self.spikes[i] >= ACTIVITY_THRESHOLD {
+                    activity[i] = 1.0;
+                    if activity_sparse.len() < cap {
+                        if let Some(id) = self.neuron_ids.get(i) {
+                            activity_sparse.insert(id.clone(), 1.0);
+                        }
+                    }
                 }
             }
         }
 
         if fly.rest_time_left > 0.0 {
             self.spikes.fill(0);
-            activity.fill(0.0);
+            if include_activity {
+                activity.fill(0.0);
+            }
             activity_sparse.clear();
         }
 

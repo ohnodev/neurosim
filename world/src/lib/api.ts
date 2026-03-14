@@ -66,6 +66,7 @@ export async function fetchWorld(): Promise<{ sources: WorldSource[] }> {
 export interface NeuronRaw {
   root_id: string;
   role?: string;
+  side?: string;
   cell_type?: string;
   x?: number;
   y?: number;
@@ -73,6 +74,16 @@ export interface NeuronRaw {
 }
 
 export async function fetchNeurons(): Promise<{ neurons: NeuronRaw[] }> {
+  // Prefer static precomputed viewer subset to reduce API/server load.
+  try {
+    const local = await fetch('/connectome-viewer-10k.json');
+    if (local.ok) {
+      const d = await local.json();
+      if (Array.isArray(d.neurons)) return { neurons: d.neurons };
+    }
+  } catch {
+    // Fall back to API endpoint below.
+  }
   const r = await fetch(`${getApiBase()}/api/neurons`);
   if (!r.ok) throw new Error(r.statusText || 'Failed to fetch neurons');
   const d = await r.json();

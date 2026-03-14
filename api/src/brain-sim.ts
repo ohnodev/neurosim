@@ -76,6 +76,7 @@ export async function createBrainSim(
     async function runRustStep(
       dt: number,
       pendingInput: Array<{ neuronIds: string[]; strength: number }>,
+      includeActivity = true,
     ): Promise<{
       activitySparse: Record<string, number>;
       motorLeft: number;
@@ -101,18 +102,20 @@ export async function createBrainSim(
       return socketClient.stepSim({
         simId,
         dt,
+        includeActivity,
         fly: flyInput,
         sources: sourcesInput,
         pending: pendingInput,
       });
     }
 
-    async function step(dt: number): Promise<SimState> {
+    async function step(dt: number, options?: { includeActivity?: boolean }): Promise<SimState> {
+      const includeActivity = options?.includeActivity ?? true;
       const stepStart = performance.now();
       if (fly.dead) {
         const t = fly.t + dt;
         fly = { ...fly, t };
-        const act = await runRustStep(dt, []);
+        const act = await runRustStep(dt, [], includeActivity);
         lastActivitySparse = act.activitySparse;
         lastRustMs = Math.round(performance.now() - stepStart);
         const activityRec = Object.keys(act.activitySparse).length ? act.activitySparse : undefined;
@@ -126,7 +129,7 @@ export async function createBrainSim(
       const pendingInput = toApply.map((p) => ({ neuronIds: p.neurons, strength: p.strength }));
 
       const rustStart = performance.now();
-      const result = await runRustStep(dt, pendingInput);
+      const result = await runRustStep(dt, pendingInput, includeActivity);
       lastRustMs = Math.round(performance.now() - rustStart);
       lastSocketTiming = socketClient.getLastRequestTiming();
       lastRustTiming = {

@@ -538,12 +538,15 @@ export function initThreeScene(
         : distSq <= FLY_LOD_DISTANCE_IN_SQ;
       if (shouldShowDetail !== inst.detailVisible) {
         inst.detailVisible = shouldShowDetail;
-        inst.detailGroup.visible = shouldShowDetail;
         inst.lowLod.group.visible = !shouldShowDetail;
         if (!shouldShowDetail) {
+          inst.detailGroup.visible = false;
+          if (inst.detailGroup.parent === inst.group) inst.group.remove(inst.detailGroup);
           inst.wasFlying = false;
           for (const action of inst.wingActions) action.stop();
         } else {
+          if (inst.detailGroup.parent !== inst.group) inst.group.add(inst.detailGroup);
+          inst.detailGroup.visible = true;
           inst.lowLodWasFlying = false;
         }
       }

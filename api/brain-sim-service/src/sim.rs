@@ -1,30 +1,37 @@
-//! Core brain simulation logic (CPU + optional GPU).
+//! Spike-based LIF simulation logic (CPU + optional GPU).
 use std::collections::HashMap;
-use rayon::prelude::*;
+use std::time::Instant;
 
 #[cfg(feature = "cuda")]
-use crate::gpu::GpuSimState;
+use crate::gpu::{GpuSimState, GpuStepResult};
 
-const REF_STEP: f64 = 1.0 / 30.0;
-const TAU: f64 = 0.004;
-const DECAY: f64 = 0.975;
-const PROP_CAP: f64 = 0.0004;
 const STIM_RATE_HZ: f64 = 200.0;
 const SENSORY_SCALE: f64 = 0.18;
-const ACTIVITY_MAX: f32 = 0.5;
-const ACTIVITY_THRESHOLD: f32 = 0.08;
+const V_REST: f32 = -52.0;
+const V_RESET: f32 = -52.0;
+const V_THRESH: f32 = -45.0;
+const TAU_MEM_MS: f32 = 20.0;
+const TAU_SYN_MS: f32 = 5.0;
+const RECURRENT_SCALE: f32 = 0.275;
+const REFRACT_MS: f64 = 2.2;
+const ACTIVITY_THRESHOLD: u8 = 1;
 const MOTOR_SCALE: f64 = 0.002;
 
 pub struct BrainSim {
     n: usize,
     neuron_ids: Vec<String>,
     id_to_idx: HashMap<String, u32>,
-    adj: Vec<Vec<(u32, f32)>>,
+    edges_pre: Vec<u32>,
+    edges_post: Vec<u32>,
+    edges_weight: Vec<f32>,
     sensory_indices: Vec<u32>,
     motor_left: Vec<u32>,
     motor_right: Vec<u32>,
     motor_unknown: Vec<u32>,
-    activity: Vec<f32>,
+    v: Vec<f32>,
+    g: Vec<f32>,
+    refractory: Vec<u16>,
+    spikes: Vec<u8>,
     #[cfg(feature = "cuda")]
     gpu_state: Option<GpuSimState>,
     #[cfg(feature = "cuda")]
@@ -53,10 +60,21 @@ pub struct PendingStimInput {
     pub strength: f64,
 }
 
+pub struct StepTiming {
+    pub compute_ms: f64,
+    pub kernel_ms: f64,
+    pub recurrent_ms: f64,
+    pub lif_ms: f64,
+    pub readout_ms: f64,
+}
+
 impl BrainSim {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         neuron_ids: Vec<String>,
-        connections: Vec<(String, String, f64)>,
+        edges_pre: Vec<u32>,
+        edges_post: Vec<u32>,
+        edges_weight: Vec<f32>,
         sensory_indices: Vec<u32>,
         motor_left: Vec<u32>,
         motor_right: Vec<u32>,
@@ -68,41 +86,37 @@ impl BrainSim {
             .enumerate()
             .map(|(i, id)| (id.clone(), i as u32))
             .collect();
-        let mut adj: Vec<Vec<(u32, f32)>> = vec![Vec::new(); n];
-        for (pre, post, weight) in connections {
-            let w = if weight >= 1.0 && weight.is_finite() {
-                weight as f32
-            } else {
-                1.0
-            };
-            if let (Some(&pi), Some(&po)) = (id_to_idx.get(&pre), id_to_idx.get(&post)) {
-                adj[pi as usize].push((po, w));
-            }
-        }
-        let activity = vec![0.0f32; n];
+        let v = vec![V_REST; n];
+        let g = vec![0.0f32; n];
+        let refractory = vec![0u16; n];
+        let spikes = vec![0u8; n];
         #[cfg(feature = "cuda")]
         let cuda_only = std::env::var("NEUROSIM_MODE").as_deref() == Ok("cuda")
             || std::env::var("USE_CUDA").as_deref() == Ok("1");
         #[cfg(feature = "cuda")]
         let gpu_state = if cuda_only {
-            match GpuSimState::new(n, &adj, &activity) {
-                Some(g) => Some(g),
+            match GpuSimState::new(n, &edges_pre, &edges_post, &edges_weight, &v, &g, &refractory, &spikes) {
+                Some(gpu) => Some(gpu),
                 None => panic!("[brain-service] CUDA required but GPU init failed"),
             }
         } else {
-            // CPU mode: never probe CUDA to avoid cudarc dynamic-load panics on non-GPU hosts.
             None
         };
         Self {
             n,
             neuron_ids,
             id_to_idx,
-            adj,
+            edges_pre,
+            edges_post,
+            edges_weight,
             sensory_indices,
             motor_left,
             motor_right,
             motor_unknown,
-            activity,
+            v,
+            g,
+            refractory,
+            spikes,
             #[cfg(feature = "cuda")]
             gpu_state,
             #[cfg(feature = "cuda")]
@@ -110,59 +124,108 @@ impl BrainSim {
         }
     }
 
-    fn run_step_cpu(&self, decay_factor: f32, tau_r: f32, prop_cap_r: f32) -> Vec<f32> {
-        let mut next = vec![0.0f32; self.n];
+    fn refrac_steps(dt: f64) -> u16 {
+        let steps = (REFRACT_MS / (dt * 1000.0)).ceil();
+        if !steps.is_finite() || steps <= 1.0 {
+            1
+        } else if steps >= u16::MAX as f64 {
+            u16::MAX
+        } else {
+            steps as u16
+        }
+    }
+
+    fn sensory_strength(&self, dt: f64, fly: &FlyInput, sources: &[SourceInput]) -> f32 {
+        if self.sensory_indices.is_empty() {
+            return 0.0;
+        }
+        let hungry = fly.hunger <= 90.0;
+        let full = fly.hunger > 90.0;
+        let mut food_modulation = 0.0f64;
+        for s in sources {
+            let dist = ((s.x - fly.x).powi(2) + (s.y - fly.y).powi(2)).sqrt();
+            if dist < 1.0 {
+                continue;
+            }
+            let inv_dist = 1.0 / (1.0 + dist * 0.1);
+            food_modulation += inv_dist * (1.0 - fly.hunger / 100.0);
+        }
+        let rate_hz = if hungry && food_modulation > 0.0 {
+            (50.0 + food_modulation * STIM_RATE_HZ).min(STIM_RATE_HZ)
+        } else if full {
+            30.0
+        } else {
+            50.0
+        };
+        ((rate_hz / STIM_RATE_HZ) * SENSORY_SCALE * (dt / (1.0 / 30.0))).min(0.5) as f32
+    }
+
+    fn run_step_cpu(
+        &mut self,
+        dt: f64,
+        fly: &FlyInput,
+        sources: &[SourceInput],
+        pending: &[PendingStimInput],
+    ) -> (f64, f64) {
+        let dt_ms = (dt * 1000.0) as f32;
+        let syn_decay = (-dt_ms / TAU_SYN_MS).exp();
+        let mem_alpha = dt_ms / TAU_MEM_MS;
+        let refrac_steps = Self::refrac_steps(dt);
+        let t_recurrent = Instant::now();
+
+        for gi in &mut self.g {
+            *gi *= syn_decay;
+        }
+        for e in 0..self.edges_pre.len() {
+            let pre = self.edges_pre[e] as usize;
+            let post = self.edges_post[e] as usize;
+            if pre < self.n && post < self.n && self.spikes[pre] > 0 {
+                self.g[post] += self.edges_weight[e] * RECURRENT_SCALE;
+            }
+        }
+        let sensory_strength = self.sensory_strength(dt, fly, sources);
+        if sensory_strength > 0.0 {
+            for &idx in &self.sensory_indices {
+                let i = idx as usize;
+                if i < self.n {
+                    self.g[i] += sensory_strength;
+                }
+            }
+        }
+        for stim in pending {
+            let strength = (stim.strength as f32).min(2.0).max(0.0);
+            for id in &stim.neuron_ids {
+                if let Some(&idx) = self.id_to_idx.get(id) {
+                    let i = idx as usize;
+                    if i < self.n {
+                        self.g[i] += strength;
+                    }
+                }
+            }
+        }
+        let recurrent_ms = t_recurrent.elapsed().as_secs_f64() * 1000.0;
+        let t_lif = Instant::now();
+
+        let mut spikes_next = vec![0u8; self.n];
         for i in 0..self.n {
-            next[i] = self.activity[i] * decay_factor;
-        }
-        let activity = &self.activity;
-        let adj = &self.adj;
-        let n = self.n;
-        let prop: Vec<f32> = (0..adj.len())
-            .into_par_iter()
-            .fold(
-                || vec![0.0f32; n],
-                |mut local, pre_idx| {
-                    let pre_act = activity[pre_idx];
-                    if !pre_act.is_finite() || pre_act <= 0.0 {
-                        return local;
-                    }
-                    for &(post_idx, weight) in &adj[pre_idx] {
-                        let j = post_idx as usize;
-                        if j < n {
-                            let w = weight.min(10.0);
-                            let v = (pre_act * tau_r * w).min(prop_cap_r);
-                            if v.is_finite() {
-                                local[j] += v;
-                            }
-                        }
-                    }
-                    local
-                },
-            )
-            .reduce(
-                || vec![0.0f32; n],
-                |mut a, b| {
-                    for (i, &v) in b.iter().enumerate() {
-                        if i < n && v.is_finite() {
-                            a[i] += v;
-                        }
-                    }
-                    a
-                },
-            );
-        for (i, &v) in prop.iter().enumerate() {
-            if i < n {
-                next[i] += v;
+            if self.refractory[i] > 0 {
+                self.refractory[i] -= 1;
+                self.v[i] = V_RESET;
+                continue;
+            }
+            let dv = mem_alpha * (V_REST - self.v[i] + self.g[i]);
+            let v_next = self.v[i] + dv;
+            if v_next >= V_THRESH {
+                spikes_next[i] = 1;
+                self.v[i] = V_RESET;
+                self.refractory[i] = refrac_steps;
+            } else {
+                self.v[i] = if v_next.is_finite() { v_next } else { V_REST };
             }
         }
-        for v in &mut next {
-            *v = (*v).clamp(0.0, ACTIVITY_MAX);
-            if !v.is_finite() {
-                *v = 0.0;
-            }
-        }
-        next
+        self.spikes = spikes_next;
+        let lif_ms = t_lif.elapsed().as_secs_f64() * 1000.0;
+        (recurrent_ms, lif_ms)
     }
 
     pub fn step(
@@ -171,133 +234,115 @@ impl BrainSim {
         fly: FlyInput,
         sources: Vec<SourceInput>,
         pending: Vec<PendingStimInput>,
-    ) -> (Vec<f32>, HashMap<String, f64>, f64, f64, f64) {
-        let r = (dt / REF_STEP).clamp(0.1, 3.0);
-        let decay_factor = DECAY.powf(r) as f32;
-        let tau_r = (TAU * r) as f32;
-        let prop_cap_r = (PROP_CAP * r) as f32;
-
-        let mut next;
-        #[cfg(feature = "cuda")]
-        let mut demote_gpu = false;
-        #[cfg(feature = "cuda")]
-        {
-            next = if let Some(ref mut gpu) = self.gpu_state {
-                match gpu.step(
-                    &self.activity,
-                    decay_factor,
-                    tau_r,
-                    prop_cap_r,
-                    ACTIVITY_MAX,
-                ) {
-                    Some(v) => v,
-                    None if self.cuda_only => panic!("[brain-service] CUDA required but step failed"),
-                    None => {
-                        demote_gpu = true;
-                        self.run_step_cpu(decay_factor, tau_r, prop_cap_r)
+    ) -> (Vec<f32>, HashMap<String, f64>, f64, f64, f64, StepTiming) {
+        let t_compute = Instant::now();
+        let (recurrent_ms, lif_ms) = {
+            #[cfg(feature = "cuda")]
+            {
+                let sensory_strength = self.sensory_strength(dt, &fly, &sources);
+                let mut pending_idx = Vec::new();
+                let mut pending_strength = Vec::new();
+                for stim in &pending {
+                    let strength = (stim.strength as f32).min(2.0).max(0.0);
+                    for id in &stim.neuron_ids {
+                        if let Some(&idx) = self.id_to_idx.get(id) {
+                            pending_idx.push(idx);
+                            pending_strength.push(strength);
+                        }
                     }
                 }
-            } else if self.cuda_only {
-                panic!("[brain-service] CUDA required but GPU unavailable");
-            } else {
-                self.run_step_cpu(decay_factor, tau_r, prop_cap_r)
-            };
-            if demote_gpu {
-                self.gpu_state = None;
-            }
-        }
-        #[cfg(not(feature = "cuda"))]
-        {
-            next = self.run_step_cpu(decay_factor, tau_r, prop_cap_r);
-        }
-
-        if !self.sensory_indices.is_empty() {
-            let hungry = fly.hunger <= 90.0;
-            let full = fly.hunger > 90.0;
-            let mut food_modulation = 0.0f64;
-            for s in &sources {
-                let dist = ((s.x - fly.x).powi(2) + (s.y - fly.y).powi(2)).sqrt();
-                if dist < 1.0 {
-                    continue;
-                }
-                let inv_dist = 1.0 / (1.0 + dist * 0.1);
-                food_modulation += inv_dist * (1.0 - fly.hunger / 100.0);
-            }
-            let rate_hz = if hungry && food_modulation > 0.0 {
-                (50.0 + food_modulation * STIM_RATE_HZ).min(STIM_RATE_HZ)
-            } else if full {
-                30.0
-            } else {
-                50.0
-            };
-            let per_neuron = ((rate_hz / STIM_RATE_HZ) * SENSORY_SCALE * r).min(0.5) as f32;
-            for &k in &self.sensory_indices {
-                let idx = k as usize;
-                if idx < self.n {
-                    next[idx] += per_neuron;
-                }
-            }
-        }
-
-        for stim in pending {
-            let strength = stim.strength.min(2.0) as f32;
-            for id in stim.neuron_ids {
-                if let Some(&idx) = self.id_to_idx.get(&id) {
-                    let i = idx as usize;
-                    if i < self.n {
-                        next[i] += strength;
+                if let Some(ref mut gpu) = self.gpu_state {
+                    match gpu.step(
+                        dt as f32,
+                        &self.sensory_indices,
+                        sensory_strength,
+                        &pending_idx,
+                        &pending_strength,
+                    ) {
+                        Some(GpuStepResult {
+                            spikes,
+                            recurrent_ms,
+                            lif_ms,
+                        }) => {
+                            self.spikes = spikes;
+                            (recurrent_ms, lif_ms)
+                        }
+                        None if self.cuda_only => {
+                            panic!("[brain-service] CUDA required but GPU step failed")
+                        }
+                        None => {
+                            self.gpu_state = None;
+                            self.run_step_cpu(dt, &fly, &sources, &pending)
+                        }
                     }
+                } else if self.cuda_only {
+                    panic!("[brain-service] CUDA required but GPU unavailable");
+                } else {
+                    self.run_step_cpu(dt, &fly, &sources, &pending)
                 }
             }
-        }
+            #[cfg(not(feature = "cuda"))]
+            {
+                self.run_step_cpu(dt, &fly, &sources, &pending)
+            }
+        };
+        let kernel_ms = recurrent_ms + lif_ms;
+        let t_readout = Instant::now();
 
         let mut activity_sparse = HashMap::new();
-        for (i, v) in next.iter_mut().enumerate() {
-            let val = (*v).clamp(0.0, ACTIVITY_MAX);
-            let val = if val.is_finite() { val } else { 0.0 };
-            *v = val;
-            if val > ACTIVITY_THRESHOLD {
+        let mut activity = vec![0.0f32; self.n];
+        for i in 0..self.n {
+            if self.spikes[i] >= ACTIVITY_THRESHOLD {
+                activity[i] = 1.0;
                 if let Some(id) = self.neuron_ids.get(i) {
-                    activity_sparse.insert(id.clone(), val.min(1.0) as f64);
+                    activity_sparse.insert(id.clone(), 1.0);
                 }
             }
         }
 
         if fly.rest_time_left > 0.0 {
-            next.fill(0.0);
+            self.spikes.fill(0);
+            activity.fill(0.0);
             activity_sparse.clear();
         }
-
-        self.activity = next.clone();
 
         let mut ml = 0.0f64;
         let mut mr = 0.0f64;
         let mut mf = 0.0f64;
         for &i in &self.motor_left {
             let idx = i as usize;
-            if idx < self.n {
-                ml += self.activity[idx] as f64;
+            if idx < self.n && self.spikes[idx] > 0 {
+                ml += 1.0;
             }
         }
         for &i in &self.motor_right {
             let idx = i as usize;
-            if idx < self.n {
-                mr += self.activity[idx] as f64;
+            if idx < self.n && self.spikes[idx] > 0 {
+                mr += 1.0;
             }
         }
         for &i in &self.motor_unknown {
             let idx = i as usize;
-            if idx < self.n {
-                mf += self.activity[idx] as f64;
+            if idx < self.n && self.spikes[idx] > 0 {
+                mf += 1.0;
             }
         }
+        let readout_ms = t_readout.elapsed().as_secs_f64() * 1000.0;
+        let compute_ms = t_compute.elapsed().as_secs_f64() * 1000.0;
 
         (
-            self.activity.clone(),
+            activity,
             activity_sparse,
             ml * MOTOR_SCALE,
             mr * MOTOR_SCALE,
             mf * MOTOR_SCALE,
+            StepTiming {
+                compute_ms,
+                kernel_ms,
+                recurrent_ms,
+                lif_ms,
+                readout_ms,
+            },
         )
     }
 }

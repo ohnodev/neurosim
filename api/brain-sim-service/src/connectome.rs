@@ -46,7 +46,9 @@ struct ConnectomeJson {
 
 pub struct ConnectomeTemplate {
     pub neuron_ids: Vec<String>,
-    pub connections: Vec<(String, String, f64)>,
+    pub edges_pre: Vec<u32>,
+    pub edges_post: Vec<u32>,
+    pub edges_weight: Vec<f32>,
     pub sensory_indices: Vec<u32>,
     pub motor_left: Vec<u32>,
     pub motor_right: Vec<u32>,
@@ -61,7 +63,7 @@ pub fn load_connectome(path: &Path) -> Result<ConnectomeTemplate, Box<dyn std::e
     }
 
     let neuron_ids: Vec<String> = data.neurons.iter().map(|n| n.root_id.clone()).collect();
-    let _id_to_idx: HashMap<String, u32> = neuron_ids
+    let id_to_idx: HashMap<String, u32> = neuron_ids
         .iter()
         .enumerate()
         .map(|(i, id)| (id.clone(), i as u32))
@@ -108,15 +110,24 @@ pub fn load_connectome(path: &Path) -> Result<ConnectomeTemplate, Box<dyn std::e
         sugar_grn
     };
 
-    let connections: Vec<(String, String, f64)> = data
-        .connections
-        .iter()
-        .map(|c| (c.pre.clone(), c.post.clone(), c.weight.unwrap_or(1.0)))
-        .collect();
+    let mut edges_pre = Vec::with_capacity(data.connections.len());
+    let mut edges_post = Vec::with_capacity(data.connections.len());
+    let mut edges_weight = Vec::with_capacity(data.connections.len());
+    for c in &data.connections {
+        if let (Some(&pre), Some(&post)) = (id_to_idx.get(&c.pre), id_to_idx.get(&c.post)) {
+            let w = c.weight.unwrap_or(1.0);
+            let wf = if w.is_finite() && w > 0.0 { w as f32 } else { 1.0 };
+            edges_pre.push(pre);
+            edges_post.push(post);
+            edges_weight.push(wf.min(10.0));
+        }
+    }
 
     Ok(ConnectomeTemplate {
         neuron_ids,
-        connections,
+        edges_pre,
+        edges_post,
+        edges_weight,
         sensory_indices: sensory_target,
         motor_left,
         motor_right,

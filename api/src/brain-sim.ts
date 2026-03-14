@@ -64,6 +64,13 @@ export async function createBrainSim(
     let lastRustMs = 0;
     let lastJsMs = 0;
     let lastSocketTiming: ReturnType<typeof socketClient.getLastRequestTiming> = null;
+    let lastRustTiming: {
+      computeMs?: number;
+      kernelMs?: number;
+      recurrentMs?: number;
+      lifMs?: number;
+      readoutMs?: number;
+    } = {};
     let lastActivitySparse: Record<string, number> = {};
 
     async function runRustStep(
@@ -74,6 +81,11 @@ export async function createBrainSim(
       motorLeft: number;
       motorRight: number;
       motorFwd: number;
+      computeMs?: number;
+      kernelMs?: number;
+      recurrentMs?: number;
+      lifMs?: number;
+      readoutMs?: number;
     }> {
       const flyInput = {
         x: fly.x,
@@ -117,6 +129,13 @@ export async function createBrainSim(
       const result = await runRustStep(dt, pendingInput);
       lastRustMs = Math.round(performance.now() - rustStart);
       lastSocketTiming = socketClient.getLastRequestTiming();
+      lastRustTiming = {
+        computeMs: result.computeMs,
+        kernelMs: result.kernelMs,
+        recurrentMs: result.recurrentMs,
+        lifMs: result.lifMs,
+        readoutMs: result.readoutMs,
+      };
       const { activitySparse, motorLeft, motorRight, motorFwd } = result;
       lastActivitySparse = activitySparse;
 
@@ -289,6 +308,11 @@ export async function createBrainSim(
         socketTotalMs: lastSocketTiming?.totalMs ?? 0,
         socketResponseWaitMs: lastSocketTiming?.responseWaitMs ?? 0,
         socketBatchSize: lastSocketTiming?.batchSize ?? 1,
+        rustComputeMs: lastRustTiming.computeMs ?? 0,
+        rustKernelMs: lastRustTiming.kernelMs ?? 0,
+        rustRecurrentMs: lastRustTiming.recurrentMs ?? 0,
+        rustLifMs: lastRustTiming.lifMs ?? 0,
+        rustReadoutMs: lastRustTiming.readoutMs ?? 0,
       };
     }
 

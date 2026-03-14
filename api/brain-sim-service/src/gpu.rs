@@ -3,158 +3,271 @@
 use cudarc::driver::safe::{CudaDevice, CudaSlice, LaunchAsync, LaunchConfig};
 use cudarc::nvrtc::safe::compile_ptx;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::OnceLock;
+use std::time::Instant;
 
 static DEVICE: OnceLock<Option<Arc<CudaDevice>>> = OnceLock::new();
-static EDGE_CACHE: Mutex<Option<Arc<SharedEdges>>> = Mutex::new(None);
-
-struct SharedEdges {
-    edge_pre: CudaSlice<u32>,
-    edge_post: CudaSlice<u32>,
-    edge_weight: CudaSlice<f32>,
-    n_edges: usize,
-}
-
-fn get_edges(
-    device: &Arc<CudaDevice>,
-    n: usize,
-    adj: &[Vec<(u32, f32)>],
-) -> Option<Arc<SharedEdges>> {
-    let mut cache = EDGE_CACHE.lock().ok()?;
-    if let Some(ref s) = *cache {
-        return Some(Arc::clone(s));
-    }
-    let mut ep = Vec::with_capacity(4096);
-    let mut epo = Vec::with_capacity(4096);
-    let mut ew = Vec::with_capacity(4096);
-    for (pre, list) in adj.iter().enumerate() {
-        for &(post, w) in list {
-            if (post as usize) < n {
-                ep.push(pre as u32);
-                epo.push(post);
-                ew.push(w.min(10.0));
-            }
-        }
-    }
-    let ne = ep.len();
-    let ed = Arc::new(SharedEdges {
-        edge_pre: device.htod_sync_copy(&ep).ok()?,
-        edge_post: device.htod_sync_copy(&epo).ok()?,
-        edge_weight: device.htod_sync_copy(&ew).ok()?,
-        n_edges: ne,
-    });
-    *cache = Some(Arc::clone(&ed));
-    Some(ed)
-}
 
 const K: &str = r#"
-__device__ void af(float* a, float v) {
-    unsigned int* u = (unsigned int*)a;
-    unsigned int o = *u, as;
-    do {
-        as = o;
-        o = atomicCAS(u, as, __float_as_uint(__uint_as_float(as) + v));
-    } while (as != o);
-}
-extern "C" __global__ void decay_kernel(const float* a, float* n, int N, float d) {
+extern "C" __global__ void decay_g_kernel(float* g, int N, float syn_decay) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < N) n[i] = a[i] * d;
+    if (i < N) g[i] = g[i] * syn_decay;
 }
-extern "C" __global__ void propagate_kernel(const float* a, float* n,
+
+extern "C" __global__ void recurrent_kernel(
+    const unsigned char* spikes_prev,
+    float* g,
     const unsigned int* ep, const unsigned int* epo, const float* ew,
-    int ne, int N, float tr, float pr) {
+    int ne, int N, float recurrent_scale
+) {
     int e = blockIdx.x * blockDim.x + threadIdx.x;
     if (e >= ne) return;
     unsigned int pi = ep[e], po = epo[e];
     if (pi >= (unsigned)N || po >= (unsigned)N) return;
-    float w = fminf(ew[e], 10.0f), pa = a[pi];
-    if (!isfinite(pa) || pa <= 0.0f) return;
-    float v = fminf(pa * tr * w, pr);
-    if (isfinite(v)) af(&n[po], v);
+    if (spikes_prev[pi] == 0) return;
+    float w = fminf(ew[e], 10.0f);
+    atomicAdd(&g[po], w * recurrent_scale);
 }
-extern "C" __global__ void clamp_kernel(float* n, int N, float m) {
+
+extern "C" __global__ void add_uniform_kernel(float* g, const unsigned int* idx, int n_idx, float val, int N) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n_idx) return;
+    unsigned int k = idx[i];
+    if (k < (unsigned)N) {
+        atomicAdd(&g[k], val);
+    }
+}
+
+extern "C" __global__ void add_pending_kernel(
+    float* g,
+    const unsigned int* idx,
+    const float* strength,
+    int n_idx,
+    int N
+) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n_idx) return;
+    unsigned int k = idx[i];
+    if (k < (unsigned)N) {
+        atomicAdd(&g[k], strength[i]);
+    }
+}
+
+extern "C" __global__ void lif_kernel(
+    float* v,
+    const float* g,
+    unsigned short* refrac,
+    unsigned char* spikes_next,
+    int N,
+    float mem_alpha,
+    float v_rest,
+    float v_reset,
+    float v_thresh,
+    unsigned short refrac_steps
+) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < N) {
-        float v = n[i];
-        n[i] = fminf(fmaxf(isfinite(v) ? v : 0.0f, 0.0f), m);
+        if (refrac[i] > 0) {
+            refrac[i] -= 1;
+            v[i] = v_reset;
+            spikes_next[i] = 0;
+            return;
+        }
+        float v_next = v[i] + mem_alpha * (v_rest - v[i] + g[i]);
+        if (!isfinite(v_next)) {
+            v_next = v_rest;
+        }
+        if (v_next >= v_thresh) {
+            v[i] = v_reset;
+            refrac[i] = refrac_steps;
+            spikes_next[i] = 1;
+        } else {
+            v[i] = v_next;
+            spikes_next[i] = 0;
+        }
     }
 }
 "#;
+
+pub struct GpuStepResult {
+    pub spikes: Vec<u8>,
+    pub recurrent_ms: f64,
+    pub lif_ms: f64,
+}
 
 pub struct GpuSimState {
     dev: Arc<CudaDevice>,
     n: usize,
     ne: usize,
-    act: CudaSlice<f32>,
-    nxt: CudaSlice<f32>,
-    edges: Arc<SharedEdges>,
+    edge_pre: CudaSlice<u32>,
+    edge_post: CudaSlice<u32>,
+    edge_weight: CudaSlice<f32>,
+    v: CudaSlice<f32>,
+    g: CudaSlice<f32>,
+    refrac: CudaSlice<u16>,
+    spikes_prev: CudaSlice<u8>,
+    spikes_next: CudaSlice<u8>,
 }
 
 impl GpuSimState {
-    pub fn new(n: usize, adj: &[Vec<(u32, f32)>], init: &[f32]) -> Option<Self> {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        n: usize,
+        edges_pre: &[u32],
+        edges_post: &[u32],
+        edges_weight: &[f32],
+        v_init: &[f32],
+        g_init: &[f32],
+        refrac_init: &[u16],
+        spikes_init: &[u8],
+    ) -> Option<Self> {
         let dev = DEVICE
             .get_or_init(|| {
                 let d = CudaDevice::new(0).ok()?;
                 let ptx = compile_ptx(K).ok()?;
-                d.load_ptx(ptx, "bs", &["decay_kernel", "propagate_kernel", "clamp_kernel"])
+                d.load_ptx(
+                    ptx,
+                    "bs",
+                    &[
+                        "decay_g_kernel",
+                        "recurrent_kernel",
+                        "add_uniform_kernel",
+                        "add_pending_kernel",
+                        "lif_kernel",
+                    ],
+                )
                     .ok()?;
                 Some(d)
             })
             .clone()?;
-        let edges = get_edges(&dev, n, adj)?;
-        let act = dev.htod_sync_copy(init).ok()?;
-        let nxt = dev.alloc_zeros(n).ok()?;
+        let edge_pre = dev.htod_sync_copy(edges_pre).ok()?;
+        let edge_post = dev.htod_sync_copy(edges_post).ok()?;
+        let edge_weight = dev.htod_sync_copy(edges_weight).ok()?;
+        let v = dev.htod_sync_copy(v_init).ok()?;
+        let g = dev.htod_sync_copy(g_init).ok()?;
+        let refrac = dev.htod_sync_copy(refrac_init).ok()?;
+        let spikes_prev = dev.htod_sync_copy(spikes_init).ok()?;
+        let spikes_next = dev.alloc_zeros(n).ok()?;
         Some(Self {
-            ne: edges.n_edges,
+            ne: edges_pre.len(),
             dev,
             n,
-            act,
-            nxt,
-            edges,
+            edge_pre,
+            edge_post,
+            edge_weight,
+            v,
+            g,
+            refrac,
+            spikes_prev,
+            spikes_next,
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn step(
         &mut self,
-        a: &[f32],
-        df: f32,
-        tr: f32,
-        pr: f32,
-        max: f32,
-    ) -> Option<Vec<f32>> {
-        if a.len() != self.n {
-            return None;
-        }
-        self.dev.htod_sync_copy_into(a, &mut self.act).ok()?;
-        let decay = self.dev.get_func("bs", "decay_kernel")?;
-        let prop = self.dev.get_func("bs", "propagate_kernel")?;
-        let clamp = self.dev.get_func("bs", "clamp_kernel")?;
+        dt_sec: f32,
+        sensory_indices: &[u32],
+        sensory_strength: f32,
+        pending_indices: &[u32],
+        pending_strength: &[f32],
+    ) -> Option<GpuStepResult> {
+        let decay = self.dev.get_func("bs", "decay_g_kernel")?;
+        let recurrent = self.dev.get_func("bs", "recurrent_kernel")?;
+        let add_uniform = self.dev.get_func("bs", "add_uniform_kernel")?;
+        let add_pending = self.dev.get_func("bs", "add_pending_kernel")?;
+        let lif = self.dev.get_func("bs", "lif_kernel")?;
         let n = self.n as i32;
         let ne = self.ne as i32;
+        let dt_ms = dt_sec * 1000.0;
+        let syn_decay = (-dt_ms / 5.0).exp();
+        let mem_alpha = dt_ms / 20.0;
+        let refrac_steps = ((2.2f32 / dt_ms).ceil().max(1.0)) as u16;
+        let t_recurrent = Instant::now();
+
         unsafe {
             decay
-                .launch(LaunchConfig::for_num_elems(self.n as u32), (&self.act, &mut self.nxt, n, df))
+                .launch(LaunchConfig::for_num_elems(self.n as u32), (&mut self.g, n, syn_decay))
                 .ok()?;
-            prop.launch(
+            recurrent.launch(
                 LaunchConfig::for_num_elems(self.ne as u32),
                 (
-                    &self.act,
-                    &mut self.nxt,
-                    &self.edges.edge_pre,
-                    &self.edges.edge_post,
-                    &self.edges.edge_weight,
+                    &self.spikes_prev,
+                    &mut self.g,
+                    &self.edge_pre,
+                    &self.edge_post,
+                    &self.edge_weight,
                     ne,
                     n,
-                    tr,
-                    pr,
+                    0.275f32,
                 ),
             )
             .ok()?;
-            clamp
-                .launch(LaunchConfig::for_num_elems(self.n as u32), (&mut self.nxt, n, max))
-                .ok()?;
         }
-        self.dev.dtoh_sync_copy(&self.nxt).ok()
+        if sensory_strength > 0.0 && !sensory_indices.is_empty() {
+            let sensory_dev = self.dev.htod_sync_copy(sensory_indices).ok()?;
+            unsafe {
+                add_uniform
+                    .launch(
+                        LaunchConfig::for_num_elems(sensory_indices.len() as u32),
+                        (
+                            &mut self.g,
+                            &sensory_dev,
+                            sensory_indices.len() as i32,
+                            sensory_strength,
+                            n,
+                        ),
+                    )
+                    .ok()?;
+            }
+        }
+        if !pending_indices.is_empty() && pending_indices.len() == pending_strength.len() {
+            let pending_idx_dev = self.dev.htod_sync_copy(pending_indices).ok()?;
+            let pending_strength_dev = self.dev.htod_sync_copy(pending_strength).ok()?;
+            unsafe {
+                add_pending
+                    .launch(
+                        LaunchConfig::for_num_elems(pending_indices.len() as u32),
+                        (
+                            &mut self.g,
+                            &pending_idx_dev,
+                            &pending_strength_dev,
+                            pending_indices.len() as i32,
+                            n,
+                        ),
+                    )
+                    .ok()?;
+            }
+        }
+        let recurrent_ms = t_recurrent.elapsed().as_secs_f64() * 1000.0;
+        let t_lif = Instant::now();
+        unsafe {
+            lif.launch(
+                LaunchConfig::for_num_elems(self.n as u32),
+                (
+                    &mut self.v,
+                    &self.g,
+                    &mut self.refrac,
+                    &mut self.spikes_next,
+                    n,
+                    mem_alpha,
+                    -52.0f32,
+                    -52.0f32,
+                    -45.0f32,
+                    refrac_steps,
+                ),
+            )
+            .ok()?;
+        }
+        let spikes = self.dev.dtoh_sync_copy(&self.spikes_next).ok()?;
+        self.dev
+            .htod_sync_copy_into(&spikes, &mut self.spikes_prev)
+            .ok()?;
+        let lif_ms = t_lif.elapsed().as_secs_f64() * 1000.0;
+        Some(GpuStepResult {
+            spikes,
+            recurrent_ms,
+            lif_ms,
+        })
     }
 }

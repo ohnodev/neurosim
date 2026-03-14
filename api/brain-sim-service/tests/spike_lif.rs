@@ -16,9 +16,9 @@ fn default_fly(t: f64) -> FlyInput {
 #[test]
 fn spike_propagates_to_downstream_neuron() {
     let neuron_ids = vec!["n0".to_string(), "n1".to_string()];
-    let edges_pre = vec![0u32];
-    let edges_post = vec![1u32];
-    let edges_weight = vec![200.0f32];
+    let edges_pre = vec![0u32; 32];
+    let edges_post = vec![1u32; 32];
+    let edges_weight = vec![10.0f32; 32];
     let mut sim = BrainSim::new(
         neuron_ids,
         edges_pre,

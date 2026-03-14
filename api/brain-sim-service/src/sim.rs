@@ -16,6 +16,9 @@ const RECURRENT_SCALE: f32 = 0.275;
 const REFRACT_MS: f64 = 2.2;
 const ACTIVITY_THRESHOLD: u8 = 1;
 const MOTOR_SCALE: f64 = 0.002;
+// Ignore near-zero food distance to avoid singular-like gain when the fly is
+// effectively at the food source (handled separately by consumption logic).
+const MIN_FOOD_DISTANCE: f64 = 1.0;
 
 pub struct BrainSim {
     n: usize,
@@ -195,7 +198,7 @@ impl BrainSim {
         let mut food_modulation = 0.0f64;
         for s in sources {
             let dist = ((s.x - fly.x).powi(2) + (s.y - fly.y).powi(2)).sqrt();
-            if dist < 1.0 {
+            if dist < MIN_FOOD_DISTANCE {
                 continue;
             }
             let inv_dist = 1.0 / (1.0 + dist * 0.1);

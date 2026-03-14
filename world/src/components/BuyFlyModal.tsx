@@ -217,7 +217,7 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
     } finally {
       if (canUpdateState()) setBusy(null);
     }
-  }, [walletClient, address, isOnBaseChain, queryClient, notification, onSuccess, onClose]);
+  }, [walletClient, address, isOnBaseChain, queryClient, notification, onSuccess, onClose, slotIndex]);
 
   if (!isOpen) return null;
 

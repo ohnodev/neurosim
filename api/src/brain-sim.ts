@@ -118,6 +118,13 @@ export async function createBrainSim(
         const act = await runRustStep(dt, [], includeActivity);
         lastActivitySparse = act.activitySparse;
         lastRustMs = Math.round(performance.now() - stepStart);
+        lastRustTiming = {
+          computeMs: act.computeMs,
+          kernelMs: act.kernelMs,
+          recurrentMs: act.recurrentMs,
+          lifMs: act.lifMs,
+          readoutMs: act.readoutMs,
+        };
         const activityRec = Object.keys(act.activitySparse).length ? act.activitySparse : undefined;
         return { t, fly, activity: activityRec };
       }

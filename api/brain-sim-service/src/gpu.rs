@@ -107,6 +107,8 @@ pub struct GpuSimState {
     refrac: CudaSlice<u16>,
     spikes_prev: CudaSlice<u8>,
     spikes_next: CudaSlice<u8>,
+    sensory_cache_indices: Vec<u32>,
+    sensory_cache_dev: Option<CudaSlice<u32>>,
 }
 
 impl GpuSimState {
@@ -160,6 +162,8 @@ impl GpuSimState {
             refrac,
             spikes_prev,
             spikes_next,
+            sensory_cache_indices: Vec::new(),
+            sensory_cache_dev: None,
         })
     }
 
@@ -205,14 +209,18 @@ impl GpuSimState {
             .ok()?;
         }
         if sensory_strength > 0.0 && !sensory_indices.is_empty() {
-            let sensory_dev = self.dev.htod_sync_copy(sensory_indices).ok()?;
+            if self.sensory_cache_indices.as_slice() != sensory_indices {
+                self.sensory_cache_dev = Some(self.dev.htod_sync_copy(sensory_indices).ok()?);
+                self.sensory_cache_indices = sensory_indices.to_vec();
+            }
+            let sensory_dev = self.sensory_cache_dev.as_ref()?;
             unsafe {
                 add_uniform
                     .launch(
                         LaunchConfig::for_num_elems(sensory_indices.len() as u32),
                         (
                             &mut self.g,
-                            &sensory_dev,
+                            sensory_dev,
                             sensory_indices.len() as i32,
                             sensory_strength,
                             n,
@@ -251,6 +259,8 @@ impl GpuSimState {
                     &mut self.spikes_next,
                     n,
                     mem_alpha,
+                    // Intentional: this model uses v_rest == v_reset for direct
+                    // reset to baseline after spikes/refractory.
                     -52.0f32,
                     -52.0f32,
                     -45.0f32,

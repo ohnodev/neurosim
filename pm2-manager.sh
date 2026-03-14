@@ -53,7 +53,6 @@ module.exports = {
       merge_logs: false,
       log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
       env_file: '$API_DIR/.env',
-      env: { NEUROSIM_BRAIN_SOCKET: '/tmp/neurosim-brain.sock', NEUROSIM_CONNECTOME_PATH: '$SCRIPT_DIR/data/connectome-subset.json' },
     },
     {
       name: '$SERVICE',
@@ -72,7 +71,6 @@ module.exports = {
       max_restarts: 10,
       min_uptime: '10s',
       env_file: '.env',
-      env: { NEUROSIM_BRAIN_SOCKET: '/tmp/neurosim-brain.sock' },
     },
   ],
 };

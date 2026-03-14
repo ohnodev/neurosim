@@ -175,7 +175,7 @@ impl BrainSim {
     }
 
     fn refrac_steps(dt: f64) -> u16 {
-        let steps = (REFRACT_MS / (dt * 1000.0)).ceil();
+        let steps = ((REFRACT_MS as f64) / (dt * 1000.0)).ceil();
         if !steps.is_finite() || steps <= 1.0 {
             1
         } else if steps >= u16::MAX as f64 {

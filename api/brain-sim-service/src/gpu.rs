@@ -195,7 +195,7 @@ impl GpuSimState {
         let dt_ms = dt_sec * 1000.0;
         let syn_decay = (-dt_ms / TAU_SYN_MS).exp();
         let mem_alpha = dt_ms / TAU_MEM_MS;
-        let refrac_steps = (((REFRACT_MS as f32) / dt_ms).ceil().max(1.0)) as u16;
+        let refrac_steps = ((REFRACT_MS / dt_ms).ceil().max(1.0)) as u16;
 
         unsafe {
             decay
@@ -219,6 +219,7 @@ impl GpuSimState {
             )
             .ok()?;
         }
+        let recurrent_ms = t_recurrent.elapsed().as_secs_f64() * 1000.0;
         if sensory_strength > 0.0 && !sensory_indices.is_empty() {
             if self.sensory_cache_indices.as_slice() != sensory_indices {
                 self.sensory_cache_dev = Some(self.dev.htod_sync_copy(sensory_indices).ok()?);
@@ -258,7 +259,6 @@ impl GpuSimState {
                     .ok()?;
             }
         }
-        let recurrent_ms = t_recurrent.elapsed().as_secs_f64() * 1000.0;
         let t_lif = Instant::now();
         unsafe {
             lif.launch(

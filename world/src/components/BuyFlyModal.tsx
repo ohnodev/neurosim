@@ -171,7 +171,7 @@ export function BuyFlyModal({ isOpen, onClose, slotIndex, onSuccess }: BuyFlyMod
                   typeof fly.claimedAt === 'string'
                 ) {
                   next[slotIndex] = fly;
-                } else if (isValidSlotIndex && next[slotIndex] == null) {
+                } else if (isValidSlotIndex) {
                   next[slotIndex] = {
                     id: `pending-${Date.now()}`,
                     method: 'pay',

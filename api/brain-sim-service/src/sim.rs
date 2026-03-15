@@ -2,8 +2,6 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-#[cfg(feature = "cuda")]
-use crate::gpu::{GpuSimState, GpuStepResult};
 use crate::model_constants::{
     RECURRENT_SCALE, REFRACT_MS, TAU_MEM_MS, TAU_SYN_MS, V_RESET, V_REST, V_THRESH,
 };
@@ -31,6 +29,9 @@ const HEALTH_DECAY: f64 = 2.5;
 const MOVE_SPEED: f64 = 10.0;
 const BASELINE_EXPLORE: f64 = 0.03;
 const FEEDING_STIM_BONUS: f32 = 0.25;
+const EONSYSTEMS_DT_MS: f32 = 0.1;
+const SYNAPTIC_DELAY_MS: f32 = 1.8;
+const SYNAPTIC_DELAY_STEPS: usize = (SYNAPTIC_DELAY_MS / EONSYSTEMS_DT_MS) as usize;
 // Ignore near-zero food distance to avoid singular-like gain when the fly is
 // effectively at the food source (handled separately by consumption logic).
 const MIN_FOOD_DISTANCE: f64 = 1.0;
@@ -50,16 +51,17 @@ pub struct BrainSim {
     motor_unknown: Vec<u32>,
     v: Vec<f32>,
     g: Vec<f32>,
+    g_next: Vec<f32>,
+    syn_input: Vec<f32>,
+    delay_buffer: Vec<f32>,
+    delay_head: usize,
+    delay_len: usize,
     refractory: Vec<u16>,
     spikes: Vec<u8>,
     viewer_indices: Vec<u32>,
     max_activity_entries: usize,
     fly_time_left_sec: f64,
     motor_turn_ema: f64,
-    #[cfg(feature = "cuda")]
-    gpu_state: Option<GpuSimState>,
-    #[cfg(feature = "cuda")]
-    cuda_only: bool,
 }
 
 pub struct FlyInput {
@@ -178,6 +180,10 @@ impl BrainSim {
         let n = neuron_ids.len();
         let v = vec![V_REST; n];
         let g = vec![0.0f32; n];
+        let g_next = vec![0.0f32; n];
+        let syn_input = vec![0.0f32; n];
+        let delay_len = SYNAPTIC_DELAY_STEPS + 1;
+        let delay_buffer = vec![0.0f32; n * delay_len];
         let refractory = vec![0u16; n];
         let spikes = vec![0u8; n];
         let mut sanitized_viewer: Vec<u32> = if viewer_indices.is_empty() {
@@ -194,18 +200,6 @@ impl BrainSim {
             sanitized_viewer = (0..n as u32).collect();
         }
         let max_activity_entries = Self::readout_activity_cap();
-        #[cfg(feature = "cuda")]
-        let cuda_only = std::env::var("NEUROSIM_MODE").as_deref() == Ok("cuda")
-            || std::env::var("USE_CUDA").as_deref() == Ok("1");
-        #[cfg(feature = "cuda")]
-        let gpu_state = if cuda_only {
-            match GpuSimState::new(n, &edges_pre, &edges_post, &edges_weight, &v, &g, &refractory, &spikes) {
-                Some(gpu) => Some(gpu),
-                None => panic!("[brain-service] CUDA required but GPU init failed"),
-            }
-        } else {
-            None
-        };
         Self {
             n,
             neuron_ids,
@@ -221,16 +215,17 @@ impl BrainSim {
             motor_unknown,
             v,
             g,
+            g_next,
+            syn_input,
+            delay_buffer,
+            delay_head: 0,
+            delay_len,
             refractory,
             spikes,
             viewer_indices: sanitized_viewer,
             max_activity_entries,
             fly_time_left_sec: FLY_TIME_MAX,
             motor_turn_ema: 0.0,
-            #[cfg(feature = "cuda")]
-            gpu_state,
-            #[cfg(feature = "cuda")]
-            cuda_only,
         }
     }
 
@@ -344,19 +339,17 @@ impl BrainSim {
         sources: &[SourceInput],
     ) -> (f64, f64) {
         let dt_ms = (dt * 1000.0) as f32;
-        let syn_decay = (-dt_ms / TAU_SYN_MS).exp();
+        let syn_time_factor = dt_ms / TAU_SYN_MS;
         let mem_alpha = dt_ms / TAU_MEM_MS;
         let refrac_steps = Self::refrac_steps(dt);
         let t_recurrent = Instant::now();
 
-        for gi in &mut self.g {
-            *gi *= syn_decay;
-        }
+        self.syn_input.fill(0.0);
         for e in 0..self.edges_pre.len() {
             let pre = self.edges_pre[e] as usize;
             let post = self.edges_post[e] as usize;
             if pre < self.n && post < self.n && self.spikes[pre] > 0 {
-                self.g[post] += self.edges_weight[e] * RECURRENT_SCALE;
+                self.syn_input[post] += self.edges_weight[e] * RECURRENT_SCALE;
             }
         }
         let sensory = self.sensory_drive(dt, fly, sources);
@@ -364,7 +357,7 @@ impl BrainSim {
             for &idx in &self.sensory_left_indices {
                 let i = idx as usize;
                 if i < self.n {
-                    self.g[i] += sensory.left;
+                    self.syn_input[i] += sensory.left;
                 }
             }
         }
@@ -372,7 +365,7 @@ impl BrainSim {
             for &idx in &self.sensory_right_indices {
                 let i = idx as usize;
                 if i < self.n {
-                    self.g[i] += sensory.right;
+                    self.syn_input[i] += sensory.right;
                 }
             }
         }
@@ -381,7 +374,7 @@ impl BrainSim {
             for &idx in &self.sensory_unknown_indices {
                 let i = idx as usize;
                 if i < self.n {
-                    self.g[i] += unknown_strength;
+                    self.syn_input[i] += unknown_strength;
                 }
             }
         }
@@ -394,11 +387,24 @@ impl BrainSim {
                 for &idx in &self.sensory_indices {
                     let i = idx as usize;
                     if i < self.n {
-                        self.g[i] += fallback;
+                        self.syn_input[i] += fallback;
                     }
                 }
             }
         }
+        // EonSystems-style alpha synapse with fixed 1.8ms delay queue.
+        // Conductance update uses delayed input and the previous conductance.
+        let delayed_base = self.delay_head * self.n;
+        let syn_decay = 1.0 - syn_time_factor;
+        for i in 0..self.n {
+            let delayed = self.delay_buffer[delayed_base + i];
+            let refrac_mask = if self.refractory[i] > 0 { 0.0 } else { 1.0 };
+            self.g_next[i] = self.g[i] * syn_decay + delayed * refrac_mask;
+            // Ring-buffer equivalent of torch.roll(-1) + write-to-last:
+            // write current input into the slot we just consumed.
+            self.delay_buffer[delayed_base + i] = self.syn_input[i];
+        }
+        self.delay_head = (self.delay_head + 1) % self.delay_len;
         let recurrent_ms = t_recurrent.elapsed().as_secs_f64() * 1000.0;
         let t_lif = Instant::now();
 
@@ -419,6 +425,12 @@ impl BrainSim {
                 self.v[i] = if v_next.is_finite() { v_next } else { V_REST };
             }
         }
+        for i in 0..self.n {
+            if spikes_next[i] > 0 {
+                self.g_next[i] = 0.0;
+            }
+        }
+        std::mem::swap(&mut self.g, &mut self.g_next);
         self.spikes = spikes_next;
         let lif_ms = t_lif.elapsed().as_secs_f64() * 1000.0;
         (recurrent_ms, lif_ms)
@@ -472,50 +484,7 @@ impl BrainSim {
         let (recurrent_ms, lif_ms) = {
             #[cfg(feature = "cuda")]
             {
-                let sensory = self.sensory_drive(dt, &fly, &sources);
-                if let Some(ref mut gpu) = self.gpu_state {
-                    match gpu.step(
-                        dt as f32,
-                        &self.sensory_left_indices,
-                        &self.sensory_right_indices,
-                        &self.sensory_unknown_indices,
-                        sensory.left.max(0.0),
-                        sensory.right.max(0.0),
-                        ((sensory.left + sensory.right + sensory.center) / 3.0).max(0.0),
-                    ) {
-                        Some(GpuStepResult {
-                            spikes,
-                            recurrent_ms,
-                            lif_ms,
-                        }) => {
-                            if let Some((v, g, refractory)) = gpu.host_state() {
-                                self.v = v;
-                                self.g = g;
-                                self.refractory = refractory;
-                            } else if self.cuda_only {
-                                panic!("[brain-service] CUDA required but GPU state sync failed");
-                            } else {
-                                eprintln!(
-                                    "[brain-service] GPU host_state sync failed; keeping GPU authoritative and retaining gpu_state"
-                                );
-                            }
-                            self.spikes = spikes;
-                            (recurrent_ms, lif_ms)
-                        }
-                        None if self.cuda_only => {
-                            panic!("[brain-service] CUDA required but GPU step failed")
-                        }
-                        None => {
-                            panic!(
-                                "[brain-service] GPU step failed; refusing CPU execution without authoritative GPU state sync"
-                            );
-                        }
-                    }
-                } else if self.cuda_only {
-                    panic!("[brain-service] CUDA required but GPU unavailable");
-                } else {
-                    self.run_step_cpu(dt, &fly, &sources)
-                }
+                self.run_step_cpu(dt, &fly, &sources)
             }
             #[cfg(not(feature = "cuda"))]
             {

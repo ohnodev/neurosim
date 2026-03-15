@@ -12,6 +12,13 @@ struct OlfactoryAfferentsJson {
 }
 
 #[derive(Deserialize)]
+struct MotorEfferentsJson {
+    left: Vec<String>,
+    right: Vec<String>,
+    unknown: Vec<String>,
+}
+
+#[derive(Deserialize)]
 struct NeuronJson {
     root_id: String,
     role: Option<String>,
@@ -88,6 +95,37 @@ fn load_precomputed_olfactory_indices(
     let precomputed_path = connectome_path.parent()?.join("olfactory-afferents.json");
     let txt = fs::read_to_string(precomputed_path).ok()?;
     let parsed: OlfactoryAfferentsJson = serde_json::from_str(&txt).ok()?;
+    let total_left = parsed.left.len();
+    let total_right = parsed.right.len();
+    let total_unknown = parsed.unknown.len();
+    let mut left: Vec<u32> = parsed
+        .left
+        .iter()
+        .filter_map(|id| id_to_idx.get(id).copied())
+        .collect();
+    let mut right: Vec<u32> = parsed
+        .right
+        .iter()
+        .filter_map(|id| id_to_idx.get(id).copied())
+        .collect();
+    let mut unknown: Vec<u32> = parsed
+        .unknown
+        .iter()
+        .filter_map(|id| id_to_idx.get(id).copied())
+        .collect();
+    left.sort_unstable();
+    right.sort_unstable();
+    unknown.sort_unstable();
+    Some((left, right, unknown, total_left, total_right, total_unknown))
+}
+
+fn load_precomputed_motor_indices(
+    connectome_path: &Path,
+    id_to_idx: &HashMap<String, u32>,
+) -> Option<(Vec<u32>, Vec<u32>, Vec<u32>, usize, usize, usize)> {
+    let precomputed_path = connectome_path.parent()?.join("motor-efferents.json");
+    let txt = fs::read_to_string(precomputed_path).ok()?;
+    let parsed: MotorEfferentsJson = serde_json::from_str(&txt).ok()?;
     let total_left = parsed.left.len();
     let total_right = parsed.right.len();
     let total_unknown = parsed.unknown.len();
@@ -203,6 +241,29 @@ pub fn load_connectome(path: &Path) -> Result<ConnectomeTemplate, Box<dyn std::e
             edges_weight.push(wf.min(10.0));
         }
     }
+
+    let (motor_left, motor_right, motor_unknown) =
+        if let Some((mot_l, mot_r, mot_u, total_l, total_r, total_u)) =
+            load_precomputed_motor_indices(path, &id_to_idx)
+        {
+            eprintln!(
+                "[connectome] motor precomputed total(L/R/U)={}/{}/{} overlap_in_loaded_connectome(L/R/U)={}/{}/{}",
+                total_l, total_r, total_u, mot_l.len(), mot_r.len(), mot_u.len()
+            );
+            if !mot_l.is_empty() || !mot_r.is_empty() || !mot_u.is_empty() {
+                (mot_l, mot_r, mot_u)
+            } else {
+                eprintln!(
+                    "[connectome] zero overlap with precomputed motor IDs; using role-based motor sets from loaded connectome"
+                );
+                (motor_left, motor_right, motor_unknown)
+            }
+        } else {
+            eprintln!(
+                "[connectome] missing/invalid data/motor-efferents.json; using role-based motor sets from loaded connectome"
+            );
+            (motor_left, motor_right, motor_unknown)
+        };
 
     Ok(ConnectomeTemplate {
         neuron_ids,

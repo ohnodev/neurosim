@@ -23,7 +23,7 @@ const EAT_RADIUS: f64 = 2.5;
 const NEAR_FOOD_RADIUS: f64 = 3.2;
 const HUNGER_DECAY: f64 = 0.8;
 const HEALTH_DECAY: f64 = 2.5;
-const MOVE_SPEED: f64 = 34.0;
+const MOVE_SPEED: f64 = 42.0;
 const BASELINE_EXPLORE: f64 = 0.03;
 const FEEDING_STIM_BONUS: f32 = 0.25;
 // Ignore near-zero food distance to avoid singular-like gain when the fly is

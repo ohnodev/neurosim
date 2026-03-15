@@ -2,20 +2,23 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import PlaybackControls from '../components/PlaybackControls';
 
-type ReplayTick = {
+type RingReplayNeuron = {
+  rootId: string;
+  ringIndex: number;
+  angleDeg: number;
+  side: string;
+  hemibrainType: string;
+};
+
+type RingReplayTick = {
   tick: number;
-  time_sec: number;
+  timeSec: number;
   spikes: string[];
 };
 
-type ReplayData = {
-  meta: {
-    ticks: number;
-    dt_sec: number;
-    baseline_rate_hz: number;
-    generated_at: string;
-  };
-  ticks: ReplayTick[];
+type RingReplayData = {
+  neurons: RingReplayNeuron[];
+  ticks: RingReplayTick[];
 };
 
 type SceneState = {
@@ -30,16 +33,84 @@ type SceneState = {
 const INACTIVE_COLOR = new THREE.Color(0x1a2035);
 const ACTIVE_COLOR = new THREE.Color(0x7cff90);
 const PLAYBACK_BASE_MS = 80;
+const RING_RADIUS = 0.88;
 
-function parseReplayJson(input: string): ReplayData {
-  const parsed = JSON.parse(input) as ReplayData;
-  if (!parsed || !Array.isArray(parsed.ticks) || !parsed.meta) {
-    throw new Error('Invalid replay JSON');
+function parseCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        cur += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (ch === ',' && !inQuotes) {
+      out.push(cur);
+      cur = '';
+    } else {
+      cur += ch;
+    }
   }
-  return parsed;
+  out.push(cur);
+  return out;
 }
 
-function buildScene(container: HTMLDivElement, neuronIds: string[]): SceneState {
+function parseRingReplayCsv(input: string): RingReplayData {
+  const lines = input.split('\n').map((line) => line.trim()).filter((line) => line.length > 0);
+  if (lines.length < 2) throw new Error('CSV is empty');
+  const neuronMap = new Map<string, RingReplayNeuron>();
+  const ticksMap = new Map<number, { timeSec: number; spikes: Array<{ rootId: string; spikeOrder: number }> }>();
+  for (let i = 1; i < lines.length; i += 1) {
+    const cols = parseCsvLine(lines[i] ?? '');
+    if (cols.length < 9) continue;
+    const tick = Number(cols[0]);
+    const timeSec = Number(cols[1]);
+    const spikeOrder = Number(cols[2]);
+    const isActive = cols[3] === '1';
+    const rootId = cols[4] ?? '';
+    const ringIndex = Number(cols[5]);
+    const angleDeg = Number(cols[6]);
+    const hemibrainType = cols[7] ?? '';
+    const side = cols[8] ?? '';
+    if (!rootId || !Number.isFinite(ringIndex) || !Number.isFinite(angleDeg)) continue;
+    if (!neuronMap.has(rootId)) {
+      neuronMap.set(rootId, {
+        rootId,
+        ringIndex,
+        angleDeg,
+        side,
+        hemibrainType,
+      });
+    }
+    if (!Number.isFinite(tick) || tick <= 0 || !isActive) continue;
+    const bucket = ticksMap.get(tick) ?? { timeSec: Number.isFinite(timeSec) ? timeSec : 0, spikes: [] };
+    bucket.spikes.push({ rootId, spikeOrder: Number.isFinite(spikeOrder) ? spikeOrder : 0 });
+    ticksMap.set(tick, bucket);
+  }
+  const neurons = [...neuronMap.values()].sort((a, b) => a.ringIndex - b.ringIndex);
+  const maxTick = Math.max(1, ...ticksMap.keys());
+  const ticks: RingReplayTick[] = [];
+  for (let tick = 1; tick <= maxTick; tick += 1) {
+    const bucket = ticksMap.get(tick);
+    if (!bucket) {
+      ticks.push({ tick, timeSec: tick * 0.0001, spikes: [] });
+      continue;
+    }
+    bucket.spikes.sort((a, b) => a.spikeOrder - b.spikeOrder);
+    ticks.push({
+      tick,
+      timeSec: bucket.timeSec,
+      spikes: bucket.spikes.map((s) => s.rootId),
+    });
+  }
+  return { neurons, ticks };
+}
+
+function buildScene(container: HTMLDivElement, neurons: RingReplayNeuron[]): SceneState {
   const width = Math.max(1, container.clientWidth);
   const height = Math.max(1, container.clientHeight);
   const scene = new THREE.Scene();
@@ -52,21 +123,17 @@ function buildScene(container: HTMLDivElement, neuronIds: string[]): SceneState 
   renderer.setSize(width, height);
   container.appendChild(renderer.domElement);
 
-  const n = Math.max(1, neuronIds.length);
-  const cols = Math.ceil(Math.sqrt(n));
-  const rows = Math.ceil(n / cols);
+  const n = Math.max(1, neurons.length);
   const positions = new Float32Array(n * 3);
   const colors = new Float32Array(n * 3);
   const idToIndex = new Map<string, number>();
-  for (let i = 0; i < neuronIds.length; i += 1) {
-    const id = neuronIds[i]!;
+  for (let i = 0; i < neurons.length; i += 1) {
+    const neuron = neurons[i]!;
+    const id = neuron.rootId;
     idToIndex.set(id, i);
-    const col = i % cols;
-    const row = Math.floor(i / cols);
-    const x = (col / Math.max(1, cols - 1)) * 2 - 1;
-    const y = (row / Math.max(1, rows - 1)) * 2 - 1;
-    positions[i * 3] = x * 0.9;
-    positions[i * 3 + 1] = -y * 0.9;
+    const angleRad = (neuron.angleDeg * Math.PI) / 180;
+    positions[i * 3] = Math.cos(angleRad) * RING_RADIUS;
+    positions[i * 3 + 1] = Math.sin(angleRad) * RING_RADIUS;
     positions[i * 3 + 2] = 0;
     colors[i * 3] = INACTIVE_COLOR.r;
     colors[i * 3 + 1] = INACTIVE_COLOR.g;
@@ -133,7 +200,7 @@ function applyTickSpikes(sceneState: SceneState, spikes: string[]): void {
 }
 
 export default function VisualizationPage() {
-  const [replay, setReplay] = useState<ReplayData | null>(null);
+  const [replay, setReplay] = useState<RingReplayData | null>(null);
   const [currentTick, setCurrentTick] = useState(1);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
@@ -141,30 +208,26 @@ export default function VisualizationPage() {
   const sceneContainerRef = useRef<HTMLDivElement | null>(null);
   const sceneRef = useRef<SceneState | null>(null);
 
-  const neuronIds = useMemo(() => {
+  const neurons = useMemo(() => {
     if (!replay) return [];
-    const ids = new Set<string>();
-    for (const tick of replay.ticks) {
-      for (const id of tick.spikes) ids.add(id);
-    }
-    return [...ids].sort();
+    return replay.neurons;
   }, [replay]);
 
   useEffect(() => {
     const container = sceneContainerRef.current;
-    if (!container || neuronIds.length === 0) return;
+    if (!container || neurons.length === 0) return;
     if (sceneRef.current) {
       (sceneRef.current.renderer as unknown as { __dispose?: () => void }).__dispose?.();
       sceneRef.current = null;
     }
-    sceneRef.current = buildScene(container, neuronIds);
+    sceneRef.current = buildScene(container, neurons);
     return () => {
       if (sceneRef.current) {
         (sceneRef.current.renderer as unknown as { __dispose?: () => void }).__dispose?.();
         sceneRef.current = null;
       }
     };
-  }, [neuronIds]);
+  }, [neurons]);
 
   useEffect(() => {
     if (!replay || !sceneRef.current) return;
@@ -194,7 +257,7 @@ export default function VisualizationPage() {
 
   const handleReplayText = (text: string) => {
     try {
-      const parsed = parseReplayJson(text);
+      const parsed = parseRingReplayCsv(text);
       setReplay(parsed);
       setCurrentTick(1);
       setPlaying(false);
@@ -207,7 +270,7 @@ export default function VisualizationPage() {
   const loadDefaultReplay = async () => {
     try {
       setError(null);
-      const res = await fetch('/eonsystems_baseline_spikes_per_tick.json');
+      const res = await fetch('/eonsystems_ring_neurons_spikes_per_tick.csv');
       if (!res.ok) throw new Error(`Default replay not found (${res.status})`);
       handleReplayText(await res.text());
     } catch (err) {
@@ -219,12 +282,12 @@ export default function VisualizationPage() {
     <div style={{ height: '100%', display: 'grid', gridTemplateRows: 'auto 1fr', background: '#060a14' }}>
       <div style={{ padding: 12, display: 'grid', gap: 10, borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button type="button" onClick={loadDefaultReplay}>Load default replay</button>
+          <button type="button" onClick={loadDefaultReplay}>Load ring replay (CSV)</button>
           <label style={{ fontSize: 13 }}>
-            Load local JSON:
+            Load local CSV:
             <input
               type="file"
-              accept=".json,application/json"
+              accept=".csv,text/csv"
               onChange={async (e) => {
                 const file = e.target.files?.[0];
                 if (!file) return;
@@ -249,8 +312,8 @@ export default function VisualizationPage() {
         ) : null}
         <div style={{ fontSize: 12, opacity: 0.8 }}>
           {replay
-            ? `meta: ticks=${replay.meta.ticks}, dt=${replay.meta.dt_sec}, baseline_hz=${replay.meta.baseline_rate_hz}`
-            : 'Load logs/eonsystems_baseline_spikes_per_tick.json to start playback.'}
+            ? `ring neurons=${replay.neurons.length}, ticks=${replay.ticks.length}`
+            : 'Load logs/eonsystems_ring_neurons_spikes_per_tick.csv to start playback.'}
         </div>
         {error ? <div style={{ color: '#f99', fontSize: 12 }}>{error}</div> : null}
       </div>

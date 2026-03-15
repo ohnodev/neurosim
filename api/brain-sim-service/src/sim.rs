@@ -372,6 +372,7 @@ impl BrainSim {
         dt: f64,
         fly: &FlyInput,
         sources: &[SourceInput],
+        olfactory_baseline_rate_hz: Option<f64>,
     ) -> (f64, f64) {
         let dt_ms = (dt * 1000.0) as f32;
         let syn_time_factor = dt_ms / TAU_SYN_MS;
@@ -387,51 +388,91 @@ impl BrainSim {
                 self.syn_input[post] += self.edges_weight[e] * RECURRENT_SCALE;
             }
         }
-        let sensory = self.sensory_drive(fly, sources);
         let mut rng_state = self.rng_state;
         let sensory_spike_amp = SENSORY_POISSON_SCALE * RECURRENT_SCALE;
-        Self::apply_poisson_stimulus(
-            &self.sensory_left_indices,
-            sensory.left_rate_hz,
-            dt,
-            sensory_spike_amp,
-            &mut rng_state,
-            &mut self.syn_input,
-        );
-        Self::apply_poisson_stimulus(
-            &self.sensory_right_indices,
-            sensory.right_rate_hz,
-            dt,
-            sensory_spike_amp,
-            &mut rng_state,
-            &mut self.syn_input,
-        );
-        let unknown_rate_hz =
-            ((sensory.left_rate_hz + sensory.right_rate_hz + sensory.center_rate_hz) / 3.0)
-                .max(0.0);
-        Self::apply_poisson_stimulus(
-            &self.sensory_unknown_indices,
-            unknown_rate_hz,
-            dt,
-            sensory_spike_amp,
-            &mut rng_state,
-            &mut self.syn_input,
-        );
-        if self.sensory_left_indices.is_empty()
-            && self.sensory_right_indices.is_empty()
-            && self.sensory_unknown_indices.is_empty()
-        {
-            let fallback_hz = sensory
-                .center_rate_hz
-                .max(sensory.left_rate_hz.max(sensory.right_rate_hz));
+        if let Some(rate_hz) = olfactory_baseline_rate_hz.filter(|v| v.is_finite() && *v > 0.0) {
             Self::apply_poisson_stimulus(
-                &self.sensory_indices,
-                fallback_hz,
+                &self.sensory_left_indices,
+                rate_hz,
                 dt,
                 sensory_spike_amp,
                 &mut rng_state,
                 &mut self.syn_input,
             );
+            Self::apply_poisson_stimulus(
+                &self.sensory_right_indices,
+                rate_hz,
+                dt,
+                sensory_spike_amp,
+                &mut rng_state,
+                &mut self.syn_input,
+            );
+            Self::apply_poisson_stimulus(
+                &self.sensory_unknown_indices,
+                rate_hz,
+                dt,
+                sensory_spike_amp,
+                &mut rng_state,
+                &mut self.syn_input,
+            );
+            if self.sensory_left_indices.is_empty()
+                && self.sensory_right_indices.is_empty()
+                && self.sensory_unknown_indices.is_empty()
+            {
+                Self::apply_poisson_stimulus(
+                    &self.sensory_indices,
+                    rate_hz,
+                    dt,
+                    sensory_spike_amp,
+                    &mut rng_state,
+                    &mut self.syn_input,
+                );
+            }
+        } else {
+            let sensory = self.sensory_drive(fly, sources);
+            Self::apply_poisson_stimulus(
+                &self.sensory_left_indices,
+                sensory.left_rate_hz,
+                dt,
+                sensory_spike_amp,
+                &mut rng_state,
+                &mut self.syn_input,
+            );
+            Self::apply_poisson_stimulus(
+                &self.sensory_right_indices,
+                sensory.right_rate_hz,
+                dt,
+                sensory_spike_amp,
+                &mut rng_state,
+                &mut self.syn_input,
+            );
+            let unknown_rate_hz =
+                ((sensory.left_rate_hz + sensory.right_rate_hz + sensory.center_rate_hz) / 3.0)
+                    .max(0.0);
+            Self::apply_poisson_stimulus(
+                &self.sensory_unknown_indices,
+                unknown_rate_hz,
+                dt,
+                sensory_spike_amp,
+                &mut rng_state,
+                &mut self.syn_input,
+            );
+            if self.sensory_left_indices.is_empty()
+                && self.sensory_right_indices.is_empty()
+                && self.sensory_unknown_indices.is_empty()
+            {
+                let fallback_hz = sensory
+                    .center_rate_hz
+                    .max(sensory.left_rate_hz.max(sensory.right_rate_hz));
+                Self::apply_poisson_stimulus(
+                    &self.sensory_indices,
+                    fallback_hz,
+                    dt,
+                    sensory_spike_amp,
+                    &mut rng_state,
+                    &mut self.syn_input,
+                );
+            }
         }
         self.rng_state = rng_state;
         // EonSystems-style alpha synapse with fixed 1.8ms delay queue.
@@ -498,7 +539,7 @@ impl BrainSim {
         StepTiming,
         FlyStepOutput,
     ) {
-        self.step_with_options(dt, fly, sources, true)
+        self.step_with_options(dt, fly, sources, true, None)
     }
 
     pub fn step_with_options(
@@ -507,6 +548,7 @@ impl BrainSim {
         fly: FlyInput,
         sources: Vec<SourceInput>,
         include_activity: bool,
+        olfactory_baseline_rate_hz: Option<f64>,
     ) -> (
         Vec<f32>,
         HashMap<String, f64>,
@@ -526,11 +568,11 @@ impl BrainSim {
         let (recurrent_ms, lif_ms) = {
             #[cfg(feature = "cuda")]
             {
-                self.run_step_cpu(dt, &fly, &sources)
+                self.run_step_cpu(dt, &fly, &sources, olfactory_baseline_rate_hz)
             }
             #[cfg(not(feature = "cuda"))]
             {
-                self.run_step_cpu(dt, &fly, &sources)
+                self.run_step_cpu(dt, &fly, &sources, olfactory_baseline_rate_hz)
             }
         };
         let kernel_ms = recurrent_ms + lif_ms;

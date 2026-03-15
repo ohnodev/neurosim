@@ -86,6 +86,7 @@ struct StepParams {
     sim_id: u32,
     dt: f64,
     include_activity: Option<bool>,
+    olfactory_baseline_rate_hz: Option<f64>,
     fly: FlyJson,
     sources: Vec<SourceJson>,
 }
@@ -364,7 +365,13 @@ fn handle(
                 timing,
                 fly_out,
             ) =
-                sim.step_with_options(step.dt, fly, srcs, include_activity);
+                sim.step_with_options(
+                    step.dt,
+                    fly,
+                    srcs,
+                    include_activity,
+                    step.olfactory_baseline_rate_hz,
+                );
             compute_ms_sum += timing.compute_ms;
             kernel_ms_sum += timing.kernel_ms;
             recurrent_ms_sum += timing.recurrent_ms;
@@ -498,7 +505,13 @@ fn handle(
             timing,
             fly_out,
         ) =
-            sim.step_with_options(p.dt, fly, srcs, include_activity);
+            sim.step_with_options(
+                p.dt,
+                fly,
+                srcs,
+                include_activity,
+                p.olfactory_baseline_rate_hz,
+            );
         let compute_ms = timing.compute_ms;
         let mut source_lookup: HashMap<String, (f64, f64)> = HashMap::new();
         for s in &p.sources {

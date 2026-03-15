@@ -10,7 +10,6 @@ const STIM_RATE_HZ = 200;
 const SENSORY_SCALE = 0.18;
 const MIN_FOOD_DISTANCE = 1.0;
 const ODOR_DETECTION_RADIUS = 24.0;
-const DEFAULT_ODOR_PER_SIDE = 1000;
 
 export interface SimState {
   t: number;
@@ -30,24 +29,6 @@ function normalizeAngle(a: number): number {
   while (out > Math.PI) out -= 2 * Math.PI;
   while (out < -Math.PI) out += 2 * Math.PI;
   return out;
-}
-
-function fnv1a32(s: string): number {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i) & 0xff;
-    h = Math.imul(h, 0x01000193);
-  }
-  return h >>> 0;
-}
-
-function selectDeterministic(ids: string[], limit: number): string[] {
-  if (ids.length <= limit) return ids;
-  return ids
-    .map((id) => ({ id, h: fnv1a32(id) }))
-    .sort((a, b) => (a.h - b.h) || a.id.localeCompare(b.id))
-    .slice(0, limit)
-    .map((x) => x.id);
 }
 
 function estimateDirectionalSensoryInput(
@@ -101,19 +82,15 @@ export async function createBrainSim(
   const getSources = (): WorldSource[] =>
     typeof worldSources === 'function' ? worldSources() : worldSources;
   const neuronIds = connectome.neurons.map((n) => n.root_id);
-  const odorPerSide = Math.max(
-    1,
-    Number.parseInt((process.env.NEUROSIM_ODOR_PER_SIDE ?? `${DEFAULT_ODOR_PER_SIDE}`), 10) || DEFAULT_ODOR_PER_SIDE,
-  );
-  const sensoryLeftNeuronIds = selectDeterministic(connectome.neurons
+  const sensoryLeftNeuronIds = connectome.neurons
     .filter((n) => n.role === 'sensory' && n.side === 'left')
-    .map((n) => n.root_id), odorPerSide);
-  const sensoryRightNeuronIds = selectDeterministic(connectome.neurons
+    .map((n) => n.root_id);
+  const sensoryRightNeuronIds = connectome.neurons
     .filter((n) => n.role === 'sensory' && n.side === 'right')
-    .map((n) => n.root_id), odorPerSide);
-  const sensoryUnknownNeuronIds = selectDeterministic(connectome.neurons
+    .map((n) => n.root_id);
+  const sensoryUnknownNeuronIds = connectome.neurons
     .filter((n) => n.role === 'sensory' && (!n.side || n.side === 'unknown'))
-    .map((n) => n.root_id), Math.max(1, Math.floor(odorPerSide / 4)));
+    .map((n) => n.root_id);
   const sensoryNeuronIds = connectome.neurons
     .filter((n) => n.role === 'sensory')
     .map((n) => n.root_id);

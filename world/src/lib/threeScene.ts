@@ -44,6 +44,7 @@ export interface ThreeSceneRefs {
   cameraModeRef: { current: CameraMode };
   followSimIndexRef: { current: number | undefined };
   sourcesRef: { current: WorldSource[] };
+  devModeRef: { current: boolean };
   snapshotBufferRef: { current: Snapshot[] };
   targetRef: { current: { x: number; y: number; z: number; heading: number } | null };
 }
@@ -332,6 +333,7 @@ export function initThreeScene(
   let cameraButton: { el: HTMLButtonElement; update: (mode: CameraMode) => void } | null = null;
   let disposeStatus: (() => void) | null = null;
   let disposeDebug: (() => void) | null = null;
+  let lastDebugVisible = refs.devModeRef.current;
   if (buttonSlot) {
     cameraButton = createCameraButton(buttonSlot, refs.cameraModeRef);
   }
@@ -359,6 +361,7 @@ export function initThreeScene(
 
   if (debugSlot) {
     disposeDebug = createDebugPanel(debugSlot, renderer, 250);
+    debugSlot.style.display = refs.devModeRef.current ? '' : 'none';
   }
 
   const ambient = new THREE.AmbientLight(0xffffff, 0.8);
@@ -581,6 +584,7 @@ export function initThreeScene(
   }
 
   function updateWorldSources(sources: WorldSource[]): void {
+    const debugEnabled = refs.devModeRef.current;
     const foodSources = sources.filter((s) => s.type === 'food');
     for (let i = 0; i < foodSources.length; i++) {
       const apple = applePool[i] ?? getOrCreateApple();
@@ -590,7 +594,7 @@ export function initThreeScene(
         apple.position.set(s.x, sourceY, s.y);
         apple.visible = true;
       }
-      if (SHOW_FOOD_RADIUS_DEBUG) {
+      if (SHOW_FOOD_RADIUS_DEBUG && debugEnabled) {
         const sphere = foodRadiusDebugPool[i] ?? getOrCreateFoodRadiusDebug();
         const s = foodSources[i]!;
         const sourceY = Math.max(0, s.z - GROUND_Z);
@@ -604,6 +608,9 @@ export function initThreeScene(
     }
     for (let i = foodSources.length; i < foodRadiusDebugPool.length; i++) {
       foodRadiusDebugPool[i]!.visible = false;
+    }
+    if (!debugEnabled) {
+      for (const sphere of foodRadiusDebugPool) sphere.visible = false;
     }
 
     for (const c of sourcesGroup.children.slice()) {
@@ -657,7 +664,7 @@ export function initThreeScene(
         initialized: false,
         wingActions: instWingActions,
       });
-      if (SHOW_FLY_SMELL_RADIUS_DEBUG) {
+      if (SHOW_FLY_SMELL_RADIUS_DEBUG && refs.devModeRef.current) {
         const smell = getOrCreateFlySmellRadiusDebug();
         smell.scale.setScalar(FLY_SMELL_RADIUS_DEBUG);
         smell.visible = true;
@@ -668,6 +675,11 @@ export function initThreeScene(
   function loop(timestamp?: number) {
     if (disposed) return;
     rafId = requestAnimationFrame(loop);
+    const debugEnabled = refs.devModeRef.current;
+    if (debugSlot && debugEnabled !== lastDebugVisible) {
+      debugSlot.style.display = debugEnabled ? '' : 'none';
+      lastDebugVisible = debugEnabled;
+    }
 
     timer.update(timestamp);
     const rawDelta = timer.getDelta();
@@ -725,6 +737,17 @@ export function initThreeScene(
     }
 
     ensureFlyCount(flyStates.length);
+    if (SHOW_FLY_SMELL_RADIUS_DEBUG) {
+      if (debugEnabled) {
+        while (flySmellDebugPool.length < flyInstances.length) {
+          const smell = getOrCreateFlySmellRadiusDebug();
+          smell.scale.setScalar(FLY_SMELL_RADIUS_DEBUG);
+          smell.visible = false;
+        }
+      } else {
+        for (const smell of flySmellDebugPool) smell.visible = false;
+      }
+    }
 
     for (let i = 0; i < flyInstances.length; i++) {
       const inst = flyInstances[i]!;
@@ -763,7 +786,7 @@ export function initThreeScene(
       const visualZ = Math.max(0, z - GROUND_Z);
       inst.group.position.set(x, visualZ, y);
       inst.group.rotation.y = inst.heading;
-      if (SHOW_FLY_SMELL_RADIUS_DEBUG && flySmellDebugPool[i]) {
+      if (SHOW_FLY_SMELL_RADIUS_DEBUG && debugEnabled && flySmellDebugPool[i]) {
         const smell = flySmellDebugPool[i]!;
         smell.position.set(x, visualZ, y);
         smell.scale.setScalar(FLY_SMELL_RADIUS_DEBUG);

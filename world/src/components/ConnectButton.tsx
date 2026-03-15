@@ -7,7 +7,13 @@ function WalletIcon() {
   return <span className="wallet-btn__svg" aria-hidden />;
 }
 
-function ConnectButtonInner() {
+function ConnectButtonInner({
+  devMode,
+  onToggleDevMode,
+}: {
+  devMode: boolean;
+  onToggleDevMode: () => void;
+}) {
   const [modalOpen, setModalOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const { ready } = usePrivy();
@@ -39,6 +45,8 @@ function ConnectButtonInner() {
         isOpen={modalOpen}
         onClose={onClose}
         anchorRef={buttonRef}
+        devMode={devMode}
+        onToggleDevMode={onToggleDevMode}
       />
     </>
   );

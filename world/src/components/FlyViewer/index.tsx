@@ -24,6 +24,7 @@ import { RewardsTable } from '../RewardsTable';
 import { StatusPanelStatusContent } from '../StatusPanelStatusContent';
 import { DEFAULT_FLY, flyCardDataEqual, resolveEffectiveSimIndex } from '../../lib/flyViewerUtils';
 import { isMobileViewport } from '../../lib/mediaQuery';
+import { getInitialDevMode, persistDevMode } from '../../lib/devMode';
 import { CameraToggleSlot } from './CameraToggleSlot';
 import { SimStateSync } from './SimStateSync';
 import { SimStatusSlot } from './SimStatusSlot';
@@ -46,6 +47,7 @@ export default function FlyViewer() {
   const [statusPanelOpen, setStatusPanelOpen] = useState(() => !isMobileViewport());
   const [statusTab, setStatusTab] = useState<'status' | 'rewards'>('status');
   const [brainPanelOpen, setBrainPanelOpen] = useState(() => !isMobileViewport());
+  const [devMode, setDevMode] = useState<boolean>(() => getInitialDevMode());
   const [deployingSlots, setDeployingSlots] = useState<Set<number>>(new Set());
   const deployingSlotsRef = useRef<Set<number>>(new Set());
 
@@ -63,6 +65,7 @@ export default function FlyViewer() {
   const deployedRef = useRef<Record<number, number>>({});
   const selectedFlyIndexRef = useRef(0);
   const connectedRef = useRef(false);
+  const devModeRef = useRef(devMode);
   const followSimIndexRef = useRef<number | undefined>(undefined);
   const sourcesRef = useRef<WorldSource[]>([]);
   const flyCardDataRef = useRef<Map<number, { fly: FlyState; points: number }>>(new Map());
@@ -281,6 +284,13 @@ export default function FlyViewer() {
   const onSelectFlySlot = useCallback((slot: number) => setSelectedFlyIndex(slot), []);
   const onStatusPanelToggle = useCallback(() => setStatusPanelOpen((o) => !o), []);
   const onBrainPanelToggle = useCallback(() => setBrainPanelOpen((o) => !o), []);
+  const onToggleDevMode = useCallback(() => {
+    setDevMode((prev) => {
+      const next = !prev;
+      persistDevMode(next);
+      return next;
+    });
+  }, []);
 
   const getFlyCardData = useCallback((slotIndex: number) => {
     const entry = flyCardDataRef.current.get(slotIndex);
@@ -297,7 +307,8 @@ export default function FlyViewer() {
     deployedRef.current = deployed;
     selectedFlyIndexRef.current = selectedFlyIndex;
     connectedRef.current = connected;
-  }, [deployed, selectedFlyIndex, connected]);
+    devModeRef.current = devMode;
+  }, [deployed, selectedFlyIndex, connected, devMode]);
 
   useEffect(() => {
     const container = document.createElement('div');
@@ -320,6 +331,7 @@ export default function FlyViewer() {
         cameraModeRef,
         followSimIndexRef,
         sourcesRef,
+        devModeRef,
         snapshotBufferRef,
         targetRef: cameraTargetRef,
       },
@@ -420,7 +432,7 @@ export default function FlyViewer() {
             </div>
           )}
           <div style={{ position: 'absolute', top: 12, right: 12, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, pointerEvents: 'auto' }}>
-            <ConnectButton />
+            <ConnectButton devMode={devMode} onToggleDevMode={onToggleDevMode} />
             <CameraToggleSlot ref={cameraToggleSlotRef} deployed={deployed} selectedFlyIndex={selectedFlyIndex} />
             <SimStatusSlot ref={simStatusSlotRef} />
           </div>

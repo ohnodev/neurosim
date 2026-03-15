@@ -198,6 +198,8 @@ let nextBatchDueAt = 0;
 let simTickInFlight = false;
 let droppedSimTicks = 0;
 let simReadyAtMs = 0;
+let graceSkippedTicks = 0;
+let graceSkipLogged = false;
 
 const wsClients = new Set<import('ws').WebSocket>();
 /** Per-client: which fly's activity to send (sim index). Default 0. */
@@ -356,6 +358,8 @@ function startSim(): void {
   nextBatchDueAt = performance.now() + BATCH_MS;
   simTickInFlight = false;
   droppedSimTicks = 0;
+  graceSkippedTicks = 0;
+  graceSkipLogged = false;
   spawnFood();
   foodIntervalId = setInterval(() => {
     const f = spawnFood();
@@ -366,6 +370,12 @@ function startSim(): void {
   }, 5_000);
   simIntervalId = setInterval(async () => {
     if (Date.now() < simReadyAtMs) {
+      graceSkippedTicks += 1;
+      if (!graceSkipLogged) {
+        const remainingMs = Math.max(0, simReadyAtMs - Date.now());
+        console.log('[sim] waiting for brain init grace period', { remainingMs, graceSkippedTicks });
+        graceSkipLogged = true;
+      }
       return;
     }
     if (simTickInFlight) {

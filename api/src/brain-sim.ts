@@ -123,14 +123,13 @@ export async function createBrainSim(
   const precomputedLeft = (precomputed?.left ?? []).filter((id) => loadedNeuronSet.has(id));
   const precomputedRight = (precomputed?.right ?? []).filter((id) => loadedNeuronSet.has(id));
   const precomputedUnknown = (precomputed?.unknown ?? []).filter((id) => loadedNeuronSet.has(id));
-  const hasPrecomputedOverlap = precomputedLeft.length > 0 || precomputedRight.length > 0 || precomputedUnknown.length > 0;
-  const sensoryLeftNeuronIds = hasPrecomputedOverlap ? precomputedLeft : connectome.neurons
+  const sensoryLeftNeuronIds = precomputedLeft.length > 0 ? precomputedLeft : connectome.neurons
     .filter((n) => n.role === 'sensory' && n.side === 'left')
     .map((n) => n.root_id);
-  const sensoryRightNeuronIds = hasPrecomputedOverlap ? precomputedRight : connectome.neurons
+  const sensoryRightNeuronIds = precomputedRight.length > 0 ? precomputedRight : connectome.neurons
     .filter((n) => n.role === 'sensory' && n.side === 'right')
     .map((n) => n.root_id);
-  const sensoryUnknownNeuronIds = hasPrecomputedOverlap ? precomputedUnknown : connectome.neurons
+  const sensoryUnknownNeuronIds = precomputedUnknown.length > 0 ? precomputedUnknown : connectome.neurons
     .filter((n) => n.role === 'sensory' && (!n.side || n.side === 'unknown'))
     .map((n) => n.root_id);
   const sensoryNeuronIds = connectome.neurons

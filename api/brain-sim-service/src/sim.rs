@@ -15,6 +15,7 @@ const ACTIVITY_THRESHOLD: u8 = 1;
 const MOTOR_SCALE: f64 = 0.002;
 const MOTOR_TURN_GAIN: f64 = 220.0;
 const MOTOR_TURN_RATE_MAX: f64 = 2.8;
+const MOTOR_TURN_EMA_TAU_SEC: f64 = 0.35;
 const ARENA: f64 = 24.0;
 const WALL_MARGIN: f64 = 6.0;
 const FLY_TIME_MAX: f64 = 6.0;
@@ -54,6 +55,7 @@ pub struct BrainSim {
     viewer_indices: Vec<u32>,
     max_activity_entries: usize,
     fly_time_left_sec: f64,
+    motor_turn_ema: f64,
     #[cfg(feature = "cuda")]
     gpu_state: Option<GpuSimState>,
     #[cfg(feature = "cuda")]
@@ -224,6 +226,7 @@ impl BrainSim {
             viewer_indices: sanitized_viewer,
             max_activity_entries,
             fly_time_left_sec: FLY_TIME_MAX,
+            motor_turn_ema: 0.0,
             #[cfg(feature = "cuda")]
             gpu_state,
             #[cfg(feature = "cuda")]
@@ -309,6 +312,9 @@ impl BrainSim {
             center_modulation += intensity * (1.0 - 0.4 * lateral.abs());
         }
         let to_strength = |modulation: f64| -> f32 {
+            if modulation <= 0.0 {
+                return 0.0;
+            }
             let rate_hz = if hungry && modulation > 0.0 {
                 (50.0 + modulation * STIM_RATE_HZ).min(STIM_RATE_HZ)
             } else if full {
@@ -319,7 +325,7 @@ impl BrainSim {
             let base = ((rate_hz / STIM_RATE_HZ) * SENSORY_SCALE * (dt / (1.0 / 30.0)))
                 .min(MAX_SENSORY_CONDUCTANCE) as f32;
             if near_food {
-                (base + FEEDING_STIM_BONUS).min(1.0)
+                (base + FEEDING_STIM_BONUS).min(MAX_SENSORY_CONDUCTANCE as f32)
             } else {
                 base
             }
@@ -467,9 +473,16 @@ impl BrainSim {
             #[cfg(feature = "cuda")]
             {
                 let sensory = self.sensory_drive(dt, &fly, &sources);
-                let sensory_strength = ((sensory.left + sensory.right + sensory.center) / 3.0).max(0.0);
                 if let Some(ref mut gpu) = self.gpu_state {
-                    match gpu.step(dt as f32, &self.sensory_indices, sensory_strength) {
+                    match gpu.step(
+                        dt as f32,
+                        &self.sensory_left_indices,
+                        &self.sensory_right_indices,
+                        &self.sensory_unknown_indices,
+                        sensory.left.max(0.0),
+                        sensory.right.max(0.0),
+                        ((sensory.left + sensory.right + sensory.center) / 3.0).max(0.0),
+                    ) {
                         Some(GpuStepResult {
                             spikes,
                             recurrent_ms,
@@ -638,7 +651,15 @@ impl BrainSim {
             let forward_from_motor = ml * MOTOR_SCALE + mr * MOTOR_SCALE + mf * MOTOR_SCALE;
             let motor = forward_from_motor.tanh() * 0.5;
 
-            let mut heading_bias = turn_from_motor * dt;
+            // Smooth motor steering to prevent frame-to-frame sign flip cancellation
+            // (e.g. -3/+5 oscillations) from collapsing heading updates.
+            let ema_alpha = if dt > 0.0 {
+                1.0 - (-dt / MOTOR_TURN_EMA_TAU_SEC).exp()
+            } else {
+                0.0
+            };
+            self.motor_turn_ema += (turn_from_motor - self.motor_turn_ema) * ema_alpha.clamp(0.0, 1.0);
+            let mut heading_bias = self.motor_turn_ema * dt;
             let near_right = fly.x > ARENA - WALL_MARGIN;
             let near_left = fly.x < -ARENA + WALL_MARGIN;
             let near_top = fly.y > ARENA - WALL_MARGIN;

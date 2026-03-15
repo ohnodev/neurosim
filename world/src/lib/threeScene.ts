@@ -90,6 +90,12 @@ const GROUND_Z = 0.35;
 const SHOW_FOOD_RADIUS_DEBUG = true;
 const FOOD_RADIUS_DEBUG_COLOR = 0x66ccff;
 const FOOD_RADIUS_DEBUG_OPACITY = 0.12;
+const FOOD_RADIUS_DEBUG_SCALE = 0.42;
+/** Debug helper: render fly smell radius sphere around each fly. */
+const SHOW_FLY_SMELL_RADIUS_DEBUG = true;
+const FLY_SMELL_RADIUS_DEBUG = 12;
+const FLY_SMELL_RADIUS_DEBUG_COLOR = 0xffd75e;
+const FLY_SMELL_RADIUS_DEBUG_OPACITY = 0.1;
 
 const DEFAULT_FLY: FlyState = { x: 0, y: 0, z: 0.35, heading: 0, t: 0, hunger: 100 };
 
@@ -387,6 +393,7 @@ export function initThreeScene(
 
   const fliesGroup = new THREE.Group();
   scene.add(fliesGroup);
+  const flySmellDebugPool: THREE.Mesh[] = [];
 
   let flyTemplate: THREE.Group | null = null;
   let flyClips: THREE.AnimationClip[] = [];
@@ -460,6 +467,24 @@ export function initThreeScene(
     return mesh;
   }
 
+  function getOrCreateFlySmellRadiusDebug(): THREE.Mesh {
+    const unused = flySmellDebugPool.find((m) => !m.visible);
+    if (unused) return unused;
+    const geom = new THREE.SphereGeometry(1, 20, 16);
+    const mat = new THREE.MeshBasicMaterial({
+      color: FLY_SMELL_RADIUS_DEBUG_COLOR,
+      transparent: true,
+      opacity: FLY_SMELL_RADIUS_DEBUG_OPACITY,
+      depthWrite: false,
+      wireframe: true,
+    });
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.visible = false;
+    flySmellDebugPool.push(mesh);
+    fliesGroup.add(mesh);
+    return mesh;
+  }
+
   loader.load(
     '/models/low-poly_apple/scene.gltf',
     (gltf) => {
@@ -516,7 +541,7 @@ export function initThreeScene(
         const sphere = foodRadiusDebugPool[i] ?? getOrCreateFoodRadiusDebug();
         const s = foodSources[i]!;
         sphere.position.set(s.x, s.z, s.y);
-        sphere.scale.setScalar(Math.max(0.001, s.radius));
+        sphere.scale.setScalar(Math.max(0.001, s.radius * FOOD_RADIUS_DEBUG_SCALE));
         sphere.visible = true;
       }
     }
@@ -540,6 +565,13 @@ export function initThreeScene(
       const inst = flyInstances.pop()!;
       fliesGroup.remove(inst.group);
       disposeObject3D(inst.detailGroup);
+      if (SHOW_FLY_SMELL_RADIUS_DEBUG && flySmellDebugPool.length > flyInstances.length) {
+        const smell = flySmellDebugPool.pop()!;
+        fliesGroup.remove(smell);
+        smell.geometry.dispose();
+        if (Array.isArray(smell.material)) smell.material.forEach((m) => m.dispose());
+        else smell.material.dispose();
+      }
     }
     while (flyInstances.length < count && flyTemplate && flyClips.length > 0) {
       const clone = cloneWithOwnResources(flyTemplate) as THREE.Group;
@@ -571,6 +603,11 @@ export function initThreeScene(
         initialized: false,
         wingActions: instWingActions,
       });
+      if (SHOW_FLY_SMELL_RADIUS_DEBUG) {
+        const smell = getOrCreateFlySmellRadiusDebug();
+        smell.scale.setScalar(FLY_SMELL_RADIUS_DEBUG);
+        smell.visible = true;
+      }
     }
   }
 
@@ -672,6 +709,12 @@ export function initThreeScene(
       const visualZ = Math.max(0, z - GROUND_Z);
       inst.group.position.set(x, visualZ, y);
       inst.group.rotation.y = inst.heading;
+      if (SHOW_FLY_SMELL_RADIUS_DEBUG && flySmellDebugPool[i]) {
+        const smell = flySmellDebugPool[i]!;
+        smell.position.set(x, visualZ, y);
+        smell.scale.setScalar(FLY_SMELL_RADIUS_DEBUG);
+        smell.visible = true;
+      }
 
       const distSq = camera.position.distanceToSquared(inst.group.position);
       const shouldShowDetail = inst.detailVisible
@@ -786,6 +829,12 @@ export function initThreeScene(
     for (const inst of flyInstances) {
       fliesGroup.remove(inst.group);
       disposeObject3D(inst.detailGroup);
+    }
+    for (const smell of flySmellDebugPool) {
+      fliesGroup.remove(smell);
+      smell.geometry.dispose();
+      if (Array.isArray(smell.material)) smell.material.forEach((m) => m.dispose());
+      else smell.material.dispose();
     }
     for (const c of sourcesGroup.children.slice()) {
       sourcesGroup.remove(c);

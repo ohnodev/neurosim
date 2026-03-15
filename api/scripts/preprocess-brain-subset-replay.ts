@@ -33,10 +33,18 @@ type ReplayData = {
 const ROOT = path.resolve(process.cwd(), '..');
 const CLASSIFICATION_PATH = path.join(ROOT, 'data', 'raw', 'classification.csv');
 const CONNECTOME_PATH = path.join(ROOT, 'data', 'connectome-full.json');
-const BASELINE_SPIKES_PATH = path.join(ROOT, 'logs', 'eonsystems_baseline_spikes_per_tick.csv');
-const OUT_JSON_LOGS = path.join(ROOT, 'logs', 'eonsystems_brain_subset_replay.json');
-const OUT_SUMMARY = path.join(ROOT, 'logs', 'eonsystems_brain_subset_summary.txt');
-const OUT_JSON_PUBLIC = path.join(ROOT, 'world', 'public', 'eonsystems_brain_subset_replay.json');
+const INPUT_SPIKES_PATH = process.env.INPUT_SPIKES_CSV
+  ? path.resolve(process.env.INPUT_SPIKES_CSV)
+  : path.join(ROOT, 'logs', 'eonsystems_baseline_spikes_per_tick.csv');
+const OUT_JSON_LOGS = process.env.OUTPUT_REPLAY_JSON
+  ? path.resolve(process.env.OUTPUT_REPLAY_JSON)
+  : path.join(ROOT, 'logs', 'eonsystems_brain_subset_replay.json');
+const OUT_SUMMARY = process.env.OUTPUT_SUMMARY
+  ? path.resolve(process.env.OUTPUT_SUMMARY)
+  : path.join(ROOT, 'logs', 'eonsystems_brain_subset_summary.txt');
+const OUT_JSON_PUBLIC = process.env.OUTPUT_PUBLIC_REPLAY_JSON
+  ? path.resolve(process.env.OUTPUT_PUBLIC_REPLAY_JSON)
+  : path.join(ROOT, 'world', 'public', 'eonsystems_brain_subset_replay.json');
 
 function parseCsvLine(line: string): string[] {
   const out: string[] = [];
@@ -110,7 +118,7 @@ function parseBaselineTicks(): {
   firedIds: Set<string>;
   ringFiredIds: Set<string>;
 } {
-  const text = fs.readFileSync(BASELINE_SPIKES_PATH, 'utf8');
+  const text = fs.readFileSync(INPUT_SPIKES_PATH, 'utf8');
   const lines = text.split('\n').filter((line) => line.trim().length > 0);
   const tickMap = new Map<number, { timeSec: number; spikes: Array<{ rootId: string; order: number }> }>();
   const firedIds = new Set<string>();
@@ -188,7 +196,7 @@ function buildReplay(): ReplayData {
   const replay: ReplayData = {
     meta: {
       generated_at: new Date().toISOString(),
-      source_csv: BASELINE_SPIKES_PATH,
+      source_csv: INPUT_SPIKES_PATH,
       ticks: ticks.length,
       unique_fired_neurons: firedIds.size,
       ring_neuron_total: ringMeta.size,
@@ -200,7 +208,7 @@ function buildReplay(): ReplayData {
 
   const summary = [
     'Brain subset preprocessing summary',
-    `source_csv: ${BASELINE_SPIKES_PATH}`,
+    `source_csv: ${INPUT_SPIKES_PATH}`,
     `subset_unique_ids_requested: ${subsetIds.size}`,
     `neurons_with_positions: ${neurons.length}`,
     `missing_positions: ${missingPositionCount}`,
@@ -217,6 +225,9 @@ function buildReplay(): ReplayData {
 function main(): void {
   const started = Date.now();
   const replay = buildReplay();
+  fs.mkdirSync(path.dirname(OUT_JSON_LOGS), { recursive: true });
+  fs.mkdirSync(path.dirname(OUT_SUMMARY), { recursive: true });
+  fs.mkdirSync(path.dirname(OUT_JSON_PUBLIC), { recursive: true });
   const serialized = `${JSON.stringify(replay)}\n`;
   fs.writeFileSync(OUT_JSON_LOGS, serialized, 'utf8');
   fs.writeFileSync(OUT_JSON_PUBLIC, serialized, 'utf8');

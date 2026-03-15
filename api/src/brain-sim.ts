@@ -27,7 +27,6 @@ function angleToward(heading: number, dx: number, dy: number): number {
 
 const ARENA = 24;
 const WALL_MARGIN = 6;
-const SEEK_RADIUS = ARENA * 1.5;
 const HUNGER_DECAY = 0.8;
 const HEALTH_DECAY = 2.5;
 const FOOD_HUNGER_RESTORE = 50;
@@ -40,21 +39,40 @@ const STIM_RATE_HZ = 200;
 const SENSORY_SCALE = 0.18;
 const MIN_FOOD_DISTANCE = 1;
 
-function estimateSensoryInputStrength(dt: number, fly: FlyState, sources: WorldSource[]): number {
-  if (sources.length === 0) return 0;
+function estimateLateralSensoryStrength(
+  dt: number,
+  fly: FlyState,
+  sources: WorldSource[]
+): { left: number; right: number } {
+  if (sources.length === 0) return { left: 0, right: 0 };
   const hungry = (fly.hunger ?? 100) <= 90;
-  let foodModulation = 0;
+  let leftMod = 0;
+  let rightMod = 0;
+  const hx = Math.cos(fly.heading);
+  const hy = Math.sin(fly.heading);
+  const leftNx = -hy;
+  const leftNy = hx;
   for (const s of sources) {
-    const dist = Math.hypot(s.x - fly.x, s.y - fly.y);
+    const dx = s.x - fly.x;
+    const dy = s.y - fly.y;
+    const dist = Math.hypot(dx, dy);
     if (dist < MIN_FOOD_DISTANCE) continue;
     const invDist = 1 / (1 + dist * 0.1);
-    foodModulation += invDist * (1 - (fly.hunger ?? 100) / 100);
+    const ux = dx / dist;
+    const uy = dy / dist;
+    const lateral = Math.max(-1, Math.min(1, ux * leftNx + uy * leftNy));
+    const foodDrive = invDist * (1 - (fly.hunger ?? 100) / 100);
+    leftMod += foodDrive * (0.5 + 0.5 * lateral);
+    rightMod += foodDrive * (0.5 - 0.5 * lateral);
   }
-  if (foodModulation <= 0) return 0;
-  const rateHz = hungry
-    ? Math.min(STIM_RATE_HZ, 50 + foodModulation * STIM_RATE_HZ)
-    : 30;
-  return Math.min(0.5, (rateHz / STIM_RATE_HZ) * SENSORY_SCALE * (dt / (1 / 30)));
+  const toStrength = (mod: number): number => {
+    if (mod <= 0) return 0;
+    const rateHz = hungry
+      ? Math.min(STIM_RATE_HZ, 50 + mod * STIM_RATE_HZ)
+      : 30;
+    return Math.min(0.5, (rateHz / STIM_RATE_HZ) * SENSORY_SCALE * (dt / (1 / 30)));
+  };
+  return { left: toStrength(leftMod), right: toStrength(rightMod) };
 }
 
 export async function createBrainSim(
@@ -67,6 +85,15 @@ export async function createBrainSim(
   const neuronIds = connectome.neurons.map((n) => n.root_id);
   const sensoryNeuronIds = connectome.neurons
     .filter((n) => String(n.role ?? '').toLowerCase() === 'sensory')
+    .map((n) => n.root_id);
+  const sensoryLeftNeuronIds = connectome.neurons
+    .filter((n) => String(n.role ?? '').toLowerCase() === 'sensory' && String(n.side ?? '').toLowerCase() === 'left')
+    .map((n) => n.root_id);
+  const sensoryRightNeuronIds = connectome.neurons
+    .filter((n) => String(n.role ?? '').toLowerCase() === 'sensory' && String(n.side ?? '').toLowerCase() === 'right')
+    .map((n) => n.root_id);
+  const sensoryUnknownNeuronIds = connectome.neurons
+    .filter((n) => String(n.role ?? '').toLowerCase() === 'sensory' && !['left', 'right'].includes(String(n.side ?? '').toLowerCase()))
     .map((n) => n.root_id);
   const pendingStimuli: { neurons: string[]; strength: number }[] = [];
   let flyTimeLeftSec = FLY_TIME_MAX;
@@ -125,13 +152,13 @@ export async function createBrainSim(
         health: fly.health ?? 100,
         restTimeLeft,
       };
-      const sourcesInput = getSources().map((s) => ({ x: s.x, y: s.y, radius: s.radius }));
       return socketClient.stepSim({
         simId,
         dt,
         includeActivity,
         fly: flyInput,
-        sources: sourcesInput,
+        // Use explicit lateralized pending stimulation below to encode odor geometry.
+        sources: [],
         pending: pendingInput,
       });
     }
@@ -163,13 +190,34 @@ export async function createBrainSim(
 
       const toApply = pendingStimuli.splice(0, pendingStimuli.length);
       const pendingInput = toApply.map((p) => ({ neuronIds: p.neurons, strength: p.strength }));
+      const lateral = estimateLateralSensoryStrength(dt, fly, currentSources);
+      if (lateral.left > 0) {
+        const leftTargets = sensoryLeftNeuronIds.length > 0 ? sensoryLeftNeuronIds : sensoryNeuronIds;
+        pendingInput.push({ neuronIds: leftTargets, strength: lateral.left });
+      }
+      if (lateral.right > 0) {
+        const rightTargets = sensoryRightNeuronIds.length > 0 ? sensoryRightNeuronIds : sensoryNeuronIds;
+        pendingInput.push({ neuronIds: rightTargets, strength: lateral.right });
+      }
+      if (sensoryUnknownNeuronIds.length > 0) {
+        const centerStrength = Math.max(lateral.left, lateral.right) * 0.35;
+        if (centerStrength > 0) pendingInput.push({ neuronIds: sensoryUnknownNeuronIds, strength: centerStrength });
+      }
       const inputActivityRec: Record<string, number> | undefined = includeActivity
         ? (() => {
             const out: Record<string, number> = {};
-            const sensoryStrength = estimateSensoryInputStrength(dt, fly, currentSources);
-            if (sensoryStrength > 0 && sensoryNeuronIds.length > 0) {
-              for (const id of sensoryNeuronIds) {
-                out[id] = Math.max(out[id] ?? 0, sensoryStrength);
+            if (lateral.left > 0) {
+              const leftTargets = sensoryLeftNeuronIds.length > 0 ? sensoryLeftNeuronIds : sensoryNeuronIds;
+              for (const id of leftTargets) out[id] = Math.max(out[id] ?? 0, lateral.left);
+            }
+            if (lateral.right > 0) {
+              const rightTargets = sensoryRightNeuronIds.length > 0 ? sensoryRightNeuronIds : sensoryNeuronIds;
+              for (const id of rightTargets) out[id] = Math.max(out[id] ?? 0, lateral.right);
+            }
+            if (sensoryUnknownNeuronIds.length > 0) {
+              const centerStrength = Math.max(lateral.left, lateral.right) * 0.35;
+              if (centerStrength > 0) {
+                for (const id of sensoryUnknownNeuronIds) out[id] = Math.max(out[id] ?? 0, centerStrength);
               }
             }
             for (const p of pendingInput) {
@@ -253,10 +301,7 @@ export async function createBrainSim(
       }
 
       const hungry = hunger <= 90;
-      const full = hunger > 90;
-      const foodResponsiveness = hungry ? Math.max(0.25, (90 - hunger) / 90) : 0;
-
-      let headingBias = turnFromMotor * dt + 0.1 * Math.sin(t * 0.7) * dt;
+      let headingBias = turnFromMotor * dt;
 
       const nearRight = fly.x > ARENA - WALL_MARGIN;
       const nearLeft = fly.x < -ARENA + WALL_MARGIN;
@@ -264,40 +309,16 @@ export async function createBrainSim(
       const nearBottom = fly.y < -ARENA + WALL_MARGIN;
       const nearCorner = (nearRight ? 1 : 0) + (nearLeft ? 1 : 0) + (nearTop ? 1 : 0) + (nearBottom ? 1 : 0) >= 2;
       if (nearCorner) {
-        headingBias += angleToward(fly.heading, -fly.x, -fly.y) * 2.2 * dt;
+        headingBias += angleToward(fly.heading, -fly.x, -fly.y) * 0.6 * dt;
       } else {
-        if (nearRight) headingBias -= 0.6 * dt;
-        if (nearLeft) headingBias += 0.6 * dt;
-        if (nearTop) headingBias -= 0.5 * dt;
-        if (nearBottom) headingBias += 0.5 * dt;
+        if (nearRight) headingBias -= 0.2 * dt;
+        if (nearLeft) headingBias += 0.2 * dt;
+        if (nearTop) headingBias -= 0.2 * dt;
+        if (nearBottom) headingBias += 0.2 * dt;
       }
 
-      if (hungry && currentSources.length > 0) {
-        let nearestDist = Infinity;
-        let nearestDx = 0, nearestDy = 0, nearestWeight = 1;
-        for (const s of currentSources) {
-          const dx = s.x - fly.x, dy = s.y - fly.y;
-          const dist = Math.hypot(dx, dy);
-          const inRange = dist < Math.max(s.radius, SEEK_RADIUS) && dist > 0.5;
-          if (inRange && dist < nearestDist) {
-            nearestDist = dist;
-            nearestDx = dx;
-            nearestDy = dy;
-            nearestWeight = 1;
-          }
-        }
-        if (nearestDist < Infinity) {
-          headingBias += angleToward(fly.heading, nearestDx, nearestDy) * 3.8 * foodResponsiveness * nearestWeight * dt;
-        } else {
-          headingBias += 0.25 * Math.sin(t * 0.8) * dt + 0.12 * Math.sin(t * 1.5) * dt;
-        }
-      } else if (full) {
-        headingBias += 0.15 * Math.sin(t * 0.5) * dt + 0.08 * Math.sin(t * 1.3) * dt;
-      }
-
-      const moveResponsiveness = hungry ? foodResponsiveness : full ? 0.4 : 0;
-      const BASELINE_EXPLORE = 0.12;
-      let effectiveMotor = Math.max(motor * moveResponsiveness, restTimeLeft <= 0 ? BASELINE_EXPLORE : 0);
+      const BASELINE_EXPLORE = 0.03;
+      let effectiveMotor = Math.max(motor, restTimeLeft <= 0 ? BASELINE_EXPLORE : 0);
       if (restTimeLeft > 0) {
         restTimeLeft -= dt;
         effectiveMotor = 0;

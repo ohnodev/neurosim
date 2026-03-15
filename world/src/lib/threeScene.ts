@@ -91,6 +91,8 @@ const SHOW_FOOD_RADIUS_DEBUG = true;
 const FOOD_RADIUS_DEBUG_COLOR = 0x66ccff;
 const FOOD_RADIUS_DEBUG_OPACITY = 0.12;
 const FOOD_RADIUS_DEBUG_RADIUS = 3.2; // Keep aligned with Rust NEAR_FOOD_RADIUS.
+const FOOD_SLICE_RADIUS = 0.75;
+const FOOD_SLICE_HEIGHT = 0.14;
 /** Debug helper: render fly smell radius sphere around each fly. */
 const SHOW_FLY_SMELL_RADIUS_DEBUG = true;
 const FLY_SMELL_RADIUS_DEBUG = 12;
@@ -399,7 +401,6 @@ export function initThreeScene(
   let flyClips: THREE.AnimationClip[] = [];
   const applePool: THREE.Object3D[] = [];
   const foodRadiusDebugPool: THREE.Mesh[] = [];
-  let appleTemplate: THREE.Object3D | null = null;
   const flyInstances: {
     group: THREE.Group;
     detailGroup: THREE.Group;
@@ -437,12 +438,73 @@ export function initThreeScene(
     undefined,
     (err) => console.error('[threeScene] fly load error:', err)
   );
+
+  function createFruitSliceTexture(): THREE.CanvasTexture {
+    const canvas = document.createElement('canvas');
+    canvas.width = 128;
+    canvas.height = 128;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      const fallback = new THREE.CanvasTexture(canvas);
+      fallback.colorSpace = THREE.SRGBColorSpace;
+      return fallback;
+    }
+
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
+    const outerR = 56;
+    const fleshR = 46;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#b4d455'; // rind
+    ctx.beginPath();
+    ctx.arc(cx, cy, outerR, 0, Math.PI * 2);
+    ctx.fill();
+
+    const fleshGrad = ctx.createRadialGradient(cx, cy, 10, cx, cy, fleshR);
+    fleshGrad.addColorStop(0, '#ff6d6d');
+    fleshGrad.addColorStop(1, '#d6364a');
+    ctx.fillStyle = fleshGrad;
+    ctx.beginPath();
+    ctx.arc(cx, cy, fleshR, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Small dark seeds to keep the slice readable from distance.
+    ctx.fillStyle = '#301116';
+    const seedCount = 14;
+    for (let i = 0; i < seedCount; i++) {
+      const a = (i / seedCount) * Math.PI * 2;
+      const r = 29 + (i % 3) * 4;
+      const x = cx + Math.cos(a) * r;
+      const y = cy + Math.sin(a) * r;
+      ctx.beginPath();
+      ctx.ellipse(x, y, 2.8, 1.8, a, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+    return tex;
+  }
+
+  function createFruitSliceDisc(): THREE.Object3D {
+    const topTex = createFruitSliceTexture();
+    const discGeom = new THREE.CylinderGeometry(FOOD_SLICE_RADIUS, FOOD_SLICE_RADIUS, FOOD_SLICE_HEIGHT, 18, 1);
+    const sideMat = new THREE.MeshStandardMaterial({ color: 0xb8d05f, roughness: 0.9, metalness: 0.02 });
+    const topMat = new THREE.MeshStandardMaterial({ map: topTex, roughness: 0.82, metalness: 0.02 });
+    const bottomMat = new THREE.MeshStandardMaterial({ color: 0x98b84a, roughness: 0.94, metalness: 0.01 });
+    const disc = new THREE.Mesh(discGeom, [sideMat, topMat, bottomMat]);
+    disc.position.y = FOOD_SLICE_HEIGHT * 0.5;
+    disc.castShadow = true;
+    disc.receiveShadow = true;
+    return disc;
+  }
+
   function getOrCreateApple(): THREE.Object3D | null {
     const unused = applePool.find((a) => !a.visible);
     if (unused) return unused;
-    if (!appleTemplate) return null;
-    const clone = cloneWithOwnResources(appleTemplate);
-    clone.scale.setScalar(1.2);
+    const clone = createFruitSliceDisc();
     clone.visible = false;
     applePool.push(clone);
     sourcesGroup.add(clone);
@@ -485,18 +547,8 @@ export function initThreeScene(
     return mesh;
   }
 
-  loader.load(
-    '/models/low-poly_apple/scene.gltf',
-    (gltf) => {
-      if (disposed) return;
-      appleTemplate = gltf.scene.clone(true);
-      getOrCreateApple();
-      getOrCreateApple();
-      updateWorldSources(lastSources);
-    },
-    undefined,
-    (err) => console.error('[threeScene] apple load error:', err)
-  );
+  getOrCreateApple();
+  getOrCreateApple();
 
   let flyStates: FlyState[] = [];
   let lastSources: WorldSource[] = [];
@@ -534,13 +586,15 @@ export function initThreeScene(
       const apple = applePool[i] ?? getOrCreateApple();
       if (apple) {
         const s = foodSources[i]!;
-        apple.position.set(s.x, s.z, s.y);
+        const sourceY = Math.max(0, s.z - GROUND_Z);
+        apple.position.set(s.x, sourceY, s.y);
         apple.visible = true;
       }
       if (SHOW_FOOD_RADIUS_DEBUG) {
         const sphere = foodRadiusDebugPool[i] ?? getOrCreateFoodRadiusDebug();
         const s = foodSources[i]!;
-        sphere.position.set(s.x, s.z, s.y);
+        const sourceY = Math.max(0, s.z - GROUND_Z);
+        sphere.position.set(s.x, sourceY, s.y);
         sphere.scale.setScalar(FOOD_RADIUS_DEBUG_RADIUS);
         sphere.visible = true;
       }
@@ -842,10 +896,6 @@ export function initThreeScene(
     }
     if (flyTemplate) disposeObject3D(flyTemplate);
     flyTemplate = null;
-    if (appleTemplate) {
-      disposeObject3D(appleTemplate);
-      appleTemplate = null;
-    }
     disposeLowLodFlyResources(lowLodResources);
   };
   return { dispose, updateButton };

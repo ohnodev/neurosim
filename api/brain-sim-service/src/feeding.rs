@@ -1,7 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 pub const FOOD_SUGAR_CAPACITY: f64 = 100.0;
-pub const FEED_SUGAR_PER_SEC: f64 = 100.0;
+pub const FEED_DURATION_SEC: f64 = 3.0;
+pub const FEED_SUGAR_PER_SEC: f64 = FOOD_SUGAR_CAPACITY / FEED_DURATION_SEC;
 pub const HUNGER_PER_SUGAR: f64 = 0.5;
 pub const HEALTH_PER_SUGAR: f64 = 0.5;
 

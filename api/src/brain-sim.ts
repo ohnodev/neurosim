@@ -23,6 +23,12 @@ export interface SimState {
   motorLeft?: number;
   motorRight?: number;
   motorFwd?: number;
+  motorLeftCount?: number;
+  motorRightCount?: number;
+  motorFwdCount?: number;
+  motorLeftMagnitude?: number;
+  motorRightMagnitude?: number;
+  motorFwdMagnitude?: number;
   eatenFoodId?: string;
   feedingSugarTaken?: number;
 }
@@ -164,6 +170,12 @@ export async function createBrainSim(
     let lastMotorLeft = 0;
     let lastMotorRight = 0;
     let lastMotorFwd = 0;
+    let lastMotorLeftCount = 0;
+    let lastMotorRightCount = 0;
+    let lastMotorFwdCount = 0;
+    let lastMotorLeftMagnitude = 0;
+    let lastMotorRightMagnitude = 0;
+    let lastMotorFwdMagnitude = 0;
 
     async function runRustStep(
       dt: number,
@@ -174,6 +186,12 @@ export async function createBrainSim(
       motorLeft: number;
       motorRight: number;
       motorFwd: number;
+      motorLeftCount: number;
+      motorRightCount: number;
+      motorFwdCount: number;
+      motorLeftMagnitude: number;
+      motorRightMagnitude: number;
+      motorFwdMagnitude: number;
       fly: {
         x: number;
         y: number;
@@ -231,6 +249,12 @@ export async function createBrainSim(
         lastMotorLeft = act.motorLeft ?? 0;
         lastMotorRight = act.motorRight ?? 0;
         lastMotorFwd = act.motorFwd ?? 0;
+        lastMotorLeftCount = act.motorLeftCount ?? 0;
+        lastMotorRightCount = act.motorRightCount ?? 0;
+        lastMotorFwdCount = act.motorFwdCount ?? 0;
+        lastMotorLeftMagnitude = act.motorLeftMagnitude ?? 0;
+        lastMotorRightMagnitude = act.motorRightMagnitude ?? 0;
+        lastMotorFwdMagnitude = act.motorFwdMagnitude ?? 0;
         lastRustMs = Math.round(performance.now() - stepStart);
         lastRustTiming = {
           computeMs: act.computeMs,
@@ -248,6 +272,12 @@ export async function createBrainSim(
           motorLeft: lastMotorLeft,
           motorRight: lastMotorRight,
           motorFwd: lastMotorFwd,
+          motorLeftCount: lastMotorLeftCount,
+          motorRightCount: lastMotorRightCount,
+          motorFwdCount: lastMotorFwdCount,
+          motorLeftMagnitude: lastMotorLeftMagnitude,
+          motorRightMagnitude: lastMotorRightMagnitude,
+          motorFwdMagnitude: lastMotorFwdMagnitude,
           eatenFoodId: lastEatenFoodId,
         };
       }
@@ -287,6 +317,12 @@ export async function createBrainSim(
       lastMotorLeft = result.motorLeft ?? 0;
       lastMotorRight = result.motorRight ?? 0;
       lastMotorFwd = result.motorFwd ?? 0;
+      lastMotorLeftCount = result.motorLeftCount ?? 0;
+      lastMotorRightCount = result.motorRightCount ?? 0;
+      lastMotorFwdCount = result.motorFwdCount ?? 0;
+      lastMotorLeftMagnitude = result.motorLeftMagnitude ?? 0;
+      lastMotorRightMagnitude = result.motorRightMagnitude ?? 0;
+      lastMotorFwdMagnitude = result.motorFwdMagnitude ?? 0;
       fly = {
         ...fly,
         x: result.fly.x,
@@ -318,6 +354,12 @@ export async function createBrainSim(
         motorLeft: lastMotorLeft,
         motorRight: lastMotorRight,
         motorFwd: lastMotorFwd,
+        motorLeftCount: lastMotorLeftCount,
+        motorRightCount: lastMotorRightCount,
+        motorFwdCount: lastMotorFwdCount,
+        motorLeftMagnitude: lastMotorLeftMagnitude,
+        motorRightMagnitude: lastMotorRightMagnitude,
+        motorFwdMagnitude: lastMotorFwdMagnitude,
         feedingSugarTaken: lastFeedingSugarTaken,
         ...(result.eatenFoodId && { eatenFoodId: result.eatenFoodId }),
       };
@@ -357,6 +399,12 @@ export async function createBrainSim(
         motorLeft: lastMotorLeft,
         motorRight: lastMotorRight,
         motorFwd: lastMotorFwd,
+        motorLeftCount: lastMotorLeftCount,
+        motorRightCount: lastMotorRightCount,
+        motorFwdCount: lastMotorFwdCount,
+        motorLeftMagnitude: lastMotorLeftMagnitude,
+        motorRightMagnitude: lastMotorRightMagnitude,
+        motorFwdMagnitude: lastMotorFwdMagnitude,
         feedingSugarTaken: lastFeedingSugarTaken,
         ...(lastEatenFoodId && { eatenFoodId: lastEatenFoodId }),
       };

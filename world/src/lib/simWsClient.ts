@@ -20,7 +20,17 @@ export interface SimPayload {
   /** Per-fly brain activity (index = sim index) */
   activities?: (Record<string, number> | undefined)[];
   /** Per-client motor readout for currently viewed sim index. */
-  motor?: { left: number; right: number; fwd: number };
+  motor?: {
+    left: number;
+    right: number;
+    fwd: number;
+    leftCount: number;
+    rightCount: number;
+    fwdCount: number;
+    leftMagnitude: number;
+    rightMagnitude: number;
+    fwdMagnitude: number;
+  };
   simRunning?: boolean;
   sources?: WorldSource[];
   error?: string;

@@ -56,7 +56,27 @@ export default function FlyViewer() {
   const latestFliesRef = useRef<FlyState[]>([]);
   const activityRef = useRef<Record<string, number>>({});
   const activitiesRef = useRef<(Record<string, number> | undefined)[]>([]);
-  const motorReadoutRef = useRef<{ left: number; right: number; fwd: number }>({ left: 0, right: 0, fwd: 0 });
+  const motorReadoutRef = useRef<{
+    left: number;
+    right: number;
+    fwd: number;
+    leftCount: number;
+    rightCount: number;
+    fwdCount: number;
+    leftMagnitude: number;
+    rightMagnitude: number;
+    fwdMagnitude: number;
+  }>({
+    left: 0,
+    right: 0,
+    fwd: 0,
+    leftCount: 0,
+    rightCount: 0,
+    fwdCount: 0,
+    leftMagnitude: 0,
+    rightMagnitude: 0,
+    fwdMagnitude: 0,
+  });
   const debugStatsRef = useRef<InterpolationDebugStats | null>(null);
   const interpolatedBySimRef = useRef<FlyState[]>([]);
   const cameraModeRef = useRef<CameraMode>('god');
@@ -177,7 +197,17 @@ export default function FlyViewer() {
           sendViewFlyIndex(eff ?? 0);
         } else if (event._event === 'closed') {
           setConnected(false);
-          motorReadoutRef.current = { left: 0, right: 0, fwd: 0 };
+          motorReadoutRef.current = {
+            left: 0,
+            right: 0,
+            fwd: 0,
+            leftCount: 0,
+            rightCount: 0,
+            fwdCount: 0,
+            leftMagnitude: 0,
+            rightMagnitude: 0,
+            fwdMagnitude: 0,
+          };
         }
         return;
       }
@@ -190,7 +220,17 @@ export default function FlyViewer() {
         activities?: (Record<string, number> | undefined)[];
         error?: string;
         sources?: WorldSource[];
-        motor?: { left: number; right: number; fwd: number };
+        motor?: {
+          left: number;
+          right: number;
+          fwd: number;
+          leftCount: number;
+          rightCount: number;
+          fwdCount: number;
+          leftMagnitude: number;
+          rightMagnitude: number;
+          fwdMagnitude: number;
+        };
       };
       if (data.sources && Array.isArray(data.sources)) {
         queryClient.setQueryData(apiKeys.world(), { sources: data.sources });
@@ -200,6 +240,12 @@ export default function FlyViewer() {
             left: Number.isFinite(data.motor.left) ? data.motor.left : 0,
             right: Number.isFinite(data.motor.right) ? data.motor.right : 0,
             fwd: Number.isFinite(data.motor.fwd) ? data.motor.fwd : 0,
+            leftCount: Number.isFinite(data.motor.leftCount) ? data.motor.leftCount : 0,
+            rightCount: Number.isFinite(data.motor.rightCount) ? data.motor.rightCount : 0,
+            fwdCount: Number.isFinite(data.motor.fwdCount) ? data.motor.fwdCount : 0,
+            leftMagnitude: Number.isFinite(data.motor.leftMagnitude) ? data.motor.leftMagnitude : 0,
+            rightMagnitude: Number.isFinite(data.motor.rightMagnitude) ? data.motor.rightMagnitude : 0,
+            fwdMagnitude: Number.isFinite(data.motor.fwdMagnitude) ? data.motor.fwdMagnitude : 0,
           };
         }
       if (!data.error) {

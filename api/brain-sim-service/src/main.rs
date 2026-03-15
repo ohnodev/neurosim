@@ -144,6 +144,12 @@ struct StepResp {
     motor_left: f64,
     motor_right: f64,
     motor_fwd: f64,
+    motor_left_count: f64,
+    motor_right_count: f64,
+    motor_fwd_count: f64,
+    motor_left_magnitude: f64,
+    motor_right_magnitude: f64,
+    motor_fwd_magnitude: f64,
     fly: FlyRespJson,
     eaten_food_id: Option<String>,
     feeding_sugar_taken: f64,
@@ -161,6 +167,12 @@ struct StepManyItemResp {
     motor_left: f64,
     motor_right: f64,
     motor_fwd: f64,
+    motor_left_count: f64,
+    motor_right_count: f64,
+    motor_fwd_count: f64,
+    motor_left_magnitude: f64,
+    motor_right_magnitude: f64,
+    motor_fwd_magnitude: f64,
     fly: FlyRespJson,
     eaten_food_id: Option<String>,
     feeding_sugar_taken: f64,
@@ -337,7 +349,21 @@ fn handle(
                 })
                 .collect();
             let include_activity = step.include_activity.unwrap_or(true);
-            let (_activity, activity_sparse, motor_left, motor_right, motor_fwd, timing, fly_out) =
+            let (
+                _activity,
+                activity_sparse,
+                motor_left,
+                motor_right,
+                motor_fwd,
+                motor_left_count,
+                motor_right_count,
+                motor_fwd_count,
+                motor_left_magnitude,
+                motor_right_magnitude,
+                motor_fwd_magnitude,
+                timing,
+                fly_out,
+            ) =
                 sim.step_with_options(step.dt, fly, srcs, include_activity);
             compute_ms_sum += timing.compute_ms;
             kernel_ms_sum += timing.kernel_ms;
@@ -350,6 +376,12 @@ fn handle(
                 motor_left,
                 motor_right,
                 motor_fwd,
+                motor_left_count,
+                motor_right_count,
+                motor_fwd_count,
+                motor_left_magnitude,
+                motor_right_magnitude,
+                motor_fwd_magnitude,
                 fly: FlyRespJson {
                     x: fly_out.x,
                     y: fly_out.y,
@@ -451,7 +483,21 @@ fn handle(
             })
             .collect();
         let include_activity = p.include_activity.unwrap_or(true);
-        let (_activity, activity_sparse, motor_left, motor_right, motor_fwd, timing, fly_out) =
+        let (
+            _activity,
+            activity_sparse,
+            motor_left,
+            motor_right,
+            motor_fwd,
+            motor_left_count,
+            motor_right_count,
+            motor_fwd_count,
+            motor_left_magnitude,
+            motor_right_magnitude,
+            motor_fwd_magnitude,
+            timing,
+            fly_out,
+        ) =
             sim.step_with_options(p.dt, fly, srcs, include_activity);
         let compute_ms = timing.compute_ms;
         let mut source_lookup: HashMap<String, (f64, f64)> = HashMap::new();
@@ -464,6 +510,12 @@ fn handle(
             motor_left: 0.0,
             motor_right: 0.0,
             motor_fwd: 0.0,
+            motor_left_count: 0.0,
+            motor_right_count: 0.0,
+            motor_fwd_count: 0.0,
+            motor_left_magnitude: 0.0,
+            motor_right_magnitude: 0.0,
+            motor_fwd_magnitude: 0.0,
             fly: FlyRespJson {
                 x: fly_out.x,
                 y: fly_out.y,
@@ -500,6 +552,12 @@ fn handle(
             motor_left,
             motor_right,
             motor_fwd,
+            motor_left_count,
+            motor_right_count,
+            motor_fwd_count,
+            motor_left_magnitude,
+            motor_right_magnitude,
+            motor_fwd_magnitude,
             fly: one_out.fly,
             eaten_food_id: one_out.eaten_food_id,
             feeding_sugar_taken: one_out.feeding_sugar_taken,

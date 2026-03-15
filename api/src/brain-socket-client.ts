@@ -313,6 +313,12 @@ export interface StepResult {
   motorLeft: number;
   motorRight: number;
   motorFwd: number;
+  motorLeftCount: number;
+  motorRightCount: number;
+  motorFwdCount: number;
+  motorLeftMagnitude: number;
+  motorRightMagnitude: number;
+  motorFwdMagnitude: number;
   fly: {
     x: number;
     y: number;
@@ -360,6 +366,12 @@ export interface StepManyResultItem {
   motorLeft: number;
   motorRight: number;
   motorFwd: number;
+  motorLeftCount: number;
+  motorRightCount: number;
+  motorFwdCount: number;
+  motorLeftMagnitude: number;
+  motorRightMagnitude: number;
+  motorFwdMagnitude: number;
   fly: StepResult['fly'];
   eatenFoodId?: string;
   feedingSugarTaken?: number;
@@ -387,6 +399,12 @@ export async function stepSim(params: StepParams): Promise<StepResult> {
     motor_left: number;
     motor_right: number;
     motor_fwd: number;
+    motor_left_count: number;
+    motor_right_count: number;
+    motor_fwd_count: number;
+    motor_left_magnitude: number;
+    motor_right_magnitude: number;
+    motor_fwd_magnitude: number;
     fly: {
       x: number;
       y: number;
@@ -434,6 +452,12 @@ export async function stepSim(params: StepParams): Promise<StepResult> {
     motorLeft: res.motor_left,
     motorRight: res.motor_right,
     motorFwd: res.motor_fwd,
+    motorLeftCount: res.motor_left_count ?? 0,
+    motorRightCount: res.motor_right_count ?? 0,
+    motorFwdCount: res.motor_fwd_count ?? 0,
+    motorLeftMagnitude: res.motor_left_magnitude ?? 0,
+    motorRightMagnitude: res.motor_right_magnitude ?? 0,
+    motorFwdMagnitude: res.motor_fwd_magnitude ?? 0,
     fly: {
       x: res.fly.x,
       y: res.fly.y,
@@ -468,6 +492,12 @@ export async function stepMany(
       motor_left: number;
       motor_right: number;
       motor_fwd: number;
+      motor_left_count: number;
+      motor_right_count: number;
+      motor_fwd_count: number;
+      motor_left_magnitude: number;
+      motor_right_magnitude: number;
+      motor_fwd_magnitude: number;
       fly: {
         x: number;
         y: number;
@@ -520,6 +550,12 @@ export async function stepMany(
       motorLeft: item.motor_left,
       motorRight: item.motor_right,
       motorFwd: item.motor_fwd,
+      motorLeftCount: item.motor_left_count ?? 0,
+      motorRightCount: item.motor_right_count ?? 0,
+      motorFwdCount: item.motor_fwd_count ?? 0,
+      motorLeftMagnitude: item.motor_left_magnitude ?? 0,
+      motorRightMagnitude: item.motor_right_magnitude ?? 0,
+      motorFwdMagnitude: item.motor_fwd_magnitude ?? 0,
       fly: {
         x: item.fly.x,
         y: item.fly.y,

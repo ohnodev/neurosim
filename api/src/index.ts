@@ -228,7 +228,17 @@ function buildClientPayload(
     flies: ReturnType<typeof sims[0]['getState']>['fly'][];
     activities: (Record<string, number> | undefined)[];
     inputActivities: (Record<string, number> | undefined)[];
-    motorReadouts: ({ left: number; right: number; fwd: number } | undefined)[];
+    motorReadouts: ({
+      left: number;
+      right: number;
+      fwd: number;
+      leftCount: number;
+      rightCount: number;
+      fwdCount: number;
+      leftMagnitude: number;
+      rightMagnitude: number;
+      fwdMagnitude: number;
+    } | undefined)[];
   }[],
 ): void {
   const nowMs = Date.now();
@@ -392,7 +402,17 @@ function startSim(): void {
         flies: ReturnType<typeof sims[0]['getState']>['fly'][];
         activities: (Record<string, number> | undefined)[];
         inputActivities: (Record<string, number> | undefined)[];
-        motorReadouts: ({ left: number; right: number; fwd: number } | undefined)[];
+    motorReadouts: ({
+      left: number;
+      right: number;
+      fwd: number;
+      leftCount: number;
+      rightCount: number;
+      fwdCount: number;
+      leftMagnitude: number;
+      rightMagnitude: number;
+      fwdMagnitude: number;
+    } | undefined)[];
       }[] = [];
 
       const transitions: Array<{
@@ -405,6 +425,12 @@ function startSim(): void {
         motorLeft?: number;
         motorRight?: number;
         motorFwd?: number;
+        motorLeftCount?: number;
+        motorRightCount?: number;
+        motorFwdCount?: number;
+        motorLeftMagnitude?: number;
+        motorRightMagnitude?: number;
+        motorFwdMagnitude?: number;
       }> = [];
 
       const beforeStates = sims.map((s) => s.getState());
@@ -476,6 +502,12 @@ function startSim(): void {
           motorLeft: state.motorLeft,
           motorRight: state.motorRight,
           motorFwd: state.motorFwd,
+          motorLeftCount: state.motorLeftCount,
+          motorRightCount: state.motorRightCount,
+          motorFwdCount: state.motorFwdCount,
+          motorLeftMagnitude: state.motorLeftMagnitude,
+          motorRightMagnitude: state.motorRightMagnitude,
+          motorFwdMagnitude: state.motorFwdMagnitude,
         });
         if (state.activity && simActivityTrail[j]) {
           const trail = simActivityTrail[j]!;
@@ -539,6 +571,12 @@ function startSim(): void {
                 left: tr.motorLeft ?? 0,
                 right: tr.motorRight ?? 0,
                 fwd: tr.motorFwd ?? 0,
+                leftCount: tr.motorLeftCount ?? 0,
+                rightCount: tr.motorRightCount ?? 0,
+                fwdCount: tr.motorFwdCount ?? 0,
+                leftMagnitude: tr.motorLeftMagnitude ?? 0,
+                rightMagnitude: tr.motorRightMagnitude ?? 0,
+                fwdMagnitude: tr.motorFwdMagnitude ?? 0,
               }
             : undefined,
         );
@@ -842,6 +880,12 @@ wss.on('connection', (ws) => {
         left: viewedState.motorLeft ?? 0,
         right: viewedState.motorRight ?? 0,
         fwd: viewedState.motorFwd ?? 0,
+        leftCount: viewedState.motorLeftCount ?? 0,
+        rightCount: viewedState.motorRightCount ?? 0,
+        fwdCount: viewedState.motorFwdCount ?? 0,
+        leftMagnitude: viewedState.motorLeftMagnitude ?? 0,
+        rightMagnitude: viewedState.motorRightMagnitude ?? 0,
+        fwdMagnitude: viewedState.motorFwdMagnitude ?? 0,
       }
     : undefined;
   ws.send(JSON.stringify({

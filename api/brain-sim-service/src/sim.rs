@@ -9,9 +9,12 @@ use crate::model_constants::{
 };
 
 const STIM_RATE_HZ: f64 = 200.0;
-const SENSORY_SCALE: f64 = 0.18;
+const SENSORY_SCALE: f64 = 12.0;
+const MAX_SENSORY_CONDUCTANCE: f64 = 16.0;
 const ACTIVITY_THRESHOLD: u8 = 1;
 const MOTOR_SCALE: f64 = 0.002;
+const MOTOR_TURN_GAIN: f64 = 220.0;
+const MOTOR_TURN_RATE_MAX: f64 = 2.8;
 const ARENA: f64 = 24.0;
 const WALL_MARGIN: f64 = 6.0;
 const FLY_TIME_MAX: f64 = 6.0;
@@ -299,8 +302,10 @@ impl BrainSim {
             let lateral = delta.sin();
             let leftness = lateral.max(0.0);
             let rightness = (-lateral).max(0.0);
-            left_modulation += intensity * (0.25 + 0.75 * leftness);
-            right_modulation += intensity * (0.25 + 0.75 * rightness);
+            // Pure lateralization: avoid symmetric baseline stimulation that can
+            // collapse steering into near-zero L/R differences.
+            left_modulation += intensity * leftness;
+            right_modulation += intensity * rightness;
             center_modulation += intensity * (1.0 - 0.4 * lateral.abs());
         }
         let to_strength = |modulation: f64| -> f32 {
@@ -311,7 +316,8 @@ impl BrainSim {
             } else {
                 50.0
             };
-            let base = ((rate_hz / STIM_RATE_HZ) * SENSORY_SCALE * (dt / (1.0 / 30.0))).min(0.5) as f32;
+            let base = ((rate_hz / STIM_RATE_HZ) * SENSORY_SCALE * (dt / (1.0 / 30.0)))
+                .min(MAX_SENSORY_CONDUCTANCE) as f32;
             if near_food {
                 (base + FEEDING_STIM_BONUS).min(1.0)
             } else {
@@ -417,7 +423,21 @@ impl BrainSim {
         dt: f64,
         fly: FlyInput,
         sources: Vec<SourceInput>,
-    ) -> (Vec<f32>, HashMap<String, f64>, f64, f64, f64, StepTiming, FlyStepOutput) {
+    ) -> (
+        Vec<f32>,
+        HashMap<String, f64>,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        StepTiming,
+        FlyStepOutput,
+    ) {
         self.step_with_options(dt, fly, sources, true)
     }
 
@@ -427,7 +447,21 @@ impl BrainSim {
         fly: FlyInput,
         sources: Vec<SourceInput>,
         include_activity: bool,
-    ) -> (Vec<f32>, HashMap<String, f64>, f64, f64, f64, StepTiming, FlyStepOutput) {
+    ) -> (
+        Vec<f32>,
+        HashMap<String, f64>,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        StepTiming,
+        FlyStepOutput,
+    ) {
         let t_compute = Instant::now();
         let (recurrent_ms, lif_ms) = {
             #[cfg(feature = "cuda")]
@@ -507,22 +541,37 @@ impl BrainSim {
         let mut ml = 0.0f64;
         let mut mr = 0.0f64;
         let mut mf = 0.0f64;
+        let mut ml_count = 0.0f64;
+        let mut mr_count = 0.0f64;
+        let mut mf_count = 0.0f64;
         for &i in &self.motor_left {
             let idx = i as usize;
-            if idx < self.n && self.spikes[idx] > 0 {
-                ml += 1.0;
+            if idx < self.n {
+                let spike = self.spikes[idx] as f64;
+                ml += spike;
+                if spike > 0.0 {
+                    ml_count += 1.0;
+                }
             }
         }
         for &i in &self.motor_right {
             let idx = i as usize;
-            if idx < self.n && self.spikes[idx] > 0 {
-                mr += 1.0;
+            if idx < self.n {
+                let spike = self.spikes[idx] as f64;
+                mr += spike;
+                if spike > 0.0 {
+                    mr_count += 1.0;
+                }
             }
         }
         for &i in &self.motor_unknown {
             let idx = i as usize;
-            if idx < self.n && self.spikes[idx] > 0 {
-                mf += 1.0;
+            if idx < self.n {
+                let spike = self.spikes[idx] as f64;
+                mf += spike;
+                if spike > 0.0 {
+                    mf_count += 1.0;
+                }
             }
         }
         let readout_ms = t_readout.elapsed().as_secs_f64() * 1000.0;
@@ -570,7 +619,22 @@ impl BrainSim {
                 }
             }
 
-            let turn_from_motor = mr * MOTOR_SCALE - ml * MOTOR_SCALE;
+            // Use per-side firing rates (not raw counts) to avoid fixed turn bias
+            // when motor bank sizes differ (e.g. 52 left vs 54 right neurons).
+            let ml_rate = if self.motor_left.is_empty() {
+                0.0
+            } else {
+                ml / self.motor_left.len() as f64
+            };
+            let mr_rate = if self.motor_right.is_empty() {
+                0.0
+            } else {
+                mr / self.motor_right.len() as f64
+            };
+            // Steering needs stronger influence than forward drive so small L/R
+            // imbalances (e.g. +/-3..5 spikes) still produce visible turns.
+            let turn_from_motor = ((ml_rate - mr_rate) * MOTOR_TURN_GAIN)
+                .clamp(-MOTOR_TURN_RATE_MAX, MOTOR_TURN_RATE_MAX);
             let forward_from_motor = ml * MOTOR_SCALE + mr * MOTOR_SCALE + mf * MOTOR_SCALE;
             let motor = forward_from_motor.tanh() * 0.5;
 
@@ -676,6 +740,12 @@ impl BrainSim {
             ml * MOTOR_SCALE,
             mr * MOTOR_SCALE,
             mf * MOTOR_SCALE,
+            ml_count,
+            mr_count,
+            mf_count,
+            ml,
+            mr,
+            mf,
             StepTiming {
                 compute_ms,
                 kernel_ms,

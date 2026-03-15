@@ -107,7 +107,6 @@ export async function createBrainSim(
         fly: flyInput,
         // Rust handles sensory drive from world source geometry.
         sources: sources.map((s) => ({ x: s.x, y: s.y, radius: s.radius })),
-        pending: [],
       });
     }
 

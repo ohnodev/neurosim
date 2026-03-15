@@ -193,10 +193,12 @@ let simIntervalId: ReturnType<typeof setInterval> | null = null;
 const SIM_FPS = 30;
 const BATCH_MS = 250;
 const FRAMES_PER_BATCH = Math.round(SIM_FPS * BATCH_MS / 1000);
+const BRAIN_INIT_GRACE_MS = Number(process.env.NEUROSIM_BRAIN_INIT_GRACE_MS ?? 10_000);
 let connectionStep = 0;
 let nextBatchDueAt = 0;
 let simTickInFlight = false;
 let droppedSimTicks = 0;
+let simReadyAtMs = 0;
 
 const wsClients = new Set<import('ws').WebSocket>();
 /** Per-client: which fly's activity to send (sim index). Default 0. */
@@ -338,6 +340,7 @@ function lerpHeading(a: number, b: number, t: number): number {
 function startSim(): void {
   if (simRunning) return;
   simRunning = true;
+  simReadyAtMs = Date.now() + Math.max(0, BRAIN_INIT_GRACE_MS);
   connectionStep = 0;
   nextBatchDueAt = performance.now() + BATCH_MS;
   simTickInFlight = false;
@@ -351,6 +354,9 @@ function startSim(): void {
     }
   }, 5_000);
   simIntervalId = setInterval(async () => {
+    if (Date.now() < simReadyAtMs) {
+      return;
+    }
     if (simTickInFlight) {
       droppedSimTicks += 1;
       return;
@@ -838,7 +844,14 @@ if (process.env.VITEST !== 'true') {
       'connections, viewer subset:',
       viewerNeuronIndices.length,
     );
-    console.log('[sim] auto-started with 0 flies; users deploy flies via POST /api/deploy');
+    const activeDeploymentCount = Array.from(deployedFlies.values()).reduce((sum, slots) => sum + slots.size, 0);
+    console.log(
+      '[sim] auto-started with',
+      sims.length,
+      'active sims from',
+      activeDeploymentCount,
+      'deployments; users deploy flies via POST /api/deploy',
+    );
   });
 }
 

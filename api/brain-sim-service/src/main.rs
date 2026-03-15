@@ -2,7 +2,7 @@
 //! Loads connectome once at startup; create allocates sims from the in-memory template.
 use std::time::Instant;
 use brain_sim_service::connectome;
-use brain_sim_service::sim::{BrainSim, FlyInput, PendingStimInput, SourceInput};
+use brain_sim_service::sim::{BrainSim, FlyInput, SourceInput};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -75,7 +75,6 @@ struct StepParams {
     include_activity: Option<bool>,
     fly: FlyJson,
     sources: Vec<SourceJson>,
-    pending: Vec<PendingJson>,
 }
 
 #[derive(Deserialize)]
@@ -100,12 +99,6 @@ struct SourceJson {
     x: f64,
     y: f64,
     radius: f64,
-}
-
-#[derive(Deserialize)]
-struct PendingJson {
-    neuron_ids: Vec<String>,
-    strength: f64,
 }
 
 #[derive(Serialize)]
@@ -246,17 +239,9 @@ fn handle(
                     radius: x.radius,
                 })
                 .collect();
-            let pend: Vec<PendingStimInput> = step
-                .pending
-                .iter()
-                .map(|x| PendingStimInput {
-                    neuron_ids: x.neuron_ids.clone(),
-                    strength: x.strength,
-                })
-                .collect();
             let include_activity = step.include_activity.unwrap_or(true);
             let (_activity, activity_sparse, motor_left, motor_right, motor_fwd, timing) =
-                sim.step_with_options(step.dt, fly, srcs, pend, include_activity);
+                sim.step_with_options(step.dt, fly, srcs, Vec::new(), include_activity);
             compute_ms_sum += timing.compute_ms;
             kernel_ms_sum += timing.kernel_ms;
             recurrent_ms_sum += timing.recurrent_ms;
@@ -343,17 +328,9 @@ fn handle(
                 radius: x.radius,
             })
             .collect();
-        let pend: Vec<PendingStimInput> = p
-            .pending
-            .iter()
-            .map(|x| PendingStimInput {
-                neuron_ids: x.neuron_ids.clone(),
-                strength: x.strength,
-            })
-            .collect();
         let include_activity = p.include_activity.unwrap_or(true);
         let (_activity, activity_sparse, motor_left, motor_right, motor_fwd, timing) =
-            sim.step_with_options(p.dt, fly, srcs, pend, include_activity);
+            sim.step_with_options(p.dt, fly, srcs, Vec::new(), include_activity);
         let compute_ms = timing.compute_ms;
         let t2 = Instant::now();
         let out_json = serde_json::to_string(&StepResp {

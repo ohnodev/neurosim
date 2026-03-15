@@ -177,7 +177,6 @@ function flushStepBatch(): void {
   const steps = batch.map((q) => {
     const params = (q.payload as { params?: JsonObj }).params ?? {};
     const fly = (params.fly as JsonObj | undefined) ?? {};
-    const pending = Array.isArray(params.pending) ? params.pending : [];
     return {
       sim_id: params.sim_id,
       dt: params.dt,
@@ -192,13 +191,6 @@ function flushStepBatch(): void {
         rest_time_left: fly.rest_time_left,
       },
       sources: params.sources ?? [],
-      pending: pending.map((p) => {
-        const item = p as { neuronIds?: unknown; neuron_ids?: unknown; strength?: unknown };
-        return {
-          neuron_ids: item.neuron_ids ?? item.neuronIds ?? [],
-          strength: item.strength ?? 0,
-        };
-      }),
       include_activity: params.include_activity ?? true,
     };
   });
@@ -279,7 +271,6 @@ export interface StepParams {
     restTimeLeft: number;
   };
   sources: Array<{ x: number; y: number; radius: number }>;
-  pending: Array<{ neuronIds: string[]; strength: number }>;
 }
 
 export interface StepResult {
@@ -310,7 +301,6 @@ export interface StepManyItem {
     restTimeLeft: number;
   };
   sources: Array<{ x: number; y: number; radius: number }>;
-  pending: Array<{ neuronIds: string[]; strength: number }>;
 }
 
 export interface StepManyResultItem {
@@ -364,7 +354,6 @@ export async function stepSim(params: StepParams): Promise<StepResult> {
         rest_time_left: params.fly.restTimeLeft,
       },
       sources: params.sources,
-      pending: params.pending,
       include_activity: params.includeActivity ?? true,
     },
   });
@@ -415,10 +404,6 @@ export async function stepMany(
           rest_time_left: item.fly.restTimeLeft,
         },
         sources: item.sources,
-        pending: item.pending.map((p) => ({
-          neuron_ids: p.neuronIds,
-          strength: p.strength,
-        })),
         include_activity: item.includeActivity ?? true,
       })),
     },

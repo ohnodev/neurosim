@@ -17,7 +17,16 @@ export interface SimState {
 
 /** Brain sim uses the Rust service via Unix socket only. Connectome loaded by brain-service at startup. */
 
+function angleToward(heading: number, dx: number, dy: number): number {
+  const target = Math.atan2(dy, dx);
+  let d = target - heading;
+  while (d > Math.PI) d -= 2 * Math.PI;
+  while (d < -Math.PI) d += 2 * Math.PI;
+  return d;
+}
+
 const ARENA = 24;
+const WALL_MARGIN = 6;
 const HUNGER_DECAY = 0.8;
 const HEALTH_DECAY = 2.5;
 const FOOD_HUNGER_RESTORE = 50;
@@ -302,6 +311,20 @@ export async function createBrainSim(
 
       const hungry = hunger <= 90;
       let headingBias = turnFromMotor * dt;
+
+      const nearRight = fly.x > ARENA - WALL_MARGIN;
+      const nearLeft = fly.x < -ARENA + WALL_MARGIN;
+      const nearTop = fly.y > ARENA - WALL_MARGIN;
+      const nearBottom = fly.y < -ARENA + WALL_MARGIN;
+      const nearCorner = (nearRight ? 1 : 0) + (nearLeft ? 1 : 0) + (nearTop ? 1 : 0) + (nearBottom ? 1 : 0) >= 2;
+      if (nearCorner) {
+        headingBias += angleToward(fly.heading, -fly.x, -fly.y) * 0.6 * dt;
+      } else {
+        if (nearRight) headingBias -= 0.2 * dt;
+        if (nearLeft) headingBias += 0.2 * dt;
+        if (nearTop) headingBias -= 0.2 * dt;
+        if (nearBottom) headingBias += 0.2 * dt;
+      }
 
       const BASELINE_EXPLORE = 0.03;
       let effectiveMotor = Math.max(motor, restTimeLeft <= 0 ? BASELINE_EXPLORE : 0);

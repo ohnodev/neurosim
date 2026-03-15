@@ -2,6 +2,9 @@
 //! Loads connectome once at startup; create allocates sims from the in-memory template.
 use std::time::Instant;
 use brain_sim_service::connectome;
+use brain_sim_service::feeding::{
+    FoodState, FEED_SUGAR_PER_SEC, HEALTH_PER_SUGAR, HUNGER_PER_SUGAR,
+};
 use brain_sim_service::sim::{BrainSim, FlyInput, SourceInput};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -46,6 +49,7 @@ fn main() {
     eprintln!("[brain-service] listening on {}", socket_path);
 
     let sims: Mutex<HashMap<u32, BrainSim>> = Mutex::new(HashMap::new());
+    let food_state: Mutex<FoodState> = Mutex::new(FoodState::default());
     let next_id: Mutex<u32> = Mutex::new(0);
     let template = Arc::new(template);
 
@@ -57,7 +61,7 @@ fn main() {
                 conn_id,
                 std::process::id()
             );
-            let _ = handle(&mut s, &sims, &next_id, template.clone(), conn_id);
+            let _ = handle(&mut s, &sims, &food_state, &next_id, template.clone(), conn_id);
             eprintln!(
                 "[brain-service] conn_close conn_id={} pid={}",
                 conn_id,
@@ -149,11 +153,45 @@ struct StepManyItemResp {
     motor_fwd: f64,
     fly: FlyRespJson,
     eaten_food_id: Option<String>,
+    #[serde(skip_serializing)]
+    feeding_candidate_id: Option<String>,
+    #[serde(skip_serializing)]
+    dt: f64,
     compute_ms: f64,
     kernel_ms: f64,
     recurrent_ms: f64,
     lif_ms: f64,
     readout_ms: f64,
+}
+
+fn apply_feeding_tick(
+    food_state: &mut FoodState,
+    source_lookup: &HashMap<String, (f64, f64)>,
+    items: &mut [StepManyItemResp],
+) {
+    for item in items.iter_mut() {
+        let sugar_per_fly = (FEED_SUGAR_PER_SEC * item.dt).max(0.0);
+        if sugar_per_fly <= 0.0 {
+            item.fly.feeding = false;
+            continue;
+        }
+        let Some(source_id) = item.feeding_candidate_id.clone() else {
+            item.fly.feeding = false;
+            continue;
+        };
+        let taken = food_state.take_sugar(&source_id, sugar_per_fly);
+        item.fly.feeding = taken > 0.0;
+        item.fly.hunger = (item.fly.hunger + taken * HUNGER_PER_SUGAR).clamp(0.0, 100.0);
+        item.fly.health = (item.fly.health + taken * HEALTH_PER_SUGAR).clamp(0.0, 100.0);
+        if let Some((sx, sy)) = source_lookup.get(&source_id) {
+            item.fly.x = *sx;
+            item.fly.y = *sy;
+            item.fly.z = 0.9;
+        }
+        if food_state.depleted(&source_id) {
+            item.eaten_food_id = Some(source_id);
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -169,6 +207,7 @@ struct ErrResp {
 fn handle(
     s: &mut UnixStream,
     sims: &Mutex<HashMap<u32, BrainSim>>,
+    food_state: &Mutex<FoodState>,
     next_id: &Mutex<u32>,
     template: Arc<connectome::ConnectomeTemplate>,
     conn_id: u64,
@@ -224,6 +263,22 @@ fn handle(
         let p: StepManyParams = serde_json::from_value(v["params"].clone())?;
         let parse_ms = t0.elapsed().as_millis();
         let step_count = p.steps.len();
+        let mut all_sources: HashMap<String, SourceJson> = HashMap::new();
+        for step in &p.steps {
+            for s in &step.sources {
+                all_sources.entry(s.id.clone()).or_insert(SourceJson {
+                    id: s.id.clone(),
+                    x: s.x,
+                    y: s.y,
+                    radius: s.radius,
+                });
+            }
+        }
+        let source_list: Vec<SourceJson> = all_sources.into_values().collect();
+        let source_lookup: HashMap<String, (f64, f64)> = source_list
+            .iter()
+            .map(|s| (s.id.clone(), (s.x, s.y)))
+            .collect();
         // This service currently processes one socket request at a time per process,
         // so a single batch lock does not reduce real concurrency in this execution model.
         let mut g = sims.lock().unwrap();
@@ -293,12 +348,19 @@ fn handle(
                     feeding: fly_out.feeding,
                 },
                 eaten_food_id: fly_out.eaten_food_id,
+                feeding_candidate_id: fly_out.feeding_candidate_id,
+                dt: step.dt,
                 compute_ms: timing.compute_ms,
                 kernel_ms: timing.kernel_ms,
                 recurrent_ms: timing.recurrent_ms,
                 lif_ms: timing.lif_ms,
                 readout_ms: timing.readout_ms,
             });
+        }
+        {
+            let mut fg = food_state.lock().unwrap();
+            fg.sync(source_list.iter().map(|s| s.id.clone()));
+            apply_feeding_tick(&mut fg, &source_lookup, &mut results);
         }
         // Atomic semantics are intentional: if any sim_id in step_many is missing,
         // we return an error for the full batch so API/client can retry coherently.
@@ -374,12 +436,16 @@ fn handle(
         let (_activity, activity_sparse, motor_left, motor_right, motor_fwd, timing, fly_out) =
             sim.step_with_options(p.dt, fly, srcs, Vec::new(), include_activity);
         let compute_ms = timing.compute_ms;
-        let t2 = Instant::now();
-        let out_json = serde_json::to_string(&StepResp {
-            activity_sparse,
-            motor_left,
-            motor_right,
-            motor_fwd,
+        let mut source_lookup: HashMap<String, (f64, f64)> = HashMap::new();
+        for s in &p.sources {
+            source_lookup.insert(s.id.clone(), (s.x, s.y));
+        }
+        let mut one = vec![StepManyItemResp {
+            sim_id: p.sim_id,
+            activity_sparse: HashMap::new(),
+            motor_left: 0.0,
+            motor_right: 0.0,
+            motor_fwd: 0.0,
             fly: FlyRespJson {
                 x: fly_out.x,
                 y: fly_out.y,
@@ -395,6 +461,28 @@ fn handle(
                 feeding: fly_out.feeding,
             },
             eaten_food_id: fly_out.eaten_food_id,
+            feeding_candidate_id: fly_out.feeding_candidate_id,
+            dt: p.dt,
+            compute_ms: timing.compute_ms,
+            kernel_ms: timing.kernel_ms,
+            recurrent_ms: timing.recurrent_ms,
+            lif_ms: timing.lif_ms,
+            readout_ms: timing.readout_ms,
+        }];
+        {
+            let mut fg = food_state.lock().unwrap();
+            fg.sync(p.sources.iter().map(|s| s.id.clone()));
+            apply_feeding_tick(&mut fg, &source_lookup, &mut one);
+        }
+        let one_out = one.pop().unwrap();
+        let t2 = Instant::now();
+        let out_json = serde_json::to_string(&StepResp {
+            activity_sparse,
+            motor_left,
+            motor_right,
+            motor_fwd,
+            fly: one_out.fly,
+            eaten_food_id: one_out.eaten_food_id,
             compute_ms: timing.compute_ms,
             kernel_ms: timing.kernel_ms,
             recurrent_ms: timing.recurrent_ms,

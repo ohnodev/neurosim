@@ -22,10 +22,9 @@ const ON_GROUND_THRESH: f64 = 0.6;
 const EAT_RADIUS: f64 = 2.5;
 const HUNGER_DECAY: f64 = 0.8;
 const HEALTH_DECAY: f64 = 2.5;
-const FOOD_HUNGER_RESTORE: f64 = 50.0;
-const FOOD_HEALTH_RESTORE: f64 = 50.0;
 const MOVE_SPEED: f64 = 35.0;
 const BASELINE_EXPLORE: f64 = 0.03;
+const FEEDING_STIM_BONUS: f32 = 0.25;
 // Ignore near-zero food distance to avoid singular-like gain when the fly is
 // effectively at the food source (handled separately by consumption logic).
 const MIN_FOOD_DISTANCE: f64 = 1.0;
@@ -100,6 +99,7 @@ pub struct FlyStepOutput {
     pub rest_duration: f64,
     pub feeding: bool,
     pub eaten_food_id: Option<String>,
+    pub feeding_candidate_id: Option<String>,
 }
 
 impl BrainSim {
@@ -246,8 +246,12 @@ impl BrainSim {
         let hungry = fly.hunger <= 90.0;
         let full = fly.hunger > 90.0;
         let mut food_modulation = 0.0f64;
+        let mut near_food = false;
         for s in sources {
             let dist = ((s.x - fly.x).powi(2) + (s.y - fly.y).powi(2)).sqrt();
+            if dist < EAT_RADIUS && fly.z <= 1.2 {
+                near_food = true;
+            }
             if dist < MIN_FOOD_DISTANCE {
                 continue;
             }
@@ -261,7 +265,12 @@ impl BrainSim {
         } else {
             50.0
         };
-        ((rate_hz / STIM_RATE_HZ) * SENSORY_SCALE * (dt / (1.0 / 30.0))).min(0.5) as f32
+        let base = ((rate_hz / STIM_RATE_HZ) * SENSORY_SCALE * (dt / (1.0 / 30.0))).min(0.5) as f32;
+        if near_food {
+            (base + FEEDING_STIM_BONUS).min(1.0)
+        } else {
+            base
+        }
     }
 
     fn run_step_cpu(
@@ -471,8 +480,9 @@ impl BrainSim {
         let mut health = fly.health;
         let mut rest_time_left = fly.rest_time_left;
         let mut dead = fly.dead;
-        let mut eaten_food_id: Option<String> = None;
-        let mut feeding = false;
+        let eaten_food_id: Option<String> = None;
+        let feeding = false;
+        let mut feeding_candidate_id: Option<String> = None;
         let mut x = fly.x;
         let mut y = fly.y;
         let mut z = fly.z;
@@ -484,17 +494,14 @@ impl BrainSim {
             if can_fly_eat {
                 for s in &sources {
                     if ((s.x - fly.x).powi(2) + (s.y - fly.y).powi(2)).sqrt() < EAT_RADIUS {
-                        feeding = true;
-                        hunger = (hunger + FOOD_HUNGER_RESTORE).min(100.0);
-                        health = (health + FOOD_HEALTH_RESTORE).min(100.0);
-                        eaten_food_id = Some(s.id.clone());
+                        feeding_candidate_id = Some(s.id.clone());
                         break;
                     }
                 }
             }
 
             let prev_hunger = hunger;
-            if !feeding {
+            if feeding_candidate_id.is_none() {
                 hunger = (hunger - HUNGER_DECAY * dt).max(0.0);
             }
 
@@ -606,6 +613,7 @@ impl BrainSim {
             rest_duration: REST_TIME,
             feeding,
             eaten_food_id,
+            feeding_candidate_id,
         };
 
         (

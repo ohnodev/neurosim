@@ -26,7 +26,7 @@ fn test_create_and_step() {
         dead: false,
     };
     let (activity, activity_sparse, motor_left, motor_right, motor_fwd, _timing, _fly_out) =
-        sim.step(1.0 / 30.0, fly, vec![], vec![]);
+        sim.step(1.0 / 30.0, fly, vec![]);
     assert_eq!(activity.len(), 3);
     assert!(activity.iter().all(|v| v.is_finite() && *v >= 0.0 && *v <= 1.0));
     assert!(motor_left.is_finite());

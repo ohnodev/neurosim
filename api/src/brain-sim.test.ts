@@ -27,7 +27,7 @@ const testConnectome = {
   meta: { total_neurons: 6, total_connections: 5 },
 };
 
-/** Minimal connectome without roles (fallback behavior). */
+/** Minimal connectome for basic Rust-path checks. */
 const miniConnectome = {
   neurons: [
     { root_id: 'a', x: 0, y: 0, z: 0 },

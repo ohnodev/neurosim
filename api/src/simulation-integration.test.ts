@@ -1,7 +1,7 @@
 /**
  * Integration tests for the brain simulation: validates that simulations run
  * correctly end-to-end (neural propagation, fly physics, activity output).
- * Works with both Rust and TypeScript backends.
+ * Uses the Rust brain-service backend.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import * as path from 'path';
@@ -18,7 +18,7 @@ const connectomePath = path.resolve(__dirname, '..', '..', 'data', 'connectome-s
 
 describe('simulation integration', () => {
   describe('brain sim backend', () => {
-    it('creates sim and reports backend (Rust or TS)', async () => {
+    it('creates sim through Rust brain-service', async () => {
       const connectome = loadConnectome(connectomePath);
       const sim = await createBrainSim(connectome, []);
       expect(sim.step).toBeDefined();

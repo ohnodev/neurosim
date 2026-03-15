@@ -32,7 +32,6 @@ const MIN_FOOD_DISTANCE: f64 = 1.0;
 pub struct BrainSim {
     n: usize,
     neuron_ids: Vec<String>,
-    id_to_idx: HashMap<String, u32>,
     edges_pre: Vec<u32>,
     edges_post: Vec<u32>,
     edges_weight: Vec<f32>,
@@ -70,11 +69,6 @@ pub struct SourceInput {
     pub x: f64,
     pub y: f64,
     pub radius: f64,
-}
-
-pub struct PendingStimInput {
-    pub neuron_ids: Vec<String>,
-    pub strength: f64,
 }
 
 pub struct StepTiming {
@@ -157,11 +151,6 @@ impl BrainSim {
             );
         }
         let n = neuron_ids.len();
-        let id_to_idx: HashMap<String, u32> = neuron_ids
-            .iter()
-            .enumerate()
-            .map(|(i, id)| (id.clone(), i as u32))
-            .collect();
         let v = vec![V_REST; n];
         let g = vec![0.0f32; n];
         let refractory = vec![0u16; n];
@@ -195,7 +184,6 @@ impl BrainSim {
         Self {
             n,
             neuron_ids,
-            id_to_idx,
             edges_pre,
             edges_post,
             edges_weight,
@@ -279,7 +267,6 @@ impl BrainSim {
         dt: f64,
         fly: &FlyInput,
         sources: &[SourceInput],
-        pending: &[PendingStimInput],
     ) -> (f64, f64) {
         let dt_ms = (dt * 1000.0) as f32;
         let syn_decay = (-dt_ms / TAU_SYN_MS).exp();
@@ -303,17 +290,6 @@ impl BrainSim {
                 let i = idx as usize;
                 if i < self.n {
                     self.g[i] += sensory_strength;
-                }
-            }
-        }
-        for stim in pending {
-            let strength = (stim.strength as f32).min(2.0).max(0.0);
-            for id in &stim.neuron_ids {
-                if let Some(&idx) = self.id_to_idx.get(id) {
-                    let i = idx as usize;
-                    if i < self.n {
-                        self.g[i] += strength;
-                    }
                 }
             }
         }
@@ -347,9 +323,8 @@ impl BrainSim {
         dt: f64,
         fly: FlyInput,
         sources: Vec<SourceInput>,
-        pending: Vec<PendingStimInput>,
     ) -> (Vec<f32>, HashMap<String, f64>, f64, f64, f64, StepTiming, FlyStepOutput) {
-        self.step_with_options(dt, fly, sources, pending, true)
+        self.step_with_options(dt, fly, sources, true)
     }
 
     pub fn step_with_options(
@@ -357,7 +332,6 @@ impl BrainSim {
         dt: f64,
         fly: FlyInput,
         sources: Vec<SourceInput>,
-        pending: Vec<PendingStimInput>,
         include_activity: bool,
     ) -> (Vec<f32>, HashMap<String, f64>, f64, f64, f64, StepTiming, FlyStepOutput) {
         let t_compute = Instant::now();
@@ -365,25 +339,8 @@ impl BrainSim {
             #[cfg(feature = "cuda")]
             {
                 let sensory_strength = self.sensory_strength(dt, &fly, &sources);
-                let mut pending_idx = Vec::new();
-                let mut pending_strength = Vec::new();
-                for stim in &pending {
-                    let strength = (stim.strength as f32).min(2.0).max(0.0);
-                    for id in &stim.neuron_ids {
-                        if let Some(&idx) = self.id_to_idx.get(id) {
-                            pending_idx.push(idx);
-                            pending_strength.push(strength);
-                        }
-                    }
-                }
                 if let Some(ref mut gpu) = self.gpu_state {
-                    match gpu.step(
-                        dt as f32,
-                        &self.sensory_indices,
-                        sensory_strength,
-                        &pending_idx,
-                        &pending_strength,
-                    ) {
+                    match gpu.step(dt as f32, &self.sensory_indices, sensory_strength) {
                         Some(GpuStepResult {
                             spikes,
                             recurrent_ms,
@@ -408,19 +365,19 @@ impl BrainSim {
                         }
                         None => {
                             panic!(
-                                "[brain-service] GPU step failed in fallback mode; refusing unsafe CPU fallback without authoritative host sync"
+                                "[brain-service] GPU step failed; refusing CPU execution without authoritative GPU state sync"
                             );
                         }
                     }
                 } else if self.cuda_only {
                     panic!("[brain-service] CUDA required but GPU unavailable");
                 } else {
-                    self.run_step_cpu(dt, &fly, &sources, &pending)
+                    self.run_step_cpu(dt, &fly, &sources)
                 }
             }
             #[cfg(not(feature = "cuda"))]
             {
-                self.run_step_cpu(dt, &fly, &sources, &pending)
+                self.run_step_cpu(dt, &fly, &sources)
             }
         };
         let kernel_ms = recurrent_ms + lif_ms;

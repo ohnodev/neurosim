@@ -326,7 +326,7 @@ fn handle(
                 .collect();
             let include_activity = step.include_activity.unwrap_or(true);
             let (_activity, activity_sparse, motor_left, motor_right, motor_fwd, timing, fly_out) =
-                sim.step_with_options(step.dt, fly, srcs, Vec::new(), include_activity);
+                sim.step_with_options(step.dt, fly, srcs, include_activity);
             compute_ms_sum += timing.compute_ms;
             kernel_ms_sum += timing.kernel_ms;
             recurrent_ms_sum += timing.recurrent_ms;
@@ -440,7 +440,7 @@ fn handle(
             .collect();
         let include_activity = p.include_activity.unwrap_or(true);
         let (_activity, activity_sparse, motor_left, motor_right, motor_fwd, timing, fly_out) =
-            sim.step_with_options(p.dt, fly, srcs, Vec::new(), include_activity);
+            sim.step_with_options(p.dt, fly, srcs, include_activity);
         let compute_ms = timing.compute_ms;
         let mut source_lookup: HashMap<String, (f64, f64)> = HashMap::new();
         for s in &p.sources {

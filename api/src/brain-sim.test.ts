@@ -56,17 +56,6 @@ describe('brain-sim', () => {
     expect(s1.fly.hunger).toBeDefined();
   });
 
-  it('inject adds activity', async () => {
-    const { step, inject } = await createBrainSim(miniConnectome);
-    await step(0.1);
-    const s1 = await step(0.1);
-    const actBefore = s1.activity ? Object.keys(s1.activity).length : 0;
-    inject(['a'], 1);
-    const s2 = await step(0.1);
-    const actAfter = s2.activity ? Object.keys(s2.activity).length : 0;
-    expect(actAfter).toBeGreaterThanOrEqual(actBefore);
-  });
-
   it('food source near fly increases activity in visual/sensory neurons', async () => {
     const { step } = await createBrainSim(testConnectome, [foodSource]);
     let maxActivity = 0;
@@ -80,9 +69,8 @@ describe('brain-sim', () => {
     expect(maxActivity, 'Food should drive some visual/sensory activity').toBeGreaterThan(0.01);
   });
 
-  it('fly position or heading changes over time with food and stimulus', async () => {
-    const { step, inject } = await createBrainSim(testConnectome, [foodSource]);
-    inject(['s1', 's2'], 1.5);
+  it('fly position or heading changes over time with food', async () => {
+    const { step } = await createBrainSim(testConnectome, [foodSource]);
     const s0 = await step(0.1);
     for (let i = 0; i < 600; i++) await step(1 / 30);
     const s1 = await step(0.1);
@@ -116,8 +104,7 @@ describe('brain-sim', () => {
   });
 
   it('fly z bounded between ground and flight altitude', async () => {
-    const { step, inject } = await createBrainSim(testConnectome, [foodSource]);
-    inject(['s1', 's2'], 1.5);
+    const { step } = await createBrainSim(testConnectome, [foodSource]);
     const samples: number[] = [];
     for (let i = 0; i < 300; i++) {
       const s = await step(1 / 30);
@@ -267,41 +254,6 @@ describe('brain-sim', () => {
     }
     const distMoved = Math.hypot(s.fly.x - startPos.x, s.fly.y - startPos.y);
     expect(distMoved, `Fly should move from (0,0); got pos (${s.fly.x.toFixed(2)}, ${s.fly.y.toFixed(2)})`).toBeGreaterThan(0.5);
-  });
-
-  it('fly moves with stimulus within 5s', async () => {
-    const dt = 1 / 30;
-    const steps = 150;
-
-    const control = await createBrainSim(testConnectome, []);
-    const s0_control = await control.step(dt);
-    let maxActivityControl = 0;
-    for (let i = 0; i < steps; i++) {
-      const s = await control.step(dt);
-      const sum = s.activity ? Object.values(s.activity).reduce((a, v) => a + v, 0) : 0;
-      maxActivityControl = Math.max(maxActivityControl, sum);
-    }
-    const s1_control = await control.step(dt);
-    const distMoved_control = Math.hypot(s1_control.fly.x - s0_control.fly.x, s1_control.fly.y - s0_control.fly.y);
-
-    const injected = await createBrainSim(testConnectome, []);
-    injected.inject(['s1', 's2'], 0.8);
-    const s0 = await injected.step(dt);
-    let maxActivityInjected = 0;
-    for (let i = 0; i < steps; i++) {
-      const s = await injected.step(dt);
-      const sum = s.activity ? Object.values(s.activity).reduce((a, v) => a + v, 0) : 0;
-      maxActivityInjected = Math.max(maxActivityInjected, sum);
-    }
-    const s1 = await injected.step(dt);
-    const distMoved = Math.hypot(s1.fly.x - s0.fly.x, s1.fly.y - s0.fly.y);
-
-    expect(distMoved_control, 'Control should have baseline movement').toBeGreaterThan(0.5);
-    expect(distMoved, 'Injected run should move').toBeGreaterThan(0.5);
-    expect(
-      maxActivityInjected,
-      'Injection adds activity; injected run should have strictly higher neural activity than control',
-    ).toBeGreaterThan(maxActivityControl);
   });
 
   it('fly eventually reaches food when hungry (long run)', async () => {

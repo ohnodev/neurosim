@@ -35,45 +35,6 @@ const FLY_TIME_MAX = 6;
 const GROUND_Z = 0.35;
 const FLIGHT_Z = 1.5;
 const ON_GROUND_THRESH = 0.6;
-const STIM_RATE_HZ = 200;
-const SENSORY_SCALE = 0.18;
-const MIN_FOOD_DISTANCE = 1;
-
-function estimateLateralSensoryStrength(
-  dt: number,
-  fly: FlyState,
-  sources: WorldSource[]
-): { left: number; right: number } {
-  if (sources.length === 0) return { left: 0, right: 0 };
-  const hungry = (fly.hunger ?? 100) <= 90;
-  let leftMod = 0;
-  let rightMod = 0;
-  const hx = Math.cos(fly.heading);
-  const hy = Math.sin(fly.heading);
-  const leftNx = -hy;
-  const leftNy = hx;
-  for (const s of sources) {
-    const dx = s.x - fly.x;
-    const dy = s.y - fly.y;
-    const dist = Math.hypot(dx, dy);
-    if (dist < MIN_FOOD_DISTANCE) continue;
-    const invDist = 1 / (1 + dist * 0.1);
-    const ux = dx / dist;
-    const uy = dy / dist;
-    const lateral = Math.max(-1, Math.min(1, ux * leftNx + uy * leftNy));
-    const foodDrive = invDist * (1 - (fly.hunger ?? 100) / 100);
-    leftMod += foodDrive * (0.5 + 0.5 * lateral);
-    rightMod += foodDrive * (0.5 - 0.5 * lateral);
-  }
-  const toStrength = (mod: number): number => {
-    if (mod <= 0) return 0;
-    const rateHz = hungry
-      ? Math.min(STIM_RATE_HZ, 50 + mod * STIM_RATE_HZ)
-      : 30;
-    return Math.min(0.5, (rateHz / STIM_RATE_HZ) * SENSORY_SCALE * (dt / (1 / 30)));
-  };
-  return { left: toStrength(leftMod), right: toStrength(rightMod) };
-}
 
 export async function createBrainSim(
   connectome: Connectome,
@@ -83,19 +44,6 @@ export async function createBrainSim(
   const getSources = (): WorldSource[] =>
     typeof worldSources === 'function' ? worldSources() : worldSources;
   const neuronIds = connectome.neurons.map((n) => n.root_id);
-  const sensoryNeuronIds = connectome.neurons
-    .filter((n) => String(n.role ?? '').toLowerCase() === 'sensory')
-    .map((n) => n.root_id);
-  const sensoryLeftNeuronIds = connectome.neurons
-    .filter((n) => String(n.role ?? '').toLowerCase() === 'sensory' && String(n.side ?? '').toLowerCase() === 'left')
-    .map((n) => n.root_id);
-  const sensoryRightNeuronIds = connectome.neurons
-    .filter((n) => String(n.role ?? '').toLowerCase() === 'sensory' && String(n.side ?? '').toLowerCase() === 'right')
-    .map((n) => n.root_id);
-  const sensoryUnknownNeuronIds = connectome.neurons
-    .filter((n) => String(n.role ?? '').toLowerCase() === 'sensory' && !['left', 'right'].includes(String(n.side ?? '').toLowerCase()))
-    .map((n) => n.root_id);
-  const pendingStimuli: { neurons: string[]; strength: number }[] = [];
   let flyTimeLeftSec = FLY_TIME_MAX;
   let restTimeLeft = 0;
 
@@ -129,7 +77,7 @@ export async function createBrainSim(
 
     async function runRustStep(
       dt: number,
-      pendingInput: Array<{ neuronIds: string[]; strength: number }>,
+      sources: WorldSource[],
       includeActivity = true,
     ): Promise<{
       activitySparse: Record<string, number>;
@@ -157,9 +105,9 @@ export async function createBrainSim(
         dt,
         includeActivity,
         fly: flyInput,
-        // Use explicit lateralized pending stimulation below to encode odor geometry.
-        sources: [],
-        pending: pendingInput,
+        // Rust handles sensory drive from world source geometry.
+        sources: sources.map((s) => ({ x: s.x, y: s.y, radius: s.radius })),
+        pending: [],
       });
     }
 
@@ -169,7 +117,7 @@ export async function createBrainSim(
       if (fly.dead) {
         const t = fly.t + dt;
         fly = { ...fly, t };
-        const act = await runRustStep(dt, [], includeActivity);
+        const act = await runRustStep(dt, getSources(), includeActivity);
         lastActivitySparse = act.activitySparse;
         lastInputActivity = undefined;
         lastEatenFoodId = undefined;
@@ -188,56 +136,11 @@ export async function createBrainSim(
       const currentSources = getSources();
       const t = fly.t + dt;
 
-      const toApply = pendingStimuli.splice(0, pendingStimuli.length);
-      const pendingInput = toApply.map((p) => ({ neuronIds: p.neurons, strength: p.strength }));
-      const lateral = includeActivity
-        ? estimateLateralSensoryStrength(dt, fly, currentSources)
-        : { left: 0, right: 0 };
-      if (includeActivity) {
-        if (lateral.left > 0) {
-          const leftTargets = sensoryLeftNeuronIds.length > 0 ? sensoryLeftNeuronIds : sensoryNeuronIds;
-          pendingInput.push({ neuronIds: leftTargets, strength: lateral.left });
-        }
-        if (lateral.right > 0) {
-          const rightTargets = sensoryRightNeuronIds.length > 0 ? sensoryRightNeuronIds : sensoryNeuronIds;
-          pendingInput.push({ neuronIds: rightTargets, strength: lateral.right });
-        }
-        if (sensoryUnknownNeuronIds.length > 0) {
-          const centerStrength = Math.max(lateral.left, lateral.right) * 0.35;
-          if (centerStrength > 0) pendingInput.push({ neuronIds: sensoryUnknownNeuronIds, strength: centerStrength });
-        }
-      }
-      const inputActivityRec: Record<string, number> | undefined = includeActivity
-        ? (() => {
-            const out: Record<string, number> = {};
-            if (lateral.left > 0) {
-              const leftTargets = sensoryLeftNeuronIds.length > 0 ? sensoryLeftNeuronIds : sensoryNeuronIds;
-              for (const id of leftTargets) out[id] = Math.max(out[id] ?? 0, lateral.left);
-            }
-            if (lateral.right > 0) {
-              const rightTargets = sensoryRightNeuronIds.length > 0 ? sensoryRightNeuronIds : sensoryNeuronIds;
-              for (const id of rightTargets) out[id] = Math.max(out[id] ?? 0, lateral.right);
-            }
-            if (sensoryUnknownNeuronIds.length > 0) {
-              const centerStrength = Math.max(lateral.left, lateral.right) * 0.35;
-              if (centerStrength > 0) {
-                for (const id of sensoryUnknownNeuronIds) out[id] = Math.max(out[id] ?? 0, centerStrength);
-              }
-            }
-            for (const p of pendingInput) {
-              const v = Math.max(0.1, Math.min(1, Number(p.strength) || 0));
-              for (const id of p.neuronIds) {
-                if (!id) continue;
-                out[id] = Math.max(out[id] ?? 0, v);
-              }
-            }
-            return Object.keys(out).length > 0 ? out : undefined;
-          })()
-        : undefined;
+      const inputActivityRec: Record<string, number> | undefined = undefined;
       lastInputActivity = inputActivityRec;
 
       const rustStart = performance.now();
-      const result = await runRustStep(dt, pendingInput, includeActivity);
+      const result = await runRustStep(dt, currentSources, includeActivity);
       lastRustMs = Math.round(performance.now() - rustStart);
       lastSocketTiming = socketClient.getLastRequestTiming();
       lastRustTiming = {
@@ -409,10 +312,6 @@ export async function createBrainSim(
       };
     }
 
-    function inject(neurons: string[], strength = 0.8) {
-      if (neurons.length > 0) pendingStimuli.push({ neurons, strength });
-    }
-
     function getState(): SimState {
       const activityRec = Object.keys(lastActivitySparse).length ? lastActivitySparse : undefined;
       const flyWithMeta = {
@@ -435,7 +334,6 @@ export async function createBrainSim(
 
     return {
       step,
-      inject,
       getState,
       getTiming,
       neuronIds,

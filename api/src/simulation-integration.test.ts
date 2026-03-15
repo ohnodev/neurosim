@@ -23,7 +23,6 @@ describe('simulation integration', () => {
       const sim = await createBrainSim(connectome, []);
       expect(typeof sim.isRustSim).toBe('boolean');
       expect(sim.step).toBeDefined();
-      expect(sim.inject).toBeDefined();
       expect(sim.getState).toBeDefined();
       expect(sim.neuronIds.length).toBe(connectome.neurons.length);
     });
@@ -51,22 +50,6 @@ describe('simulation integration', () => {
       expect(lastState.t, 'Simulation time should advance').toBeGreaterThan(10);
     });
 
-    it('injection adds activity and propagates', async () => {
-      const connectome = loadConnectome(connectomePath);
-      const { step, inject, neuronIds } = await createBrainSim(connectome, []);
-      const dt = 1 / 30;
-      await step(dt);
-      await step(dt);
-      const s0 = await step(dt);
-      const actKeys0 = s0.activity ? Object.keys(s0.activity).length : 0;
-
-      if (neuronIds.length > 0) {
-        inject([neuronIds[0]], 1);
-        const s1 = await step(dt);
-        const actKeys1 = s1.activity ? Object.keys(s1.activity).length : 0;
-        expect(actKeys1).toBeGreaterThanOrEqual(actKeys0);
-      }
-    });
   });
 
   describe('API simulation flow', () => {

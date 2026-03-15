@@ -77,6 +77,16 @@ console.log(`[backend] brain=unix-socket rust=${backendInfo.rust} gpu=${backendI
 
 const GROUND_Z = 0.35;
 const INITIAL_SPREAD = 4;
+const SPAWN_JITTER_RADIUS = 1.25;
+
+function hash32(s: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i) & 0xff;
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h >>> 0;
+}
 
 let foodIntervalId: ReturnType<typeof setInterval> | null = null;
 let rewardFlushIntervalId: ReturnType<typeof setInterval> | null = null;
@@ -133,15 +143,19 @@ function removeSimAtIndex(simIndex: number): { address: string; slotIndex: numbe
   return deployment;
 }
 
-async function addFlyToSim(): Promise<number> {
-  const angle = (2 * Math.PI * sims.length) / Math.max(1, sims.length + 1);
-  const x = INITIAL_SPREAD * Math.cos(angle);
-  const y = INITIAL_SPREAD * Math.sin(angle);
+async function addFlyToSim(spawnKey?: string): Promise<number> {
+  const baseAngle = (2 * Math.PI * sims.length) / Math.max(1, sims.length + 1);
+  const h = hash32(spawnKey ?? `sim-${sims.length}-${Date.now()}`);
+  const jitterAngle = ((h & 1023) / 1023) * 2 * Math.PI;
+  const jitterRadius = (((h >>> 10) & 1023) / 1023) * SPAWN_JITTER_RADIUS;
+  const x = INITIAL_SPREAD * Math.cos(baseAngle) + jitterRadius * Math.cos(jitterAngle);
+  const y = INITIAL_SPREAD * Math.sin(baseAngle) + jitterRadius * Math.sin(jitterAngle);
+  const heading = (((h >>> 20) & 1023) / 1023) * 2 * Math.PI - Math.PI;
   const sim = await createBrainSim(connectome, () => getSources(), {
     x,
     y,
     z: GROUND_Z,
-    heading: 0,
+    heading,
     t: 0,
     hunger: 100,
     health: 100,
@@ -156,7 +170,7 @@ async function restoreDeployFromStore(): Promise<void> {
     (r) => r.active !== false && isValidSlotIndex(r.slotIndex)
   );
   for (const { address, slotIndex } of records) {
-    const simIndex = await addFlyToSim();
+    const simIndex = await addFlyToSim(`${address}:${slotIndex}`);
     let map = deployedFlies.get(address);
     if (!map) {
       map = new Map();
@@ -642,7 +656,7 @@ app.post('/api/deploy', async (req, res) => {
       res.json({ success: true, simIndex: map.get(slotIndex), message: 'Already deployed' });
       return;
     }
-    const simIndex = await addFlyToSim();
+    const simIndex = await addFlyToSim(`${address}:${slotIndex}`);
     if (!map) {
       map = new Map();
       deployedFlies.set(address, map);

@@ -5,6 +5,13 @@ use std::fs;
 use std::path::Path;
 
 #[derive(Deserialize)]
+struct OlfactoryAfferentsJson {
+    left: Vec<String>,
+    right: Vec<String>,
+    unknown: Vec<String>,
+}
+
+#[derive(Deserialize)]
 struct NeuronJson {
     root_id: String,
     role: Option<String>,
@@ -74,6 +81,37 @@ fn compute_viewer_subset_indices(neuron_ids: &[String], limit: usize) -> Vec<u32
     out
 }
 
+fn load_precomputed_olfactory_indices(
+    connectome_path: &Path,
+    id_to_idx: &HashMap<String, u32>,
+) -> Option<(Vec<u32>, Vec<u32>, Vec<u32>, usize, usize, usize)> {
+    let precomputed_path = connectome_path.parent()?.join("olfactory-afferents.json");
+    let txt = fs::read_to_string(precomputed_path).ok()?;
+    let parsed: OlfactoryAfferentsJson = serde_json::from_str(&txt).ok()?;
+    let total_left = parsed.left.len();
+    let total_right = parsed.right.len();
+    let total_unknown = parsed.unknown.len();
+    let mut left: Vec<u32> = parsed
+        .left
+        .iter()
+        .filter_map(|id| id_to_idx.get(id).copied())
+        .collect();
+    let mut right: Vec<u32> = parsed
+        .right
+        .iter()
+        .filter_map(|id| id_to_idx.get(id).copied())
+        .collect();
+    let mut unknown: Vec<u32> = parsed
+        .unknown
+        .iter()
+        .filter_map(|id| id_to_idx.get(id).copied())
+        .collect();
+    left.sort_unstable();
+    right.sort_unstable();
+    unknown.sort_unstable();
+    Some((left, right, unknown, total_left, total_right, total_unknown))
+}
+
 pub fn load_connectome(path: &Path) -> Result<ConnectomeTemplate, Box<dyn std::error::Error + Send + Sync>> {
     let s = fs::read_to_string(path)?;
     let data: ConnectomeJson = serde_json::from_str(&s)?;
@@ -119,11 +157,30 @@ pub fn load_connectome(path: &Path) -> Result<ConnectomeTemplate, Box<dyn std::e
         }
     }
 
-    // Baseline odor encoding uses all bilateral sensory afferents.
-    // Sugar-specific modulation is applied only by feeding logic in sim.rs.
-    let sensory_left_indices = sensory_left_all;
-    let sensory_right_indices = sensory_right_all;
-    let sensory_unknown_indices = sensory_unknown_all;
+    // Prefer precomputed olfactory afferents from data/olfactory-afferents.json.
+    // If overlap with the currently loaded connectome is empty, fall back to all sensory neurons.
+    let (sensory_left_indices, sensory_right_indices, sensory_unknown_indices) =
+        if let Some((olf_l, olf_r, olf_u, total_l, total_r, total_u)) =
+            load_precomputed_olfactory_indices(path, &id_to_idx)
+        {
+            eprintln!(
+                "[connectome] olfactory precomputed total(L/R/U)={}/{}/{} overlap_in_loaded_connectome(L/R/U)={}/{}/{}",
+                total_l, total_r, total_u, olf_l.len(), olf_r.len(), olf_u.len()
+            );
+            if !olf_l.is_empty() || !olf_r.is_empty() || !olf_u.is_empty() {
+                (olf_l, olf_r, olf_u)
+            } else {
+                eprintln!(
+                    "[connectome] zero overlap with precomputed olfactory IDs; using all sensory neurons in loaded connectome"
+                );
+                (sensory_left_all, sensory_right_all, sensory_unknown_all)
+            }
+        } else {
+            eprintln!(
+                "[connectome] missing/invalid data/olfactory-afferents.json; using all sensory neurons in loaded connectome"
+            );
+            (sensory_left_all, sensory_right_all, sensory_unknown_all)
+        };
     let mut sensory_target = Vec::with_capacity(
         sensory_left_indices.len() + sensory_right_indices.len() + sensory_unknown_indices.len(),
     );

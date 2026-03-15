@@ -2,6 +2,8 @@ import type { Connectome } from './connectome.js';
 import type { FlyState } from './fly-state.js';
 import type { WorldSource } from './world.js';
 import * as socketClient from './brain-socket-client.js';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 export type { FlyState } from './fly-state.js';
 export const EAT_RADIUS = 2.5;
@@ -10,6 +12,8 @@ const STIM_RATE_HZ = 200;
 const SENSORY_SCALE = 0.18;
 const MIN_FOOD_DISTANCE = 1.0;
 const ODOR_DETECTION_RADIUS = 24.0;
+type PrecomputedOlfactory = { left: string[]; right: string[]; unknown: string[] };
+let precomputedOlfactoryCache: PrecomputedOlfactory | null | undefined;
 
 export interface SimState {
   t: number;
@@ -29,6 +33,29 @@ function normalizeAngle(a: number): number {
   while (out > Math.PI) out -= 2 * Math.PI;
   while (out < -Math.PI) out += 2 * Math.PI;
   return out;
+}
+
+function loadPrecomputedOlfactory(): PrecomputedOlfactory | null {
+  if (precomputedOlfactoryCache !== undefined) return precomputedOlfactoryCache;
+  const candidates = [
+    path.resolve(process.cwd(), '..', 'data', 'olfactory-afferents.json'),
+    path.resolve(process.cwd(), 'data', 'olfactory-afferents.json'),
+  ];
+  for (const p of candidates) {
+    try {
+      if (!fs.existsSync(p)) continue;
+      const parsed = JSON.parse(fs.readFileSync(p, 'utf-8')) as Partial<PrecomputedOlfactory>;
+      const left = Array.isArray(parsed.left) ? parsed.left.filter((x): x is string => typeof x === 'string') : [];
+      const right = Array.isArray(parsed.right) ? parsed.right.filter((x): x is string => typeof x === 'string') : [];
+      const unknown = Array.isArray(parsed.unknown) ? parsed.unknown.filter((x): x is string => typeof x === 'string') : [];
+      precomputedOlfactoryCache = { left, right, unknown };
+      return precomputedOlfactoryCache;
+    } catch {
+      // Try next candidate path.
+    }
+  }
+  precomputedOlfactoryCache = null;
+  return null;
 }
 
 function estimateDirectionalSensoryInput(
@@ -82,13 +109,19 @@ export async function createBrainSim(
   const getSources = (): WorldSource[] =>
     typeof worldSources === 'function' ? worldSources() : worldSources;
   const neuronIds = connectome.neurons.map((n) => n.root_id);
-  const sensoryLeftNeuronIds = connectome.neurons
+  const precomputed = loadPrecomputedOlfactory();
+  const loadedNeuronSet = new Set(neuronIds);
+  const precomputedLeft = (precomputed?.left ?? []).filter((id) => loadedNeuronSet.has(id));
+  const precomputedRight = (precomputed?.right ?? []).filter((id) => loadedNeuronSet.has(id));
+  const precomputedUnknown = (precomputed?.unknown ?? []).filter((id) => loadedNeuronSet.has(id));
+  const hasPrecomputedOverlap = precomputedLeft.length > 0 || precomputedRight.length > 0 || precomputedUnknown.length > 0;
+  const sensoryLeftNeuronIds = hasPrecomputedOverlap ? precomputedLeft : connectome.neurons
     .filter((n) => n.role === 'sensory' && n.side === 'left')
     .map((n) => n.root_id);
-  const sensoryRightNeuronIds = connectome.neurons
+  const sensoryRightNeuronIds = hasPrecomputedOverlap ? precomputedRight : connectome.neurons
     .filter((n) => n.role === 'sensory' && n.side === 'right')
     .map((n) => n.root_id);
-  const sensoryUnknownNeuronIds = connectome.neurons
+  const sensoryUnknownNeuronIds = hasPrecomputedOverlap ? precomputedUnknown : connectome.neurons
     .filter((n) => n.role === 'sensory' && (!n.side || n.side === 'unknown'))
     .map((n) => n.root_id);
   const sensoryNeuronIds = connectome.neurons

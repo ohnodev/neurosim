@@ -21,9 +21,10 @@ const FLIGHT_Z: f64 = 1.5;
 const ON_GROUND_THRESH: f64 = 0.6;
 const EAT_RADIUS: f64 = 2.5;
 const NEAR_FOOD_RADIUS: f64 = 3.2;
+const ODOR_DETECTION_RADIUS: f64 = 24.0;
 const HUNGER_DECAY: f64 = 0.8;
 const HEALTH_DECAY: f64 = 2.5;
-const MOVE_SPEED: f64 = 42.0;
+const MOVE_SPEED: f64 = 38.0;
 const BASELINE_EXPLORE: f64 = 0.03;
 const FEEDING_STIM_BONUS: f32 = 0.25;
 // Ignore near-zero food distance to avoid singular-like gain when the fly is
@@ -241,6 +242,9 @@ impl BrainSim {
             let dist = ((s.x - fly.x).powi(2) + (s.y - fly.y).powi(2)).sqrt();
             if dist < EAT_RADIUS && fly.z <= 1.2 {
                 near_food = true;
+            }
+            if dist > ODOR_DETECTION_RADIUS {
+                continue;
             }
             if dist < MIN_FOOD_DISTANCE {
                 continue;

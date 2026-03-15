@@ -95,7 +95,7 @@ const FOOD_SLICE_RADIUS = 0.75;
 const FOOD_SLICE_HEIGHT = 0.14;
 /** Debug helper: render fly smell radius sphere around each fly. */
 const SHOW_FLY_SMELL_RADIUS_DEBUG = true;
-const FLY_SMELL_RADIUS_DEBUG = 12;
+const FLY_SMELL_RADIUS_DEBUG = 24; // Keep aligned with Rust ODOR_DETECTION_RADIUS.
 const FLY_SMELL_RADIUS_DEBUG_COLOR = 0xffd75e;
 const FLY_SMELL_RADIUS_DEBUG_OPACITY = 0.1;
 

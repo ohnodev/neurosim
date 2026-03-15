@@ -11,7 +11,7 @@ import * as path from 'path';
 import { parse } from 'csv-parse/sync';
 
 const DATA_RAW = path.join(process.cwd(), 'data', 'raw');
-const OUTPUT = path.join(process.cwd(), 'data', 'connectome-subset.json');
+const OUTPUT = path.resolve(process.cwd(), process.env.OUTPUT_PATH || 'data/connectome-subset.json');
 const DEFAULT_SUBSET_SIZE = 10000; // curated subset for movement/odor/visual/feeding (use --all for full)
 const MIN_SYNAPSES = 2;
 

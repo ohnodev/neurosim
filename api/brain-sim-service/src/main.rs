@@ -22,8 +22,17 @@ fn main() {
     let default_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|p| p.parent())
-        .map(|p| p.join("data/connectome-subset.json"))
-        .filter(|p| p.exists())
+        .and_then(|root| {
+            let full = root.join("data/connectome-full.json");
+            if full.exists() {
+                return Some(full);
+            }
+            let subset = root.join("data/connectome-subset.json");
+            if subset.exists() {
+                return Some(subset);
+            }
+            None
+        })
         .and_then(|p| p.canonicalize().ok())
         .map(|p| p.to_string_lossy().into_owned());
     let connectome_path = std::env::var("NEUROSIM_CONNECTOME_PATH")

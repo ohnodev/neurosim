@@ -6,6 +6,10 @@ import * as socketClient from './brain-socket-client.js';
 export type { FlyState } from './fly-state.js';
 export const EAT_RADIUS = 2.5;
 export const REST_TIME = 4;
+const STIM_RATE_HZ = 200;
+const SENSORY_SCALE = 0.18;
+const MIN_FOOD_DISTANCE = 1.0;
+const ODOR_DETECTION_RADIUS = 24.0;
 
 export interface SimState {
   t: number;
@@ -20,6 +24,24 @@ export interface SimState {
 const FLY_TIME_MAX = 6;
 const GROUND_Z = 0.35;
 
+function estimateSensoryInputStrength(dt: number, fly: FlyState, sources: WorldSource[]): number {
+  if (sources.length === 0) return 0;
+  const hunger = fly.hunger ?? 100;
+  const hungry = hunger <= 90;
+  let foodModulation = 0;
+  for (const s of sources) {
+    const dist = Math.hypot((s.x ?? 0) - (fly.x ?? 0), (s.y ?? 0) - (fly.y ?? 0));
+    if (dist > ODOR_DETECTION_RADIUS || dist < MIN_FOOD_DISTANCE) continue;
+    const invDist = 1 / (1 + dist * 0.1);
+    foodModulation += invDist * Math.max(0, 1 - hunger / 100);
+  }
+  if (foodModulation <= 0) return 0;
+  const rateHz = hungry
+    ? Math.min(STIM_RATE_HZ, 50 + foodModulation * STIM_RATE_HZ)
+    : 30;
+  return Math.min(0.5, (rateHz / STIM_RATE_HZ) * SENSORY_SCALE * (dt / (1 / 30)));
+}
+
 export async function createBrainSim(
   connectome: Connectome,
   worldSources: WorldSource[] | (() => WorldSource[]) = [],
@@ -28,6 +50,9 @@ export async function createBrainSim(
   const getSources = (): WorldSource[] =>
     typeof worldSources === 'function' ? worldSources() : worldSources;
   const neuronIds = connectome.neurons.map((n) => n.root_id);
+  const sensoryNeuronIds = connectome.neurons
+    .filter((n) => n.role === 'sensory')
+    .map((n) => n.root_id);
   let flyTimeLeftSec = FLY_TIME_MAX;
   let restTimeLeft = 0;
 
@@ -136,7 +161,13 @@ export async function createBrainSim(
       }
 
       const currentSources = getSources();
-      const inputActivityRec: Record<string, number> | undefined = undefined;
+      const sensoryStrength = estimateSensoryInputStrength(dt, fly, currentSources);
+      const inputActivityRec: Record<string, number> | undefined =
+        sensoryStrength > 0 && sensoryNeuronIds.length > 0
+          ? Object.fromEntries(
+              sensoryNeuronIds.map((id) => [id, Math.max(0.05, Math.min(0.95, sensoryStrength))] as const)
+            )
+          : undefined;
       lastInputActivity = inputActivityRec;
 
       const rustStart = performance.now();

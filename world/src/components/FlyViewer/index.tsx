@@ -94,18 +94,22 @@ export default function FlyViewer() {
     else setError((prev) => (prev === 'Failed to load world' || prev === 'Failed to load neurons' ? null : prev));
   }, [worldError, neuronsError]);
 
-  const { data: myFlies = [] } = useQuery({
+  const myFliesQuery = useQuery({
     queryKey: apiKeys.myFlies(address ?? '__unauthenticated__'),
     queryFn: () => fetchMyFlies(address!),
     enabled: !!address,
   });
+  const myFlies = myFliesQuery.data ?? [null, null, null];
 
-  const { data: myDeployedData = { deployed: {}, graveyardSlots: [] }, refetch: refetchDeployed } = useQuery({
+  const myDeployedQuery = useQuery({
     queryKey: apiKeys.myDeployed(address ?? '__unauthenticated__'),
     queryFn: () => fetchMyDeployed(address!),
     enabled: !!address,
   });
+  const myDeployedData = myDeployedQuery.data ?? { deployed: {}, graveyardSlots: [] };
+  const { refetch: refetchDeployed } = myDeployedQuery;
   const deployed = myDeployedData.deployed;
+  const ownershipHydrating = !!address && (myFliesQuery.isPending || myDeployedQuery.isPending);
 
   const { data: rewardsHistory } = useQuery({
     queryKey: apiKeys.rewardsHistory(),
@@ -471,6 +475,7 @@ export default function FlyViewer() {
                   deployed={deployed}
                   selectedFlyIndex={selectedFlyIndex}
                   myFlies={myFlies}
+                  ownershipHydrating={ownershipHydrating}
                   graveyardSlots={graveyardSlots}
                   deployingSlots={deployingSlots}
                   statsBySlot={statsBySlot}

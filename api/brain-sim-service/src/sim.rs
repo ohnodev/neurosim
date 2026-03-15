@@ -100,6 +100,7 @@ pub struct FlyStepOutput {
     pub feeding: bool,
     pub eaten_food_id: Option<String>,
     pub feeding_candidate_id: Option<String>,
+    pub feeding_sugar_taken: f64,
 }
 
 impl BrainSim {
@@ -614,6 +615,7 @@ impl BrainSim {
             feeding,
             eaten_food_id,
             feeding_candidate_id,
+            feeding_sugar_taken: 0.0,
         };
 
         (

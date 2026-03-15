@@ -13,6 +13,7 @@ export interface SimState {
   activity?: Record<string, number>;
   inputActivity?: Record<string, number>;
   eatenFoodId?: string;
+  feedingSugarTaken?: number;
 }
 
 /** Brain sim uses the Rust service via Unix socket only. Connectome loaded by brain-service at startup. */
@@ -57,6 +58,7 @@ export async function createBrainSim(
     let lastActivitySparse: Record<string, number> = {};
     let lastInputActivity: Record<string, number> | undefined;
     let lastEatenFoodId: string | undefined;
+    let lastFeedingSugarTaken = 0;
 
     async function runRustStep(
       dt: number,
@@ -82,6 +84,7 @@ export async function createBrainSim(
         feeding: boolean;
       };
       eatenFoodId?: string;
+      feedingSugarTaken?: number;
       computeMs?: number;
       kernelMs?: number;
       recurrentMs?: number;
@@ -119,6 +122,7 @@ export async function createBrainSim(
         lastActivitySparse = act.activitySparse;
         lastInputActivity = undefined;
         lastEatenFoodId = undefined;
+        lastFeedingSugarTaken = 0;
         lastRustMs = Math.round(performance.now() - stepStart);
         lastRustTiming = {
           computeMs: act.computeMs,
@@ -168,6 +172,7 @@ export async function createBrainSim(
 
       const activityRec = Object.keys(activitySparse).length ? activitySparse : undefined;
       lastEatenFoodId = result.eatenFoodId;
+      lastFeedingSugarTaken = result.feedingSugarTaken ?? 0;
       lastJsMs = Math.round(performance.now() - stepStart - lastRustMs);
 
       return {
@@ -175,6 +180,7 @@ export async function createBrainSim(
         fly,
         activity: activityRec,
         inputActivity: inputActivityRec,
+        feedingSugarTaken: lastFeedingSugarTaken,
         ...(result.eatenFoodId && { eatenFoodId: result.eatenFoodId }),
       };
     }
@@ -210,6 +216,7 @@ export async function createBrainSim(
         fly: flyWithMeta,
         activity: activityRec,
         inputActivity: lastInputActivity,
+        feedingSugarTaken: lastFeedingSugarTaken,
         ...(lastEatenFoodId && { eatenFoodId: lastEatenFoodId }),
       };
     }

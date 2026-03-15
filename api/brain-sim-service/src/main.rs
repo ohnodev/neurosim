@@ -137,6 +137,7 @@ struct StepResp {
     motor_fwd: f64,
     fly: FlyRespJson,
     eaten_food_id: Option<String>,
+    feeding_sugar_taken: f64,
     compute_ms: f64,
     kernel_ms: f64,
     recurrent_ms: f64,
@@ -153,6 +154,7 @@ struct StepManyItemResp {
     motor_fwd: f64,
     fly: FlyRespJson,
     eaten_food_id: Option<String>,
+    feeding_sugar_taken: f64,
     #[serde(skip_serializing)]
     feeding_candidate_id: Option<String>,
     #[serde(skip_serializing)]
@@ -173,14 +175,17 @@ fn apply_feeding_tick(
         let sugar_per_fly = (FEED_SUGAR_PER_SEC * item.dt).max(0.0);
         if sugar_per_fly <= 0.0 {
             item.fly.feeding = false;
+            item.feeding_sugar_taken = 0.0;
             continue;
         }
         let Some(source_id) = item.feeding_candidate_id.clone() else {
             item.fly.feeding = false;
+            item.feeding_sugar_taken = 0.0;
             continue;
         };
         let taken = food_state.take_sugar(&source_id, sugar_per_fly);
         item.fly.feeding = taken > 0.0;
+        item.feeding_sugar_taken = taken;
         item.fly.hunger = (item.fly.hunger + taken * HUNGER_PER_SUGAR).clamp(0.0, 100.0);
         item.fly.health = (item.fly.health + taken * HEALTH_PER_SUGAR).clamp(0.0, 100.0);
         if let Some((sx, sy)) = source_lookup.get(&source_id) {
@@ -348,6 +353,7 @@ fn handle(
                     feeding: fly_out.feeding,
                 },
                 eaten_food_id: fly_out.eaten_food_id,
+                feeding_sugar_taken: fly_out.feeding_sugar_taken,
                 feeding_candidate_id: fly_out.feeding_candidate_id,
                 dt: step.dt,
                 compute_ms: timing.compute_ms,
@@ -461,6 +467,7 @@ fn handle(
                 feeding: fly_out.feeding,
             },
             eaten_food_id: fly_out.eaten_food_id,
+            feeding_sugar_taken: fly_out.feeding_sugar_taken,
             feeding_candidate_id: fly_out.feeding_candidate_id,
             dt: p.dt,
             compute_ms: timing.compute_ms,
@@ -483,6 +490,7 @@ fn handle(
             motor_fwd,
             fly: one_out.fly,
             eaten_food_id: one_out.eaten_food_id,
+            feeding_sugar_taken: one_out.feeding_sugar_taken,
             compute_ms: timing.compute_ms,
             kernel_ms: timing.kernel_ms,
             recurrent_ms: timing.recurrent_ms,

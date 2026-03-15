@@ -10,7 +10,15 @@ import { getWorld, spawnFood, removeFood, getSources, type WorldSource } from '.
 import claimsRouter from './routes/claims.js';
 import { getFlies, removeFlyAtSlot } from './services/flyStore.js';
 import { getDeployments, addDeployment, clearForTesting, deactivateDeployment } from './services/deployStore.js';
-import { recordFoodCollected, getStatsForAddress, getDistributedHistory, REWARD_PER_FOOD, getNeuroFlyStats } from './services/rewardStore.js';
+import {
+  recordFeedingPoints,
+  recordFoodDepleted,
+  flushAccruedPointsToPending,
+  getStatsForAddress,
+  getDistributedHistory,
+  REWARD_PER_POINT,
+  getNeuroFlyStats,
+} from './services/rewardStore.js';
 import { flushRewards } from './services/rewardDistributor.js';
 
 const PORT = Number(process.env.PORT) || 3001;
@@ -442,9 +450,15 @@ function startSim(): void {
           removeFood(state.eatenFoodId);
           const deployment = findDeploymentBySimIndex(j);
           if (deployment) {
-            recordFoodCollected(deployment.address, deployment.slotIndex);
+            recordFoodDepleted(deployment.address, deployment.slotIndex);
           }
           console.log('[world] fly', j, 'ate food', state.eatenFoodId);
+        }
+        if ((state.feedingSugarTaken ?? 0) > 0) {
+          const deployment = findDeploymentBySimIndex(j);
+          if (deployment) {
+            recordFeedingPoints(deployment.address, deployment.slotIndex, state.feedingSugarTaken ?? 0);
+          }
         }
         transitions.push({
           fromFly: before.fly,
@@ -535,7 +549,10 @@ function startSim(): void {
       simTickInFlight = false;
     }
   }, BATCH_MS);
-  rewardFlushIntervalId = setInterval(() => void flushRewards(), 60_000);
+  rewardFlushIntervalId = setInterval(() => {
+    flushAccruedPointsToPending();
+    void flushRewards();
+  }, 60_000);
   console.log('[sim] started');
 }
 
@@ -685,7 +702,7 @@ app.get('/api/rewards/stats', (req, res) => {
       return;
     }
     const stats = getStatsForAddress(address);
-    const rewardPerPointWei = REWARD_PER_FOOD.toString();
+    const rewardPerPointWei = REWARD_PER_POINT.toString();
     res.json({ stats, rewardPerPointWei });
   } catch (err) {
     console.error('[rewards] stats error:', err);
@@ -768,7 +785,7 @@ app.get('/api/deploy/graveyard', (req, res) => {
           flyId,
           slotIndex: d.slotIndex,
           feedCount,
-          rewardWei: (BigInt(feedCount) * REWARD_PER_FOOD).toString(),
+          rewardWei: (BigInt(stats?.pointsEarnedMilli ?? 0) * (REWARD_PER_POINT / 1000n)).toString(),
           timeBirthed: stats?.timeBirthed,
           timeDeployed: d.timeDeployed ?? stats?.timeDeployed,
           removedAt: d.deactivatedAt ?? null,

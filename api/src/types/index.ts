@@ -10,7 +10,12 @@ export interface NeuroFlyStats {
   flyId: string;
   timeBirthed: string;
   timeDeployed: string;
+  /** Lifetime whole-fruit consumptions attributed to this fly. */
   feedCount: number;
+  /** Lifetime earned feeding points in milli-points (1 point = 1000 milli-points). */
+  pointsEarnedMilli: number;
+  /** Lifetime flushed feeding points in milli-points (already moved to pending/distribution pipeline). */
+  pointsFlushedMilli: number;
 }
 
 /** Audit log entry for a past distribution */

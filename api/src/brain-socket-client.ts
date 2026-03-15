@@ -221,6 +221,7 @@ function flushStepBatch(): void {
       feeding: boolean;
     };
     eaten_food_id?: string;
+    feeding_sugar_taken?: number;
   }> }>(manyPayload)).then((res) => {
     const bySim = new Map<number, {
       sim_id: number;
@@ -243,6 +244,7 @@ function flushStepBatch(): void {
         feeding: boolean;
       };
       eaten_food_id?: string;
+      feeding_sugar_taken?: number;
     }>();
     for (const r of res.results ?? []) bySim.set(r.sim_id, r);
     for (const q of batch) {
@@ -326,6 +328,7 @@ export interface StepResult {
     feeding: boolean;
   };
   eatenFoodId?: string;
+  feedingSugarTaken?: number;
   computeMs?: number;
   kernelMs?: number;
   recurrentMs?: number;
@@ -359,6 +362,7 @@ export interface StepManyResultItem {
   motorFwd: number;
   fly: StepResult['fly'];
   eatenFoodId?: string;
+  feedingSugarTaken?: number;
   computeMs?: number;
   kernelMs?: number;
   recurrentMs?: number;
@@ -398,6 +402,7 @@ export async function stepSim(params: StepParams): Promise<StepResult> {
       feeding: boolean;
     };
     eaten_food_id?: string;
+    feeding_sugar_taken?: number;
     compute_ms?: number;
     kernel_ms?: number;
     recurrent_ms?: number;
@@ -444,6 +449,7 @@ export async function stepSim(params: StepParams): Promise<StepResult> {
       feeding: res.fly.feeding,
     },
     ...(res.eaten_food_id ? { eatenFoodId: res.eaten_food_id } : {}),
+    feedingSugarTaken: res.feeding_sugar_taken,
     computeMs: res.compute_ms,
     kernelMs: res.kernel_ms,
     recurrentMs: res.recurrent_ms,
@@ -477,6 +483,7 @@ export async function stepMany(
         feeding: boolean;
       };
       eaten_food_id?: string;
+      feeding_sugar_taken?: number;
       compute_ms?: number;
       kernel_ms?: number;
       recurrent_ms?: number;
@@ -528,6 +535,7 @@ export async function stepMany(
         feeding: item.fly.feeding,
       },
       ...(item.eaten_food_id ? { eatenFoodId: item.eaten_food_id } : {}),
+      feedingSugarTaken: item.feeding_sugar_taken,
       computeMs: item.compute_ms,
       kernelMs: item.kernel_ms,
       recurrentMs: item.recurrent_ms,

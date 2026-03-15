@@ -19,6 +19,7 @@
     "test:api": "cd api && npm run test",
     "test:smoke": "node scripts/smoke-test.mjs",
     "test:smoothness": "node scripts/check-smoothness.mjs",
+    "audit:neurons": "node scripts/audit-neuron-classification.mjs",
     "bench:brain-service": "node scripts/benchmark-brain-service.mjs",
     "ngrok": "ngrok http 3001 ${NGROK_DOMAIN:+--domain=$NGROK_DOMAIN}"
   },

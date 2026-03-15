@@ -190,18 +190,22 @@ export async function createBrainSim(
 
       const toApply = pendingStimuli.splice(0, pendingStimuli.length);
       const pendingInput = toApply.map((p) => ({ neuronIds: p.neurons, strength: p.strength }));
-      const lateral = estimateLateralSensoryStrength(dt, fly, currentSources);
-      if (lateral.left > 0) {
-        const leftTargets = sensoryLeftNeuronIds.length > 0 ? sensoryLeftNeuronIds : sensoryNeuronIds;
-        pendingInput.push({ neuronIds: leftTargets, strength: lateral.left });
-      }
-      if (lateral.right > 0) {
-        const rightTargets = sensoryRightNeuronIds.length > 0 ? sensoryRightNeuronIds : sensoryNeuronIds;
-        pendingInput.push({ neuronIds: rightTargets, strength: lateral.right });
-      }
-      if (sensoryUnknownNeuronIds.length > 0) {
-        const centerStrength = Math.max(lateral.left, lateral.right) * 0.35;
-        if (centerStrength > 0) pendingInput.push({ neuronIds: sensoryUnknownNeuronIds, strength: centerStrength });
+      const lateral = includeActivity
+        ? estimateLateralSensoryStrength(dt, fly, currentSources)
+        : { left: 0, right: 0 };
+      if (includeActivity) {
+        if (lateral.left > 0) {
+          const leftTargets = sensoryLeftNeuronIds.length > 0 ? sensoryLeftNeuronIds : sensoryNeuronIds;
+          pendingInput.push({ neuronIds: leftTargets, strength: lateral.left });
+        }
+        if (lateral.right > 0) {
+          const rightTargets = sensoryRightNeuronIds.length > 0 ? sensoryRightNeuronIds : sensoryNeuronIds;
+          pendingInput.push({ neuronIds: rightTargets, strength: lateral.right });
+        }
+        if (sensoryUnknownNeuronIds.length > 0) {
+          const centerStrength = Math.max(lateral.left, lateral.right) * 0.35;
+          if (centerStrength > 0) pendingInput.push({ neuronIds: sensoryUnknownNeuronIds, strength: centerStrength });
+        }
       }
       const inputActivityRec: Record<string, number> | undefined = includeActivity
         ? (() => {

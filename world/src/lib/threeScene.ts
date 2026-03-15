@@ -86,6 +86,10 @@ const NEURAL_EDGE_MIN_DISTANCE = 20;
 const NEURAL_EDGE_MAX_DISTANCE = 98;
 /** Sim ground level (z=0.35); map to Three.js y=0 so fly rests on ground */
 const GROUND_Z = 0.35;
+/** Temporary debug helper: render translucent food radius spheres. */
+const SHOW_FOOD_RADIUS_DEBUG = true;
+const FOOD_RADIUS_DEBUG_COLOR = 0x66ccff;
+const FOOD_RADIUS_DEBUG_OPACITY = 0.12;
 
 const DEFAULT_FLY: FlyState = { x: 0, y: 0, z: 0.35, heading: 0, t: 0, hunger: 100 };
 
@@ -387,6 +391,7 @@ export function initThreeScene(
   let flyTemplate: THREE.Group | null = null;
   let flyClips: THREE.AnimationClip[] = [];
   const applePool: THREE.Object3D[] = [];
+  const foodRadiusDebugPool: THREE.Mesh[] = [];
   let appleTemplate: THREE.Object3D | null = null;
   const flyInstances: {
     group: THREE.Group;
@@ -435,6 +440,24 @@ export function initThreeScene(
     applePool.push(clone);
     sourcesGroup.add(clone);
     return clone;
+  }
+
+  function getOrCreateFoodRadiusDebug(): THREE.Mesh {
+    const unused = foodRadiusDebugPool.find((m) => !m.visible);
+    if (unused) return unused;
+    const geom = new THREE.SphereGeometry(1, 20, 16);
+    const mat = new THREE.MeshBasicMaterial({
+      color: FOOD_RADIUS_DEBUG_COLOR,
+      transparent: true,
+      opacity: FOOD_RADIUS_DEBUG_OPACITY,
+      depthWrite: false,
+      wireframe: true,
+    });
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.visible = false;
+    foodRadiusDebugPool.push(mesh);
+    sourcesGroup.add(mesh);
+    return mesh;
   }
 
   loader.load(
@@ -489,13 +512,24 @@ export function initThreeScene(
         apple.position.set(s.x, s.z, s.y);
         apple.visible = true;
       }
+      if (SHOW_FOOD_RADIUS_DEBUG) {
+        const sphere = foodRadiusDebugPool[i] ?? getOrCreateFoodRadiusDebug();
+        const s = foodSources[i]!;
+        sphere.position.set(s.x, s.z, s.y);
+        sphere.scale.setScalar(Math.max(0.001, s.radius));
+        sphere.visible = true;
+      }
     }
     for (let i = foodSources.length; i < applePool.length; i++) {
       applePool[i]!.visible = false;
     }
+    for (let i = foodSources.length; i < foodRadiusDebugPool.length; i++) {
+      foodRadiusDebugPool[i]!.visible = false;
+    }
 
     for (const c of sourcesGroup.children.slice()) {
       if (applePool.includes(c)) continue;
+      if (foodRadiusDebugPool.includes(c as THREE.Mesh)) continue;
       sourcesGroup.remove(c);
       disposeObject3D(c);
     }

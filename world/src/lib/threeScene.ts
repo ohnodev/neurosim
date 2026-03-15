@@ -90,7 +90,7 @@ const GROUND_Z = 0.35;
 const SHOW_FOOD_RADIUS_DEBUG = true;
 const FOOD_RADIUS_DEBUG_COLOR = 0x66ccff;
 const FOOD_RADIUS_DEBUG_OPACITY = 0.12;
-const FOOD_RADIUS_DEBUG_SCALE = 0.42;
+const FOOD_RADIUS_DEBUG_RADIUS = 3.2; // Keep aligned with Rust NEAR_FOOD_RADIUS.
 /** Debug helper: render fly smell radius sphere around each fly. */
 const SHOW_FLY_SMELL_RADIUS_DEBUG = true;
 const FLY_SMELL_RADIUS_DEBUG = 12;
@@ -541,7 +541,7 @@ export function initThreeScene(
         const sphere = foodRadiusDebugPool[i] ?? getOrCreateFoodRadiusDebug();
         const s = foodSources[i]!;
         sphere.position.set(s.x, s.z, s.y);
-        sphere.scale.setScalar(Math.max(0.001, s.radius * FOOD_RADIUS_DEBUG_SCALE));
+        sphere.scale.setScalar(FOOD_RADIUS_DEBUG_RADIUS);
         sphere.visible = true;
       }
     }

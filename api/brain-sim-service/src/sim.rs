@@ -20,6 +20,7 @@ const GROUND_Z: f64 = 0.35;
 const FLIGHT_Z: f64 = 1.5;
 const ON_GROUND_THRESH: f64 = 0.6;
 const EAT_RADIUS: f64 = 2.5;
+const NEAR_FOOD_RADIUS: f64 = 3.2;
 const HUNGER_DECAY: f64 = 0.8;
 const HEALTH_DECAY: f64 = 2.5;
 const MOVE_SPEED: f64 = 34.0;
@@ -534,7 +535,7 @@ impl BrainSim {
             } else {
                 let mut near_food = false;
                 for s in &sources {
-                    if ((s.x - fly.x).powi(2) + (s.y - fly.y).powi(2)).sqrt() < EAT_RADIUS * 2.0 {
+                    if ((s.x - fly.x).powi(2) + (s.y - fly.y).powi(2)).sqrt() < NEAR_FOOD_RADIUS {
                         near_food = true;
                         break;
                     }

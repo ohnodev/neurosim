@@ -12,6 +12,7 @@ const SUGAR_GRN_IDS: [&str; 21] = [
     "720575940633143833", "720575940612670570", "720575940628853239", "720575940629176663",
     "720575940611875570",
 ];
+const DEFAULT_ODOR_PER_SIDE: usize = 1000;
 
 fn is_photoreceptor(cell_type: Option<&str>) -> bool {
     let s = match cell_type {
@@ -94,6 +95,40 @@ fn compute_viewer_subset_indices(neuron_ids: &[String], limit: usize) -> Vec<u32
     out
 }
 
+fn odor_per_side_limit() -> usize {
+    std::env::var("NEUROSIM_ODOR_PER_SIDE")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_ODOR_PER_SIDE)
+        .max(1)
+}
+
+fn use_sugar_grn_targeting() -> bool {
+    std::env::var("NEUROSIM_USE_SUGAR_GRN_TARGETING")
+        .ok()
+        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false)
+}
+
+fn select_deterministic(indices: &[u32], neuron_ids: &[String], limit: usize) -> Vec<u32> {
+    if indices.is_empty() || limit == 0 {
+        return Vec::new();
+    }
+    if indices.len() <= limit {
+        return indices.to_vec();
+    }
+    let mut ranked: Vec<(u32, u32)> = indices
+        .iter()
+        .copied()
+        .filter(|idx| (*idx as usize) < neuron_ids.len())
+        .map(|idx| (fnv1a32(&neuron_ids[idx as usize]), idx))
+        .collect();
+    ranked.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    let mut out: Vec<u32> = ranked.into_iter().take(limit).map(|(_, idx)| idx).collect();
+    out.sort_unstable();
+    out
+}
+
 pub fn load_connectome(path: &Path) -> Result<ConnectomeTemplate, Box<dyn std::error::Error + Send + Sync>> {
     let s = fs::read_to_string(path)?;
     let data: ConnectomeJson = serde_json::from_str(&s)?;
@@ -109,8 +144,13 @@ pub fn load_connectome(path: &Path) -> Result<ConnectomeTemplate, Box<dyn std::e
         .collect();
 
     let mut sensory = Vec::new();
+    let mut sensory_left_all = Vec::new();
+    let mut sensory_right_all = Vec::new();
+    let mut sensory_unknown_all = Vec::new();
     let mut afferent_visual = Vec::new();
-    let mut sugar_grn = Vec::new();
+    let mut sugar_grn_left = Vec::new();
+    let mut sugar_grn_right = Vec::new();
+    let mut sugar_grn_unknown = Vec::new();
     let mut motor_left = Vec::new();
     let mut motor_right = Vec::new();
     let mut motor_unknown = Vec::new();
@@ -118,11 +158,20 @@ pub fn load_connectome(path: &Path) -> Result<ConnectomeTemplate, Box<dyn std::e
     for (i, n) in data.neurons.iter().enumerate() {
         let role = n.role.as_deref().unwrap_or("interneuron");
         if SUGAR_GRN_IDS.contains(&n.root_id.as_str()) {
-            sugar_grn.push(i as u32);
+            match n.side.as_deref() {
+                Some("left") => sugar_grn_left.push(i as u32),
+                Some("right") => sugar_grn_right.push(i as u32),
+                _ => sugar_grn_unknown.push(i as u32),
+            }
         }
         match role {
             "sensory" => {
                 sensory.push(i as u32);
+                match n.side.as_deref() {
+                    Some("left") => sensory_left_all.push(i as u32),
+                    Some("right") => sensory_right_all.push(i as u32),
+                    _ => sensory_unknown_all.push(i as u32),
+                }
                 if is_photoreceptor(n.cell_type.as_deref()) {
                     afferent_visual.push(i as u32);
                 }
@@ -139,30 +188,48 @@ pub fn load_connectome(path: &Path) -> Result<ConnectomeTemplate, Box<dyn std::e
         }
     }
 
-    let sensory_target = if sugar_grn.is_empty() {
-        if afferent_visual.is_empty() {
-            sensory
+    let per_side = odor_per_side_limit();
+    let (mut sensory_left_indices, mut sensory_right_indices, mut sensory_unknown_indices): (Vec<u32>, Vec<u32>, Vec<u32>) =
+        if use_sugar_grn_targeting()
+            && !sugar_grn_left.is_empty()
+            && !sugar_grn_right.is_empty()
+        {
+            (
+                sugar_grn_left,
+                sugar_grn_right,
+                sugar_grn_unknown,
+            )
         } else {
-            afferent_visual
-        }
-    } else {
-        sugar_grn
-    };
-    let sensory_target_set: std::collections::HashSet<u32> = sensory_target.iter().copied().collect();
-    let mut sensory_left_indices: Vec<u32> = Vec::new();
-    let mut sensory_right_indices: Vec<u32> = Vec::new();
-    let mut sensory_unknown_indices: Vec<u32> = Vec::new();
-    for (i, n) in data.neurons.iter().enumerate() {
-        let idx = i as u32;
-        if !sensory_target_set.contains(&idx) {
-            continue;
-        }
-        match n.side.as_deref() {
-            Some("left") => sensory_left_indices.push(idx),
-            Some("right") => sensory_right_indices.push(idx),
-            _ => sensory_unknown_indices.push(idx),
+            (
+                select_deterministic(&sensory_left_all, &neuron_ids, per_side),
+                select_deterministic(&sensory_right_all, &neuron_ids, per_side),
+                select_deterministic(&sensory_unknown_all, &neuron_ids, (per_side / 4).max(1)),
+            )
+        };
+    // Final safety fallback so we never end up one-sided if metadata is skewed.
+    if sensory_left_indices.is_empty() || sensory_right_indices.is_empty() {
+        let bank = if afferent_visual.is_empty() { &sensory } else { &afferent_visual };
+        let selected = select_deterministic(bank, &neuron_ids, per_side.saturating_mul(2));
+        sensory_left_indices.clear();
+        sensory_right_indices.clear();
+        sensory_unknown_indices.clear();
+        for idx in selected {
+            let id = &neuron_ids[idx as usize];
+            if (fnv1a32(id) & 1) == 0 {
+                sensory_left_indices.push(idx);
+            } else {
+                sensory_right_indices.push(idx);
+            }
         }
     }
+    let mut sensory_target = Vec::with_capacity(
+        sensory_left_indices.len() + sensory_right_indices.len() + sensory_unknown_indices.len(),
+    );
+    sensory_target.extend_from_slice(&sensory_left_indices);
+    sensory_target.extend_from_slice(&sensory_right_indices);
+    sensory_target.extend_from_slice(&sensory_unknown_indices);
+    sensory_target.sort_unstable();
+    sensory_target.dedup();
 
     let viewer_subset_indices = compute_viewer_subset_indices(&neuron_ids, viewer_subset_limit());
     let mut edges_pre = Vec::with_capacity(data.connections.len());

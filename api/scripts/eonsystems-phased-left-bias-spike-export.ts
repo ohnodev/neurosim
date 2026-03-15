@@ -27,6 +27,7 @@ type ReplayJson = {
     dt_sec: number;
     baseline_rate_hz: number;
     scenario: string;
+    phase_switch_tick: number;
     generated_at: string;
   };
   ticks: ReplayTick[];
@@ -35,17 +36,18 @@ type ReplayJson = {
 const ROOT = path.resolve(process.cwd(), '..');
 const LOGS_DIR = path.join(ROOT, 'logs');
 const CLASSIFICATION_PATH = path.join(ROOT, 'data', 'raw', 'classification.csv');
-const OUT_CSV = path.join(LOGS_DIR, 'eonsystems_left_bias_spikes_per_tick.csv');
-const OUT_JSON = path.join(LOGS_DIR, 'eonsystems_left_bias_spikes_per_tick.json');
-const OUT_SUMMARY = path.join(LOGS_DIR, 'eonsystems_left_bias_summary.txt');
+const OUT_CSV = path.join(LOGS_DIR, 'eonsystems_phased_left_bias_spikes_per_tick.csv');
+const OUT_JSON = path.join(LOGS_DIR, 'eonsystems_phased_left_bias_spikes_per_tick.json');
+const OUT_SUMMARY = path.join(LOGS_DIR, 'eonsystems_phased_left_bias_summary.txt');
 
 const SOCKET_PATH = process.env.NEUROSIM_BRAIN_SOCKET || '/tmp/neurosim-brain.sock';
 const REQUEST_TIMEOUT_MS = Number(process.env.NEUROSIM_BRAIN_REQUEST_TIMEOUT_MS ?? 30_000);
-const TICKS = Math.max(1, Number(process.env.LEFT_BIAS_TICKS ?? 3000));
-const DT_SEC = Number(process.env.LEFT_BIAS_DT_SEC ?? 0.0001);
-const BASELINE_RATE_HZ = Math.max(0, Number(process.env.LEFT_BIAS_BASELINE_OLFACTORY_HZ ?? 2));
-const HYGRO_BASELINE_HZ = Math.max(0, Number(process.env.LEFT_BIAS_HYGRO_HZ ?? 6));
-const THERMO_BASELINE_HZ = Math.max(0, Number(process.env.LEFT_BIAS_THERMO_HZ ?? 6));
+const TICKS = Math.max(1, Number(process.env.PHASED_LEFT_BIAS_TICKS ?? 3000));
+const DT_SEC = Number(process.env.PHASED_LEFT_BIAS_DT_SEC ?? 0.0001);
+const BASELINE_RATE_HZ = Math.max(0, Number(process.env.PHASED_LEFT_BIAS_BASELINE_OLFACTORY_HZ ?? 2));
+const HYGRO_BASELINE_HZ = Math.max(0, Number(process.env.PHASED_LEFT_BIAS_HYGRO_HZ ?? 6));
+const THERMO_BASELINE_HZ = Math.max(0, Number(process.env.PHASED_LEFT_BIAS_THERMO_HZ ?? 6));
+const PHASE_SWITCH_TICK = Math.max(1, Number(process.env.PHASED_LEFT_BIAS_SWITCH_TICK ?? 1000));
 const LEFT_SOURCES = [
   { id: 'odor-left-near', x: -10, y: 0, radius: 3.2 },
   { id: 'odor-left-mid', x: -16, y: 4, radius: 3.2 },
@@ -172,7 +174,7 @@ function loadClassificationMap(): Map<string, ClassificationRow> {
   return map;
 }
 
-async function runLeftBiasReplay(): Promise<ReplayJson> {
+async function runPhasedLeftBiasReplay(): Promise<ReplayJson> {
   const conn = await BrainSocket.connect();
   try {
     await conn.request<{ ok: boolean }>('ping');
@@ -194,8 +196,8 @@ async function runLeftBiasReplay(): Promise<ReplayJson> {
         rest_time_left: 0,
         dead: false,
       },
-      // Left-side odor gradient using multiple odor points.
-      sources: LEFT_SOURCES,
+      // Phase 1: baseline only. Phase 2: inject left-biased odor gradient.
+      sources: (i + 1) > PHASE_SWITCH_TICK ? LEFT_SOURCES : [],
       pending: [],
     }));
     const response = await conn.request<{
@@ -214,7 +216,8 @@ async function runLeftBiasReplay(): Promise<ReplayJson> {
         ticks: ticks.length,
         dt_sec: DT_SEC,
         baseline_rate_hz: BASELINE_RATE_HZ,
-        scenario: 'left_bias_odor_gradient',
+        scenario: 'phased_left_bias_odor_gradient',
+        phase_switch_tick: PHASE_SWITCH_TICK,
         generated_at: new Date().toISOString(),
       },
       ticks,
@@ -239,7 +242,7 @@ function augmentTicksWithSensoryBaseline(
 ): { hygroAdded: number; thermoAdded: number } {
   let hygroAdded = 0;
   let thermoAdded = 0;
-  const rng = createSeededRandom(0x1ef7a41c);
+  const rng = createSeededRandom(0x0f4d2e91);
   const addGroup = (ids: string[], hz: number, tick: ReplayTick): number => {
     if (hz <= 0 || ids.length === 0) return 0;
     const p = Math.min(1, hz * replay.meta.dt_sec);
@@ -328,7 +331,7 @@ function writeOutputs(
   ).length;
 
   const summary = [
-    'EonSystems left-bias odor replay summary',
+    'EonSystems phased left-bias odor replay summary',
     `scenario: ${replay.meta.scenario}`,
     `ticks: ${replay.meta.ticks}`,
     `dt_sec: ${replay.meta.dt_sec}`,
@@ -337,7 +340,8 @@ function writeOutputs(
     `thermo_baseline_hz: ${THERMO_BASELINE_HZ}`,
     `hygro_spikes_added: ${hygroAdded}`,
     `thermo_spikes_added: ${thermoAdded}`,
-    `left_sources: ${JSON.stringify(LEFT_SOURCES)}`,
+    `phase_switch_tick: ${replay.meta.phase_switch_tick}`,
+    `left_sources_after_switch: ${JSON.stringify(LEFT_SOURCES)}`,
     `selected_olfactory_group_left_count: ${leftOlfactory}`,
     `selected_olfactory_group_right_count: ${rightOlfactory}`,
     `total_spikes: ${totalSpikes}`,
@@ -353,7 +357,7 @@ function writeOutputs(
 async function main(): Promise<void> {
   const startedAt = Date.now();
   const cls = loadClassificationMap();
-  const replay = await runLeftBiasReplay();
+  const replay = await runPhasedLeftBiasReplay();
   const hygroIds = [...cls.values()]
     .filter((r) => r.flow === 'afferent' && r.super_class === 'sensory' && r.class === 'hygrosensory')
     .map((r) => r.root_id);

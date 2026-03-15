@@ -44,11 +44,17 @@ type SceneState = {
   idToIndex: Map<string, number>;
   isRingByIndex: boolean[];
   ringDirectionByIndex: Array<THREE.Vector2 | null>;
+  arrowState: {
+    angleCurrentDeg: number;
+    angleTargetDeg: number;
+    strengthCurrent: number;
+    strengthTarget: number;
+  };
   dispose: () => void;
 };
 
 type ViewMode = 'raw' | 'aligned' | 'compass';
-type DatasetMode = 'baseline' | 'left_bias_odor';
+type DatasetMode = 'baseline' | 'left_bias_odor' | 'phased_left_bias_odor';
 
 const INACTIVE_COLOR = new THREE.Color(0x16203a);
 const INACTIVE_RING_COLOR = new THREE.Color(0x3e2c78);
@@ -64,6 +70,18 @@ type CompassStats = {
   bumpStrength: number;
   ringBins: number[];
 };
+
+function normalizeAngleDeg(angleDeg: number): number {
+  let a = angleDeg;
+  while (a > 180) a -= 360;
+  while (a < -180) a += 360;
+  return a;
+}
+
+function shortestAngleLerpDeg(fromDeg: number, toDeg: number, alpha: number): number {
+  const delta = normalizeAngleDeg(toDeg - fromDeg);
+  return normalizeAngleDeg(fromDeg + delta * alpha);
+}
 
 function powerIteration(
   m: number[][],
@@ -276,13 +294,30 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
     0.06,
     0.03,
   );
-  bumpArrow.visible = false;
+  bumpArrow.visible = true;
   scene.add(bumpArrow);
+
+  const arrowState = {
+    angleCurrentDeg: 0,
+    angleTargetDeg: 0,
+    strengthCurrent: 0.2,
+    strengthTarget: 0.2,
+  };
 
   scene.add(new THREE.AmbientLight(0xffffff, 0.95));
 
   let raf = 0;
   const animate = () => {
+    arrowState.angleCurrentDeg = shortestAngleLerpDeg(arrowState.angleCurrentDeg, arrowState.angleTargetDeg, 0.18);
+    arrowState.strengthCurrent = arrowState.strengthCurrent + (arrowState.strengthTarget - arrowState.strengthCurrent) * 0.18;
+    const dir3 = new THREE.Vector3(
+      Math.cos((arrowState.angleCurrentDeg * Math.PI) / 180),
+      Math.sin((arrowState.angleCurrentDeg * Math.PI) / 180),
+      0,
+    ).normalize();
+    bumpArrow.setDirection(dir3);
+    bumpArrow.setLength(0.28 + 0.52 * Math.min(1, Math.max(0.08, arrowState.strengthCurrent)), 0.07, 0.035);
+    bumpArrow.setColor(ACTIVE_RING_COLOR);
     controls.update();
     renderer.render(scene, camera);
     raf = requestAnimationFrame(animate);
@@ -323,12 +358,13 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
     idToIndex,
     isRingByIndex,
     ringDirectionByIndex,
+    arrowState,
     dispose,
   };
 }
 
 function applyTickSpikes(sceneState: SceneState, spikes: string[]): CompassStats {
-  const { colorAttr, idToIndex, isRingByIndex, ringDirectionByIndex, bumpArrow } = sceneState;
+  const { colorAttr, idToIndex, isRingByIndex, ringDirectionByIndex } = sceneState;
   const count = colorAttr.count;
   for (let i = 0; i < count; i += 1) {
     const c = isRingByIndex[i] ? INACTIVE_RING_COLOR : INACTIVE_COLOR;
@@ -360,14 +396,9 @@ function applyTickSpikes(sceneState: SceneState, spikes: string[]): CompassStats
   }
   const bumpStrength = ringActiveCount > 0 ? bump.length() / ringActiveCount : 0;
   const bumpAngleDeg = bump.lengthSq() > 1e-8 ? (Math.atan2(bump.y, bump.x) * 180) / Math.PI : null;
-  if (bumpAngleDeg == null) {
-    bumpArrow.visible = false;
-  } else {
-    bumpArrow.visible = true;
-    const dir3 = new THREE.Vector3(Math.cos((bumpAngleDeg * Math.PI) / 180), Math.sin((bumpAngleDeg * Math.PI) / 180), 0);
-    bumpArrow.setDirection(dir3.normalize());
-    bumpArrow.setLength(0.35 + 0.5 * Math.min(1, bumpStrength), 0.07, 0.035);
-    bumpArrow.setColor(ACTIVE_RING_COLOR);
+  if (bumpAngleDeg != null) {
+    sceneState.arrowState.angleTargetDeg = normalizeAngleDeg(bumpAngleDeg);
+    sceneState.arrowState.strengthTarget = Math.max(0.08, bumpStrength);
   }
   colorAttr.needsUpdate = true;
   const ringBinMax = ringBins.reduce((m, v) => Math.max(m, v), 0);
@@ -403,7 +434,9 @@ export default function VisualizationPage() {
         setError(null);
         const datasetUrl = datasetMode === 'baseline'
           ? '/eonsystems_brain_subset_baseline_replay.json'
-          : '/eonsystems_brain_subset_left_bias_replay.json';
+          : datasetMode === 'left_bias_odor'
+            ? '/eonsystems_brain_subset_left_bias_replay.json'
+            : '/eonsystems_brain_subset_phased_left_bias_replay.json';
         const res = await fetch(datasetUrl);
         if (!res.ok) throw new Error(`Replay not found (${res.status})`);
         const parsed = await res.json() as ReplayData;
@@ -471,6 +504,13 @@ export default function VisualizationPage() {
           </button>
           <button type="button" onClick={() => setDatasetMode('left_bias_odor')} style={{ opacity: datasetMode === 'left_bias_odor' ? 1 : 0.65 }}>
             Left-bias odor
+          </button>
+          <button
+            type="button"
+            onClick={() => setDatasetMode('phased_left_bias_odor')}
+            style={{ opacity: datasetMode === 'phased_left_bias_odor' ? 1 : 0.65 }}
+          >
+            Phased left-bias
           </button>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>

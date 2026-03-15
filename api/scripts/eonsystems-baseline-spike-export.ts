@@ -43,6 +43,8 @@ const REQUEST_TIMEOUT_MS = Number(process.env.NEUROSIM_BRAIN_REQUEST_TIMEOUT_MS 
 const TICKS = Math.max(1, Number(process.env.BASELINE_TICKS ?? 3000));
 const DT_SEC = Number(process.env.BASELINE_DT_SEC ?? 0.0001);
 const BASELINE_RATE_HZ = Math.max(0, Number(process.env.BASELINE_OLFACTORY_HZ ?? 2));
+const HYGRO_BASELINE_HZ = Math.max(0, Number(process.env.BASELINE_HYGRO_HZ ?? 6));
+const THERMO_BASELINE_HZ = Math.max(0, Number(process.env.BASELINE_THERMO_HZ ?? 6));
 
 type BrainResponse = { error?: string };
 
@@ -214,7 +216,51 @@ async function runBaselineReplay(): Promise<ReplayJson> {
   }
 }
 
-function writeOutputs(replay: ReplayJson, cls: Map<string, ClassificationRow>, elapsedMs: number): void {
+function createSeededRandom(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (1664525 * state + 1013904223) >>> 0;
+    return state / 0x100000000;
+  };
+}
+
+function augmentTicksWithSensoryBaseline(
+  replay: ReplayJson,
+  hygroIds: string[],
+  thermoIds: string[],
+): { hygroAdded: number; thermoAdded: number } {
+  let hygroAdded = 0;
+  let thermoAdded = 0;
+  const rng = createSeededRandom(0x51f15e27);
+  const addGroup = (ids: string[], hz: number, tick: ReplayTick): number => {
+    if (hz <= 0 || ids.length === 0) return 0;
+    const p = Math.min(1, hz * replay.meta.dt_sec);
+    let added = 0;
+    for (const id of ids) {
+      if (rng() < p) {
+        tick.spikes.push(id);
+        added += 1;
+      }
+    }
+    return added;
+  };
+  for (const tick of replay.ticks) {
+    hygroAdded += addGroup(hygroIds, HYGRO_BASELINE_HZ, tick);
+    thermoAdded += addGroup(thermoIds, THERMO_BASELINE_HZ, tick);
+  }
+  for (const tick of replay.ticks) {
+    tick.spikes.sort();
+  }
+  return { hygroAdded, thermoAdded };
+}
+
+function writeOutputs(
+  replay: ReplayJson,
+  cls: Map<string, ClassificationRow>,
+  elapsedMs: number,
+  hygroAdded: number,
+  thermoAdded: number,
+): void {
   fs.mkdirSync(LOGS_DIR, { recursive: true });
   fs.writeFileSync(OUT_JSON, `${JSON.stringify(replay, null, 2)}\n`, 'utf8');
 
@@ -271,6 +317,10 @@ function writeOutputs(replay: ReplayJson, cls: Map<string, ClassificationRow>, e
     `ticks: ${replay.meta.ticks}`,
     `dt_sec: ${replay.meta.dt_sec}`,
     `baseline_rate_hz: ${replay.meta.baseline_rate_hz}`,
+    `hygro_baseline_hz: ${HYGRO_BASELINE_HZ}`,
+    `thermo_baseline_hz: ${THERMO_BASELINE_HZ}`,
+    `hygro_spikes_added: ${hygroAdded}`,
+    `thermo_spikes_added: ${thermoAdded}`,
     `total_spikes: ${totalSpikes}`,
     `first_active_tick: ${firstActiveTick}`,
     `last_active_tick: ${lastActiveTick}`,
@@ -285,8 +335,15 @@ async function main(): Promise<void> {
   const startedAt = Date.now();
   const cls = loadClassificationMap();
   const replay = await runBaselineReplay();
+  const hygroIds = [...cls.values()]
+    .filter((r) => r.flow === 'afferent' && r.super_class === 'sensory' && r.class === 'hygrosensory')
+    .map((r) => r.root_id);
+  const thermoIds = [...cls.values()]
+    .filter((r) => r.flow === 'afferent' && r.super_class === 'sensory' && r.class === 'thermosensory')
+    .map((r) => r.root_id);
+  const { hygroAdded, thermoAdded } = augmentTicksWithSensoryBaseline(replay, hygroIds, thermoIds);
   const elapsedMs = Date.now() - startedAt;
-  writeOutputs(replay, cls, elapsedMs);
+  writeOutputs(replay, cls, elapsedMs, hygroAdded, thermoAdded);
   console.log(`wrote ${OUT_JSON}`);
   console.log(`wrote ${OUT_CSV}`);
   console.log(`wrote ${OUT_SUMMARY}`);

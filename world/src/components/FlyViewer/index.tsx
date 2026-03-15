@@ -32,6 +32,7 @@ import { DebugPanelSlot } from './DebugPanelSlot';
 import { FliesPanelCurrentSlots } from './FliesPanelCurrentSlots';
 import { FliesPanelGraveyardSlots } from './FliesPanelGraveyardSlots';
 import { SidePanelToggle } from './SidePanelToggle';
+import { BrainMotorReadout } from './BrainMotorReadout';
 import './FlyViewer.css';
 
 export default function FlyViewer() {
@@ -55,6 +56,7 @@ export default function FlyViewer() {
   const latestFliesRef = useRef<FlyState[]>([]);
   const activityRef = useRef<Record<string, number>>({});
   const activitiesRef = useRef<(Record<string, number> | undefined)[]>([]);
+  const motorReadoutRef = useRef<{ left: number; right: number; fwd: number }>({ left: 0, right: 0, fwd: 0 });
   const debugStatsRef = useRef<InterpolationDebugStats | null>(null);
   const interpolatedBySimRef = useRef<FlyState[]>([]);
   const cameraModeRef = useRef<CameraMode>('god');
@@ -175,6 +177,7 @@ export default function FlyViewer() {
           sendViewFlyIndex(eff ?? 0);
         } else if (event._event === 'closed') {
           setConnected(false);
+          motorReadoutRef.current = { left: 0, right: 0, fwd: 0 };
         }
         return;
       }
@@ -187,10 +190,18 @@ export default function FlyViewer() {
         activities?: (Record<string, number> | undefined)[];
         error?: string;
         sources?: WorldSource[];
+        motor?: { left: number; right: number; fwd: number };
       };
       if (data.sources && Array.isArray(data.sources)) {
         queryClient.setQueryData(apiKeys.world(), { sources: data.sources });
       }
+        if (data.motor) {
+          motorReadoutRef.current = {
+            left: Number.isFinite(data.motor.left) ? data.motor.left : 0,
+            right: Number.isFinite(data.motor.right) ? data.motor.right : 0,
+            fwd: Number.isFinite(data.motor.fwd) ? data.motor.fwd : 0,
+          };
+        }
       if (!data.error) {
         const buf = snapshotBufferRef.current;
         const batchSources = Array.isArray(data.sources) ? data.sources : [];
@@ -570,6 +581,9 @@ export default function FlyViewer() {
                   />
                 )}
               </div>
+              {brainPanelOpen && (
+                <BrainMotorReadout motorReadoutRef={motorReadoutRef} />
+              )}
             </div>
           </div>
           <SidePanelToggle open={brainPanelOpen} onToggle={onBrainPanelToggle} label="Brain" position="right" />

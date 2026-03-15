@@ -228,6 +228,7 @@ function buildClientPayload(
     flies: ReturnType<typeof sims[0]['getState']>['fly'][];
     activities: (Record<string, number> | undefined)[];
     inputActivities: (Record<string, number> | undefined)[];
+    motorReadouts: ({ left: number; right: number; fwd: number } | undefined)[];
   }[],
 ): void {
   const nowMs = Date.now();
@@ -244,8 +245,9 @@ function buildClientPayload(
       lastFrame ? (lastFrame.inputActivities[viewIndex] ?? {}) : {},
       nowMs,
     );
+    const motor = lastFrame ? (lastFrame.motorReadouts[viewIndex] ?? undefined) : undefined;
     try {
-      ws.send(JSON.stringify({ frames: clientFrames, activity, sources, simRunning: true }));
+      ws.send(JSON.stringify({ frames: clientFrames, activity, motor, sources, simRunning: true }));
     } catch (err) {
       console.error('[ws] send error', err);
     }
@@ -390,6 +392,7 @@ function startSim(): void {
         flies: ReturnType<typeof sims[0]['getState']>['fly'][];
         activities: (Record<string, number> | undefined)[];
         inputActivities: (Record<string, number> | undefined)[];
+        motorReadouts: ({ left: number; right: number; fwd: number } | undefined)[];
       }[] = [];
 
       const transitions: Array<{
@@ -399,6 +402,9 @@ function startSim(): void {
         toT: number;
         activity?: Record<string, number>;
         inputActivity?: Record<string, number>;
+        motorLeft?: number;
+        motorRight?: number;
+        motorFwd?: number;
       }> = [];
 
       const beforeStates = sims.map((s) => s.getState());
@@ -467,6 +473,9 @@ function startSim(): void {
           toT: state.t,
           activity: state.activity,
           inputActivity: state.inputActivity,
+          motorLeft: state.motorLeft,
+          motorRight: state.motorRight,
+          motorFwd: state.motorFwd,
         });
         if (state.activity && simActivityTrail[j]) {
           const trail = simActivityTrail[j]!;
@@ -524,8 +533,17 @@ function startSim(): void {
         }));
         const activities = transitions.map((tr) => (i === FRAMES_PER_BATCH ? tr.activity : undefined));
         const inputActivities = transitions.map((tr) => (i === FRAMES_PER_BATCH ? tr.inputActivity : undefined));
+        const motorReadouts = transitions.map((tr) =>
+          i === FRAMES_PER_BATCH
+            ? {
+                left: tr.motorLeft ?? 0,
+                right: tr.motorRight ?? 0,
+                fwd: tr.motorFwd ?? 0,
+              }
+            : undefined,
+        );
         const t = transitions.length ? lerp(transitions[0].fromT, transitions[0].toT, alpha) : 0;
-        frames.push({ t, flies, activities, inputActivities });
+        frames.push({ t, flies, activities, inputActivities, motorReadouts });
       }
       const beforePayload = performance.now();
       buildClientPayload(frames);
@@ -815,11 +833,21 @@ wss.on('connection', (ws) => {
 
   const flies = sims.map((s) => s.getState().fly);
   const viewIndex = Math.max(0, Math.min(sims.length - 1, 0));
-  const activities = sims.map((s) => s.getState().activity);
+  const states = sims.map((s) => s.getState());
+  const activities = states.map((s) => s.activity);
   const firstState = sims[0]?.getState();
+  const viewedState = states[viewIndex];
+  const motor = viewedState
+    ? {
+        left: viewedState.motorLeft ?? 0,
+        right: viewedState.motorRight ?? 0,
+        fwd: viewedState.motorFwd ?? 0,
+      }
+    : undefined;
   ws.send(JSON.stringify({
     frames: [{ t: firstState?.t ?? 0, flies }],
     activity: activities[viewIndex] ?? {},
+    motor,
     sources: getSources(),
     simRunning,
   }));

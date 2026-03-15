@@ -20,6 +20,9 @@ export interface SimState {
   fly: FlyState;
   activity?: Record<string, number>;
   inputActivity?: Record<string, number>;
+  motorLeft?: number;
+  motorRight?: number;
+  motorFwd?: number;
   eatenFoodId?: string;
   feedingSugarTaken?: number;
 }
@@ -158,6 +161,9 @@ export async function createBrainSim(
     let lastInputActivity: Record<string, number> | undefined;
     let lastEatenFoodId: string | undefined;
     let lastFeedingSugarTaken = 0;
+    let lastMotorLeft = 0;
+    let lastMotorRight = 0;
+    let lastMotorFwd = 0;
 
     async function runRustStep(
       dt: number,
@@ -222,6 +228,9 @@ export async function createBrainSim(
         lastInputActivity = undefined;
         lastEatenFoodId = undefined;
         lastFeedingSugarTaken = 0;
+        lastMotorLeft = act.motorLeft ?? 0;
+        lastMotorRight = act.motorRight ?? 0;
+        lastMotorFwd = act.motorFwd ?? 0;
         lastRustMs = Math.round(performance.now() - stepStart);
         lastRustTiming = {
           computeMs: act.computeMs,
@@ -231,7 +240,16 @@ export async function createBrainSim(
           readoutMs: act.readoutMs,
         };
         const activityRec = Object.keys(act.activitySparse).length ? act.activitySparse : undefined;
-        return { t, fly, activity: activityRec, inputActivity: lastInputActivity, eatenFoodId: lastEatenFoodId };
+        return {
+          t,
+          fly,
+          activity: activityRec,
+          inputActivity: lastInputActivity,
+          motorLeft: lastMotorLeft,
+          motorRight: lastMotorRight,
+          motorFwd: lastMotorFwd,
+          eatenFoodId: lastEatenFoodId,
+        };
       }
 
       const currentSources = getSources();
@@ -266,6 +284,9 @@ export async function createBrainSim(
       };
       const { activitySparse } = result;
       lastActivitySparse = activitySparse;
+      lastMotorLeft = result.motorLeft ?? 0;
+      lastMotorRight = result.motorRight ?? 0;
+      lastMotorFwd = result.motorFwd ?? 0;
       fly = {
         ...fly,
         x: result.fly.x,
@@ -294,6 +315,9 @@ export async function createBrainSim(
         fly,
         activity: activityRec,
         inputActivity: inputActivityRec,
+        motorLeft: lastMotorLeft,
+        motorRight: lastMotorRight,
+        motorFwd: lastMotorFwd,
         feedingSugarTaken: lastFeedingSugarTaken,
         ...(result.eatenFoodId && { eatenFoodId: result.eatenFoodId }),
       };
@@ -330,6 +354,9 @@ export async function createBrainSim(
         fly: flyWithMeta,
         activity: activityRec,
         inputActivity: lastInputActivity,
+        motorLeft: lastMotorLeft,
+        motorRight: lastMotorRight,
+        motorFwd: lastMotorFwd,
         feedingSugarTaken: lastFeedingSugarTaken,
         ...(lastEatenFoodId && { eatenFoodId: lastEatenFoodId }),
       };

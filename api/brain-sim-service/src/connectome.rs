@@ -5,17 +5,19 @@ use std::fs;
 use std::path::Path;
 
 #[derive(Deserialize)]
-struct OlfactoryAfferentsJson {
+struct LateralizedIdsJson {
     left: Vec<String>,
     right: Vec<String>,
     unknown: Vec<String>,
 }
 
-#[derive(Deserialize)]
-struct MotorEfferentsJson {
-    left: Vec<String>,
-    right: Vec<String>,
-    unknown: Vec<String>,
+struct PrecomputedIndices {
+    left: Vec<u32>,
+    right: Vec<u32>,
+    unknown: Vec<u32>,
+    total_left: usize,
+    total_right: usize,
+    total_unknown: usize,
 }
 
 #[derive(Deserialize)]
@@ -88,13 +90,14 @@ fn compute_viewer_subset_indices(neuron_ids: &[String], limit: usize) -> Vec<u32
     out
 }
 
-fn load_precomputed_olfactory_indices(
+fn load_precomputed_indices(
     connectome_path: &Path,
     id_to_idx: &HashMap<String, u32>,
-) -> Option<(Vec<u32>, Vec<u32>, Vec<u32>, usize, usize, usize)> {
-    let precomputed_path = connectome_path.parent()?.join("olfactory-afferents.json");
+    filename: &str,
+) -> Option<PrecomputedIndices> {
+    let precomputed_path = connectome_path.parent()?.join(filename);
     let txt = fs::read_to_string(precomputed_path).ok()?;
-    let parsed: OlfactoryAfferentsJson = serde_json::from_str(&txt).ok()?;
+    let parsed: LateralizedIdsJson = serde_json::from_str(&txt).ok()?;
     let total_left = parsed.left.len();
     let total_right = parsed.right.len();
     let total_unknown = parsed.unknown.len();
@@ -116,38 +119,28 @@ fn load_precomputed_olfactory_indices(
     left.sort_unstable();
     right.sort_unstable();
     unknown.sort_unstable();
-    Some((left, right, unknown, total_left, total_right, total_unknown))
+    Some(PrecomputedIndices {
+        left,
+        right,
+        unknown,
+        total_left,
+        total_right,
+        total_unknown,
+    })
+}
+
+fn load_precomputed_olfactory_indices(
+    connectome_path: &Path,
+    id_to_idx: &HashMap<String, u32>,
+) -> Option<PrecomputedIndices> {
+    load_precomputed_indices(connectome_path, id_to_idx, "olfactory-afferents.json")
 }
 
 fn load_precomputed_motor_indices(
     connectome_path: &Path,
     id_to_idx: &HashMap<String, u32>,
-) -> Option<(Vec<u32>, Vec<u32>, Vec<u32>, usize, usize, usize)> {
-    let precomputed_path = connectome_path.parent()?.join("motor-efferents.json");
-    let txt = fs::read_to_string(precomputed_path).ok()?;
-    let parsed: MotorEfferentsJson = serde_json::from_str(&txt).ok()?;
-    let total_left = parsed.left.len();
-    let total_right = parsed.right.len();
-    let total_unknown = parsed.unknown.len();
-    let mut left: Vec<u32> = parsed
-        .left
-        .iter()
-        .filter_map(|id| id_to_idx.get(id).copied())
-        .collect();
-    let mut right: Vec<u32> = parsed
-        .right
-        .iter()
-        .filter_map(|id| id_to_idx.get(id).copied())
-        .collect();
-    let mut unknown: Vec<u32> = parsed
-        .unknown
-        .iter()
-        .filter_map(|id| id_to_idx.get(id).copied())
-        .collect();
-    left.sort_unstable();
-    right.sort_unstable();
-    unknown.sort_unstable();
-    Some((left, right, unknown, total_left, total_right, total_unknown))
+) -> Option<PrecomputedIndices> {
+    load_precomputed_indices(connectome_path, id_to_idx, "motor-efferents.json")
 }
 
 pub fn load_connectome(path: &Path) -> Result<ConnectomeTemplate, Box<dyn std::error::Error + Send + Sync>> {
@@ -198,15 +191,15 @@ pub fn load_connectome(path: &Path) -> Result<ConnectomeTemplate, Box<dyn std::e
     // Prefer precomputed olfactory afferents from data/olfactory-afferents.json.
     // If overlap with the currently loaded connectome is empty, fall back to all sensory neurons.
     let (sensory_left_indices, sensory_right_indices, sensory_unknown_indices) =
-        if let Some((olf_l, olf_r, olf_u, total_l, total_r, total_u)) =
+        if let Some(olf) =
             load_precomputed_olfactory_indices(path, &id_to_idx)
         {
             eprintln!(
                 "[connectome] olfactory precomputed total(L/R/U)={}/{}/{} overlap_in_loaded_connectome(L/R/U)={}/{}/{}",
-                total_l, total_r, total_u, olf_l.len(), olf_r.len(), olf_u.len()
+                olf.total_left, olf.total_right, olf.total_unknown, olf.left.len(), olf.right.len(), olf.unknown.len()
             );
-            if !olf_l.is_empty() || !olf_r.is_empty() || !olf_u.is_empty() {
-                (olf_l, olf_r, olf_u)
+            if !olf.left.is_empty() || !olf.right.is_empty() || !olf.unknown.is_empty() {
+                (olf.left, olf.right, olf.unknown)
             } else {
                 eprintln!(
                     "[connectome] zero overlap with precomputed olfactory IDs; using all sensory neurons in loaded connectome"
@@ -243,15 +236,15 @@ pub fn load_connectome(path: &Path) -> Result<ConnectomeTemplate, Box<dyn std::e
     }
 
     let (motor_left, motor_right, motor_unknown) =
-        if let Some((mot_l, mot_r, mot_u, total_l, total_r, total_u)) =
+        if let Some(mot) =
             load_precomputed_motor_indices(path, &id_to_idx)
         {
             eprintln!(
                 "[connectome] motor precomputed total(L/R/U)={}/{}/{} overlap_in_loaded_connectome(L/R/U)={}/{}/{}",
-                total_l, total_r, total_u, mot_l.len(), mot_r.len(), mot_u.len()
+                mot.total_left, mot.total_right, mot.total_unknown, mot.left.len(), mot.right.len(), mot.unknown.len()
             );
-            if !mot_l.is_empty() || !mot_r.is_empty() || !mot_u.is_empty() {
-                (mot_l, mot_r, mot_u)
+            if !mot.left.is_empty() || !mot.right.is_empty() || !mot.unknown.is_empty() {
+                (mot.left, mot.right, mot.unknown)
             } else {
                 eprintln!(
                     "[connectome] zero overlap with precomputed motor IDs; using role-based motor sets from loaded connectome"

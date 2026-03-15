@@ -7,8 +7,7 @@ use crate::model_constants::{
 };
 
 const STIM_RATE_HZ: f64 = 200.0;
-const SENSORY_SCALE: f64 = 12.0;
-const MAX_SENSORY_CONDUCTANCE: f64 = 16.0;
+const SENSORY_POISSON_SCALE: f32 = 250.0;
 const ACTIVITY_THRESHOLD: u8 = 1;
 const MOTOR_SCALE: f64 = 0.002;
 const MOTOR_TURN_GAIN: f64 = 220.0;
@@ -28,7 +27,7 @@ const HUNGER_DECAY: f64 = 0.8;
 const HEALTH_DECAY: f64 = 2.5;
 const MOVE_SPEED: f64 = 10.0;
 const BASELINE_EXPLORE: f64 = 0.03;
-const FEEDING_STIM_BONUS: f32 = 0.25;
+const FEEDING_STIM_BONUS: f64 = 0.25;
 const EONSYSTEMS_DT_MS: f32 = 0.1;
 const SYNAPTIC_DELAY_MS: f32 = 1.8;
 const SYNAPTIC_DELAY_STEPS: usize = (SYNAPTIC_DELAY_MS / EONSYSTEMS_DT_MS) as usize;
@@ -62,6 +61,7 @@ pub struct BrainSim {
     max_activity_entries: usize,
     fly_time_left_sec: f64,
     motor_turn_ema: f64,
+    rng_state: u64,
 }
 
 pub struct FlyInput {
@@ -110,9 +110,9 @@ pub struct FlyStepOutput {
 }
 
 struct SensoryDrive {
-    left: f32,
-    right: f32,
-    center: f32,
+    left_rate_hz: f64,
+    right_rate_hz: f64,
+    center_rate_hz: f64,
 }
 
 impl BrainSim {
@@ -226,6 +226,7 @@ impl BrainSim {
             max_activity_entries,
             fly_time_left_sec: FLY_TIME_MAX,
             motor_turn_ema: 0.0,
+            rng_state: 0x9E3779B97F4A7C15u64,
         }
     }
 
@@ -262,12 +263,12 @@ impl BrainSim {
         a
     }
 
-    fn sensory_drive(&self, dt: f64, fly: &FlyInput, sources: &[SourceInput]) -> SensoryDrive {
+    fn sensory_drive(&self, fly: &FlyInput, sources: &[SourceInput]) -> SensoryDrive {
         if self.sensory_indices.is_empty() {
             return SensoryDrive {
-                left: 0.0,
-                right: 0.0,
-                center: 0.0,
+                left_rate_hz: 0.0,
+                right_rate_hz: 0.0,
+                center_rate_hz: 0.0,
             };
         }
         let hungry = fly.hunger <= 90.0;
@@ -306,29 +307,63 @@ impl BrainSim {
             right_modulation += intensity * rightness;
             center_modulation += intensity * (1.0 - 0.4 * lateral.abs());
         }
-        let to_strength = |modulation: f64| -> f32 {
+        let to_rate_hz = |modulation: f64| -> f64 {
             if modulation <= 0.0 {
                 return 0.0;
             }
-            let rate_hz = if hungry && modulation > 0.0 {
+            let mut rate_hz = if hungry && modulation > 0.0 {
                 (50.0 + modulation * STIM_RATE_HZ).min(STIM_RATE_HZ)
             } else if full {
                 30.0
             } else {
                 50.0
             };
-            let base = ((rate_hz / STIM_RATE_HZ) * SENSORY_SCALE * (dt / (1.0 / 30.0)))
-                .min(MAX_SENSORY_CONDUCTANCE) as f32;
             if near_food {
-                (base + FEEDING_STIM_BONUS).min(MAX_SENSORY_CONDUCTANCE as f32)
-            } else {
-                base
+                rate_hz = (rate_hz + STIM_RATE_HZ * FEEDING_STIM_BONUS).min(STIM_RATE_HZ);
             }
+            rate_hz
         };
         SensoryDrive {
-            left: to_strength(left_modulation),
-            right: to_strength(right_modulation),
-            center: to_strength(center_modulation),
+            left_rate_hz: to_rate_hz(left_modulation),
+            right_rate_hz: to_rate_hz(right_modulation),
+            center_rate_hz: to_rate_hz(center_modulation),
+        }
+    }
+
+    fn next_uniform(state: &mut u64) -> f64 {
+        // xorshift64* PRNG. Deterministic and fast, good enough for Poisson sampling.
+        let mut x = *state;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        *state = x;
+        let y = x.wrapping_mul(0x2545F4914F6CDD1D);
+        (y as f64) / (u64::MAX as f64)
+    }
+
+    fn apply_poisson_stimulus(
+        indices: &[u32],
+        rate_hz: f64,
+        dt_sec: f64,
+        spike_amp: f32,
+        rng_state: &mut u64,
+        syn_input: &mut [f32],
+    ) {
+        if rate_hz <= 0.0 || indices.is_empty() {
+            return;
+        }
+        let p = (rate_hz * dt_sec).clamp(0.0, 1.0);
+        if p <= 0.0 {
+            return;
+        }
+        for &idx in indices {
+            let i = idx as usize;
+            if i >= syn_input.len() {
+                continue;
+            }
+            if Self::next_uniform(rng_state) < p {
+                syn_input[i] += spike_amp;
+            }
         }
     }
 
@@ -352,46 +387,53 @@ impl BrainSim {
                 self.syn_input[post] += self.edges_weight[e] * RECURRENT_SCALE;
             }
         }
-        let sensory = self.sensory_drive(dt, fly, sources);
-        if sensory.left > 0.0 {
-            for &idx in &self.sensory_left_indices {
-                let i = idx as usize;
-                if i < self.n {
-                    self.syn_input[i] += sensory.left;
-                }
-            }
-        }
-        if sensory.right > 0.0 {
-            for &idx in &self.sensory_right_indices {
-                let i = idx as usize;
-                if i < self.n {
-                    self.syn_input[i] += sensory.right;
-                }
-            }
-        }
-        let unknown_strength = ((sensory.left + sensory.right + sensory.center) / 3.0).max(0.0);
-        if unknown_strength > 0.0 {
-            for &idx in &self.sensory_unknown_indices {
-                let i = idx as usize;
-                if i < self.n {
-                    self.syn_input[i] += unknown_strength;
-                }
-            }
-        }
+        let sensory = self.sensory_drive(fly, sources);
+        let mut rng_state = self.rng_state;
+        let sensory_spike_amp = SENSORY_POISSON_SCALE * RECURRENT_SCALE;
+        Self::apply_poisson_stimulus(
+            &self.sensory_left_indices,
+            sensory.left_rate_hz,
+            dt,
+            sensory_spike_amp,
+            &mut rng_state,
+            &mut self.syn_input,
+        );
+        Self::apply_poisson_stimulus(
+            &self.sensory_right_indices,
+            sensory.right_rate_hz,
+            dt,
+            sensory_spike_amp,
+            &mut rng_state,
+            &mut self.syn_input,
+        );
+        let unknown_rate_hz =
+            ((sensory.left_rate_hz + sensory.right_rate_hz + sensory.center_rate_hz) / 3.0)
+                .max(0.0);
+        Self::apply_poisson_stimulus(
+            &self.sensory_unknown_indices,
+            unknown_rate_hz,
+            dt,
+            sensory_spike_amp,
+            &mut rng_state,
+            &mut self.syn_input,
+        );
         if self.sensory_left_indices.is_empty()
             && self.sensory_right_indices.is_empty()
             && self.sensory_unknown_indices.is_empty()
         {
-            let fallback = sensory.center.max(sensory.left.max(sensory.right));
-            if fallback > 0.0 {
-                for &idx in &self.sensory_indices {
-                    let i = idx as usize;
-                    if i < self.n {
-                        self.syn_input[i] += fallback;
-                    }
-                }
-            }
+            let fallback_hz = sensory
+                .center_rate_hz
+                .max(sensory.left_rate_hz.max(sensory.right_rate_hz));
+            Self::apply_poisson_stimulus(
+                &self.sensory_indices,
+                fallback_hz,
+                dt,
+                sensory_spike_amp,
+                &mut rng_state,
+                &mut self.syn_input,
+            );
         }
+        self.rng_state = rng_state;
         // EonSystems-style alpha synapse with fixed 1.8ms delay queue.
         // Conductance update uses delayed input and the previous conductance.
         let delayed_base = self.delay_head * self.n;

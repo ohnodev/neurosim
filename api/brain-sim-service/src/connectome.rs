@@ -51,6 +51,9 @@ pub struct ConnectomeTemplate {
     pub edges_post: Vec<u32>,
     pub edges_weight: Vec<f32>,
     pub sensory_indices: Vec<u32>,
+    pub sensory_left_indices: Vec<u32>,
+    pub sensory_right_indices: Vec<u32>,
+    pub sensory_unknown_indices: Vec<u32>,
     pub motor_left: Vec<u32>,
     pub motor_right: Vec<u32>,
     pub motor_unknown: Vec<u32>,
@@ -145,6 +148,21 @@ pub fn load_connectome(path: &Path) -> Result<ConnectomeTemplate, Box<dyn std::e
     } else {
         sugar_grn
     };
+    let sensory_target_set: std::collections::HashSet<u32> = sensory_target.iter().copied().collect();
+    let mut sensory_left_indices: Vec<u32> = Vec::new();
+    let mut sensory_right_indices: Vec<u32> = Vec::new();
+    let mut sensory_unknown_indices: Vec<u32> = Vec::new();
+    for (i, n) in data.neurons.iter().enumerate() {
+        let idx = i as u32;
+        if !sensory_target_set.contains(&idx) {
+            continue;
+        }
+        match n.side.as_deref() {
+            Some("left") => sensory_left_indices.push(idx),
+            Some("right") => sensory_right_indices.push(idx),
+            _ => sensory_unknown_indices.push(idx),
+        }
+    }
 
     let viewer_subset_indices = compute_viewer_subset_indices(&neuron_ids, viewer_subset_limit());
     let mut edges_pre = Vec::with_capacity(data.connections.len());
@@ -167,6 +185,9 @@ pub fn load_connectome(path: &Path) -> Result<ConnectomeTemplate, Box<dyn std::e
         edges_post,
         edges_weight,
         sensory_indices: sensory_target,
+        sensory_left_indices,
+        sensory_right_indices,
+        sensory_unknown_indices,
         motor_left,
         motor_right,
         motor_unknown,

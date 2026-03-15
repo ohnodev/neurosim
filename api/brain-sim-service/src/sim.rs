@@ -38,6 +38,9 @@ pub struct BrainSim {
     edges_post: Vec<u32>,
     edges_weight: Vec<f32>,
     sensory_indices: Vec<u32>,
+    sensory_left_indices: Vec<u32>,
+    sensory_right_indices: Vec<u32>,
+    sensory_unknown_indices: Vec<u32>,
     motor_left: Vec<u32>,
     motor_right: Vec<u32>,
     motor_unknown: Vec<u32>,
@@ -99,6 +102,12 @@ pub struct FlyStepOutput {
     pub feeding_sugar_taken: f64,
 }
 
+struct SensoryDrive {
+    left: f32,
+    right: f32,
+    center: f32,
+}
+
 impl BrainSim {
     fn readout_activity_cap() -> usize {
         let parsed = std::env::var("NEUROSIM_ACTIVITY_CAP")
@@ -115,6 +124,9 @@ impl BrainSim {
         edges_post: Vec<u32>,
         edges_weight: Vec<f32>,
         sensory_indices: Vec<u32>,
+        sensory_left_indices: Vec<u32>,
+        sensory_right_indices: Vec<u32>,
+        sensory_unknown_indices: Vec<u32>,
         motor_left: Vec<u32>,
         motor_right: Vec<u32>,
         motor_unknown: Vec<u32>,
@@ -125,6 +137,9 @@ impl BrainSim {
             edges_post,
             edges_weight,
             sensory_indices,
+            sensory_left_indices,
+            sensory_right_indices,
+            sensory_unknown_indices,
             motor_left,
             motor_right,
             motor_unknown,
@@ -139,6 +154,9 @@ impl BrainSim {
         edges_post: Vec<u32>,
         edges_weight: Vec<f32>,
         sensory_indices: Vec<u32>,
+        sensory_left_indices: Vec<u32>,
+        sensory_right_indices: Vec<u32>,
+        sensory_unknown_indices: Vec<u32>,
         motor_left: Vec<u32>,
         motor_right: Vec<u32>,
         motor_unknown: Vec<u32>,
@@ -190,6 +208,9 @@ impl BrainSim {
             edges_post,
             edges_weight,
             sensory_indices,
+            sensory_left_indices,
+            sensory_right_indices,
+            sensory_unknown_indices,
             motor_left,
             motor_right,
             motor_unknown,
@@ -230,16 +251,35 @@ impl BrainSim {
         d
     }
 
-    fn sensory_strength(&self, dt: f64, fly: &FlyInput, sources: &[SourceInput]) -> f32 {
+    fn normalize_angle(mut a: f64) -> f64 {
+        while a > std::f64::consts::PI {
+            a -= 2.0 * std::f64::consts::PI;
+        }
+        while a < -std::f64::consts::PI {
+            a += 2.0 * std::f64::consts::PI;
+        }
+        a
+    }
+
+    fn sensory_drive(&self, dt: f64, fly: &FlyInput, sources: &[SourceInput]) -> SensoryDrive {
         if self.sensory_indices.is_empty() {
-            return 0.0;
+            return SensoryDrive {
+                left: 0.0,
+                right: 0.0,
+                center: 0.0,
+            };
         }
         let hungry = fly.hunger <= 90.0;
         let full = fly.hunger > 90.0;
-        let mut food_modulation = 0.0f64;
+        let hunger_mod = (1.0 - fly.hunger / 100.0).max(0.0);
+        let mut left_modulation = 0.0f64;
+        let mut right_modulation = 0.0f64;
+        let mut center_modulation = 0.0f64;
         let mut near_food = false;
         for s in sources {
-            let dist = ((s.x - fly.x).powi(2) + (s.y - fly.y).powi(2)).sqrt();
+            let to_x = s.x - fly.x;
+            let to_y = s.y - fly.y;
+            let dist = (to_x.powi(2) + to_y.powi(2)).sqrt();
             if dist < EAT_RADIUS && fly.z <= 1.2 {
                 near_food = true;
             }
@@ -250,20 +290,38 @@ impl BrainSim {
                 continue;
             }
             let inv_dist = 1.0 / (1.0 + dist * 0.1);
-            food_modulation += inv_dist * (1.0 - fly.hunger / 100.0);
+            let intensity = inv_dist * hunger_mod;
+            if intensity <= 0.0 {
+                continue;
+            }
+            let target = to_y.atan2(to_x);
+            let delta = Self::normalize_angle(target - fly.heading);
+            let lateral = delta.sin();
+            let leftness = lateral.max(0.0);
+            let rightness = (-lateral).max(0.0);
+            left_modulation += intensity * (0.25 + 0.75 * leftness);
+            right_modulation += intensity * (0.25 + 0.75 * rightness);
+            center_modulation += intensity * (1.0 - 0.4 * lateral.abs());
         }
-        let rate_hz = if hungry && food_modulation > 0.0 {
-            (50.0 + food_modulation * STIM_RATE_HZ).min(STIM_RATE_HZ)
-        } else if full {
-            30.0
-        } else {
-            50.0
+        let to_strength = |modulation: f64| -> f32 {
+            let rate_hz = if hungry && modulation > 0.0 {
+                (50.0 + modulation * STIM_RATE_HZ).min(STIM_RATE_HZ)
+            } else if full {
+                30.0
+            } else {
+                50.0
+            };
+            let base = ((rate_hz / STIM_RATE_HZ) * SENSORY_SCALE * (dt / (1.0 / 30.0))).min(0.5) as f32;
+            if near_food {
+                (base + FEEDING_STIM_BONUS).min(1.0)
+            } else {
+                base
+            }
         };
-        let base = ((rate_hz / STIM_RATE_HZ) * SENSORY_SCALE * (dt / (1.0 / 30.0))).min(0.5) as f32;
-        if near_food {
-            (base + FEEDING_STIM_BONUS).min(1.0)
-        } else {
-            base
+        SensoryDrive {
+            left: to_strength(left_modulation),
+            right: to_strength(right_modulation),
+            center: to_strength(center_modulation),
         }
     }
 
@@ -289,12 +347,43 @@ impl BrainSim {
                 self.g[post] += self.edges_weight[e] * RECURRENT_SCALE;
             }
         }
-        let sensory_strength = self.sensory_strength(dt, fly, sources);
-        if sensory_strength > 0.0 {
-            for &idx in &self.sensory_indices {
+        let sensory = self.sensory_drive(dt, fly, sources);
+        if sensory.left > 0.0 {
+            for &idx in &self.sensory_left_indices {
                 let i = idx as usize;
                 if i < self.n {
-                    self.g[i] += sensory_strength;
+                    self.g[i] += sensory.left;
+                }
+            }
+        }
+        if sensory.right > 0.0 {
+            for &idx in &self.sensory_right_indices {
+                let i = idx as usize;
+                if i < self.n {
+                    self.g[i] += sensory.right;
+                }
+            }
+        }
+        let unknown_strength = ((sensory.left + sensory.right + sensory.center) / 3.0).max(0.0);
+        if unknown_strength > 0.0 {
+            for &idx in &self.sensory_unknown_indices {
+                let i = idx as usize;
+                if i < self.n {
+                    self.g[i] += unknown_strength;
+                }
+            }
+        }
+        if self.sensory_left_indices.is_empty()
+            && self.sensory_right_indices.is_empty()
+            && self.sensory_unknown_indices.is_empty()
+        {
+            let fallback = sensory.center.max(sensory.left.max(sensory.right));
+            if fallback > 0.0 {
+                for &idx in &self.sensory_indices {
+                    let i = idx as usize;
+                    if i < self.n {
+                        self.g[i] += fallback;
+                    }
                 }
             }
         }
@@ -343,7 +432,8 @@ impl BrainSim {
         let (recurrent_ms, lif_ms) = {
             #[cfg(feature = "cuda")]
             {
-                let sensory_strength = self.sensory_strength(dt, &fly, &sources);
+                let sensory = self.sensory_drive(dt, &fly, &sources);
+                let sensory_strength = ((sensory.left + sensory.right + sensory.center) / 3.0).max(0.0);
                 if let Some(ref mut gpu) = self.gpu_state {
                     match gpu.step(dt as f32, &self.sensory_indices, sensory_strength) {
                         Some(GpuStepResult {

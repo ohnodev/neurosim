@@ -24,22 +24,54 @@ export interface SimState {
 const FLY_TIME_MAX = 6;
 const GROUND_Z = 0.35;
 
-function estimateSensoryInputStrength(dt: number, fly: FlyState, sources: WorldSource[]): number {
-  if (sources.length === 0) return 0;
+function normalizeAngle(a: number): number {
+  let out = a;
+  while (out > Math.PI) out -= 2 * Math.PI;
+  while (out < -Math.PI) out += 2 * Math.PI;
+  return out;
+}
+
+function estimateDirectionalSensoryInput(
+  dt: number,
+  fly: FlyState,
+  sources: WorldSource[],
+): { left: number; right: number; center: number } {
+  if (sources.length === 0) return { left: 0, right: 0, center: 0 };
   const hunger = fly.hunger ?? 100;
   const hungry = hunger <= 90;
-  let foodModulation = 0;
+  const hungerMod = Math.max(0, 1 - hunger / 100);
+  let leftMod = 0;
+  let rightMod = 0;
+  let centerMod = 0;
   for (const s of sources) {
-    const dist = Math.hypot((s.x ?? 0) - (fly.x ?? 0), (s.y ?? 0) - (fly.y ?? 0));
+    const dx = (s.x ?? 0) - (fly.x ?? 0);
+    const dy = (s.y ?? 0) - (fly.y ?? 0);
+    const dist = Math.hypot(dx, dy);
     if (dist > ODOR_DETECTION_RADIUS || dist < MIN_FOOD_DISTANCE) continue;
     const invDist = 1 / (1 + dist * 0.1);
-    foodModulation += invDist * Math.max(0, 1 - hunger / 100);
+    const intensity = invDist * hungerMod;
+    if (intensity <= 0) continue;
+    const target = Math.atan2(dy, dx);
+    const delta = normalizeAngle(target - (fly.heading ?? 0));
+    const lateral = Math.sin(delta);
+    const leftness = Math.max(0, lateral);
+    const rightness = Math.max(0, -lateral);
+    leftMod += intensity * (0.25 + 0.75 * leftness);
+    rightMod += intensity * (0.25 + 0.75 * rightness);
+    centerMod += intensity * (1 - 0.4 * Math.abs(lateral));
   }
-  if (foodModulation <= 0) return 0;
-  const rateHz = hungry
-    ? Math.min(STIM_RATE_HZ, 50 + foodModulation * STIM_RATE_HZ)
-    : 30;
-  return Math.min(0.5, (rateHz / STIM_RATE_HZ) * SENSORY_SCALE * (dt / (1 / 30)));
+  const toStrength = (mod: number): number => {
+    if (mod <= 0) return 0;
+    const rateHz = hungry
+      ? Math.min(STIM_RATE_HZ, 50 + mod * STIM_RATE_HZ)
+      : 30;
+    return Math.min(0.5, (rateHz / STIM_RATE_HZ) * SENSORY_SCALE * (dt / (1 / 30)));
+  };
+  return {
+    left: toStrength(leftMod),
+    right: toStrength(rightMod),
+    center: toStrength(centerMod),
+  };
 }
 
 export async function createBrainSim(
@@ -50,6 +82,15 @@ export async function createBrainSim(
   const getSources = (): WorldSource[] =>
     typeof worldSources === 'function' ? worldSources() : worldSources;
   const neuronIds = connectome.neurons.map((n) => n.root_id);
+  const sensoryLeftNeuronIds = connectome.neurons
+    .filter((n) => n.role === 'sensory' && n.side === 'left')
+    .map((n) => n.root_id);
+  const sensoryRightNeuronIds = connectome.neurons
+    .filter((n) => n.role === 'sensory' && n.side === 'right')
+    .map((n) => n.root_id);
+  const sensoryUnknownNeuronIds = connectome.neurons
+    .filter((n) => n.role === 'sensory' && (!n.side || n.side === 'unknown'))
+    .map((n) => n.root_id);
   const sensoryNeuronIds = connectome.neurons
     .filter((n) => n.role === 'sensory')
     .map((n) => n.root_id);
@@ -161,13 +202,22 @@ export async function createBrainSim(
       }
 
       const currentSources = getSources();
-      const sensoryStrength = estimateSensoryInputStrength(dt, fly, currentSources);
-      const inputActivityRec: Record<string, number> | undefined =
-        sensoryStrength > 0 && sensoryNeuronIds.length > 0
-          ? Object.fromEntries(
-              sensoryNeuronIds.map((id) => [id, Math.max(0.05, Math.min(0.95, sensoryStrength))] as const)
-            )
-          : undefined;
+      const directional = estimateDirectionalSensoryInput(dt, fly, currentSources);
+      const leftStrength = Math.max(0.05, Math.min(0.95, directional.left));
+      const rightStrength = Math.max(0.05, Math.min(0.95, directional.right));
+      const centerStrength = Math.max(0.05, Math.min(0.95, directional.center));
+      let inputActivityRec: Record<string, number> | undefined;
+      if (directional.left > 0 || directional.right > 0 || directional.center > 0) {
+        const next: Record<string, number> = {};
+        for (const id of sensoryLeftNeuronIds) next[id] = leftStrength;
+        for (const id of sensoryRightNeuronIds) next[id] = rightStrength;
+        for (const id of sensoryUnknownNeuronIds) next[id] = centerStrength;
+        // If side metadata is absent in the connectome, still emit sensory targets for the client.
+        if (Object.keys(next).length === 0) {
+          for (const id of sensoryNeuronIds) next[id] = centerStrength;
+        }
+        if (Object.keys(next).length > 0) inputActivityRec = next;
+      }
       lastInputActivity = inputActivityRec;
 
       const rustStart = performance.now();

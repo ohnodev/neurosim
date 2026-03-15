@@ -11,7 +11,7 @@ export const REST_TIME = 4;
 const STIM_RATE_HZ = 200;
 const SENSORY_SCALE = 0.18;
 const MIN_FOOD_DISTANCE = 1.0;
-const ODOR_DETECTION_RADIUS = 24.0;
+const ODOR_DETECTION_RADIUS = 34.0;
 type PrecomputedOlfactory = { left: string[]; right: string[]; unknown: string[] };
 let precomputedOlfactoryCache: PrecomputedOlfactory | null | undefined;
 
@@ -284,9 +284,9 @@ export async function createBrainSim(
 
       const currentSources = getSources();
       const directional = estimateDirectionalSensoryInput(dt, fly, currentSources);
-      const leftStrength = Math.max(0.05, Math.min(0.95, directional.left));
-      const rightStrength = Math.max(0.05, Math.min(0.95, directional.right));
-      const centerStrength = Math.max(0.05, Math.min(0.95, directional.center));
+      const leftStrength = directional.left > 0 ? Math.max(0.05, Math.min(0.95, directional.left)) : 0;
+      const rightStrength = directional.right > 0 ? Math.max(0.05, Math.min(0.95, directional.right)) : 0;
+      const centerStrength = directional.center > 0 ? Math.max(0.05, Math.min(0.95, directional.center)) : 0;
       let inputActivityRec: Record<string, number> | undefined;
       if (directional.left > 0 || directional.right > 0 || directional.center > 0) {
         const next: Record<string, number> = {};

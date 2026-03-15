@@ -341,13 +341,7 @@ export default function FlyViewer() {
   const onSelectFlySlot = useCallback((slot: number) => setSelectedFlyIndex(slot), []);
   const onStatusPanelToggle = useCallback(() => setStatusPanelOpen((o) => !o), []);
   const onBrainPanelToggle = useCallback(() => setBrainPanelOpen((o) => !o), []);
-  const onToggleDevMode = useCallback(() => {
-    setDevMode((prev) => {
-      const next = !prev;
-      persistDevMode(next);
-      return next;
-    });
-  }, []);
+  const onToggleDevMode = useCallback(() => setDevMode((prev) => !prev), []);
 
   const getFlyCardData = useCallback((slotIndex: number) => {
     const entry = flyCardDataRef.current.get(slotIndex);
@@ -359,6 +353,10 @@ export default function FlyViewer() {
   useEffect(() => {
     sourcesRef.current = sources;
   }, [sources]);
+
+  useEffect(() => {
+    persistDevMode(devMode);
+  }, [devMode]);
 
   useEffect(() => {
     deployedRef.current = deployed;

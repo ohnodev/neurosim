@@ -87,15 +87,6 @@ const GROUND_Z = 0.35;
 const INITIAL_SPREAD = 4;
 const SPAWN_JITTER_RADIUS = 1.25;
 
-function hash32(s: string): number {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i) & 0xff;
-    h = Math.imul(h, 0x01000193) >>> 0;
-  }
-  return h >>> 0;
-}
-
 let foodIntervalId: ReturnType<typeof setInterval> | null = null;
 let rewardFlushIntervalId: ReturnType<typeof setInterval> | null = null;
 
@@ -153,7 +144,7 @@ function removeSimAtIndex(simIndex: number): { address: string; slotIndex: numbe
 
 async function addFlyToSim(spawnKey?: string): Promise<number> {
   const baseAngle = (2 * Math.PI * sims.length) / Math.max(1, sims.length + 1);
-  const h = hash32(spawnKey ?? `sim-${sims.length}-${Date.now()}`);
+  const h = fnv1a32(spawnKey ?? `sim-${sims.length}-${Date.now()}`);
   const jitterAngle = ((h & 1023) / 1023) * 2 * Math.PI;
   const jitterRadius = (((h >>> 10) & 1023) / 1023) * SPAWN_JITTER_RADIUS;
   const x = INITIAL_SPREAD * Math.cos(baseAngle) + jitterRadius * Math.cos(jitterAngle);

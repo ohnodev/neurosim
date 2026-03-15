@@ -38,10 +38,6 @@ const ON_GROUND_THRESH = 0.6;
 const STIM_RATE_HZ = 200;
 const SENSORY_SCALE = 0.18;
 const MIN_FOOD_DISTANCE = 1;
-function isOlfactoryAfferent(cellType: unknown): boolean {
-  const s = String(cellType ?? '').trim();
-  return /^orn_/i.test(s);
-}
 
 function estimateLateralSensoryStrength(
   dt: number,
@@ -87,18 +83,17 @@ export async function createBrainSim(
   const getSources = (): WorldSource[] =>
     typeof worldSources === 'function' ? worldSources() : worldSources;
   const neuronIds = connectome.neurons.map((n) => n.root_id);
-  const sensoryNeurons = connectome.neurons.filter((n) => String(n.role ?? '').toLowerCase() === 'sensory');
-  const afferentOlfactoryNeurons = sensoryNeurons.filter((n) => isOlfactoryAfferent(n.cell_type));
-  const odorTargetNeurons = afferentOlfactoryNeurons;
-  const sensoryNeuronIds = odorTargetNeurons.map((n) => n.root_id);
-  const sensoryLeftNeuronIds = odorTargetNeurons
-    .filter((n) => String(n.side ?? '').toLowerCase() === 'left')
+  const sensoryNeuronIds = connectome.neurons
+    .filter((n) => String(n.role ?? '').toLowerCase() === 'sensory')
     .map((n) => n.root_id);
-  const sensoryRightNeuronIds = odorTargetNeurons
-    .filter((n) => String(n.side ?? '').toLowerCase() === 'right')
+  const sensoryLeftNeuronIds = connectome.neurons
+    .filter((n) => String(n.role ?? '').toLowerCase() === 'sensory' && String(n.side ?? '').toLowerCase() === 'left')
     .map((n) => n.root_id);
-  const sensoryUnknownNeuronIds = odorTargetNeurons
-    .filter((n) => !['left', 'right'].includes(String(n.side ?? '').toLowerCase()))
+  const sensoryRightNeuronIds = connectome.neurons
+    .filter((n) => String(n.role ?? '').toLowerCase() === 'sensory' && String(n.side ?? '').toLowerCase() === 'right')
+    .map((n) => n.root_id);
+  const sensoryUnknownNeuronIds = connectome.neurons
+    .filter((n) => String(n.role ?? '').toLowerCase() === 'sensory' && !['left', 'right'].includes(String(n.side ?? '').toLowerCase()))
     .map((n) => n.root_id);
   const pendingStimuli: { neurons: string[]; strength: number }[] = [];
   let flyTimeLeftSec = FLY_TIME_MAX;

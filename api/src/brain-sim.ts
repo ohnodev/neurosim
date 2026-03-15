@@ -336,8 +336,6 @@ export async function createBrainSim(
       getState,
       getTiming,
       neuronIds,
-      isRustSim: true,
-      isGpuSim: process.env.USE_CUDA === '1',
     };
   }
 }

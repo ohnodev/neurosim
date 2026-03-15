@@ -21,7 +21,6 @@ describe('simulation integration', () => {
     it('creates sim and reports backend (Rust or TS)', async () => {
       const connectome = loadConnectome(connectomePath);
       const sim = await createBrainSim(connectome, []);
-      expect(typeof sim.isRustSim).toBe('boolean');
       expect(sim.step).toBeDefined();
       expect(sim.getState).toBeDefined();
       expect(sim.neuronIds.length).toBe(connectome.neurons.length);

@@ -50,8 +50,14 @@ fn test_flies_simulate() {
             hunger,
             health: 100.0,
             rest_time_left: 0.0,
+            dead: false,
         };
-        let food = vec![SourceInput { x: 3.0, y: 1.0, radius: 2.5 }];
+        let food = vec![SourceInput {
+            id: "food1".to_string(),
+            x: 3.0,
+            y: 1.0,
+            radius: 2.5,
+        }];
         let pending = if inject_ids.is_empty() {
             vec![]
         } else {
@@ -60,7 +66,7 @@ fn test_flies_simulate() {
                 strength: 2.0,
             }]
         };
-        let (activity, activity_sparse, motor_left, motor_right, motor_fwd, _timing) =
+        let (activity, activity_sparse, motor_left, motor_right, motor_fwd, _timing, _fly_out) =
             sim.step(dt, fly, food, pending);
 
         assert_eq!(activity.len(), template.neuron_ids.len());

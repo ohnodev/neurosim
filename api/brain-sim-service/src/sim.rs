@@ -12,6 +12,20 @@ const STIM_RATE_HZ: f64 = 200.0;
 const SENSORY_SCALE: f64 = 0.18;
 const ACTIVITY_THRESHOLD: u8 = 1;
 const MOTOR_SCALE: f64 = 0.002;
+const ARENA: f64 = 24.0;
+const WALL_MARGIN: f64 = 6.0;
+const FLY_TIME_MAX: f64 = 6.0;
+const REST_TIME: f64 = 4.0;
+const GROUND_Z: f64 = 0.35;
+const FLIGHT_Z: f64 = 1.5;
+const ON_GROUND_THRESH: f64 = 0.6;
+const EAT_RADIUS: f64 = 2.5;
+const HUNGER_DECAY: f64 = 0.8;
+const HEALTH_DECAY: f64 = 2.5;
+const FOOD_HUNGER_RESTORE: f64 = 50.0;
+const FOOD_HEALTH_RESTORE: f64 = 50.0;
+const MOVE_SPEED: f64 = 35.0;
+const BASELINE_EXPLORE: f64 = 0.03;
 // Ignore near-zero food distance to avoid singular-like gain when the fly is
 // effectively at the food source (handled separately by consumption logic).
 const MIN_FOOD_DISTANCE: f64 = 1.0;
@@ -33,6 +47,7 @@ pub struct BrainSim {
     spikes: Vec<u8>,
     viewer_indices: Vec<u32>,
     max_activity_entries: usize,
+    fly_time_left_sec: f64,
     #[cfg(feature = "cuda")]
     gpu_state: Option<GpuSimState>,
     #[cfg(feature = "cuda")]
@@ -48,9 +63,11 @@ pub struct FlyInput {
     pub hunger: f64,
     pub health: f64,
     pub rest_time_left: f64,
+    pub dead: bool,
 }
 
 pub struct SourceInput {
+    pub id: String,
     pub x: f64,
     pub y: f64,
     pub radius: f64,
@@ -67,6 +84,22 @@ pub struct StepTiming {
     pub recurrent_ms: f64,
     pub lif_ms: f64,
     pub readout_ms: f64,
+}
+
+pub struct FlyStepOutput {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub heading: f64,
+    pub t: f64,
+    pub hunger: f64,
+    pub health: f64,
+    pub dead: bool,
+    pub fly_time_left: f64,
+    pub rest_time_left: f64,
+    pub rest_duration: f64,
+    pub feeding: bool,
+    pub eaten_food_id: Option<String>,
 }
 
 impl BrainSim {
@@ -175,6 +208,7 @@ impl BrainSim {
             spikes,
             viewer_indices: sanitized_viewer,
             max_activity_entries,
+            fly_time_left_sec: FLY_TIME_MAX,
             #[cfg(feature = "cuda")]
             gpu_state,
             #[cfg(feature = "cuda")]
@@ -191,6 +225,18 @@ impl BrainSim {
         } else {
             steps as u16
         }
+    }
+
+    fn angle_toward(heading: f64, dx: f64, dy: f64) -> f64 {
+        let target = dy.atan2(dx);
+        let mut d = target - heading;
+        while d > std::f64::consts::PI {
+            d -= 2.0 * std::f64::consts::PI;
+        }
+        while d < -std::f64::consts::PI {
+            d += 2.0 * std::f64::consts::PI;
+        }
+        d
     }
 
     fn sensory_strength(&self, dt: f64, fly: &FlyInput, sources: &[SourceInput]) -> f32 {
@@ -292,7 +338,7 @@ impl BrainSim {
         fly: FlyInput,
         sources: Vec<SourceInput>,
         pending: Vec<PendingStimInput>,
-    ) -> (Vec<f32>, HashMap<String, f64>, f64, f64, f64, StepTiming) {
+    ) -> (Vec<f32>, HashMap<String, f64>, f64, f64, f64, StepTiming, FlyStepOutput) {
         self.step_with_options(dt, fly, sources, pending, true)
     }
 
@@ -303,7 +349,7 @@ impl BrainSim {
         sources: Vec<SourceInput>,
         pending: Vec<PendingStimInput>,
         include_activity: bool,
-    ) -> (Vec<f32>, HashMap<String, f64>, f64, f64, f64, StepTiming) {
+    ) -> (Vec<f32>, HashMap<String, f64>, f64, f64, f64, StepTiming, FlyStepOutput) {
         let t_compute = Instant::now();
         let (recurrent_ms, lif_ms) = {
             #[cfg(feature = "cuda")]
@@ -420,6 +466,148 @@ impl BrainSim {
         let readout_ms = t_readout.elapsed().as_secs_f64() * 1000.0;
         let compute_ms = t_compute.elapsed().as_secs_f64() * 1000.0;
 
+        let t = fly.t + dt;
+        let mut hunger = fly.hunger;
+        let mut health = fly.health;
+        let mut rest_time_left = fly.rest_time_left;
+        let mut dead = fly.dead;
+        let mut eaten_food_id: Option<String> = None;
+        let mut feeding = false;
+        let mut x = fly.x;
+        let mut y = fly.y;
+        let mut z = fly.z;
+        let mut heading = fly.heading;
+
+        if !dead {
+            let on_ground = fly.z < ON_GROUND_THRESH;
+            let can_fly_eat = (rest_time_left > 0.0 || on_ground || fly.z < 1.1) && fly.z < 1.2;
+            if can_fly_eat {
+                for s in &sources {
+                    if ((s.x - fly.x).powi(2) + (s.y - fly.y).powi(2)).sqrt() < EAT_RADIUS {
+                        feeding = true;
+                        hunger = (hunger + FOOD_HUNGER_RESTORE).min(100.0);
+                        health = (health + FOOD_HEALTH_RESTORE).min(100.0);
+                        eaten_food_id = Some(s.id.clone());
+                        break;
+                    }
+                }
+            }
+
+            let prev_hunger = hunger;
+            if !feeding {
+                hunger = (hunger - HUNGER_DECAY * dt).max(0.0);
+            }
+
+            if hunger <= 0.0 {
+                let time_at_zero = if prev_hunger <= 0.0 {
+                    dt
+                } else {
+                    (HUNGER_DECAY * dt - prev_hunger).max(0.0) / HUNGER_DECAY
+                };
+                health = (health - HEALTH_DECAY * time_at_zero).max(0.0);
+                if health <= 0.0 {
+                    dead = true;
+                }
+            }
+
+            let turn_from_motor = mr * MOTOR_SCALE - ml * MOTOR_SCALE;
+            let forward_from_motor = ml * MOTOR_SCALE + mr * MOTOR_SCALE + mf * MOTOR_SCALE;
+            let motor = forward_from_motor.tanh() * 0.5;
+
+            let mut heading_bias = turn_from_motor * dt;
+            let near_right = fly.x > ARENA - WALL_MARGIN;
+            let near_left = fly.x < -ARENA + WALL_MARGIN;
+            let near_top = fly.y > ARENA - WALL_MARGIN;
+            let near_bottom = fly.y < -ARENA + WALL_MARGIN;
+            let near_corner = (near_right as u8 + near_left as u8 + near_top as u8 + near_bottom as u8) >= 2;
+            if near_corner {
+                heading_bias += Self::angle_toward(fly.heading, -fly.x, -fly.y) * 0.6 * dt;
+            } else {
+                if near_right {
+                    heading_bias -= 0.2 * dt;
+                }
+                if near_left {
+                    heading_bias += 0.2 * dt;
+                }
+                if near_top {
+                    heading_bias -= 0.2 * dt;
+                }
+                if near_bottom {
+                    heading_bias += 0.2 * dt;
+                }
+            }
+
+            let mut effective_motor = if rest_time_left <= 0.0 {
+                motor.max(BASELINE_EXPLORE)
+            } else {
+                0.0
+            };
+            if rest_time_left > 0.0 {
+                rest_time_left -= dt;
+                effective_motor = 0.0;
+                if rest_time_left <= 0.0 {
+                    self.fly_time_left_sec = FLY_TIME_MAX;
+                }
+            } else if effective_motor.abs() > 0.005 {
+                self.fly_time_left_sec = (self.fly_time_left_sec - dt * effective_motor.abs()).max(0.0);
+                if self.fly_time_left_sec <= 0.0 {
+                    rest_time_left = REST_TIME;
+                }
+            } else {
+                self.fly_time_left_sec = (self.fly_time_left_sec + dt * 0.5).min(FLY_TIME_MAX);
+            }
+            self.fly_time_left_sec = self.fly_time_left_sec.clamp(0.0, FLY_TIME_MAX);
+
+            let dx = fly.heading.cos() * effective_motor * dt * MOVE_SPEED;
+            let dy = fly.heading.sin() * effective_motor * dt * MOVE_SPEED;
+            x = (fly.x + if dx.is_finite() { dx } else { 0.0 }).clamp(-ARENA, ARENA);
+            y = (fly.y + if dy.is_finite() { dy } else { 0.0 }).clamp(-ARENA, ARENA);
+
+            let mut z_drift = 0.0;
+            if rest_time_left > 0.0 {
+                z_drift = -0.5 * dt;
+            } else {
+                let mut near_food = false;
+                for s in &sources {
+                    if ((s.x - fly.x).powi(2) + (s.y - fly.y).powi(2)).sqrt() < EAT_RADIUS * 2.0 {
+                        near_food = true;
+                        break;
+                    }
+                }
+                if hunger <= 90.0 && near_food {
+                    z_drift = -0.6 * dt;
+                } else if effective_motor.abs() > 0.005 {
+                    z_drift = 0.4 * dt;
+                }
+            }
+            let z_osc = 0.08 * (t * 20.0).sin() * dt;
+            z = (fly.z + if z_drift.is_finite() { z_drift } else { 0.0 } + if z_osc.is_finite() { z_osc } else { 0.0 })
+                .clamp(GROUND_Z, FLIGHT_Z);
+
+            let two_pi = 2.0 * std::f64::consts::PI;
+            let n_heading = fly.heading + if heading_bias.is_finite() { heading_bias } else { 0.0 };
+            heading = n_heading - two_pi * ((n_heading + std::f64::consts::PI) / two_pi).floor();
+            if !heading.is_finite() {
+                heading = fly.heading;
+            }
+        }
+
+        let fly_out = FlyStepOutput {
+            x,
+            y,
+            z,
+            heading,
+            t,
+            hunger: if hunger.is_finite() { hunger } else { fly.hunger },
+            health: if health.is_finite() { health } else { fly.health },
+            dead,
+            fly_time_left: (self.fly_time_left_sec / FLY_TIME_MAX).clamp(0.0, 1.0),
+            rest_time_left: if rest_time_left > 0.0 { rest_time_left } else { 0.0 },
+            rest_duration: REST_TIME,
+            feeding,
+            eaten_food_id,
+        };
+
         (
             activity,
             activity_sparse,
@@ -433,6 +621,7 @@ impl BrainSim {
                 lif_ms,
                 readout_ms,
             },
+            fly_out,
         )
     }
 }

@@ -92,13 +92,32 @@ struct FlyJson {
     hunger: f64,
     health: f64,
     rest_time_left: f64,
+    #[serde(default)]
+    dead: bool,
 }
 
 #[derive(Deserialize)]
 struct SourceJson {
+    id: String,
     x: f64,
     y: f64,
     radius: f64,
+}
+
+#[derive(Serialize)]
+struct FlyRespJson {
+    x: f64,
+    y: f64,
+    z: f64,
+    heading: f64,
+    t: f64,
+    hunger: f64,
+    health: f64,
+    dead: bool,
+    fly_time_left: f64,
+    rest_time_left: f64,
+    rest_duration: f64,
+    feeding: bool,
 }
 
 #[derive(Serialize)]
@@ -112,6 +131,8 @@ struct StepResp {
     motor_left: f64,
     motor_right: f64,
     motor_fwd: f64,
+    fly: FlyRespJson,
+    eaten_food_id: Option<String>,
     compute_ms: f64,
     kernel_ms: f64,
     recurrent_ms: f64,
@@ -126,6 +147,8 @@ struct StepManyItemResp {
     motor_left: f64,
     motor_right: f64,
     motor_fwd: f64,
+    fly: FlyRespJson,
+    eaten_food_id: Option<String>,
     compute_ms: f64,
     kernel_ms: f64,
     recurrent_ms: f64,
@@ -229,18 +252,20 @@ fn handle(
                 hunger: step.fly.hunger,
                 health: step.fly.health,
                 rest_time_left: step.fly.rest_time_left,
+                dead: step.fly.dead,
             };
             let srcs: Vec<SourceInput> = step
                 .sources
                 .iter()
                 .map(|x| SourceInput {
+                    id: x.id.clone(),
                     x: x.x,
                     y: x.y,
                     radius: x.radius,
                 })
                 .collect();
             let include_activity = step.include_activity.unwrap_or(true);
-            let (_activity, activity_sparse, motor_left, motor_right, motor_fwd, timing) =
+            let (_activity, activity_sparse, motor_left, motor_right, motor_fwd, timing, fly_out) =
                 sim.step_with_options(step.dt, fly, srcs, Vec::new(), include_activity);
             compute_ms_sum += timing.compute_ms;
             kernel_ms_sum += timing.kernel_ms;
@@ -253,6 +278,21 @@ fn handle(
                 motor_left,
                 motor_right,
                 motor_fwd,
+                fly: FlyRespJson {
+                    x: fly_out.x,
+                    y: fly_out.y,
+                    z: fly_out.z,
+                    heading: fly_out.heading,
+                    t: fly_out.t,
+                    hunger: fly_out.hunger,
+                    health: fly_out.health,
+                    dead: fly_out.dead,
+                    fly_time_left: fly_out.fly_time_left,
+                    rest_time_left: fly_out.rest_time_left,
+                    rest_duration: fly_out.rest_duration,
+                    feeding: fly_out.feeding,
+                },
+                eaten_food_id: fly_out.eaten_food_id,
                 compute_ms: timing.compute_ms,
                 kernel_ms: timing.kernel_ms,
                 recurrent_ms: timing.recurrent_ms,
@@ -318,18 +358,20 @@ fn handle(
             hunger: p.fly.hunger,
             health: p.fly.health,
             rest_time_left: p.fly.rest_time_left,
+            dead: p.fly.dead,
         };
         let srcs: Vec<SourceInput> = p
             .sources
             .iter()
             .map(|x| SourceInput {
+                id: x.id.clone(),
                 x: x.x,
                 y: x.y,
                 radius: x.radius,
             })
             .collect();
         let include_activity = p.include_activity.unwrap_or(true);
-        let (_activity, activity_sparse, motor_left, motor_right, motor_fwd, timing) =
+        let (_activity, activity_sparse, motor_left, motor_right, motor_fwd, timing, fly_out) =
             sim.step_with_options(p.dt, fly, srcs, Vec::new(), include_activity);
         let compute_ms = timing.compute_ms;
         let t2 = Instant::now();
@@ -338,6 +380,21 @@ fn handle(
             motor_left,
             motor_right,
             motor_fwd,
+            fly: FlyRespJson {
+                x: fly_out.x,
+                y: fly_out.y,
+                z: fly_out.z,
+                heading: fly_out.heading,
+                t: fly_out.t,
+                hunger: fly_out.hunger,
+                health: fly_out.health,
+                dead: fly_out.dead,
+                fly_time_left: fly_out.fly_time_left,
+                rest_time_left: fly_out.rest_time_left,
+                rest_duration: fly_out.rest_duration,
+                feeding: fly_out.feeding,
+            },
+            eaten_food_id: fly_out.eaten_food_id,
             compute_ms: timing.compute_ms,
             kernel_ms: timing.kernel_ms,
             recurrent_ms: timing.recurrent_ms,

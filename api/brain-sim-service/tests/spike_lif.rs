@@ -10,6 +10,7 @@ fn default_fly(t: f64) -> FlyInput {
         hunger: 30.0,
         health: 100.0,
         rest_time_left: 0.0,
+        dead: false,
     }
 }
 
@@ -39,7 +40,7 @@ fn spike_propagates_to_downstream_neuron() {
             neuron_ids: boosted_ids,
             strength: 2.0,
         }];
-        let (_activity, activity_sparse, _ml, _mr, _mf, _timing) =
+        let (_activity, activity_sparse, _ml, _mr, _mf, _timing, _fly_out) =
             sim.step(0.001, default_fly(i as f64 * 0.001), vec![], pending);
         if activity_sparse.contains_key("n1") {
             saw_n1 = true;
@@ -73,7 +74,7 @@ fn refractory_prevents_every_step_spiking() {
             neuron_ids: boosted_ids,
             strength: 2.0,
         }];
-        let (_activity, activity_sparse, _ml, _mr, _mf, _timing) =
+        let (_activity, activity_sparse, _ml, _mr, _mf, _timing, _fly_out) =
             sim.step(0.001, default_fly(i as f64 * 0.001), vec![], pending);
         if activity_sparse.contains_key("n0") {
             spike_steps.push(i);

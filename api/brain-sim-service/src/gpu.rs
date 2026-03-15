@@ -40,21 +40,6 @@ extern "C" __global__ void add_uniform_kernel(float* g, const unsigned int* idx,
     }
 }
 
-extern "C" __global__ void add_pending_kernel(
-    float* g,
-    const unsigned int* idx,
-    const float* strength,
-    int n_idx,
-    int N
-) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= n_idx) return;
-    unsigned int k = idx[i];
-    if (k < (unsigned)N) {
-        atomicAdd(&g[k], strength[i]);
-    }
-}
-
 extern "C" __global__ void lif_kernel(
     float* v,
     const float* g,
@@ -109,8 +94,6 @@ pub struct GpuSimState {
     refrac: CudaSlice<u16>,
     spikes_prev: CudaSlice<u8>,
     spikes_next: CudaSlice<u8>,
-    sensory_cache_indices: Vec<u32>,
-    sensory_cache_dev: Option<CudaSlice<u32>>,
 }
 
 impl GpuSimState {
@@ -143,7 +126,6 @@ impl GpuSimState {
                         "decay_g_kernel",
                         "recurrent_kernel",
                         "add_uniform_kernel",
-                        "add_pending_kernel",
                         "lif_kernel",
                     ],
                 )
@@ -171,8 +153,6 @@ impl GpuSimState {
             refrac,
             spikes_prev,
             spikes_next,
-            sensory_cache_indices: Vec::new(),
-            sensory_cache_dev: None,
         })
     }
 
@@ -180,10 +160,12 @@ impl GpuSimState {
     pub fn step(
         &mut self,
         dt_sec: f32,
-        sensory_indices: &[u32],
-        sensory_strength: f32,
-        pending_indices: &[u32],
-        pending_strength: &[f32],
+        sensory_left_indices: &[u32],
+        sensory_right_indices: &[u32],
+        sensory_unknown_indices: &[u32],
+        sensory_left_strength: f32,
+        sensory_right_strength: f32,
+        sensory_unknown_strength: f32,
     ) -> Option<GpuStepResult> {
         if !dt_sec.is_finite() || dt_sec <= 0.0 {
             eprintln!(
@@ -195,7 +177,6 @@ impl GpuSimState {
         let decay = self.dev.get_func("bs", "decay_g_kernel")?;
         let recurrent = self.dev.get_func("bs", "recurrent_kernel")?;
         let add_uniform = self.dev.get_func("bs", "add_uniform_kernel")?;
-        let add_pending = self.dev.get_func("bs", "add_pending_kernel")?;
         let lif = self.dev.get_func("bs", "lif_kernel")?;
         let n = self.n as i32;
         let ne = self.ne as i32;
@@ -227,49 +208,51 @@ impl GpuSimState {
             .ok()?;
         }
         let recurrent_ms = t_recurrent.elapsed().as_secs_f64() * 1000.0;
-        if sensory_strength > 0.0 && !sensory_indices.is_empty() {
-            if self.sensory_cache_indices.as_slice() != sensory_indices {
-                self.sensory_cache_dev = Some(self.dev.htod_sync_copy(sensory_indices).ok()?);
-                self.sensory_cache_indices = sensory_indices.to_vec();
-            }
-            let sensory_dev = self.sensory_cache_dev.as_ref()?;
+        if sensory_left_strength > 0.0 && !sensory_left_indices.is_empty() {
+            let dev_indices = self.dev.htod_sync_copy(sensory_left_indices).ok()?;
             unsafe {
-                add_uniform
+                add_uniform.clone()
                     .launch(
-                        LaunchConfig::for_num_elems(sensory_indices.len() as u32),
+                        LaunchConfig::for_num_elems(sensory_left_indices.len() as u32),
                         (
                             &mut self.g,
-                            sensory_dev,
-                            sensory_indices.len() as i32,
-                            sensory_strength,
+                            &dev_indices,
+                            sensory_left_indices.len() as i32,
+                            sensory_left_strength,
                             n,
                         ),
                     )
                     .ok()?;
             }
         }
-        if pending_indices.len() != pending_strength.len() {
-            eprintln!(
-                "[brain-service][gpu] pending length mismatch: idx_len={} strength_len={} n={} g_len={}",
-                pending_indices.len(),
-                pending_strength.len(),
-                n,
-                self.n
-            );
-            return None;
-        }
-        if !pending_indices.is_empty() {
-            let pending_idx_dev = self.dev.htod_sync_copy(pending_indices).ok()?;
-            let pending_strength_dev = self.dev.htod_sync_copy(pending_strength).ok()?;
+        if sensory_right_strength > 0.0 && !sensory_right_indices.is_empty() {
+            let dev_indices = self.dev.htod_sync_copy(sensory_right_indices).ok()?;
             unsafe {
-                add_pending
+                add_uniform.clone()
                     .launch(
-                        LaunchConfig::for_num_elems(pending_indices.len() as u32),
+                        LaunchConfig::for_num_elems(sensory_right_indices.len() as u32),
                         (
                             &mut self.g,
-                            &pending_idx_dev,
-                            &pending_strength_dev,
-                            pending_indices.len() as i32,
+                            &dev_indices,
+                            sensory_right_indices.len() as i32,
+                            sensory_right_strength,
+                            n,
+                        ),
+                    )
+                    .ok()?;
+            }
+        }
+        if sensory_unknown_strength > 0.0 && !sensory_unknown_indices.is_empty() {
+            let dev_indices = self.dev.htod_sync_copy(sensory_unknown_indices).ok()?;
+            unsafe {
+                add_uniform.clone()
+                    .launch(
+                        LaunchConfig::for_num_elems(sensory_unknown_indices.len() as u32),
+                        (
+                            &mut self.g,
+                            &dev_indices,
+                            sensory_unknown_indices.len() as i32,
+                            sensory_unknown_strength,
                             n,
                         ),
                     )

@@ -29,9 +29,11 @@ interface WalletMenuModalProps {
   isOpen: boolean;
   onClose: () => void;
   anchorRef: React.RefObject<HTMLButtonElement | null>;
+  devMode: boolean;
+  onToggleDevMode: () => void;
 }
 
-function WalletMenuModalInner({ isOpen, onClose, anchorRef }: WalletMenuModalProps) {
+function WalletMenuModalInner({ isOpen, onClose, anchorRef, devMode, onToggleDevMode }: WalletMenuModalProps) {
   const [copied, setCopied] = useState(false);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { isConnected, address, chainId } = usePrivyWallet();
@@ -150,6 +152,13 @@ function WalletMenuModalInner({ isOpen, onClose, anchorRef }: WalletMenuModalPro
             >
               <DisconnectIcon />
               <span>Disconnect</span>
+            </button>
+            <button
+              type="button"
+              className="wallet-modal-item"
+              onClick={onToggleDevMode}
+            >
+              <span>Dev mode: {devMode ? 'On' : 'Off'}</span>
             </button>
           </>
         )}

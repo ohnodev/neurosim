@@ -8,6 +8,7 @@ logs/
 ecosystem.config.js
 data/raw/
 data/connectome-subset.json
+data/connectome-full.json
 api/data/claims.json
 api/data/flies.json
 api/data/deployments.json

@@ -1,7 +1,7 @@
 //! Focused test: load real connectome, create sim, run 30 steps.
 //! Proves the Rust service can simulate flies. Run with: cargo test -p brain-sim-service test_flies_simulate
 use brain_sim_service::connectome;
-use brain_sim_service::sim::{BrainSim, FlyInput, PendingStimInput, SourceInput};
+use brain_sim_service::sim::{BrainSim, FlyInput, SourceInput};
 use std::path::Path;
 
 #[test]
@@ -30,12 +30,6 @@ fn test_flies_simulate() {
     );
 
     let dt = 1.0 / 30.0;
-    let inject_ids: Vec<String> = template
-        .sensory_indices
-        .iter()
-        .take(8)
-        .filter_map(|&i| template.neuron_ids.get(i as usize).cloned())
-        .collect();
     let mut t = 0.0f64;
     let mut x = 2.0f64;
     let mut hunger = 80.0f64;
@@ -50,18 +44,16 @@ fn test_flies_simulate() {
             hunger,
             health: 100.0,
             rest_time_left: 0.0,
+            dead: false,
         };
-        let food = vec![SourceInput { x: 3.0, y: 1.0, radius: 2.5 }];
-        let pending = if inject_ids.is_empty() {
-            vec![]
-        } else {
-            vec![PendingStimInput {
-                neuron_ids: inject_ids.clone(),
-                strength: 2.0,
-            }]
-        };
-        let (activity, activity_sparse, motor_left, motor_right, motor_fwd, _timing) =
-            sim.step(dt, fly, food, pending);
+        let food = vec![SourceInput {
+            id: "food1".to_string(),
+            x: 3.0,
+            y: 1.0,
+            radius: 2.5,
+        }];
+        let (activity, activity_sparse, motor_left, motor_right, motor_fwd, _timing, _fly_out) =
+            sim.step(dt, fly, food);
 
         assert_eq!(activity.len(), template.neuron_ids.len());
         assert!(activity.iter().all(|v| v.is_finite() && *v >= 0.0 && *v <= 1.0));

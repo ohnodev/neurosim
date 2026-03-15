@@ -4,30 +4,26 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-const SUGAR_GRN_IDS: [&str; 21] = [
-    "720575940624963786", "720575940630233916", "720575940637568838", "720575940638202345",
-    "720575940617000768", "720575940630797113", "720575940632889389", "720575940621754367",
-    "720575940621502051", "720575940640649691", "720575940639332736", "720575940616885538",
-    "720575940639198653", "720575940639259967", "720575940617937543", "720575940632425919",
-    "720575940633143833", "720575940612670570", "720575940628853239", "720575940629176663",
-    "720575940611875570",
-];
+#[derive(Deserialize)]
+struct LateralizedIdsJson {
+    left: Vec<String>,
+    right: Vec<String>,
+    unknown: Vec<String>,
+}
 
-fn is_photoreceptor(cell_type: Option<&str>) -> bool {
-    let s = match cell_type {
-        Some(x) if !x.trim().is_empty() => x.trim(),
-        _ => return false,
-    };
-    s.len() >= 2
-        && s.chars().next().map(|c| c == 'R' || c == 'r') == Some(true)
-        && s.chars().nth(1).map(|c| c.is_ascii_digit()) == Some(true)
+struct PrecomputedIndices {
+    left: Vec<u32>,
+    right: Vec<u32>,
+    unknown: Vec<u32>,
+    total_left: usize,
+    total_right: usize,
+    total_unknown: usize,
 }
 
 #[derive(Deserialize)]
 struct NeuronJson {
     root_id: String,
     role: Option<String>,
-    cell_type: Option<String>,
     side: Option<String>,
 }
 
@@ -51,6 +47,9 @@ pub struct ConnectomeTemplate {
     pub edges_post: Vec<u32>,
     pub edges_weight: Vec<f32>,
     pub sensory_indices: Vec<u32>,
+    pub sensory_left_indices: Vec<u32>,
+    pub sensory_right_indices: Vec<u32>,
+    pub sensory_unknown_indices: Vec<u32>,
     pub motor_left: Vec<u32>,
     pub motor_right: Vec<u32>,
     pub motor_unknown: Vec<u32>,
@@ -91,6 +90,59 @@ fn compute_viewer_subset_indices(neuron_ids: &[String], limit: usize) -> Vec<u32
     out
 }
 
+fn load_precomputed_indices(
+    connectome_path: &Path,
+    id_to_idx: &HashMap<String, u32>,
+    filename: &str,
+) -> Option<PrecomputedIndices> {
+    let precomputed_path = connectome_path.parent()?.join(filename);
+    let txt = fs::read_to_string(precomputed_path).ok()?;
+    let parsed: LateralizedIdsJson = serde_json::from_str(&txt).ok()?;
+    let total_left = parsed.left.len();
+    let total_right = parsed.right.len();
+    let total_unknown = parsed.unknown.len();
+    let mut left: Vec<u32> = parsed
+        .left
+        .iter()
+        .filter_map(|id| id_to_idx.get(id).copied())
+        .collect();
+    let mut right: Vec<u32> = parsed
+        .right
+        .iter()
+        .filter_map(|id| id_to_idx.get(id).copied())
+        .collect();
+    let mut unknown: Vec<u32> = parsed
+        .unknown
+        .iter()
+        .filter_map(|id| id_to_idx.get(id).copied())
+        .collect();
+    left.sort_unstable();
+    right.sort_unstable();
+    unknown.sort_unstable();
+    Some(PrecomputedIndices {
+        left,
+        right,
+        unknown,
+        total_left,
+        total_right,
+        total_unknown,
+    })
+}
+
+fn load_precomputed_olfactory_indices(
+    connectome_path: &Path,
+    id_to_idx: &HashMap<String, u32>,
+) -> Option<PrecomputedIndices> {
+    load_precomputed_indices(connectome_path, id_to_idx, "olfactory-afferents.json")
+}
+
+fn load_precomputed_motor_indices(
+    connectome_path: &Path,
+    id_to_idx: &HashMap<String, u32>,
+) -> Option<PrecomputedIndices> {
+    load_precomputed_indices(connectome_path, id_to_idx, "motor-efferents.json")
+}
+
 pub fn load_connectome(path: &Path) -> Result<ConnectomeTemplate, Box<dyn std::error::Error + Send + Sync>> {
     let s = fs::read_to_string(path)?;
     let data: ConnectomeJson = serde_json::from_str(&s)?;
@@ -106,22 +158,22 @@ pub fn load_connectome(path: &Path) -> Result<ConnectomeTemplate, Box<dyn std::e
         .collect();
 
     let mut sensory = Vec::new();
-    let mut afferent_visual = Vec::new();
-    let mut sugar_grn = Vec::new();
+    let mut sensory_left_all = Vec::new();
+    let mut sensory_right_all = Vec::new();
+    let mut sensory_unknown_all = Vec::new();
     let mut motor_left = Vec::new();
     let mut motor_right = Vec::new();
     let mut motor_unknown = Vec::new();
 
     for (i, n) in data.neurons.iter().enumerate() {
         let role = n.role.as_deref().unwrap_or("interneuron");
-        if SUGAR_GRN_IDS.contains(&n.root_id.as_str()) {
-            sugar_grn.push(i as u32);
-        }
         match role {
             "sensory" => {
                 sensory.push(i as u32);
-                if is_photoreceptor(n.cell_type.as_deref()) {
-                    afferent_visual.push(i as u32);
+                match n.side.as_deref() {
+                    Some("left") => sensory_left_all.push(i as u32),
+                    Some("right") => sensory_right_all.push(i as u32),
+                    _ => sensory_unknown_all.push(i as u32),
                 }
             }
             "motor" => {
@@ -136,15 +188,38 @@ pub fn load_connectome(path: &Path) -> Result<ConnectomeTemplate, Box<dyn std::e
         }
     }
 
-    let sensory_target = if sugar_grn.is_empty() {
-        if afferent_visual.is_empty() {
-            sensory
+    // Prefer precomputed olfactory afferents from data/olfactory-afferents.json.
+    // If overlap with the currently loaded connectome is empty, fall back to all sensory neurons.
+    let (sensory_left_indices, sensory_right_indices, sensory_unknown_indices) =
+        if let Some(olf) =
+            load_precomputed_olfactory_indices(path, &id_to_idx)
+        {
+            eprintln!(
+                "[connectome] olfactory precomputed total(L/R/U)={}/{}/{} overlap_in_loaded_connectome(L/R/U)={}/{}/{}",
+                olf.total_left, olf.total_right, olf.total_unknown, olf.left.len(), olf.right.len(), olf.unknown.len()
+            );
+            if !olf.left.is_empty() || !olf.right.is_empty() || !olf.unknown.is_empty() {
+                (olf.left, olf.right, olf.unknown)
+            } else {
+                eprintln!(
+                    "[connectome] zero overlap with precomputed olfactory IDs; using all sensory neurons in loaded connectome"
+                );
+                (sensory_left_all, sensory_right_all, sensory_unknown_all)
+            }
         } else {
-            afferent_visual
-        }
-    } else {
-        sugar_grn
-    };
+            eprintln!(
+                "[connectome] missing/invalid data/olfactory-afferents.json; using all sensory neurons in loaded connectome"
+            );
+            (sensory_left_all, sensory_right_all, sensory_unknown_all)
+        };
+    let mut sensory_target = Vec::with_capacity(
+        sensory_left_indices.len() + sensory_right_indices.len() + sensory_unknown_indices.len(),
+    );
+    sensory_target.extend_from_slice(&sensory_left_indices);
+    sensory_target.extend_from_slice(&sensory_right_indices);
+    sensory_target.extend_from_slice(&sensory_unknown_indices);
+    sensory_target.sort_unstable();
+    sensory_target.dedup();
 
     let viewer_subset_indices = compute_viewer_subset_indices(&neuron_ids, viewer_subset_limit());
     let mut edges_pre = Vec::with_capacity(data.connections.len());
@@ -160,6 +235,29 @@ pub fn load_connectome(path: &Path) -> Result<ConnectomeTemplate, Box<dyn std::e
         }
     }
 
+    let (pre_motor_left, pre_motor_right, pre_motor_unknown) =
+        if let Some(mot) =
+            load_precomputed_motor_indices(path, &id_to_idx)
+        {
+            eprintln!(
+                "[connectome] motor precomputed total(L/R/U)={}/{}/{} overlap_in_loaded_connectome(L/R/U)={}/{}/{}",
+                mot.total_left, mot.total_right, mot.total_unknown, mot.left.len(), mot.right.len(), mot.unknown.len()
+            );
+            if !mot.left.is_empty() || !mot.right.is_empty() || !mot.unknown.is_empty() {
+                (mot.left, mot.right, mot.unknown)
+            } else {
+                eprintln!(
+                    "[connectome] zero overlap with precomputed motor IDs; using role-based motor sets from loaded connectome"
+                );
+                (motor_left, motor_right, motor_unknown)
+            }
+        } else {
+            eprintln!(
+                "[connectome] missing/invalid data/motor-efferents.json; using role-based motor sets from loaded connectome"
+            );
+            (motor_left, motor_right, motor_unknown)
+        };
+
     Ok(ConnectomeTemplate {
         neuron_ids,
         viewer_subset_indices,
@@ -167,8 +265,11 @@ pub fn load_connectome(path: &Path) -> Result<ConnectomeTemplate, Box<dyn std::e
         edges_post,
         edges_weight,
         sensory_indices: sensory_target,
-        motor_left,
-        motor_right,
-        motor_unknown,
+        sensory_left_indices,
+        sensory_right_indices,
+        sensory_unknown_indices,
+        motor_left: pre_motor_left,
+        motor_right: pre_motor_right,
+        motor_unknown: pre_motor_unknown,
     })
 }

@@ -1,5 +1,5 @@
 import { useStatusPanelData } from '../lib/simDisplayContext';
-import { DEFAULT_FLY, getFlyMode, resolveEffectiveSimIndex, shortId } from '../lib/flyViewerUtils';
+import { DEFAULT_FLY, getFlyMode, resolveEffectiveSimIndex } from '../lib/flyViewerUtils';
 
 /** Status tab: shows focused fly position, heading, hunger, and top firing neurons. */
 export function StatusPanelStatusContent({
@@ -36,11 +36,13 @@ export function StatusPanelStatusContent({
       <div style={{ color: '#888', marginBottom: 4 }}>Firing neurons ({activeCount})</div>
       <div style={{ maxHeight: 120, overflow: 'auto' }}>
         {topActivity.length === 0 && <span style={{ color: '#666' }}>—</span>}
-        {topActivity.map(([id, v]) => (
+        {topActivity.map(([id, v]) => {
+          const label = neuronLabels[id] || id;
+          return (
           <div
             key={id}
             style={{ display: 'flex', justifyContent: 'space-between', gap: 12, minWidth: 0 }}
-            title={`${neuronLabels[id] || id}\n${id}`}
+            title={`${label}\n${id}`}
           >
             <span
               style={{
@@ -50,11 +52,12 @@ export function StatusPanelStatusContent({
                 whiteSpace: 'nowrap',
               }}
             >
-              {neuronLabels[id] || shortId(id)}
+              {label}
             </span>
             <span style={{ color: '#8cf', flexShrink: 0 }}>{(Math.min(v ?? 0, 1)).toFixed(2)}</span>
           </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

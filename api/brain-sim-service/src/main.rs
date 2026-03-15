@@ -2,7 +2,10 @@
 //! Loads connectome once at startup; create allocates sims from the in-memory template.
 use std::time::Instant;
 use brain_sim_service::connectome;
-use brain_sim_service::sim::{BrainSim, FlyInput, PendingStimInput, SourceInput};
+use brain_sim_service::feeding::{
+    FoodState, FEED_SUGAR_PER_SEC, HEALTH_PER_SUGAR, HUNGER_PER_SUGAR,
+};
+use brain_sim_service::sim::{BrainSim, FlyInput, SourceInput};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -19,8 +22,17 @@ fn main() {
     let default_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|p| p.parent())
-        .map(|p| p.join("data/connectome-subset.json"))
-        .filter(|p| p.exists())
+        .and_then(|root| {
+            let full = root.join("data/connectome-full.json");
+            if full.exists() {
+                return Some(full);
+            }
+            let subset = root.join("data/connectome-subset.json");
+            if subset.exists() {
+                return Some(subset);
+            }
+            None
+        })
         .and_then(|p| p.canonicalize().ok())
         .map(|p| p.to_string_lossy().into_owned());
     let connectome_path = std::env::var("NEUROSIM_CONNECTOME_PATH")
@@ -46,6 +58,7 @@ fn main() {
     eprintln!("[brain-service] listening on {}", socket_path);
 
     let sims: Mutex<HashMap<u32, BrainSim>> = Mutex::new(HashMap::new());
+    let food_state: Mutex<FoodState> = Mutex::new(FoodState::default());
     let next_id: Mutex<u32> = Mutex::new(0);
     let template = Arc::new(template);
 
@@ -57,7 +70,7 @@ fn main() {
                 conn_id,
                 std::process::id()
             );
-            let _ = handle(&mut s, &sims, &next_id, template.clone(), conn_id);
+            let _ = handle(&mut s, &sims, &food_state, &next_id, template.clone(), conn_id);
             eprintln!(
                 "[brain-service] conn_close conn_id={} pid={}",
                 conn_id,
@@ -75,7 +88,6 @@ struct StepParams {
     include_activity: Option<bool>,
     fly: FlyJson,
     sources: Vec<SourceJson>,
-    pending: Vec<PendingJson>,
 }
 
 #[derive(Deserialize)]
@@ -93,19 +105,32 @@ struct FlyJson {
     hunger: f64,
     health: f64,
     rest_time_left: f64,
+    #[serde(default)]
+    dead: bool,
 }
 
 #[derive(Deserialize)]
 struct SourceJson {
+    id: String,
     x: f64,
     y: f64,
     radius: f64,
 }
 
-#[derive(Deserialize)]
-struct PendingJson {
-    neuron_ids: Vec<String>,
-    strength: f64,
+#[derive(Serialize)]
+struct FlyRespJson {
+    x: f64,
+    y: f64,
+    z: f64,
+    heading: f64,
+    t: f64,
+    hunger: f64,
+    health: f64,
+    dead: bool,
+    fly_time_left: f64,
+    rest_time_left: f64,
+    rest_duration: f64,
+    feeding: bool,
 }
 
 #[derive(Serialize)]
@@ -119,6 +144,15 @@ struct StepResp {
     motor_left: f64,
     motor_right: f64,
     motor_fwd: f64,
+    motor_left_count: f64,
+    motor_right_count: f64,
+    motor_fwd_count: f64,
+    motor_left_magnitude: f64,
+    motor_right_magnitude: f64,
+    motor_fwd_magnitude: f64,
+    fly: FlyRespJson,
+    eaten_food_id: Option<String>,
+    feeding_sugar_taken: f64,
     compute_ms: f64,
     kernel_ms: f64,
     recurrent_ms: f64,
@@ -133,11 +167,57 @@ struct StepManyItemResp {
     motor_left: f64,
     motor_right: f64,
     motor_fwd: f64,
+    motor_left_count: f64,
+    motor_right_count: f64,
+    motor_fwd_count: f64,
+    motor_left_magnitude: f64,
+    motor_right_magnitude: f64,
+    motor_fwd_magnitude: f64,
+    fly: FlyRespJson,
+    eaten_food_id: Option<String>,
+    feeding_sugar_taken: f64,
+    #[serde(skip_serializing)]
+    feeding_candidate_id: Option<String>,
+    #[serde(skip_serializing)]
+    dt: f64,
     compute_ms: f64,
     kernel_ms: f64,
     recurrent_ms: f64,
     lif_ms: f64,
     readout_ms: f64,
+}
+
+fn apply_feeding_tick(
+    food_state: &mut FoodState,
+    source_lookup: &HashMap<String, (f64, f64)>,
+    items: &mut [StepManyItemResp],
+) {
+    for item in items.iter_mut() {
+        let sugar_per_fly = (FEED_SUGAR_PER_SEC * item.dt).max(0.0);
+        if sugar_per_fly <= 0.0 {
+            item.fly.feeding = false;
+            item.feeding_sugar_taken = 0.0;
+            continue;
+        }
+        let Some(source_id) = item.feeding_candidate_id.clone() else {
+            item.fly.feeding = false;
+            item.feeding_sugar_taken = 0.0;
+            continue;
+        };
+        let taken = food_state.take_sugar(&source_id, sugar_per_fly);
+        item.fly.feeding = taken > 0.0;
+        item.feeding_sugar_taken = taken;
+        item.fly.hunger = (item.fly.hunger + taken * HUNGER_PER_SUGAR).clamp(0.0, 100.0);
+        item.fly.health = (item.fly.health + taken * HEALTH_PER_SUGAR).clamp(0.0, 100.0);
+        if let Some((sx, sy)) = source_lookup.get(&source_id) {
+            item.fly.x = *sx;
+            item.fly.y = *sy;
+            item.fly.z = 0.9;
+        }
+        if food_state.depleted(&source_id) {
+            item.eaten_food_id = Some(source_id);
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -153,6 +233,7 @@ struct ErrResp {
 fn handle(
     s: &mut UnixStream,
     sims: &Mutex<HashMap<u32, BrainSim>>,
+    food_state: &Mutex<FoodState>,
     next_id: &Mutex<u32>,
     template: Arc<connectome::ConnectomeTemplate>,
     conn_id: u64,
@@ -184,6 +265,9 @@ fn handle(
             template.edges_post.clone(),
             template.edges_weight.clone(),
             template.sensory_indices.clone(),
+            template.sensory_left_indices.clone(),
+            template.sensory_right_indices.clone(),
+            template.sensory_unknown_indices.clone(),
             template.motor_left.clone(),
             template.motor_right.clone(),
             template.motor_unknown.clone(),
@@ -208,6 +292,22 @@ fn handle(
         let p: StepManyParams = serde_json::from_value(v["params"].clone())?;
         let parse_ms = t0.elapsed().as_millis();
         let step_count = p.steps.len();
+        let mut all_sources: HashMap<String, SourceJson> = HashMap::new();
+        for step in &p.steps {
+            for s in &step.sources {
+                all_sources.entry(s.id.clone()).or_insert(SourceJson {
+                    id: s.id.clone(),
+                    x: s.x,
+                    y: s.y,
+                    radius: s.radius,
+                });
+            }
+        }
+        let source_list: Vec<SourceJson> = all_sources.into_values().collect();
+        let source_lookup: HashMap<String, (f64, f64)> = source_list
+            .iter()
+            .map(|s| (s.id.clone(), (s.x, s.y)))
+            .collect();
         // This service currently processes one socket request at a time per process,
         // so a single batch lock does not reduce real concurrency in this execution model.
         let mut g = sims.lock().unwrap();
@@ -236,27 +336,35 @@ fn handle(
                 hunger: step.fly.hunger,
                 health: step.fly.health,
                 rest_time_left: step.fly.rest_time_left,
+                dead: step.fly.dead,
             };
             let srcs: Vec<SourceInput> = step
                 .sources
                 .iter()
                 .map(|x| SourceInput {
+                    id: x.id.clone(),
                     x: x.x,
                     y: x.y,
                     radius: x.radius,
                 })
                 .collect();
-            let pend: Vec<PendingStimInput> = step
-                .pending
-                .iter()
-                .map(|x| PendingStimInput {
-                    neuron_ids: x.neuron_ids.clone(),
-                    strength: x.strength,
-                })
-                .collect();
             let include_activity = step.include_activity.unwrap_or(true);
-            let (_activity, activity_sparse, motor_left, motor_right, motor_fwd, timing) =
-                sim.step_with_options(step.dt, fly, srcs, pend, include_activity);
+            let (
+                _activity,
+                activity_sparse,
+                motor_left,
+                motor_right,
+                motor_fwd,
+                motor_left_count,
+                motor_right_count,
+                motor_fwd_count,
+                motor_left_magnitude,
+                motor_right_magnitude,
+                motor_fwd_magnitude,
+                timing,
+                fly_out,
+            ) =
+                sim.step_with_options(step.dt, fly, srcs, include_activity);
             compute_ms_sum += timing.compute_ms;
             kernel_ms_sum += timing.kernel_ms;
             recurrent_ms_sum += timing.recurrent_ms;
@@ -268,12 +376,41 @@ fn handle(
                 motor_left,
                 motor_right,
                 motor_fwd,
+                motor_left_count,
+                motor_right_count,
+                motor_fwd_count,
+                motor_left_magnitude,
+                motor_right_magnitude,
+                motor_fwd_magnitude,
+                fly: FlyRespJson {
+                    x: fly_out.x,
+                    y: fly_out.y,
+                    z: fly_out.z,
+                    heading: fly_out.heading,
+                    t: fly_out.t,
+                    hunger: fly_out.hunger,
+                    health: fly_out.health,
+                    dead: fly_out.dead,
+                    fly_time_left: fly_out.fly_time_left,
+                    rest_time_left: fly_out.rest_time_left,
+                    rest_duration: fly_out.rest_duration,
+                    feeding: fly_out.feeding,
+                },
+                eaten_food_id: fly_out.eaten_food_id,
+                feeding_sugar_taken: fly_out.feeding_sugar_taken,
+                feeding_candidate_id: fly_out.feeding_candidate_id,
+                dt: step.dt,
                 compute_ms: timing.compute_ms,
                 kernel_ms: timing.kernel_ms,
                 recurrent_ms: timing.recurrent_ms,
                 lif_ms: timing.lif_ms,
                 readout_ms: timing.readout_ms,
             });
+        }
+        {
+            let mut fg = food_state.lock().unwrap();
+            fg.sync(source_list.iter().map(|s| s.id.clone()));
+            apply_feeding_tick(&mut fg, &source_lookup, &mut results);
         }
         // Atomic semantics are intentional: if any sim_id in step_many is missing,
         // we return an error for the full batch so API/client can retry coherently.
@@ -333,34 +470,97 @@ fn handle(
             hunger: p.fly.hunger,
             health: p.fly.health,
             rest_time_left: p.fly.rest_time_left,
+            dead: p.fly.dead,
         };
         let srcs: Vec<SourceInput> = p
             .sources
             .iter()
             .map(|x| SourceInput {
+                id: x.id.clone(),
                 x: x.x,
                 y: x.y,
                 radius: x.radius,
             })
             .collect();
-        let pend: Vec<PendingStimInput> = p
-            .pending
-            .iter()
-            .map(|x| PendingStimInput {
-                neuron_ids: x.neuron_ids.clone(),
-                strength: x.strength,
-            })
-            .collect();
         let include_activity = p.include_activity.unwrap_or(true);
-        let (_activity, activity_sparse, motor_left, motor_right, motor_fwd, timing) =
-            sim.step_with_options(p.dt, fly, srcs, pend, include_activity);
+        let (
+            _activity,
+            activity_sparse,
+            motor_left,
+            motor_right,
+            motor_fwd,
+            motor_left_count,
+            motor_right_count,
+            motor_fwd_count,
+            motor_left_magnitude,
+            motor_right_magnitude,
+            motor_fwd_magnitude,
+            timing,
+            fly_out,
+        ) =
+            sim.step_with_options(p.dt, fly, srcs, include_activity);
         let compute_ms = timing.compute_ms;
+        let mut source_lookup: HashMap<String, (f64, f64)> = HashMap::new();
+        for s in &p.sources {
+            source_lookup.insert(s.id.clone(), (s.x, s.y));
+        }
+        let mut one = vec![StepManyItemResp {
+            sim_id: p.sim_id,
+            activity_sparse: HashMap::new(),
+            motor_left: 0.0,
+            motor_right: 0.0,
+            motor_fwd: 0.0,
+            motor_left_count: 0.0,
+            motor_right_count: 0.0,
+            motor_fwd_count: 0.0,
+            motor_left_magnitude: 0.0,
+            motor_right_magnitude: 0.0,
+            motor_fwd_magnitude: 0.0,
+            fly: FlyRespJson {
+                x: fly_out.x,
+                y: fly_out.y,
+                z: fly_out.z,
+                heading: fly_out.heading,
+                t: fly_out.t,
+                hunger: fly_out.hunger,
+                health: fly_out.health,
+                dead: fly_out.dead,
+                fly_time_left: fly_out.fly_time_left,
+                rest_time_left: fly_out.rest_time_left,
+                rest_duration: fly_out.rest_duration,
+                feeding: fly_out.feeding,
+            },
+            eaten_food_id: fly_out.eaten_food_id,
+            feeding_sugar_taken: fly_out.feeding_sugar_taken,
+            feeding_candidate_id: fly_out.feeding_candidate_id,
+            dt: p.dt,
+            compute_ms: timing.compute_ms,
+            kernel_ms: timing.kernel_ms,
+            recurrent_ms: timing.recurrent_ms,
+            lif_ms: timing.lif_ms,
+            readout_ms: timing.readout_ms,
+        }];
+        {
+            let mut fg = food_state.lock().unwrap();
+            fg.sync(p.sources.iter().map(|s| s.id.clone()));
+            apply_feeding_tick(&mut fg, &source_lookup, &mut one);
+        }
+        let one_out = one.pop().unwrap();
         let t2 = Instant::now();
         let out_json = serde_json::to_string(&StepResp {
             activity_sparse,
             motor_left,
             motor_right,
             motor_fwd,
+            motor_left_count,
+            motor_right_count,
+            motor_fwd_count,
+            motor_left_magnitude,
+            motor_right_magnitude,
+            motor_fwd_magnitude,
+            fly: one_out.fly,
+            eaten_food_id: one_out.eaten_food_id,
+            feeding_sugar_taken: one_out.feeding_sugar_taken,
             compute_ms: timing.compute_ms,
             kernel_ms: timing.kernel_ms,
             recurrent_ms: timing.recurrent_ms,

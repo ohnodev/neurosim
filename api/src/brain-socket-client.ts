@@ -177,7 +177,6 @@ function flushStepBatch(): void {
   const steps = batch.map((q) => {
     const params = (q.payload as { params?: JsonObj }).params ?? {};
     const fly = (params.fly as JsonObj | undefined) ?? {};
-    const pending = Array.isArray(params.pending) ? params.pending : [];
     return {
       sim_id: params.sim_id,
       dt: params.dt,
@@ -190,15 +189,9 @@ function flushStepBatch(): void {
         hunger: fly.hunger,
         health: fly.health,
         rest_time_left: fly.rest_time_left,
+        dead: fly.dead,
       },
       sources: params.sources ?? [],
-      pending: pending.map((p) => {
-        const item = p as { neuronIds?: unknown; neuron_ids?: unknown; strength?: unknown };
-        return {
-          neuron_ids: item.neuron_ids ?? item.neuronIds ?? [],
-          strength: item.strength ?? 0,
-        };
-      }),
       include_activity: params.include_activity ?? true,
     };
   });
@@ -213,6 +206,22 @@ function flushStepBatch(): void {
     motor_left: number;
     motor_right: number;
     motor_fwd: number;
+    fly: {
+      x: number;
+      y: number;
+      z: number;
+      heading: number;
+      t: number;
+      hunger: number;
+      health: number;
+      dead: boolean;
+      fly_time_left: number;
+      rest_time_left: number;
+      rest_duration: number;
+      feeding: boolean;
+    };
+    eaten_food_id?: string;
+    feeding_sugar_taken?: number;
   }> }>(manyPayload)).then((res) => {
     const bySim = new Map<number, {
       sim_id: number;
@@ -220,6 +229,22 @@ function flushStepBatch(): void {
       motor_left: number;
       motor_right: number;
       motor_fwd: number;
+      fly: {
+        x: number;
+        y: number;
+        z: number;
+        heading: number;
+        t: number;
+        hunger: number;
+        health: number;
+        dead: boolean;
+        fly_time_left: number;
+        rest_time_left: number;
+        rest_duration: number;
+        feeding: boolean;
+      };
+      eaten_food_id?: string;
+      feeding_sugar_taken?: number;
     }>();
     for (const r of res.results ?? []) bySim.set(r.sim_id, r);
     for (const q of batch) {
@@ -277,9 +302,9 @@ export interface StepParams {
     hunger: number;
     health: number;
     restTimeLeft: number;
+    dead: boolean;
   };
-  sources: Array<{ x: number; y: number; radius: number }>;
-  pending: Array<{ neuronIds: string[]; strength: number }>;
+  sources: Array<{ id: string; x: number; y: number; radius: number }>;
 }
 
 export interface StepResult {
@@ -288,6 +313,28 @@ export interface StepResult {
   motorLeft: number;
   motorRight: number;
   motorFwd: number;
+  motorLeftCount: number;
+  motorRightCount: number;
+  motorFwdCount: number;
+  motorLeftMagnitude: number;
+  motorRightMagnitude: number;
+  motorFwdMagnitude: number;
+  fly: {
+    x: number;
+    y: number;
+    z: number;
+    heading: number;
+    t: number;
+    hunger: number;
+    health: number;
+    dead: boolean;
+    flyTimeLeft: number;
+    restTimeLeft: number;
+    restDuration: number;
+    feeding: boolean;
+  };
+  eatenFoodId?: string;
+  feedingSugarTaken?: number;
   computeMs?: number;
   kernelMs?: number;
   recurrentMs?: number;
@@ -308,9 +355,9 @@ export interface StepManyItem {
     hunger: number;
     health: number;
     restTimeLeft: number;
+    dead: boolean;
   };
-  sources: Array<{ x: number; y: number; radius: number }>;
-  pending: Array<{ neuronIds: string[]; strength: number }>;
+  sources: Array<{ id: string; x: number; y: number; radius: number }>;
 }
 
 export interface StepManyResultItem {
@@ -319,6 +366,15 @@ export interface StepManyResultItem {
   motorLeft: number;
   motorRight: number;
   motorFwd: number;
+  motorLeftCount: number;
+  motorRightCount: number;
+  motorFwdCount: number;
+  motorLeftMagnitude: number;
+  motorRightMagnitude: number;
+  motorFwdMagnitude: number;
+  fly: StepResult['fly'];
+  eatenFoodId?: string;
+  feedingSugarTaken?: number;
   computeMs?: number;
   kernelMs?: number;
   recurrentMs?: number;
@@ -343,6 +399,28 @@ export async function stepSim(params: StepParams): Promise<StepResult> {
     motor_left: number;
     motor_right: number;
     motor_fwd: number;
+    motor_left_count: number;
+    motor_right_count: number;
+    motor_fwd_count: number;
+    motor_left_magnitude: number;
+    motor_right_magnitude: number;
+    motor_fwd_magnitude: number;
+    fly: {
+      x: number;
+      y: number;
+      z: number;
+      heading: number;
+      t: number;
+      hunger: number;
+      health: number;
+      dead: boolean;
+      fly_time_left: number;
+      rest_time_left: number;
+      rest_duration: number;
+      feeding: boolean;
+    };
+    eaten_food_id?: string;
+    feeding_sugar_taken?: number;
     compute_ms?: number;
     kernel_ms?: number;
     recurrent_ms?: number;
@@ -362,9 +440,9 @@ export async function stepSim(params: StepParams): Promise<StepResult> {
         hunger: params.fly.hunger,
         health: params.fly.health,
         rest_time_left: params.fly.restTimeLeft,
+        dead: params.fly.dead,
       },
       sources: params.sources,
-      pending: params.pending,
       include_activity: params.includeActivity ?? true,
     },
   });
@@ -374,6 +452,28 @@ export async function stepSim(params: StepParams): Promise<StepResult> {
     motorLeft: res.motor_left,
     motorRight: res.motor_right,
     motorFwd: res.motor_fwd,
+    motorLeftCount: res.motor_left_count ?? 0,
+    motorRightCount: res.motor_right_count ?? 0,
+    motorFwdCount: res.motor_fwd_count ?? 0,
+    motorLeftMagnitude: res.motor_left_magnitude ?? 0,
+    motorRightMagnitude: res.motor_right_magnitude ?? 0,
+    motorFwdMagnitude: res.motor_fwd_magnitude ?? 0,
+    fly: {
+      x: res.fly.x,
+      y: res.fly.y,
+      z: res.fly.z,
+      heading: res.fly.heading,
+      t: res.fly.t,
+      hunger: res.fly.hunger,
+      health: res.fly.health,
+      dead: res.fly.dead,
+      flyTimeLeft: res.fly.fly_time_left,
+      restTimeLeft: res.fly.rest_time_left,
+      restDuration: res.fly.rest_duration,
+      feeding: res.fly.feeding,
+    },
+    eatenFoodId: res.eaten_food_id,
+    feedingSugarTaken: res.feeding_sugar_taken,
     computeMs: res.compute_ms,
     kernelMs: res.kernel_ms,
     recurrentMs: res.recurrent_ms,
@@ -392,6 +492,28 @@ export async function stepMany(
       motor_left: number;
       motor_right: number;
       motor_fwd: number;
+      motor_left_count: number;
+      motor_right_count: number;
+      motor_fwd_count: number;
+      motor_left_magnitude: number;
+      motor_right_magnitude: number;
+      motor_fwd_magnitude: number;
+      fly: {
+        x: number;
+        y: number;
+        z: number;
+        heading: number;
+        t: number;
+        hunger: number;
+        health: number;
+        dead: boolean;
+        fly_time_left: number;
+        rest_time_left: number;
+        rest_duration: number;
+        feeding: boolean;
+      };
+      eaten_food_id?: string;
+      feeding_sugar_taken?: number;
       compute_ms?: number;
       kernel_ms?: number;
       recurrent_ms?: number;
@@ -413,12 +535,9 @@ export async function stepMany(
           hunger: item.fly.hunger,
           health: item.fly.health,
           rest_time_left: item.fly.restTimeLeft,
+          dead: item.fly.dead,
         },
         sources: item.sources,
-        pending: item.pending.map((p) => ({
-          neuron_ids: p.neuronIds,
-          strength: p.strength,
-        })),
         include_activity: item.includeActivity ?? true,
       })),
     },
@@ -431,6 +550,28 @@ export async function stepMany(
       motorLeft: item.motor_left,
       motorRight: item.motor_right,
       motorFwd: item.motor_fwd,
+      motorLeftCount: item.motor_left_count ?? 0,
+      motorRightCount: item.motor_right_count ?? 0,
+      motorFwdCount: item.motor_fwd_count ?? 0,
+      motorLeftMagnitude: item.motor_left_magnitude ?? 0,
+      motorRightMagnitude: item.motor_right_magnitude ?? 0,
+      motorFwdMagnitude: item.motor_fwd_magnitude ?? 0,
+      fly: {
+        x: item.fly.x,
+        y: item.fly.y,
+        z: item.fly.z,
+        heading: item.fly.heading,
+        t: item.fly.t,
+        hunger: item.fly.hunger,
+        health: item.fly.health,
+        dead: item.fly.dead,
+        flyTimeLeft: item.fly.fly_time_left,
+        restTimeLeft: item.fly.rest_time_left,
+        restDuration: item.fly.rest_duration,
+        feeding: item.fly.feeding,
+      },
+      eatenFoodId: item.eaten_food_id,
+      feedingSugarTaken: item.feeding_sugar_taken,
       computeMs: item.compute_ms,
       kernelMs: item.kernel_ms,
       recurrentMs: item.recurrent_ms,

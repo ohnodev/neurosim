@@ -24,6 +24,7 @@ import { RewardsTable } from '../RewardsTable';
 import { StatusPanelStatusContent } from '../StatusPanelStatusContent';
 import { DEFAULT_FLY, flyCardDataEqual, resolveEffectiveSimIndex } from '../../lib/flyViewerUtils';
 import { isMobileViewport } from '../../lib/mediaQuery';
+import { getInitialDevMode, persistDevMode } from '../../lib/devMode';
 import { CameraToggleSlot } from './CameraToggleSlot';
 import { SimStateSync } from './SimStateSync';
 import { SimStatusSlot } from './SimStatusSlot';
@@ -31,6 +32,7 @@ import { DebugPanelSlot } from './DebugPanelSlot';
 import { FliesPanelCurrentSlots } from './FliesPanelCurrentSlots';
 import { FliesPanelGraveyardSlots } from './FliesPanelGraveyardSlots';
 import { SidePanelToggle } from './SidePanelToggle';
+import { BrainMotorReadout } from './BrainMotorReadout';
 import './FlyViewer.css';
 
 export default function FlyViewer() {
@@ -46,6 +48,7 @@ export default function FlyViewer() {
   const [statusPanelOpen, setStatusPanelOpen] = useState(() => !isMobileViewport());
   const [statusTab, setStatusTab] = useState<'status' | 'rewards'>('status');
   const [brainPanelOpen, setBrainPanelOpen] = useState(() => !isMobileViewport());
+  const [devMode, setDevMode] = useState<boolean>(() => getInitialDevMode());
   const [deployingSlots, setDeployingSlots] = useState<Set<number>>(new Set());
   const deployingSlotsRef = useRef<Set<number>>(new Set());
 
@@ -53,6 +56,27 @@ export default function FlyViewer() {
   const latestFliesRef = useRef<FlyState[]>([]);
   const activityRef = useRef<Record<string, number>>({});
   const activitiesRef = useRef<(Record<string, number> | undefined)[]>([]);
+  const motorReadoutRef = useRef<{
+    left: number;
+    right: number;
+    fwd: number;
+    leftCount: number;
+    rightCount: number;
+    fwdCount: number;
+    leftMagnitude: number;
+    rightMagnitude: number;
+    fwdMagnitude: number;
+  }>({
+    left: 0,
+    right: 0,
+    fwd: 0,
+    leftCount: 0,
+    rightCount: 0,
+    fwdCount: 0,
+    leftMagnitude: 0,
+    rightMagnitude: 0,
+    fwdMagnitude: 0,
+  });
   const debugStatsRef = useRef<InterpolationDebugStats | null>(null);
   const interpolatedBySimRef = useRef<FlyState[]>([]);
   const cameraModeRef = useRef<CameraMode>('god');
@@ -63,6 +87,7 @@ export default function FlyViewer() {
   const deployedRef = useRef<Record<number, number>>({});
   const selectedFlyIndexRef = useRef(0);
   const connectedRef = useRef(false);
+  const devModeRef = useRef(devMode);
   const followSimIndexRef = useRef<number | undefined>(undefined);
   const sourcesRef = useRef<WorldSource[]>([]);
   const flyCardDataRef = useRef<Map<number, { fly: FlyState; points: number }>>(new Map());
@@ -94,18 +119,22 @@ export default function FlyViewer() {
     else setError((prev) => (prev === 'Failed to load world' || prev === 'Failed to load neurons' ? null : prev));
   }, [worldError, neuronsError]);
 
-  const { data: myFlies = [] } = useQuery({
+  const myFliesQuery = useQuery({
     queryKey: apiKeys.myFlies(address ?? '__unauthenticated__'),
     queryFn: () => fetchMyFlies(address!),
     enabled: !!address,
   });
+  const myFlies = myFliesQuery.data ?? [null, null, null];
 
-  const { data: myDeployedData = { deployed: {}, graveyardSlots: [] }, refetch: refetchDeployed } = useQuery({
+  const myDeployedQuery = useQuery({
     queryKey: apiKeys.myDeployed(address ?? '__unauthenticated__'),
     queryFn: () => fetchMyDeployed(address!),
     enabled: !!address,
   });
+  const myDeployedData = myDeployedQuery.data ?? { deployed: {}, graveyardSlots: [] };
+  const { refetch: refetchDeployed } = myDeployedQuery;
   const deployed = myDeployedData.deployed;
+  const ownershipHydrating = !!address && (myFliesQuery.isPending || myDeployedQuery.isPending);
 
   const { data: rewardsHistory } = useQuery({
     queryKey: apiKeys.rewardsHistory(),
@@ -168,6 +197,17 @@ export default function FlyViewer() {
           sendViewFlyIndex(eff ?? 0);
         } else if (event._event === 'closed') {
           setConnected(false);
+          motorReadoutRef.current = {
+            left: 0,
+            right: 0,
+            fwd: 0,
+            leftCount: 0,
+            rightCount: 0,
+            fwdCount: 0,
+            leftMagnitude: 0,
+            rightMagnitude: 0,
+            fwdMagnitude: 0,
+          };
         }
         return;
       }
@@ -180,10 +220,34 @@ export default function FlyViewer() {
         activities?: (Record<string, number> | undefined)[];
         error?: string;
         sources?: WorldSource[];
+        motor?: {
+          left: number;
+          right: number;
+          fwd: number;
+          leftCount: number;
+          rightCount: number;
+          fwdCount: number;
+          leftMagnitude: number;
+          rightMagnitude: number;
+          fwdMagnitude: number;
+        };
       };
       if (data.sources && Array.isArray(data.sources)) {
         queryClient.setQueryData(apiKeys.world(), { sources: data.sources });
       }
+        if (data.motor) {
+          motorReadoutRef.current = {
+            left: Number.isFinite(data.motor.left) ? data.motor.left : 0,
+            right: Number.isFinite(data.motor.right) ? data.motor.right : 0,
+            fwd: Number.isFinite(data.motor.fwd) ? data.motor.fwd : 0,
+            leftCount: Number.isFinite(data.motor.leftCount) ? data.motor.leftCount : 0,
+            rightCount: Number.isFinite(data.motor.rightCount) ? data.motor.rightCount : 0,
+            fwdCount: Number.isFinite(data.motor.fwdCount) ? data.motor.fwdCount : 0,
+            leftMagnitude: Number.isFinite(data.motor.leftMagnitude) ? data.motor.leftMagnitude : 0,
+            rightMagnitude: Number.isFinite(data.motor.rightMagnitude) ? data.motor.rightMagnitude : 0,
+            fwdMagnitude: Number.isFinite(data.motor.fwdMagnitude) ? data.motor.fwdMagnitude : 0,
+          };
+        }
       if (!data.error) {
         const buf = snapshotBufferRef.current;
         const batchSources = Array.isArray(data.sources) ? data.sources : [];
@@ -277,6 +341,7 @@ export default function FlyViewer() {
   const onSelectFlySlot = useCallback((slot: number) => setSelectedFlyIndex(slot), []);
   const onStatusPanelToggle = useCallback(() => setStatusPanelOpen((o) => !o), []);
   const onBrainPanelToggle = useCallback(() => setBrainPanelOpen((o) => !o), []);
+  const onToggleDevMode = useCallback(() => setDevMode((prev) => !prev), []);
 
   const getFlyCardData = useCallback((slotIndex: number) => {
     const entry = flyCardDataRef.current.get(slotIndex);
@@ -290,10 +355,15 @@ export default function FlyViewer() {
   }, [sources]);
 
   useEffect(() => {
+    persistDevMode(devMode);
+  }, [devMode]);
+
+  useEffect(() => {
     deployedRef.current = deployed;
     selectedFlyIndexRef.current = selectedFlyIndex;
     connectedRef.current = connected;
-  }, [deployed, selectedFlyIndex, connected]);
+    devModeRef.current = devMode;
+  }, [deployed, selectedFlyIndex, connected, devMode]);
 
   useEffect(() => {
     const container = document.createElement('div');
@@ -316,6 +386,7 @@ export default function FlyViewer() {
         cameraModeRef,
         followSimIndexRef,
         sourcesRef,
+        devModeRef,
         snapshotBufferRef,
         targetRef: cameraTargetRef,
       },
@@ -416,7 +487,7 @@ export default function FlyViewer() {
             </div>
           )}
           <div style={{ position: 'absolute', top: 12, right: 12, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, pointerEvents: 'auto' }}>
-            <ConnectButton />
+            <ConnectButton devMode={devMode} onToggleDevMode={onToggleDevMode} />
             <CameraToggleSlot ref={cameraToggleSlotRef} deployed={deployed} selectedFlyIndex={selectedFlyIndex} />
             <SimStatusSlot ref={simStatusSlotRef} />
           </div>
@@ -471,6 +542,7 @@ export default function FlyViewer() {
                   deployed={deployed}
                   selectedFlyIndex={selectedFlyIndex}
                   myFlies={myFlies}
+                  ownershipHydrating={ownershipHydrating}
                   graveyardSlots={graveyardSlots}
                   deployingSlots={deployingSlots}
                   statsBySlot={statsBySlot}
@@ -553,6 +625,9 @@ export default function FlyViewer() {
                   />
                 )}
               </div>
+              {brainPanelOpen && (
+                <BrainMotorReadout motorReadoutRef={motorReadoutRef} />
+              )}
             </div>
           </div>
           <SidePanelToggle open={brainPanelOpen} onToggle={onBrainPanelToggle} label="Brain" position="right" />

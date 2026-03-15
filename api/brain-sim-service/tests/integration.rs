@@ -23,9 +23,10 @@ fn test_create_and_step() {
         hunger: 100.0,
         health: 100.0,
         rest_time_left: 0.0,
+        dead: false,
     };
-    let (activity, activity_sparse, motor_left, motor_right, motor_fwd, _timing) =
-        sim.step(1.0 / 30.0, fly, vec![], vec![]);
+    let (activity, activity_sparse, motor_left, motor_right, motor_fwd, _timing, _fly_out) =
+        sim.step(1.0 / 30.0, fly, vec![]);
     assert_eq!(activity.len(), 3);
     assert!(activity.iter().all(|v| v.is_finite() && *v >= 0.0 && *v <= 1.0));
     assert!(motor_left.is_finite());

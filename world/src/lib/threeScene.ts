@@ -44,6 +44,7 @@ export interface ThreeSceneRefs {
   cameraModeRef: { current: CameraMode };
   followSimIndexRef: { current: number | undefined };
   sourcesRef: { current: WorldSource[] };
+  devModeRef: { current: boolean };
   snapshotBufferRef: { current: Snapshot[] };
   targetRef: { current: { x: number; y: number; z: number; heading: number } | null };
 }
@@ -86,6 +87,18 @@ const NEURAL_EDGE_MIN_DISTANCE = 20;
 const NEURAL_EDGE_MAX_DISTANCE = 98;
 /** Sim ground level (z=0.35); map to Three.js y=0 so fly rests on ground */
 const GROUND_Z = 0.35;
+/** Temporary debug helper: render translucent food radius spheres. */
+const SHOW_FOOD_RADIUS_DEBUG = true;
+const FOOD_RADIUS_DEBUG_COLOR = 0x66ccff;
+const FOOD_RADIUS_DEBUG_OPACITY = 0.12;
+const FOOD_RADIUS_DEBUG_RADIUS = 3.2; // Keep aligned with Rust NEAR_FOOD_RADIUS.
+const FOOD_SLICE_RADIUS = 0.75;
+const FOOD_SLICE_HEIGHT = 0.14;
+/** Debug helper: render fly smell radius sphere around each fly. */
+const SHOW_FLY_SMELL_RADIUS_DEBUG = true;
+const FLY_SMELL_RADIUS_DEBUG = 24; // Keep aligned with Rust ODOR_DETECTION_RADIUS.
+const FLY_SMELL_RADIUS_DEBUG_COLOR = 0xffd75e;
+const FLY_SMELL_RADIUS_DEBUG_OPACITY = 0.1;
 
 const DEFAULT_FLY: FlyState = { x: 0, y: 0, z: 0.35, heading: 0, t: 0, hunger: 100 };
 
@@ -320,6 +333,7 @@ export function initThreeScene(
   let cameraButton: { el: HTMLButtonElement; update: (mode: CameraMode) => void } | null = null;
   let disposeStatus: (() => void) | null = null;
   let disposeDebug: (() => void) | null = null;
+  let lastDebugVisible = refs.devModeRef.current;
   if (buttonSlot) {
     cameraButton = createCameraButton(buttonSlot, refs.cameraModeRef);
   }
@@ -347,6 +361,7 @@ export function initThreeScene(
 
   if (debugSlot) {
     disposeDebug = createDebugPanel(debugSlot, renderer, 250);
+    debugSlot.style.display = refs.devModeRef.current ? '' : 'none';
   }
 
   const ambient = new THREE.AmbientLight(0xffffff, 0.8);
@@ -383,11 +398,12 @@ export function initThreeScene(
 
   const fliesGroup = new THREE.Group();
   scene.add(fliesGroup);
+  const flySmellDebugPool: THREE.Mesh[] = [];
 
   let flyTemplate: THREE.Group | null = null;
   let flyClips: THREE.AnimationClip[] = [];
   const applePool: THREE.Object3D[] = [];
-  let appleTemplate: THREE.Object3D | null = null;
+  const foodRadiusDebugPool: THREE.Mesh[] = [];
   const flyInstances: {
     group: THREE.Group;
     detailGroup: THREE.Group;
@@ -425,30 +441,117 @@ export function initThreeScene(
     undefined,
     (err) => console.error('[threeScene] fly load error:', err)
   );
+
+  function createFruitSliceTexture(): THREE.CanvasTexture {
+    const canvas = document.createElement('canvas');
+    canvas.width = 128;
+    canvas.height = 128;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      const fallback = new THREE.CanvasTexture(canvas);
+      fallback.colorSpace = THREE.SRGBColorSpace;
+      return fallback;
+    }
+
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
+    const outerR = 56;
+    const fleshR = 46;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#b4d455'; // rind
+    ctx.beginPath();
+    ctx.arc(cx, cy, outerR, 0, Math.PI * 2);
+    ctx.fill();
+
+    const fleshGrad = ctx.createRadialGradient(cx, cy, 10, cx, cy, fleshR);
+    fleshGrad.addColorStop(0, '#ff6d6d');
+    fleshGrad.addColorStop(1, '#d6364a');
+    ctx.fillStyle = fleshGrad;
+    ctx.beginPath();
+    ctx.arc(cx, cy, fleshR, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Small dark seeds to keep the slice readable from distance.
+    ctx.fillStyle = '#301116';
+    const seedCount = 14;
+    for (let i = 0; i < seedCount; i++) {
+      const a = (i / seedCount) * Math.PI * 2;
+      const r = 29 + (i % 3) * 4;
+      const x = cx + Math.cos(a) * r;
+      const y = cy + Math.sin(a) * r;
+      ctx.beginPath();
+      ctx.ellipse(x, y, 2.8, 1.8, a, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+    return tex;
+  }
+
+  function createFruitSliceDisc(): THREE.Object3D {
+    const topTex = createFruitSliceTexture();
+    const discGeom = new THREE.CylinderGeometry(FOOD_SLICE_RADIUS, FOOD_SLICE_RADIUS, FOOD_SLICE_HEIGHT, 18, 1);
+    const sideMat = new THREE.MeshStandardMaterial({ color: 0xb8d05f, roughness: 0.9, metalness: 0.02 });
+    const topMat = new THREE.MeshStandardMaterial({ map: topTex, roughness: 0.82, metalness: 0.02 });
+    const bottomMat = new THREE.MeshStandardMaterial({ color: 0x98b84a, roughness: 0.94, metalness: 0.01 });
+    const disc = new THREE.Mesh(discGeom, [sideMat, topMat, bottomMat]);
+    disc.position.y = FOOD_SLICE_HEIGHT * 0.5;
+    disc.castShadow = true;
+    disc.receiveShadow = true;
+    return disc;
+  }
+
   function getOrCreateApple(): THREE.Object3D | null {
     const unused = applePool.find((a) => !a.visible);
     if (unused) return unused;
-    if (!appleTemplate) return null;
-    const clone = cloneWithOwnResources(appleTemplate);
-    clone.scale.setScalar(1.2);
+    const clone = createFruitSliceDisc();
     clone.visible = false;
     applePool.push(clone);
     sourcesGroup.add(clone);
     return clone;
   }
 
-  loader.load(
-    '/models/low-poly_apple/scene.gltf',
-    (gltf) => {
-      if (disposed) return;
-      appleTemplate = gltf.scene.clone(true);
-      getOrCreateApple();
-      getOrCreateApple();
-      updateWorldSources(lastSources);
-    },
-    undefined,
-    (err) => console.error('[threeScene] apple load error:', err)
-  );
+  function getOrCreateFoodRadiusDebug(): THREE.Mesh {
+    const unused = foodRadiusDebugPool.find((m) => !m.visible);
+    if (unused) return unused;
+    const geom = new THREE.SphereGeometry(1, 20, 16);
+    const mat = new THREE.MeshBasicMaterial({
+      color: FOOD_RADIUS_DEBUG_COLOR,
+      transparent: true,
+      opacity: FOOD_RADIUS_DEBUG_OPACITY,
+      depthWrite: false,
+      wireframe: true,
+    });
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.visible = false;
+    foodRadiusDebugPool.push(mesh);
+    sourcesGroup.add(mesh);
+    return mesh;
+  }
+
+  function getOrCreateFlySmellRadiusDebug(): THREE.Mesh {
+    const unused = flySmellDebugPool.find((m) => !m.visible);
+    if (unused) return unused;
+    const geom = new THREE.SphereGeometry(1, 20, 16);
+    const mat = new THREE.MeshBasicMaterial({
+      color: FLY_SMELL_RADIUS_DEBUG_COLOR,
+      transparent: true,
+      opacity: FLY_SMELL_RADIUS_DEBUG_OPACITY,
+      depthWrite: false,
+      wireframe: true,
+    });
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.visible = false;
+    flySmellDebugPool.push(mesh);
+    fliesGroup.add(mesh);
+    return mesh;
+  }
+
+  getOrCreateApple();
+  getOrCreateApple();
 
   let flyStates: FlyState[] = [];
   let lastSources: WorldSource[] = [];
@@ -481,21 +584,38 @@ export function initThreeScene(
   }
 
   function updateWorldSources(sources: WorldSource[]): void {
+    const debugEnabled = refs.devModeRef.current;
     const foodSources = sources.filter((s) => s.type === 'food');
     for (let i = 0; i < foodSources.length; i++) {
       const apple = applePool[i] ?? getOrCreateApple();
       if (apple) {
         const s = foodSources[i]!;
-        apple.position.set(s.x, s.z, s.y);
+        const sourceY = Math.max(0, s.z - GROUND_Z);
+        apple.position.set(s.x, sourceY, s.y);
         apple.visible = true;
+      }
+      if (SHOW_FOOD_RADIUS_DEBUG && debugEnabled) {
+        const sphere = foodRadiusDebugPool[i] ?? getOrCreateFoodRadiusDebug();
+        const s = foodSources[i]!;
+        const sourceY = Math.max(0, s.z - GROUND_Z);
+        sphere.position.set(s.x, sourceY, s.y);
+        sphere.scale.setScalar(FOOD_RADIUS_DEBUG_RADIUS);
+        sphere.visible = true;
       }
     }
     for (let i = foodSources.length; i < applePool.length; i++) {
       applePool[i]!.visible = false;
     }
+    for (let i = foodSources.length; i < foodRadiusDebugPool.length; i++) {
+      foodRadiusDebugPool[i]!.visible = false;
+    }
+    if (!debugEnabled) {
+      for (const sphere of foodRadiusDebugPool) sphere.visible = false;
+    }
 
     for (const c of sourcesGroup.children.slice()) {
       if (applePool.includes(c)) continue;
+      if (foodRadiusDebugPool.includes(c as THREE.Mesh)) continue;
       sourcesGroup.remove(c);
       disposeObject3D(c);
     }
@@ -506,6 +626,13 @@ export function initThreeScene(
       const inst = flyInstances.pop()!;
       fliesGroup.remove(inst.group);
       disposeObject3D(inst.detailGroup);
+      if (SHOW_FLY_SMELL_RADIUS_DEBUG && flySmellDebugPool.length > flyInstances.length) {
+        const smell = flySmellDebugPool.pop()!;
+        fliesGroup.remove(smell);
+        smell.geometry.dispose();
+        if (Array.isArray(smell.material)) smell.material.forEach((m) => m.dispose());
+        else smell.material.dispose();
+      }
     }
     while (flyInstances.length < count && flyTemplate && flyClips.length > 0) {
       const clone = cloneWithOwnResources(flyTemplate) as THREE.Group;
@@ -537,12 +664,22 @@ export function initThreeScene(
         initialized: false,
         wingActions: instWingActions,
       });
+      if (SHOW_FLY_SMELL_RADIUS_DEBUG && refs.devModeRef.current) {
+        const smell = getOrCreateFlySmellRadiusDebug();
+        smell.scale.setScalar(FLY_SMELL_RADIUS_DEBUG);
+        smell.visible = true;
+      }
     }
   }
 
   function loop(timestamp?: number) {
     if (disposed) return;
     rafId = requestAnimationFrame(loop);
+    const debugEnabled = refs.devModeRef.current;
+    if (debugSlot && debugEnabled !== lastDebugVisible) {
+      debugSlot.style.display = debugEnabled ? '' : 'none';
+      lastDebugVisible = debugEnabled;
+    }
 
     timer.update(timestamp);
     const rawDelta = timer.getDelta();
@@ -600,6 +737,17 @@ export function initThreeScene(
     }
 
     ensureFlyCount(flyStates.length);
+    if (SHOW_FLY_SMELL_RADIUS_DEBUG) {
+      if (debugEnabled) {
+        while (flySmellDebugPool.length < flyInstances.length) {
+          const smell = getOrCreateFlySmellRadiusDebug();
+          smell.scale.setScalar(FLY_SMELL_RADIUS_DEBUG);
+          smell.visible = false;
+        }
+      } else {
+        for (const smell of flySmellDebugPool) smell.visible = false;
+      }
+    }
 
     for (let i = 0; i < flyInstances.length; i++) {
       const inst = flyInstances[i]!;
@@ -638,6 +786,12 @@ export function initThreeScene(
       const visualZ = Math.max(0, z - GROUND_Z);
       inst.group.position.set(x, visualZ, y);
       inst.group.rotation.y = inst.heading;
+      if (SHOW_FLY_SMELL_RADIUS_DEBUG && debugEnabled && flySmellDebugPool[i]) {
+        const smell = flySmellDebugPool[i]!;
+        smell.position.set(x, visualZ, y);
+        smell.scale.setScalar(FLY_SMELL_RADIUS_DEBUG);
+        smell.visible = true;
+      }
 
       const distSq = camera.position.distanceToSquared(inst.group.position);
       const shouldShowDetail = inst.detailVisible
@@ -753,16 +907,18 @@ export function initThreeScene(
       fliesGroup.remove(inst.group);
       disposeObject3D(inst.detailGroup);
     }
+    for (const smell of flySmellDebugPool) {
+      fliesGroup.remove(smell);
+      smell.geometry.dispose();
+      if (Array.isArray(smell.material)) smell.material.forEach((m) => m.dispose());
+      else smell.material.dispose();
+    }
     for (const c of sourcesGroup.children.slice()) {
       sourcesGroup.remove(c);
       disposeObject3D(c);
     }
     if (flyTemplate) disposeObject3D(flyTemplate);
     flyTemplate = null;
-    if (appleTemplate) {
-      disposeObject3D(appleTemplate);
-      appleTemplate = null;
-    }
     disposeLowLodFlyResources(lowLodResources);
   };
   return { dispose, updateButton };

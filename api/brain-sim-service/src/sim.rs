@@ -9,9 +9,28 @@ use crate::model_constants::{
 };
 
 const STIM_RATE_HZ: f64 = 200.0;
-const SENSORY_SCALE: f64 = 0.18;
+const SENSORY_SCALE: f64 = 12.0;
+const MAX_SENSORY_CONDUCTANCE: f64 = 16.0;
 const ACTIVITY_THRESHOLD: u8 = 1;
 const MOTOR_SCALE: f64 = 0.002;
+const MOTOR_TURN_GAIN: f64 = 220.0;
+const MOTOR_TURN_RATE_MAX: f64 = 2.8;
+const MOTOR_TURN_EMA_TAU_SEC: f64 = 0.35;
+const ARENA: f64 = 24.0;
+const WALL_MARGIN: f64 = 6.0;
+const FLY_TIME_MAX: f64 = 6.0;
+const REST_TIME: f64 = 4.0;
+const GROUND_Z: f64 = 0.35;
+const FLIGHT_Z: f64 = 1.5;
+const ON_GROUND_THRESH: f64 = 0.6;
+const EAT_RADIUS: f64 = 2.5;
+const NEAR_FOOD_RADIUS: f64 = 3.2;
+const ODOR_DETECTION_RADIUS: f64 = 34.0;
+const HUNGER_DECAY: f64 = 0.8;
+const HEALTH_DECAY: f64 = 2.5;
+const MOVE_SPEED: f64 = 10.0;
+const BASELINE_EXPLORE: f64 = 0.03;
+const FEEDING_STIM_BONUS: f32 = 0.25;
 // Ignore near-zero food distance to avoid singular-like gain when the fly is
 // effectively at the food source (handled separately by consumption logic).
 const MIN_FOOD_DISTANCE: f64 = 1.0;
@@ -19,11 +38,13 @@ const MIN_FOOD_DISTANCE: f64 = 1.0;
 pub struct BrainSim {
     n: usize,
     neuron_ids: Vec<String>,
-    id_to_idx: HashMap<String, u32>,
     edges_pre: Vec<u32>,
     edges_post: Vec<u32>,
     edges_weight: Vec<f32>,
     sensory_indices: Vec<u32>,
+    sensory_left_indices: Vec<u32>,
+    sensory_right_indices: Vec<u32>,
+    sensory_unknown_indices: Vec<u32>,
     motor_left: Vec<u32>,
     motor_right: Vec<u32>,
     motor_unknown: Vec<u32>,
@@ -33,6 +54,8 @@ pub struct BrainSim {
     spikes: Vec<u8>,
     viewer_indices: Vec<u32>,
     max_activity_entries: usize,
+    fly_time_left_sec: f64,
+    motor_turn_ema: f64,
     #[cfg(feature = "cuda")]
     gpu_state: Option<GpuSimState>,
     #[cfg(feature = "cuda")]
@@ -48,17 +71,14 @@ pub struct FlyInput {
     pub hunger: f64,
     pub health: f64,
     pub rest_time_left: f64,
+    pub dead: bool,
 }
 
 pub struct SourceInput {
+    pub id: String,
     pub x: f64,
     pub y: f64,
     pub radius: f64,
-}
-
-pub struct PendingStimInput {
-    pub neuron_ids: Vec<String>,
-    pub strength: f64,
 }
 
 pub struct StepTiming {
@@ -67,6 +87,30 @@ pub struct StepTiming {
     pub recurrent_ms: f64,
     pub lif_ms: f64,
     pub readout_ms: f64,
+}
+
+pub struct FlyStepOutput {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub heading: f64,
+    pub t: f64,
+    pub hunger: f64,
+    pub health: f64,
+    pub dead: bool,
+    pub fly_time_left: f64,
+    pub rest_time_left: f64,
+    pub rest_duration: f64,
+    pub feeding: bool,
+    pub eaten_food_id: Option<String>,
+    pub feeding_candidate_id: Option<String>,
+    pub feeding_sugar_taken: f64,
+}
+
+struct SensoryDrive {
+    left: f32,
+    right: f32,
+    center: f32,
 }
 
 impl BrainSim {
@@ -85,6 +129,9 @@ impl BrainSim {
         edges_post: Vec<u32>,
         edges_weight: Vec<f32>,
         sensory_indices: Vec<u32>,
+        sensory_left_indices: Vec<u32>,
+        sensory_right_indices: Vec<u32>,
+        sensory_unknown_indices: Vec<u32>,
         motor_left: Vec<u32>,
         motor_right: Vec<u32>,
         motor_unknown: Vec<u32>,
@@ -95,6 +142,9 @@ impl BrainSim {
             edges_post,
             edges_weight,
             sensory_indices,
+            sensory_left_indices,
+            sensory_right_indices,
+            sensory_unknown_indices,
             motor_left,
             motor_right,
             motor_unknown,
@@ -109,6 +159,9 @@ impl BrainSim {
         edges_post: Vec<u32>,
         edges_weight: Vec<f32>,
         sensory_indices: Vec<u32>,
+        sensory_left_indices: Vec<u32>,
+        sensory_right_indices: Vec<u32>,
+        sensory_unknown_indices: Vec<u32>,
         motor_left: Vec<u32>,
         motor_right: Vec<u32>,
         motor_unknown: Vec<u32>,
@@ -123,11 +176,6 @@ impl BrainSim {
             );
         }
         let n = neuron_ids.len();
-        let id_to_idx: HashMap<String, u32> = neuron_ids
-            .iter()
-            .enumerate()
-            .map(|(i, id)| (id.clone(), i as u32))
-            .collect();
         let v = vec![V_REST; n];
         let g = vec![0.0f32; n];
         let refractory = vec![0u16; n];
@@ -161,11 +209,13 @@ impl BrainSim {
         Self {
             n,
             neuron_ids,
-            id_to_idx,
             edges_pre,
             edges_post,
             edges_weight,
             sensory_indices,
+            sensory_left_indices,
+            sensory_right_indices,
+            sensory_unknown_indices,
             motor_left,
             motor_right,
             motor_unknown,
@@ -175,6 +225,8 @@ impl BrainSim {
             spikes,
             viewer_indices: sanitized_viewer,
             max_activity_entries,
+            fly_time_left_sec: FLY_TIME_MAX,
+            motor_turn_ema: 0.0,
             #[cfg(feature = "cuda")]
             gpu_state,
             #[cfg(feature = "cuda")]
@@ -193,29 +245,96 @@ impl BrainSim {
         }
     }
 
-    fn sensory_strength(&self, dt: f64, fly: &FlyInput, sources: &[SourceInput]) -> f32 {
+    fn angle_toward(heading: f64, dx: f64, dy: f64) -> f64 {
+        let target = dy.atan2(dx);
+        let mut d = target - heading;
+        while d > std::f64::consts::PI {
+            d -= 2.0 * std::f64::consts::PI;
+        }
+        while d < -std::f64::consts::PI {
+            d += 2.0 * std::f64::consts::PI;
+        }
+        d
+    }
+
+    fn normalize_angle(mut a: f64) -> f64 {
+        while a > std::f64::consts::PI {
+            a -= 2.0 * std::f64::consts::PI;
+        }
+        while a < -std::f64::consts::PI {
+            a += 2.0 * std::f64::consts::PI;
+        }
+        a
+    }
+
+    fn sensory_drive(&self, dt: f64, fly: &FlyInput, sources: &[SourceInput]) -> SensoryDrive {
         if self.sensory_indices.is_empty() {
-            return 0.0;
+            return SensoryDrive {
+                left: 0.0,
+                right: 0.0,
+                center: 0.0,
+            };
         }
         let hungry = fly.hunger <= 90.0;
         let full = fly.hunger > 90.0;
-        let mut food_modulation = 0.0f64;
+        let hunger_mod = (1.0 - fly.hunger / 100.0).max(0.0);
+        let mut left_modulation = 0.0f64;
+        let mut right_modulation = 0.0f64;
+        let mut center_modulation = 0.0f64;
+        let mut near_food = false;
         for s in sources {
-            let dist = ((s.x - fly.x).powi(2) + (s.y - fly.y).powi(2)).sqrt();
+            let to_x = s.x - fly.x;
+            let to_y = s.y - fly.y;
+            let dist = (to_x.powi(2) + to_y.powi(2)).sqrt();
+            if dist < EAT_RADIUS && fly.z <= 1.2 {
+                near_food = true;
+            }
+            if dist > ODOR_DETECTION_RADIUS {
+                continue;
+            }
             if dist < MIN_FOOD_DISTANCE {
                 continue;
             }
             let inv_dist = 1.0 / (1.0 + dist * 0.1);
-            food_modulation += inv_dist * (1.0 - fly.hunger / 100.0);
+            let intensity = inv_dist * hunger_mod;
+            if intensity <= 0.0 {
+                continue;
+            }
+            let target = to_y.atan2(to_x);
+            let delta = Self::normalize_angle(target - fly.heading);
+            let lateral = delta.sin();
+            let leftness = lateral.max(0.0);
+            let rightness = (-lateral).max(0.0);
+            // Pure lateralization: avoid symmetric baseline stimulation that can
+            // collapse steering into near-zero L/R differences.
+            left_modulation += intensity * leftness;
+            right_modulation += intensity * rightness;
+            center_modulation += intensity * (1.0 - 0.4 * lateral.abs());
         }
-        let rate_hz = if hungry && food_modulation > 0.0 {
-            (50.0 + food_modulation * STIM_RATE_HZ).min(STIM_RATE_HZ)
-        } else if full {
-            30.0
-        } else {
-            50.0
+        let to_strength = |modulation: f64| -> f32 {
+            if modulation <= 0.0 {
+                return 0.0;
+            }
+            let rate_hz = if hungry && modulation > 0.0 {
+                (50.0 + modulation * STIM_RATE_HZ).min(STIM_RATE_HZ)
+            } else if full {
+                30.0
+            } else {
+                50.0
+            };
+            let base = ((rate_hz / STIM_RATE_HZ) * SENSORY_SCALE * (dt / (1.0 / 30.0)))
+                .min(MAX_SENSORY_CONDUCTANCE) as f32;
+            if near_food {
+                (base + FEEDING_STIM_BONUS).min(MAX_SENSORY_CONDUCTANCE as f32)
+            } else {
+                base
+            }
         };
-        ((rate_hz / STIM_RATE_HZ) * SENSORY_SCALE * (dt / (1.0 / 30.0))).min(0.5) as f32
+        SensoryDrive {
+            left: to_strength(left_modulation),
+            right: to_strength(right_modulation),
+            center: to_strength(center_modulation),
+        }
     }
 
     fn run_step_cpu(
@@ -223,7 +342,6 @@ impl BrainSim {
         dt: f64,
         fly: &FlyInput,
         sources: &[SourceInput],
-        pending: &[PendingStimInput],
     ) -> (f64, f64) {
         let dt_ms = (dt * 1000.0) as f32;
         let syn_decay = (-dt_ms / TAU_SYN_MS).exp();
@@ -241,22 +359,42 @@ impl BrainSim {
                 self.g[post] += self.edges_weight[e] * RECURRENT_SCALE;
             }
         }
-        let sensory_strength = self.sensory_strength(dt, fly, sources);
-        if sensory_strength > 0.0 {
-            for &idx in &self.sensory_indices {
+        let sensory = self.sensory_drive(dt, fly, sources);
+        if sensory.left > 0.0 {
+            for &idx in &self.sensory_left_indices {
                 let i = idx as usize;
                 if i < self.n {
-                    self.g[i] += sensory_strength;
+                    self.g[i] += sensory.left;
                 }
             }
         }
-        for stim in pending {
-            let strength = (stim.strength as f32).min(2.0).max(0.0);
-            for id in &stim.neuron_ids {
-                if let Some(&idx) = self.id_to_idx.get(id) {
+        if sensory.right > 0.0 {
+            for &idx in &self.sensory_right_indices {
+                let i = idx as usize;
+                if i < self.n {
+                    self.g[i] += sensory.right;
+                }
+            }
+        }
+        let unknown_strength = ((sensory.left + sensory.right + sensory.center) / 3.0).max(0.0);
+        if unknown_strength > 0.0 {
+            for &idx in &self.sensory_unknown_indices {
+                let i = idx as usize;
+                if i < self.n {
+                    self.g[i] += unknown_strength;
+                }
+            }
+        }
+        if self.sensory_left_indices.is_empty()
+            && self.sensory_right_indices.is_empty()
+            && self.sensory_unknown_indices.is_empty()
+        {
+            let fallback = sensory.center.max(sensory.left.max(sensory.right));
+            if fallback > 0.0 {
+                for &idx in &self.sensory_indices {
                     let i = idx as usize;
                     if i < self.n {
-                        self.g[i] += strength;
+                        self.g[i] += fallback;
                     }
                 }
             }
@@ -291,9 +429,22 @@ impl BrainSim {
         dt: f64,
         fly: FlyInput,
         sources: Vec<SourceInput>,
-        pending: Vec<PendingStimInput>,
-    ) -> (Vec<f32>, HashMap<String, f64>, f64, f64, f64, StepTiming) {
-        self.step_with_options(dt, fly, sources, pending, true)
+    ) -> (
+        Vec<f32>,
+        HashMap<String, f64>,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        StepTiming,
+        FlyStepOutput,
+    ) {
+        self.step_with_options(dt, fly, sources, true)
     }
 
     pub fn step_with_options(
@@ -301,32 +452,36 @@ impl BrainSim {
         dt: f64,
         fly: FlyInput,
         sources: Vec<SourceInput>,
-        pending: Vec<PendingStimInput>,
         include_activity: bool,
-    ) -> (Vec<f32>, HashMap<String, f64>, f64, f64, f64, StepTiming) {
+    ) -> (
+        Vec<f32>,
+        HashMap<String, f64>,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        StepTiming,
+        FlyStepOutput,
+    ) {
         let t_compute = Instant::now();
         let (recurrent_ms, lif_ms) = {
             #[cfg(feature = "cuda")]
             {
-                let sensory_strength = self.sensory_strength(dt, &fly, &sources);
-                let mut pending_idx = Vec::new();
-                let mut pending_strength = Vec::new();
-                for stim in &pending {
-                    let strength = (stim.strength as f32).min(2.0).max(0.0);
-                    for id in &stim.neuron_ids {
-                        if let Some(&idx) = self.id_to_idx.get(id) {
-                            pending_idx.push(idx);
-                            pending_strength.push(strength);
-                        }
-                    }
-                }
+                let sensory = self.sensory_drive(dt, &fly, &sources);
                 if let Some(ref mut gpu) = self.gpu_state {
                     match gpu.step(
                         dt as f32,
-                        &self.sensory_indices,
-                        sensory_strength,
-                        &pending_idx,
-                        &pending_strength,
+                        &self.sensory_left_indices,
+                        &self.sensory_right_indices,
+                        &self.sensory_unknown_indices,
+                        sensory.left.max(0.0),
+                        sensory.right.max(0.0),
+                        ((sensory.left + sensory.right + sensory.center) / 3.0).max(0.0),
                     ) {
                         Some(GpuStepResult {
                             spikes,
@@ -352,19 +507,19 @@ impl BrainSim {
                         }
                         None => {
                             panic!(
-                                "[brain-service] GPU step failed in fallback mode; refusing unsafe CPU fallback without authoritative host sync"
+                                "[brain-service] GPU step failed; refusing CPU execution without authoritative GPU state sync"
                             );
                         }
                     }
                 } else if self.cuda_only {
                     panic!("[brain-service] CUDA required but GPU unavailable");
                 } else {
-                    self.run_step_cpu(dt, &fly, &sources, &pending)
+                    self.run_step_cpu(dt, &fly, &sources)
                 }
             }
             #[cfg(not(feature = "cuda"))]
             {
-                self.run_step_cpu(dt, &fly, &sources, &pending)
+                self.run_step_cpu(dt, &fly, &sources)
             }
         };
         let kernel_ms = recurrent_ms + lif_ms;
@@ -399,26 +554,206 @@ impl BrainSim {
         let mut ml = 0.0f64;
         let mut mr = 0.0f64;
         let mut mf = 0.0f64;
+        let mut ml_count = 0.0f64;
+        let mut mr_count = 0.0f64;
+        let mut mf_count = 0.0f64;
         for &i in &self.motor_left {
             let idx = i as usize;
-            if idx < self.n && self.spikes[idx] > 0 {
-                ml += 1.0;
+            if idx < self.n {
+                let spike = self.spikes[idx] as f64;
+                ml += spike;
+                if spike > 0.0 {
+                    ml_count += 1.0;
+                }
             }
         }
         for &i in &self.motor_right {
             let idx = i as usize;
-            if idx < self.n && self.spikes[idx] > 0 {
-                mr += 1.0;
+            if idx < self.n {
+                let spike = self.spikes[idx] as f64;
+                mr += spike;
+                if spike > 0.0 {
+                    mr_count += 1.0;
+                }
             }
         }
         for &i in &self.motor_unknown {
             let idx = i as usize;
-            if idx < self.n && self.spikes[idx] > 0 {
-                mf += 1.0;
+            if idx < self.n {
+                let spike = self.spikes[idx] as f64;
+                mf += spike;
+                if spike > 0.0 {
+                    mf_count += 1.0;
+                }
             }
         }
         let readout_ms = t_readout.elapsed().as_secs_f64() * 1000.0;
         let compute_ms = t_compute.elapsed().as_secs_f64() * 1000.0;
+
+        let t = fly.t + dt;
+        let mut hunger = fly.hunger;
+        let mut health = fly.health;
+        let mut rest_time_left = fly.rest_time_left;
+        let mut dead = fly.dead;
+        let eaten_food_id: Option<String> = None;
+        let feeding = false;
+        let mut feeding_candidate_id: Option<String> = None;
+        let mut x = fly.x;
+        let mut y = fly.y;
+        let mut z = fly.z;
+        let mut heading = fly.heading;
+
+        if !dead {
+            let on_ground = fly.z < ON_GROUND_THRESH;
+            let can_fly_eat = (rest_time_left > 0.0 || on_ground || fly.z < 1.1) && fly.z < 1.2;
+            if can_fly_eat {
+                for s in &sources {
+                    if ((s.x - fly.x).powi(2) + (s.y - fly.y).powi(2)).sqrt() < EAT_RADIUS {
+                        feeding_candidate_id = Some(s.id.clone());
+                        break;
+                    }
+                }
+            }
+
+            let prev_hunger = hunger;
+            if feeding_candidate_id.is_none() {
+                hunger = (hunger - HUNGER_DECAY * dt).max(0.0);
+            }
+
+            if hunger <= 0.0 {
+                let time_at_zero = if prev_hunger <= 0.0 {
+                    dt
+                } else {
+                    (HUNGER_DECAY * dt - prev_hunger).max(0.0) / HUNGER_DECAY
+                };
+                health = (health - HEALTH_DECAY * time_at_zero).max(0.0);
+                if health <= 0.0 {
+                    dead = true;
+                }
+            }
+
+            // Use per-side firing rates (not raw counts) to avoid fixed turn bias
+            // when motor bank sizes differ (e.g. 52 left vs 54 right neurons).
+            let ml_rate = if self.motor_left.is_empty() {
+                0.0
+            } else {
+                ml / self.motor_left.len() as f64
+            };
+            let mr_rate = if self.motor_right.is_empty() {
+                0.0
+            } else {
+                mr / self.motor_right.len() as f64
+            };
+            // Steering needs stronger influence than forward drive so small L/R
+            // imbalances (e.g. +/-3..5 spikes) still produce visible turns.
+            let turn_from_motor = ((ml_rate - mr_rate) * MOTOR_TURN_GAIN)
+                .clamp(-MOTOR_TURN_RATE_MAX, MOTOR_TURN_RATE_MAX);
+            let forward_from_motor = ml * MOTOR_SCALE + mr * MOTOR_SCALE + mf * MOTOR_SCALE;
+            let motor = forward_from_motor.tanh() * 0.5;
+
+            // Smooth motor steering to prevent frame-to-frame sign flip cancellation
+            // (e.g. -3/+5 oscillations) from collapsing heading updates.
+            let ema_alpha = if dt > 0.0 {
+                1.0 - (-dt / MOTOR_TURN_EMA_TAU_SEC).exp()
+            } else {
+                0.0
+            };
+            self.motor_turn_ema += (turn_from_motor - self.motor_turn_ema) * ema_alpha.clamp(0.0, 1.0);
+            let mut heading_bias = self.motor_turn_ema * dt;
+            let near_right = fly.x > ARENA - WALL_MARGIN;
+            let near_left = fly.x < -ARENA + WALL_MARGIN;
+            let near_top = fly.y > ARENA - WALL_MARGIN;
+            let near_bottom = fly.y < -ARENA + WALL_MARGIN;
+            let near_corner = (near_right as u8 + near_left as u8 + near_top as u8 + near_bottom as u8) >= 2;
+            if near_corner {
+                heading_bias += Self::angle_toward(fly.heading, -fly.x, -fly.y) * 0.6 * dt;
+            } else {
+                if near_right {
+                    heading_bias -= 0.2 * dt;
+                }
+                if near_left {
+                    heading_bias += 0.2 * dt;
+                }
+                if near_top {
+                    heading_bias -= 0.2 * dt;
+                }
+                if near_bottom {
+                    heading_bias += 0.2 * dt;
+                }
+            }
+
+            let mut effective_motor = if rest_time_left <= 0.0 {
+                motor.max(BASELINE_EXPLORE)
+            } else {
+                0.0
+            };
+            if rest_time_left > 0.0 {
+                rest_time_left -= dt;
+                effective_motor = 0.0;
+                if rest_time_left <= 0.0 {
+                    self.fly_time_left_sec = FLY_TIME_MAX;
+                }
+            } else if effective_motor.abs() > 0.005 {
+                self.fly_time_left_sec = (self.fly_time_left_sec - dt * effective_motor.abs()).max(0.0);
+                if self.fly_time_left_sec <= 0.0 {
+                    rest_time_left = REST_TIME;
+                }
+            } else {
+                self.fly_time_left_sec = (self.fly_time_left_sec + dt * 0.5).min(FLY_TIME_MAX);
+            }
+            self.fly_time_left_sec = self.fly_time_left_sec.clamp(0.0, FLY_TIME_MAX);
+
+            let dx = fly.heading.cos() * effective_motor * dt * MOVE_SPEED;
+            let dy = fly.heading.sin() * effective_motor * dt * MOVE_SPEED;
+            x = (fly.x + if dx.is_finite() { dx } else { 0.0 }).clamp(-ARENA, ARENA);
+            y = (fly.y + if dy.is_finite() { dy } else { 0.0 }).clamp(-ARENA, ARENA);
+
+            let mut z_drift = 0.0;
+            if rest_time_left > 0.0 {
+                z_drift = -0.5 * dt;
+            } else {
+                let mut near_food = false;
+                for s in &sources {
+                    if ((s.x - fly.x).powi(2) + (s.y - fly.y).powi(2)).sqrt() < NEAR_FOOD_RADIUS {
+                        near_food = true;
+                        break;
+                    }
+                }
+                if hunger <= 90.0 && near_food {
+                    z_drift = -0.6 * dt;
+                } else if effective_motor.abs() > 0.005 {
+                    z_drift = 0.4 * dt;
+                }
+            }
+            let z_osc = 0.08 * (t * 20.0).sin() * dt;
+            z = (fly.z + if z_drift.is_finite() { z_drift } else { 0.0 } + if z_osc.is_finite() { z_osc } else { 0.0 })
+                .clamp(GROUND_Z, FLIGHT_Z);
+
+            let two_pi = 2.0 * std::f64::consts::PI;
+            let n_heading = fly.heading + if heading_bias.is_finite() { heading_bias } else { 0.0 };
+            heading = n_heading - two_pi * ((n_heading + std::f64::consts::PI) / two_pi).floor();
+            if !heading.is_finite() {
+                heading = fly.heading;
+            }
+        }
+
+        let fly_out = FlyStepOutput {
+            x,
+            y,
+            z,
+            heading,
+            t,
+            hunger: if hunger.is_finite() { hunger } else { fly.hunger },
+            health: if health.is_finite() { health } else { fly.health },
+            dead,
+            fly_time_left: (self.fly_time_left_sec / FLY_TIME_MAX).clamp(0.0, 1.0),
+            rest_time_left: if rest_time_left > 0.0 { rest_time_left } else { 0.0 },
+            rest_duration: REST_TIME,
+            feeding,
+            eaten_food_id,
+            feeding_candidate_id,
+            feeding_sugar_taken: 0.0,
+        };
 
         (
             activity,
@@ -426,6 +761,12 @@ impl BrainSim {
             ml * MOTOR_SCALE,
             mr * MOTOR_SCALE,
             mf * MOTOR_SCALE,
+            ml_count,
+            mr_count,
+            mf_count,
+            ml,
+            mr,
+            mf,
             StepTiming {
                 compute_ms,
                 kernel_ms,
@@ -433,6 +774,7 @@ impl BrainSim {
                 lif_ms,
                 readout_ms,
             },
+            fly_out,
         )
     }
 }

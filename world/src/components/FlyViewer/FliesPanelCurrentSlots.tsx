@@ -18,6 +18,7 @@ export function FliesPanelCurrentSlots(props: {
   deployed: Record<number, number>;
   selectedFlyIndex: number;
   myFlies: Array<ClaimedFly | null>;
+  ownershipHydrating: boolean;
   graveyardSlots: Set<number>;
   deployingSlots: Set<number>;
   statsBySlot: Record<number, number>;
@@ -31,6 +32,7 @@ export function FliesPanelCurrentSlots(props: {
     deployed,
     selectedFlyIndex,
     myFlies,
+    ownershipHydrating,
     graveyardSlots,
     deployingSlots,
     statsBySlot,
@@ -56,7 +58,10 @@ export function FliesPanelCurrentSlots(props: {
           const hasSimFly = isDeployed && flies[simIdx] != null;
           const simFly = hasSimFly ? flies[simIdx]! : DEFAULT_FLY;
           const isDead = hasSimFly && simFly.dead;
-          const t: SlotType = !hasFly
+          const shouldHoldForOwnership = ownershipHydrating && !inGraveyard && !hasFly && !isDeployed;
+          const t: SlotType = shouldHoldForOwnership
+            ? 'connecting'
+            : !hasFly
             ? 'buy'
             : isDeploying
               ? 'deploying'
@@ -71,7 +76,7 @@ export function FliesPanelCurrentSlots(props: {
         }
         return types;
       },
-      [graveyardSlots, myFlies, deployingSlots, deployed]
+      [graveyardSlots, myFlies, ownershipHydrating, deployingSlots, deployed]
     )
   );
 

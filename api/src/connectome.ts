@@ -26,7 +26,10 @@ export interface Connectome {
   meta: { total_neurons: number; total_connections: number };
 }
 
-const DEFAULT_PATH = path.resolve(process.cwd(), '..', 'data', 'connectome-subset.json');
+const DATA_DIR = path.resolve(process.cwd(), '..', 'data');
+const FULL_PATH = path.join(DATA_DIR, 'connectome-full.json');
+const SUBSET_PATH = path.join(DATA_DIR, 'connectome-subset.json');
+const DEFAULT_PATH = fs.existsSync(FULL_PATH) ? FULL_PATH : SUBSET_PATH;
 
 export function loadConnectome(p: string = DEFAULT_PATH): Connectome {
   const buf = fs.readFileSync(p, 'utf-8');

@@ -10,7 +10,15 @@ import { getWorld, spawnFood, removeFood, getSources, type WorldSource } from '.
 import claimsRouter from './routes/claims.js';
 import { getFlies, removeFlyAtSlot } from './services/flyStore.js';
 import { getDeployments, addDeployment, clearForTesting, deactivateDeployment } from './services/deployStore.js';
-import { recordFoodCollected, getStatsForAddress, getDistributedHistory, REWARD_PER_FOOD, getNeuroFlyStats } from './services/rewardStore.js';
+import {
+  recordFeedingPoints,
+  recordFoodDepleted,
+  flushAccruedPointsToPending,
+  getStatsForAddress,
+  getDistributedHistory,
+  REWARD_PER_POINT,
+  getNeuroFlyStats,
+} from './services/rewardStore.js';
 import { flushRewards } from './services/rewardDistributor.js';
 
 const PORT = Number(process.env.PORT) || 3001;
@@ -77,6 +85,7 @@ console.log(`[backend] brain=unix-socket rust=${backendInfo.rust} gpu=${backendI
 
 const GROUND_Z = 0.35;
 const INITIAL_SPREAD = 4;
+const SPAWN_JITTER_RADIUS = 1.25;
 
 let foodIntervalId: ReturnType<typeof setInterval> | null = null;
 let rewardFlushIntervalId: ReturnType<typeof setInterval> | null = null;
@@ -133,15 +142,19 @@ function removeSimAtIndex(simIndex: number): { address: string; slotIndex: numbe
   return deployment;
 }
 
-async function addFlyToSim(): Promise<number> {
-  const angle = (2 * Math.PI * sims.length) / Math.max(1, sims.length + 1);
-  const x = INITIAL_SPREAD * Math.cos(angle);
-  const y = INITIAL_SPREAD * Math.sin(angle);
+async function addFlyToSim(spawnKey?: string): Promise<number> {
+  const baseAngle = (2 * Math.PI * sims.length) / Math.max(1, sims.length + 1);
+  const h = fnv1a32(spawnKey ?? `sim-${sims.length}-${Date.now()}`);
+  const jitterAngle = ((h & 1023) / 1023) * 2 * Math.PI;
+  const jitterRadius = (((h >>> 10) & 1023) / 1023) * SPAWN_JITTER_RADIUS;
+  const x = INITIAL_SPREAD * Math.cos(baseAngle) + jitterRadius * Math.cos(jitterAngle);
+  const y = INITIAL_SPREAD * Math.sin(baseAngle) + jitterRadius * Math.sin(jitterAngle);
+  const heading = (((h >>> 20) & 1023) / 1023) * 2 * Math.PI - Math.PI;
   const sim = await createBrainSim(connectome, () => getSources(), {
     x,
     y,
     z: GROUND_Z,
-    heading: 0,
+    heading,
     t: 0,
     hunger: 100,
     health: 100,
@@ -156,7 +169,7 @@ async function restoreDeployFromStore(): Promise<void> {
     (r) => r.active !== false && isValidSlotIndex(r.slotIndex)
   );
   for (const { address, slotIndex } of records) {
-    const simIndex = await addFlyToSim();
+    const simIndex = await addFlyToSim(`${address}:${slotIndex}`);
     let map = deployedFlies.get(address);
     if (!map) {
       map = new Map();
@@ -179,10 +192,14 @@ let simIntervalId: ReturnType<typeof setInterval> | null = null;
 const SIM_FPS = 30;
 const BATCH_MS = 250;
 const FRAMES_PER_BATCH = Math.round(SIM_FPS * BATCH_MS / 1000);
+const BRAIN_INIT_GRACE_MS = Number(process.env.NEUROSIM_BRAIN_INIT_GRACE_MS ?? 10_000);
 let connectionStep = 0;
 let nextBatchDueAt = 0;
 let simTickInFlight = false;
 let droppedSimTicks = 0;
+let simReadyAtMs = 0;
+let graceSkippedTicks = 0;
+let graceSkipLogged = false;
 
 const wsClients = new Set<import('ws').WebSocket>();
 /** Per-client: which fly's activity to send (sim index). Default 0. */
@@ -204,6 +221,17 @@ function buildClientPayload(
     flies: ReturnType<typeof sims[0]['getState']>['fly'][];
     activities: (Record<string, number> | undefined)[];
     inputActivities: (Record<string, number> | undefined)[];
+    motorReadouts: ({
+      left: number;
+      right: number;
+      fwd: number;
+      leftCount: number;
+      rightCount: number;
+      fwdCount: number;
+      leftMagnitude: number;
+      rightMagnitude: number;
+      fwdMagnitude: number;
+    } | undefined)[];
   }[],
 ): void {
   const nowMs = Date.now();
@@ -220,8 +248,9 @@ function buildClientPayload(
       lastFrame ? (lastFrame.inputActivities[viewIndex] ?? {}) : {},
       nowMs,
     );
+    const motor = lastFrame ? (lastFrame.motorReadouts[viewIndex] ?? undefined) : undefined;
     try {
-      ws.send(JSON.stringify({ frames: clientFrames, activity, sources, simRunning: true }));
+      ws.send(JSON.stringify({ frames: clientFrames, activity, motor, sources, simRunning: true }));
     } catch (err) {
       console.error('[ws] send error', err);
     }
@@ -324,10 +353,13 @@ function lerpHeading(a: number, b: number, t: number): number {
 function startSim(): void {
   if (simRunning) return;
   simRunning = true;
+  simReadyAtMs = Date.now() + Math.max(0, BRAIN_INIT_GRACE_MS);
   connectionStep = 0;
   nextBatchDueAt = performance.now() + BATCH_MS;
   simTickInFlight = false;
   droppedSimTicks = 0;
+  graceSkippedTicks = 0;
+  graceSkipLogged = false;
   spawnFood();
   foodIntervalId = setInterval(() => {
     const f = spawnFood();
@@ -337,6 +369,15 @@ function startSim(): void {
     }
   }, 5_000);
   simIntervalId = setInterval(async () => {
+    if (Date.now() < simReadyAtMs) {
+      graceSkippedTicks += 1;
+      if (!graceSkipLogged) {
+        const remainingMs = Math.max(0, simReadyAtMs - Date.now());
+        console.log('[sim] waiting for brain init grace period', { remainingMs, graceSkippedTicks });
+        graceSkipLogged = true;
+      }
+      return;
+    }
     if (simTickInFlight) {
       droppedSimTicks += 1;
       return;
@@ -362,6 +403,17 @@ function startSim(): void {
         flies: ReturnType<typeof sims[0]['getState']>['fly'][];
         activities: (Record<string, number> | undefined)[];
         inputActivities: (Record<string, number> | undefined)[];
+    motorReadouts: ({
+      left: number;
+      right: number;
+      fwd: number;
+      leftCount: number;
+      rightCount: number;
+      fwdCount: number;
+      leftMagnitude: number;
+      rightMagnitude: number;
+      fwdMagnitude: number;
+    } | undefined)[];
       }[] = [];
 
       const transitions: Array<{
@@ -371,6 +423,15 @@ function startSim(): void {
         toT: number;
         activity?: Record<string, number>;
         inputActivity?: Record<string, number>;
+        motorLeft?: number;
+        motorRight?: number;
+        motorFwd?: number;
+        motorLeftCount?: number;
+        motorRightCount?: number;
+        motorFwdCount?: number;
+        motorLeftMagnitude?: number;
+        motorRightMagnitude?: number;
+        motorFwdMagnitude?: number;
       }> = [];
 
       const beforeStates = sims.map((s) => s.getState());
@@ -422,9 +483,15 @@ function startSim(): void {
           removeFood(state.eatenFoodId);
           const deployment = findDeploymentBySimIndex(j);
           if (deployment) {
-            recordFoodCollected(deployment.address, deployment.slotIndex);
+            recordFoodDepleted(deployment.address, deployment.slotIndex);
           }
           console.log('[world] fly', j, 'ate food', state.eatenFoodId);
+        }
+        if ((state.feedingSugarTaken ?? 0) > 0) {
+          const deployment = findDeploymentBySimIndex(j);
+          if (deployment) {
+            recordFeedingPoints(deployment.address, deployment.slotIndex, state.feedingSugarTaken ?? 0);
+          }
         }
         transitions.push({
           fromFly: before.fly,
@@ -433,6 +500,15 @@ function startSim(): void {
           toT: state.t,
           activity: state.activity,
           inputActivity: state.inputActivity,
+          motorLeft: state.motorLeft,
+          motorRight: state.motorRight,
+          motorFwd: state.motorFwd,
+          motorLeftCount: state.motorLeftCount,
+          motorRightCount: state.motorRightCount,
+          motorFwdCount: state.motorFwdCount,
+          motorLeftMagnitude: state.motorLeftMagnitude,
+          motorRightMagnitude: state.motorRightMagnitude,
+          motorFwdMagnitude: state.motorFwdMagnitude,
         });
         if (state.activity && simActivityTrail[j]) {
           const trail = simActivityTrail[j]!;
@@ -490,8 +566,23 @@ function startSim(): void {
         }));
         const activities = transitions.map((tr) => (i === FRAMES_PER_BATCH ? tr.activity : undefined));
         const inputActivities = transitions.map((tr) => (i === FRAMES_PER_BATCH ? tr.inputActivity : undefined));
+        const motorReadouts = transitions.map((tr) =>
+          i === FRAMES_PER_BATCH
+            ? {
+                left: tr.motorLeft ?? 0,
+                right: tr.motorRight ?? 0,
+                fwd: tr.motorFwd ?? 0,
+                leftCount: tr.motorLeftCount ?? 0,
+                rightCount: tr.motorRightCount ?? 0,
+                fwdCount: tr.motorFwdCount ?? 0,
+                leftMagnitude: tr.motorLeftMagnitude ?? 0,
+                rightMagnitude: tr.motorRightMagnitude ?? 0,
+                fwdMagnitude: tr.motorFwdMagnitude ?? 0,
+              }
+            : undefined,
+        );
         const t = transitions.length ? lerp(transitions[0].fromT, transitions[0].toT, alpha) : 0;
-        frames.push({ t, flies, activities, inputActivities });
+        frames.push({ t, flies, activities, inputActivities, motorReadouts });
       }
       const beforePayload = performance.now();
       buildClientPayload(frames);
@@ -515,7 +606,10 @@ function startSim(): void {
       simTickInFlight = false;
     }
   }, BATCH_MS);
-  rewardFlushIntervalId = setInterval(() => void flushRewards(), 60_000);
+  rewardFlushIntervalId = setInterval(() => {
+    flushAccruedPointsToPending();
+    void flushRewards();
+  }, 60_000);
   console.log('[sim] started');
 }
 
@@ -642,7 +736,7 @@ app.post('/api/deploy', async (req, res) => {
       res.json({ success: true, simIndex: map.get(slotIndex), message: 'Already deployed' });
       return;
     }
-    const simIndex = await addFlyToSim();
+    const simIndex = await addFlyToSim(`${address}:${slotIndex}`);
     if (!map) {
       map = new Map();
       deployedFlies.set(address, map);
@@ -665,7 +759,7 @@ app.get('/api/rewards/stats', (req, res) => {
       return;
     }
     const stats = getStatsForAddress(address);
-    const rewardPerPointWei = REWARD_PER_FOOD.toString();
+    const rewardPerPointWei = REWARD_PER_POINT.toString();
     res.json({ stats, rewardPerPointWei });
   } catch (err) {
     console.error('[rewards] stats error:', err);
@@ -748,7 +842,7 @@ app.get('/api/deploy/graveyard', (req, res) => {
           flyId,
           slotIndex: d.slotIndex,
           feedCount,
-          rewardWei: (BigInt(feedCount) * REWARD_PER_FOOD).toString(),
+          rewardWei: (BigInt(stats?.pointsEarnedMilli ?? 0) * (REWARD_PER_POINT / 1000n)).toString(),
           timeBirthed: stats?.timeBirthed,
           timeDeployed: d.timeDeployed ?? stats?.timeDeployed,
           removedAt: d.deactivatedAt ?? null,
@@ -778,11 +872,27 @@ wss.on('connection', (ws) => {
 
   const flies = sims.map((s) => s.getState().fly);
   const viewIndex = Math.max(0, Math.min(sims.length - 1, 0));
-  const activities = sims.map((s) => s.getState().activity);
+  const states = sims.map((s) => s.getState());
+  const activities = states.map((s) => s.activity);
   const firstState = sims[0]?.getState();
+  const viewedState = states[viewIndex];
+  const motor = viewedState
+    ? {
+        left: viewedState.motorLeft ?? 0,
+        right: viewedState.motorRight ?? 0,
+        fwd: viewedState.motorFwd ?? 0,
+        leftCount: viewedState.motorLeftCount ?? 0,
+        rightCount: viewedState.motorRightCount ?? 0,
+        fwdCount: viewedState.motorFwdCount ?? 0,
+        leftMagnitude: viewedState.motorLeftMagnitude ?? 0,
+        rightMagnitude: viewedState.motorRightMagnitude ?? 0,
+        fwdMagnitude: viewedState.motorFwdMagnitude ?? 0,
+      }
+    : undefined;
   ws.send(JSON.stringify({
     frames: [{ t: firstState?.t ?? 0, flies }],
     activity: activities[viewIndex] ?? {},
+    motor,
     sources: getSources(),
     simRunning,
   }));
@@ -824,7 +934,14 @@ if (process.env.VITEST !== 'true') {
       'connections, viewer subset:',
       viewerNeuronIndices.length,
     );
-    console.log('[sim] auto-started with 0 flies; users deploy flies via POST /api/deploy');
+    const activeDeploymentCount = Array.from(deployedFlies.values()).reduce((sum, slots) => sum + slots.size, 0);
+    console.log(
+      '[sim] auto-started with',
+      sims.length,
+      'active sims from',
+      activeDeploymentCount,
+      'deployments; users deploy flies via POST /api/deploy',
+    );
   });
 }
 

@@ -16,8 +16,12 @@ import { dataPath } from '../lib/dataPath.js';
 const rewardsPath = dataPath('rewards-state.json');
 const deadLetterPath = dataPath('dead-letter.json');
 
-/** 50 $NEURO (18 decimals) per food collected */
-export const REWARD_PER_FOOD = 50n * 10n ** 18n;
+/** 400 $NEURO (18 decimals) per fully depleted fruit. */
+export const REWARD_PER_FOOD = 400n * 10n ** 18n;
+/** One fruit represents 100 feeding points (kept as milli-points for precision). */
+const POINTS_PER_FOOD_MILLI = 100_000;
+export const REWARD_PER_POINT = REWARD_PER_FOOD / 100n;
+const REWARD_PER_MILLI_POINT = REWARD_PER_FOOD / BigInt(POINTS_PER_FOOD_MILLI);
 
 /** Number of NeuroFly slots per address */
 export const MAX_SLOTS = 3;
@@ -33,6 +37,10 @@ let distributed: RewardState['distributed'] = [];
 let saveScheduled: ReturnType<typeof setTimeout> | null = null;
 const SAVE_DEBOUNCE_MS = 500;
 
+if (REWARD_PER_FOOD % BigInt(POINTS_PER_FOOD_MILLI) !== 0n) {
+  throw new Error('[rewardStore] REWARD_PER_FOOD must be divisible by POINTS_PER_FOOD_MILLI');
+}
+
 function load(): void {
   try {
     const raw = readFileSync(rewardsPath, 'utf-8');
@@ -47,9 +55,14 @@ function load(): void {
       pending.set(addr, current + amt);
     }
     inFlight = new Map();
-    neuroflyStats = (Array.isArray(data?.neuroflyStats) ? data.neuroflyStats : []).filter(
-      (s): s is NeuroFlyStats => typeof (s as NeuroFlyStats).flyId === 'string'
-    );
+    neuroflyStats = (Array.isArray(data?.neuroflyStats) ? data.neuroflyStats : [])
+      .filter((s): s is NeuroFlyStats => typeof (s as NeuroFlyStats).flyId === 'string')
+      .map((s) => ({
+        ...s,
+        feedCount: Number.isFinite(s.feedCount) ? Math.max(0, Math.floor(s.feedCount)) : 0,
+        pointsEarnedMilli: Number.isFinite(s.pointsEarnedMilli) ? Math.max(0, Math.floor(s.pointsEarnedMilli)) : 0,
+        pointsFlushedMilli: Number.isFinite(s.pointsFlushedMilli) ? Math.max(0, Math.floor(s.pointsFlushedMilli)) : 0,
+      }));
     distributed = Array.isArray(data?.distributed) ? data.distributed : [];
   } catch (err) {
     const nodeErr = err as NodeJS.ErrnoException;
@@ -171,27 +184,67 @@ function getOrCreateStats(address: string, slotIndex: number, flyId: string): Ne
     timeBirthed: fly?.claimedAt ?? new Date().toISOString(),
     timeDeployed: deployRecord?.timeDeployed ?? new Date().toISOString(),
     feedCount: 0,
+    pointsEarnedMilli: 0,
+    pointsFlushedMilli: 0,
   };
   neuroflyStats.push(stats);
   return stats;
 }
 
 /**
- * Record that an active deployed fly collected food.
- * Uses runtime deployment mapping (address + slot) instead of persisted deployment array index.
+ * Record that an active deployed fly has consumed from a fully depleted fruit.
  */
-export function recordFoodCollected(address: string, slotIndex: number): void {
+export function recordFoodDepleted(address: string, slotIndex: number): void {
   const addr = address.toLowerCase();
   const flyId = getFlies(addr)[slotIndex]?.id;
   if (!flyId) return;
 
   const stats = getOrCreateStats(addr, slotIndex, flyId);
   stats.feedCount += 1;
-
-  const current = pending.get(addr) ?? 0n;
-  pending.set(addr, current + REWARD_PER_FOOD);
-
   save();
+}
+
+/**
+ * Record incremental feeding points for an active deployed fly.
+ * Points are tracked as milli-points to avoid floating point drift.
+ */
+export function recordFeedingPoints(address: string, slotIndex: number, points: number): void {
+  if (!Number.isFinite(points) || points <= 0) return;
+  const addr = address.toLowerCase();
+  const flyId = getFlies(addr)[slotIndex]?.id;
+  if (!flyId) return;
+
+  const stats = getOrCreateStats(addr, slotIndex, flyId);
+  const milli = Math.max(0, Math.round(points * 1000));
+  if (milli <= 0) return;
+  stats.pointsEarnedMilli += milli;
+  save();
+}
+
+/**
+ * Move newly accrued per-fly points into the per-address pending reward queue.
+ * Returns number of addresses that received new pending reward.
+ */
+export function flushAccruedPointsToPending(): number {
+  const byAddress = new Map<string, number>();
+  for (const stats of neuroflyStats) {
+    const delta = Math.max(0, stats.pointsEarnedMilli - stats.pointsFlushedMilli);
+    if (delta <= 0) continue;
+    stats.pointsFlushedMilli += delta;
+    const current = byAddress.get(stats.address) ?? 0;
+    byAddress.set(stats.address, current + delta);
+  }
+  let changed = 0;
+  for (const [addr, deltaMilli] of byAddress) {
+    if (deltaMilli <= 0) continue;
+    const amtWei = BigInt(deltaMilli) * REWARD_PER_MILLI_POINT;
+    if (amtWei <= 0n) continue;
+    const current = pending.get(addr) ?? 0n;
+    pending.set(addr, current + amtWei);
+    changed += 1;
+  }
+  if (changed > 0) save();
+  return changed;
 }
 
 /**
@@ -283,16 +336,34 @@ export function getNeuroFlyStats(
 }
 
 /** Stats per slot for current flies only. New fly in a slot => 0 points until it earns. */
-export function getStatsForAddress(address: string): { slotIndex: number; feedCount: number }[] {
+export function getStatsForAddress(address: string): {
+  slotIndex: number;
+  feedCount: number;
+  pointsEarned: number;
+  pointsFlushed: number;
+  pointsPending: number;
+}[] {
   const addr = address.toLowerCase();
   const flies = getFlies(addr);
-  const result: { slotIndex: number; feedCount: number }[] = [];
+  const result: {
+    slotIndex: number;
+    feedCount: number;
+    pointsEarned: number;
+    pointsFlushed: number;
+    pointsPending: number;
+  }[] = [];
   for (let slotIndex = 0; slotIndex < MAX_SLOTS; slotIndex++) {
     const fly = flies[slotIndex];
-    const feedCount = fly
-      ? (findStats(addr, slotIndex, fly.id)?.feedCount ?? 0)
-      : 0;
-    result.push({ slotIndex, feedCount });
+    const stats = fly ? findStats(addr, slotIndex, fly.id) : undefined;
+    const pointsEarnedMilli = stats?.pointsEarnedMilli ?? 0;
+    const pointsFlushedMilli = stats?.pointsFlushedMilli ?? 0;
+    result.push({
+      slotIndex,
+      feedCount: stats?.feedCount ?? 0,
+      pointsEarned: pointsEarnedMilli / 1000,
+      pointsFlushed: pointsFlushedMilli / 1000,
+      pointsPending: Math.max(0, pointsEarnedMilli - pointsFlushedMilli) / 1000,
+    });
   }
   return result;
 }

@@ -2,59 +2,112 @@ import type { Connectome } from './connectome.js';
 import type { FlyState } from './fly-state.js';
 import type { WorldSource } from './world.js';
 import * as socketClient from './brain-socket-client.js';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 export type { FlyState } from './fly-state.js';
 export const EAT_RADIUS = 2.5;
 export const REST_TIME = 4;
+const STIM_RATE_HZ = 200;
+const SENSORY_SCALE = 0.18;
+const MIN_FOOD_DISTANCE = 1.0;
+const ODOR_DETECTION_RADIUS = 34.0;
+type PrecomputedOlfactory = { left: string[]; right: string[]; unknown: string[] };
+let precomputedOlfactoryCache: PrecomputedOlfactory | null | undefined;
 
 export interface SimState {
   t: number;
   fly: FlyState;
   activity?: Record<string, number>;
   inputActivity?: Record<string, number>;
+  motorLeft?: number;
+  motorRight?: number;
+  motorFwd?: number;
+  motorLeftCount?: number;
+  motorRightCount?: number;
+  motorFwdCount?: number;
+  motorLeftMagnitude?: number;
+  motorRightMagnitude?: number;
+  motorFwdMagnitude?: number;
   eatenFoodId?: string;
+  feedingSugarTaken?: number;
 }
 
 /** Brain sim uses the Rust service via Unix socket only. Connectome loaded by brain-service at startup. */
-
-function angleToward(heading: number, dx: number, dy: number): number {
-  const target = Math.atan2(dy, dx);
-  let d = target - heading;
-  while (d > Math.PI) d -= 2 * Math.PI;
-  while (d < -Math.PI) d += 2 * Math.PI;
-  return d;
-}
-
-const ARENA = 24;
-const WALL_MARGIN = 6;
-const SEEK_RADIUS = ARENA * 1.5;
-const HUNGER_DECAY = 0.8;
-const HEALTH_DECAY = 2.5;
-const FOOD_HUNGER_RESTORE = 50;
-const FOOD_HEALTH_RESTORE = 50;
 const FLY_TIME_MAX = 6;
 const GROUND_Z = 0.35;
-const FLIGHT_Z = 1.5;
-const ON_GROUND_THRESH = 0.6;
-const STIM_RATE_HZ = 200;
-const SENSORY_SCALE = 0.18;
-const MIN_FOOD_DISTANCE = 1;
 
-function estimateSensoryInputStrength(dt: number, fly: FlyState, sources: WorldSource[]): number {
-  if (sources.length === 0) return 0;
-  const hungry = (fly.hunger ?? 100) <= 90;
-  let foodModulation = 0;
-  for (const s of sources) {
-    const dist = Math.hypot(s.x - fly.x, s.y - fly.y);
-    if (dist < MIN_FOOD_DISTANCE) continue;
-    const invDist = 1 / (1 + dist * 0.1);
-    foodModulation += invDist * (1 - (fly.hunger ?? 100) / 100);
+function normalizeAngle(a: number): number {
+  let out = a;
+  while (out > Math.PI) out -= 2 * Math.PI;
+  while (out < -Math.PI) out += 2 * Math.PI;
+  return out;
+}
+
+function loadPrecomputedOlfactory(): PrecomputedOlfactory | null {
+  if (precomputedOlfactoryCache !== undefined) return precomputedOlfactoryCache;
+  const candidates = [
+    path.resolve(process.cwd(), '..', 'data', 'olfactory-afferents.json'),
+    path.resolve(process.cwd(), 'data', 'olfactory-afferents.json'),
+  ];
+  for (const p of candidates) {
+    try {
+      if (!fs.existsSync(p)) continue;
+      const parsed = JSON.parse(fs.readFileSync(p, 'utf-8')) as Partial<PrecomputedOlfactory>;
+      const left = Array.isArray(parsed.left) ? parsed.left.filter((x): x is string => typeof x === 'string') : [];
+      const right = Array.isArray(parsed.right) ? parsed.right.filter((x): x is string => typeof x === 'string') : [];
+      const unknown = Array.isArray(parsed.unknown) ? parsed.unknown.filter((x): x is string => typeof x === 'string') : [];
+      precomputedOlfactoryCache = { left, right, unknown };
+      return precomputedOlfactoryCache;
+    } catch {
+      // Try next candidate path.
+    }
   }
-  if (foodModulation <= 0) return 0;
-  const rateHz = hungry
-    ? Math.min(STIM_RATE_HZ, 50 + foodModulation * STIM_RATE_HZ)
-    : 30;
-  return Math.min(0.5, (rateHz / STIM_RATE_HZ) * SENSORY_SCALE * (dt / (1 / 30)));
+  precomputedOlfactoryCache = null;
+  return null;
+}
+
+function estimateDirectionalSensoryInput(
+  dt: number,
+  fly: FlyState,
+  sources: WorldSource[],
+): { left: number; right: number; center: number } {
+  if (sources.length === 0) return { left: 0, right: 0, center: 0 };
+  const hunger = fly.hunger ?? 100;
+  const hungry = hunger <= 90;
+  const hungerMod = Math.max(0, 1 - hunger / 100);
+  let leftMod = 0;
+  let rightMod = 0;
+  let centerMod = 0;
+  for (const s of sources) {
+    const dx = (s.x ?? 0) - (fly.x ?? 0);
+    const dy = (s.y ?? 0) - (fly.y ?? 0);
+    const dist = Math.hypot(dx, dy);
+    if (dist > ODOR_DETECTION_RADIUS || dist < MIN_FOOD_DISTANCE) continue;
+    const invDist = 1 / (1 + dist * 0.1);
+    const intensity = invDist * hungerMod;
+    if (intensity <= 0) continue;
+    const target = Math.atan2(dy, dx);
+    const delta = normalizeAngle(target - (fly.heading ?? 0));
+    const lateral = Math.sin(delta);
+    const leftness = Math.max(0, lateral);
+    const rightness = Math.max(0, -lateral);
+    leftMod += intensity * (0.25 + 0.75 * leftness);
+    rightMod += intensity * (0.25 + 0.75 * rightness);
+    centerMod += intensity * (1 - 0.4 * Math.abs(lateral));
+  }
+  const toStrength = (mod: number): number => {
+    if (mod <= 0) return 0;
+    const rateHz = hungry
+      ? Math.min(STIM_RATE_HZ, 50 + mod * STIM_RATE_HZ)
+      : 30;
+    return Math.min(0.5, (rateHz / STIM_RATE_HZ) * SENSORY_SCALE * (dt / (1 / 30)));
+  };
+  return {
+    left: toStrength(leftMod),
+    right: toStrength(rightMod),
+    center: toStrength(centerMod),
+  };
 }
 
 export async function createBrainSim(
@@ -65,10 +118,23 @@ export async function createBrainSim(
   const getSources = (): WorldSource[] =>
     typeof worldSources === 'function' ? worldSources() : worldSources;
   const neuronIds = connectome.neurons.map((n) => n.root_id);
-  const sensoryNeuronIds = connectome.neurons
-    .filter((n) => String(n.role ?? '').toLowerCase() === 'sensory')
+  const precomputed = loadPrecomputedOlfactory();
+  const loadedNeuronSet = new Set(neuronIds);
+  const precomputedLeft = (precomputed?.left ?? []).filter((id) => loadedNeuronSet.has(id));
+  const precomputedRight = (precomputed?.right ?? []).filter((id) => loadedNeuronSet.has(id));
+  const precomputedUnknown = (precomputed?.unknown ?? []).filter((id) => loadedNeuronSet.has(id));
+  const sensoryLeftNeuronIds = precomputedLeft.length > 0 ? precomputedLeft : connectome.neurons
+    .filter((n) => n.role === 'sensory' && n.side === 'left')
     .map((n) => n.root_id);
-  const pendingStimuli: { neurons: string[]; strength: number }[] = [];
+  const sensoryRightNeuronIds = precomputedRight.length > 0 ? precomputedRight : connectome.neurons
+    .filter((n) => n.role === 'sensory' && n.side === 'right')
+    .map((n) => n.root_id);
+  const sensoryUnknownNeuronIds = precomputedUnknown.length > 0 ? precomputedUnknown : connectome.neurons
+    .filter((n) => n.role === 'sensory' && (!n.side || n.side === 'unknown'))
+    .map((n) => n.root_id);
+  const sensoryNeuronIds = connectome.neurons
+    .filter((n) => n.role === 'sensory')
+    .map((n) => n.root_id);
   let flyTimeLeftSec = FLY_TIME_MAX;
   let restTimeLeft = 0;
 
@@ -99,16 +165,48 @@ export async function createBrainSim(
     let lastActivitySparse: Record<string, number> = {};
     let lastInputActivity: Record<string, number> | undefined;
     let lastEatenFoodId: string | undefined;
+    let lastFeedingSugarTaken = 0;
+    let lastMotorLeft = 0;
+    let lastMotorRight = 0;
+    let lastMotorFwd = 0;
+    let lastMotorLeftCount = 0;
+    let lastMotorRightCount = 0;
+    let lastMotorFwdCount = 0;
+    let lastMotorLeftMagnitude = 0;
+    let lastMotorRightMagnitude = 0;
+    let lastMotorFwdMagnitude = 0;
 
     async function runRustStep(
       dt: number,
-      pendingInput: Array<{ neuronIds: string[]; strength: number }>,
+      sources: WorldSource[],
       includeActivity = true,
     ): Promise<{
       activitySparse: Record<string, number>;
       motorLeft: number;
       motorRight: number;
       motorFwd: number;
+      motorLeftCount: number;
+      motorRightCount: number;
+      motorFwdCount: number;
+      motorLeftMagnitude: number;
+      motorRightMagnitude: number;
+      motorFwdMagnitude: number;
+      fly: {
+        x: number;
+        y: number;
+        z: number;
+        heading: number;
+        t: number;
+        hunger: number;
+        health: number;
+        dead: boolean;
+        flyTimeLeft: number;
+        restTimeLeft: number;
+        restDuration: number;
+        feeding: boolean;
+      };
+      eatenFoodId?: string;
+      feedingSugarTaken?: number;
       computeMs?: number;
       kernelMs?: number;
       recurrentMs?: number;
@@ -124,15 +222,15 @@ export async function createBrainSim(
         hunger: fly.hunger,
         health: fly.health ?? 100,
         restTimeLeft,
+        dead: fly.dead ?? false,
       };
-      const sourcesInput = getSources().map((s) => ({ x: s.x, y: s.y, radius: s.radius }));
       return socketClient.stepSim({
         simId,
         dt,
         includeActivity,
         fly: flyInput,
-        sources: sourcesInput,
-        pending: pendingInput,
+        // Rust handles sensory drive from world source geometry.
+        sources: sources.map((s) => ({ id: s.id, x: s.x, y: s.y, radius: s.radius })),
       });
     }
 
@@ -142,10 +240,20 @@ export async function createBrainSim(
       if (fly.dead) {
         const t = fly.t + dt;
         fly = { ...fly, t };
-        const act = await runRustStep(dt, [], includeActivity);
+        const act = await runRustStep(dt, getSources(), includeActivity);
         lastActivitySparse = act.activitySparse;
         lastInputActivity = undefined;
         lastEatenFoodId = undefined;
+        lastFeedingSugarTaken = 0;
+        lastMotorLeft = act.motorLeft ?? 0;
+        lastMotorRight = act.motorRight ?? 0;
+        lastMotorFwd = act.motorFwd ?? 0;
+        lastMotorLeftCount = act.motorLeftCount ?? 0;
+        lastMotorRightCount = act.motorRightCount ?? 0;
+        lastMotorFwdCount = act.motorFwdCount ?? 0;
+        lastMotorLeftMagnitude = act.motorLeftMagnitude ?? 0;
+        lastMotorRightMagnitude = act.motorRightMagnitude ?? 0;
+        lastMotorFwdMagnitude = act.motorFwdMagnitude ?? 0;
         lastRustMs = Math.round(performance.now() - stepStart);
         lastRustTiming = {
           computeMs: act.computeMs,
@@ -155,37 +263,45 @@ export async function createBrainSim(
           readoutMs: act.readoutMs,
         };
         const activityRec = Object.keys(act.activitySparse).length ? act.activitySparse : undefined;
-        return { t, fly, activity: activityRec, inputActivity: lastInputActivity, eatenFoodId: lastEatenFoodId };
+        return {
+          t,
+          fly,
+          activity: activityRec,
+          inputActivity: lastInputActivity,
+          motorLeft: lastMotorLeft,
+          motorRight: lastMotorRight,
+          motorFwd: lastMotorFwd,
+          motorLeftCount: lastMotorLeftCount,
+          motorRightCount: lastMotorRightCount,
+          motorFwdCount: lastMotorFwdCount,
+          motorLeftMagnitude: lastMotorLeftMagnitude,
+          motorRightMagnitude: lastMotorRightMagnitude,
+          motorFwdMagnitude: lastMotorFwdMagnitude,
+          eatenFoodId: lastEatenFoodId,
+        };
       }
 
       const currentSources = getSources();
-      const t = fly.t + dt;
-
-      const toApply = pendingStimuli.splice(0, pendingStimuli.length);
-      const pendingInput = toApply.map((p) => ({ neuronIds: p.neurons, strength: p.strength }));
-      const inputActivityRec: Record<string, number> | undefined = includeActivity
-        ? (() => {
-            const out: Record<string, number> = {};
-            const sensoryStrength = estimateSensoryInputStrength(dt, fly, currentSources);
-            if (sensoryStrength > 0 && sensoryNeuronIds.length > 0) {
-              for (const id of sensoryNeuronIds) {
-                out[id] = Math.max(out[id] ?? 0, sensoryStrength);
-              }
-            }
-            for (const p of pendingInput) {
-              const v = Math.max(0.1, Math.min(1, Number(p.strength) || 0));
-              for (const id of p.neuronIds) {
-                if (!id) continue;
-                out[id] = Math.max(out[id] ?? 0, v);
-              }
-            }
-            return Object.keys(out).length > 0 ? out : undefined;
-          })()
-        : undefined;
+      const directional = estimateDirectionalSensoryInput(dt, fly, currentSources);
+      const leftStrength = directional.left > 0 ? Math.max(0.05, Math.min(0.95, directional.left)) : 0;
+      const rightStrength = directional.right > 0 ? Math.max(0.05, Math.min(0.95, directional.right)) : 0;
+      const centerStrength = directional.center > 0 ? Math.max(0.05, Math.min(0.95, directional.center)) : 0;
+      let inputActivityRec: Record<string, number> | undefined;
+      if (directional.left > 0 || directional.right > 0 || directional.center > 0) {
+        const next: Record<string, number> = {};
+        for (const id of sensoryLeftNeuronIds) next[id] = leftStrength;
+        for (const id of sensoryRightNeuronIds) next[id] = rightStrength;
+        for (const id of sensoryUnknownNeuronIds) next[id] = centerStrength;
+        // If side metadata is absent in the connectome, still emit sensory targets for the client.
+        if (Object.keys(next).length === 0) {
+          for (const id of sensoryNeuronIds) next[id] = centerStrength;
+        }
+        if (Object.keys(next).length > 0) inputActivityRec = next;
+      }
       lastInputActivity = inputActivityRec;
 
       const rustStart = performance.now();
-      const result = await runRustStep(dt, pendingInput, includeActivity);
+      const result = await runRustStep(dt, currentSources, includeActivity);
       lastRustMs = Math.round(performance.now() - rustStart);
       lastSocketTiming = socketClient.getLastRequestTiming();
       lastRustTiming = {
@@ -195,177 +311,56 @@ export async function createBrainSim(
         lifMs: result.lifMs,
         readoutMs: result.readoutMs,
       };
-      const { activitySparse, motorLeft, motorRight, motorFwd } = result;
+      const { activitySparse } = result;
       lastActivitySparse = activitySparse;
-
-      const turnFromMotor = (motorRight - motorLeft);
-      const forwardFromMotor = motorLeft + motorRight + motorFwd;
-      const motor = Math.tanh(forwardFromMotor) * 0.5;
-
-      const onGround = fly.z < ON_GROUND_THRESH;
-      const canFlyEat = (restTimeLeft > 0 || onGround || fly.z < 1.1) && fly.z < 1.2;
-      let hunger = fly.hunger;
-      let health = fly.health ?? 100;
-      let isEating = false;
-      let eatenFoodId: string | undefined;
-      if (canFlyEat) {
-        for (const s of currentSources) {
-          if (Math.hypot(s.x - fly.x, s.y - fly.y) < EAT_RADIUS) {
-            isEating = true;
-            hunger = Math.min(100, hunger + FOOD_HUNGER_RESTORE);
-            health = Math.min(100, health + FOOD_HEALTH_RESTORE);
-            eatenFoodId = s.id;
-            break;
-          }
-        }
-      }
-      const prevHunger = hunger;
-      if (!isEating) hunger = Math.max(0, hunger - HUNGER_DECAY * dt);
-
-      let timeAtZero = 0;
-      if (hunger <= 0) {
-        if (prevHunger <= 0) timeAtZero = dt;
-        else timeAtZero = Math.max(0, HUNGER_DECAY * dt - prevHunger) / HUNGER_DECAY;
-        health = Math.max(0, health - HEALTH_DECAY * timeAtZero);
-        if (health <= 0) {
-          fly = {
-            ...fly,
-            t,
-            hunger,
-            health: 0,
-            dead: true,
-            flyTimeLeft: Math.max(0, Math.min(1, flyTimeLeftSec / FLY_TIME_MAX)),
-            restTimeLeft: restTimeLeft > 0 ? restTimeLeft : 0,
-            restDuration: REST_TIME,
-            feeding: false,
-          };
-          const activityRec = Object.keys(activitySparse).length ? activitySparse : undefined;
-          lastEatenFoodId = eatenFoodId;
-          lastJsMs = Math.round(performance.now() - stepStart - lastRustMs);
-          return {
-            t,
-            fly,
-            activity: activityRec,
-            inputActivity: inputActivityRec,
-            ...(eatenFoodId && { eatenFoodId }),
-          };
-        }
-      }
-
-      const hungry = hunger <= 90;
-      const full = hunger > 90;
-      const foodResponsiveness = hungry ? Math.max(0.25, (90 - hunger) / 90) : 0;
-
-      let headingBias = turnFromMotor * dt + 0.1 * Math.sin(t * 0.7) * dt;
-
-      const nearRight = fly.x > ARENA - WALL_MARGIN;
-      const nearLeft = fly.x < -ARENA + WALL_MARGIN;
-      const nearTop = fly.y > ARENA - WALL_MARGIN;
-      const nearBottom = fly.y < -ARENA + WALL_MARGIN;
-      const nearCorner = (nearRight ? 1 : 0) + (nearLeft ? 1 : 0) + (nearTop ? 1 : 0) + (nearBottom ? 1 : 0) >= 2;
-      if (nearCorner) {
-        headingBias += angleToward(fly.heading, -fly.x, -fly.y) * 2.2 * dt;
-      } else {
-        if (nearRight) headingBias -= 0.6 * dt;
-        if (nearLeft) headingBias += 0.6 * dt;
-        if (nearTop) headingBias -= 0.5 * dt;
-        if (nearBottom) headingBias += 0.5 * dt;
-      }
-
-      if (hungry && currentSources.length > 0) {
-        let nearestDist = Infinity;
-        let nearestDx = 0, nearestDy = 0, nearestWeight = 1;
-        for (const s of currentSources) {
-          const dx = s.x - fly.x, dy = s.y - fly.y;
-          const dist = Math.hypot(dx, dy);
-          const inRange = dist < Math.max(s.radius, SEEK_RADIUS) && dist > 0.5;
-          if (inRange && dist < nearestDist) {
-            nearestDist = dist;
-            nearestDx = dx;
-            nearestDy = dy;
-            nearestWeight = 1;
-          }
-        }
-        if (nearestDist < Infinity) {
-          headingBias += angleToward(fly.heading, nearestDx, nearestDy) * 3.8 * foodResponsiveness * nearestWeight * dt;
-        } else {
-          headingBias += 0.25 * Math.sin(t * 0.8) * dt + 0.12 * Math.sin(t * 1.5) * dt;
-        }
-      } else if (full) {
-        headingBias += 0.15 * Math.sin(t * 0.5) * dt + 0.08 * Math.sin(t * 1.3) * dt;
-      }
-
-      const moveResponsiveness = hungry ? foodResponsiveness : full ? 0.4 : 0;
-      const BASELINE_EXPLORE = 0.12;
-      let effectiveMotor = Math.max(motor * moveResponsiveness, restTimeLeft <= 0 ? BASELINE_EXPLORE : 0);
-      if (restTimeLeft > 0) {
-        restTimeLeft -= dt;
-        effectiveMotor = 0;
-        if (restTimeLeft <= 0) flyTimeLeftSec = FLY_TIME_MAX;
-      } else if (Math.abs(effectiveMotor) > 0.005) {
-        flyTimeLeftSec = Math.max(0, flyTimeLeftSec - dt * Math.abs(effectiveMotor));
-        if (flyTimeLeftSec <= 0) restTimeLeft = REST_TIME;
-      } else {
-        flyTimeLeftSec = Math.min(FLY_TIME_MAX, flyTimeLeftSec + dt * 0.5);
-      }
-      flyTimeLeftSec = Math.max(0, Math.min(FLY_TIME_MAX, flyTimeLeftSec));
-
-      const MOVE_SPEED = 35;
-      const dx = Math.cos(fly.heading) * effectiveMotor * dt * MOVE_SPEED;
-      const dy = Math.sin(fly.heading) * effectiveMotor * dt * MOVE_SPEED;
-      let nx = fly.x + (Number.isFinite(dx) ? dx : 0);
-      let ny = fly.y + (Number.isFinite(dy) ? dy : 0);
-      nx = Math.max(-ARENA, Math.min(ARENA, nx));
-      ny = Math.max(-ARENA, Math.min(ARENA, ny));
-
-      let zDrift = 0;
-      if (restTimeLeft > 0) {
-        zDrift = -0.5 * dt;
-      } else {
-        let nearFood = false;
-        for (const s of currentSources) {
-          if (s.type === 'food' && Math.hypot(s.x - fly.x, s.y - fly.y) < EAT_RADIUS * 2) {
-            nearFood = true;
-            break;
-          }
-        }
-        if (hungry && nearFood) zDrift = -0.6 * dt;
-        else if (Math.abs(effectiveMotor) > 0.005) zDrift = 0.4 * dt;
-      }
-      const zOsc = 0.08 * Math.sin(t * 20) * dt;
-      let nz = fly.z + (Number.isFinite(zDrift) ? zDrift : 0) + (Number.isFinite(zOsc) ? zOsc : 0);
-      nz = Math.max(GROUND_Z, Math.min(FLIGHT_Z, nz));
-
-      let nHeading = fly.heading + (Number.isFinite(headingBias) ? headingBias : 0);
-      const TWO_PI = 2 * Math.PI;
-      nHeading = nHeading - TWO_PI * Math.floor((nHeading + Math.PI) / TWO_PI);
-      nHeading = Number.isFinite(nHeading) ? nHeading : fly.heading;
-
+      lastMotorLeft = result.motorLeft ?? 0;
+      lastMotorRight = result.motorRight ?? 0;
+      lastMotorFwd = result.motorFwd ?? 0;
+      lastMotorLeftCount = result.motorLeftCount ?? 0;
+      lastMotorRightCount = result.motorRightCount ?? 0;
+      lastMotorFwdCount = result.motorFwdCount ?? 0;
+      lastMotorLeftMagnitude = result.motorLeftMagnitude ?? 0;
+      lastMotorRightMagnitude = result.motorRightMagnitude ?? 0;
+      lastMotorFwdMagnitude = result.motorFwdMagnitude ?? 0;
       fly = {
-        x: Number.isFinite(nx) ? nx : fly.x,
-        y: Number.isFinite(ny) ? ny : fly.y,
-        z: Number.isFinite(nz) ? nz : fly.z,
-        heading: nHeading,
-        t: Number.isFinite(t) ? t : fly.t,
-        hunger: Number.isFinite(hunger) ? hunger : fly.hunger,
-        health: Number.isFinite(health) ? health : (fly.health ?? 100),
-        dead: false,
-        flyTimeLeft: Math.max(0, Math.min(1, flyTimeLeftSec / FLY_TIME_MAX)),
-        restTimeLeft: restTimeLeft > 0 ? restTimeLeft : 0,
-        restDuration: REST_TIME,
-        feeding: isEating,
+        ...fly,
+        x: result.fly.x,
+        y: result.fly.y,
+        z: result.fly.z,
+        heading: result.fly.heading,
+        t: result.fly.t,
+        hunger: result.fly.hunger,
+        health: result.fly.health,
+        dead: result.fly.dead,
+        flyTimeLeft: result.fly.flyTimeLeft,
+        restTimeLeft: result.fly.restTimeLeft,
+        restDuration: result.fly.restDuration,
+        feeding: result.fly.feeding,
       };
+      flyTimeLeftSec = Math.max(0, Math.min(FLY_TIME_MAX, (result.fly.flyTimeLeft ?? 0) * FLY_TIME_MAX));
+      restTimeLeft = result.fly.restTimeLeft ?? 0;
 
       const activityRec = Object.keys(activitySparse).length ? activitySparse : undefined;
-      lastEatenFoodId = eatenFoodId;
+      lastEatenFoodId = result.eatenFoodId;
+      lastFeedingSugarTaken = result.feedingSugarTaken ?? 0;
       lastJsMs = Math.round(performance.now() - stepStart - lastRustMs);
 
       return {
-        t,
+        t: fly.t,
         fly,
         activity: activityRec,
         inputActivity: inputActivityRec,
-        ...(eatenFoodId && { eatenFoodId }),
+        motorLeft: lastMotorLeft,
+        motorRight: lastMotorRight,
+        motorFwd: lastMotorFwd,
+        motorLeftCount: lastMotorLeftCount,
+        motorRightCount: lastMotorRightCount,
+        motorFwdCount: lastMotorFwdCount,
+        motorLeftMagnitude: lastMotorLeftMagnitude,
+        motorRightMagnitude: lastMotorRightMagnitude,
+        motorFwdMagnitude: lastMotorFwdMagnitude,
+        feedingSugarTaken: lastFeedingSugarTaken,
+        ...(result.eatenFoodId && { eatenFoodId: result.eatenFoodId }),
       };
     }
 
@@ -384,10 +379,6 @@ export async function createBrainSim(
       };
     }
 
-    function inject(neurons: string[], strength = 0.8) {
-      if (neurons.length > 0) pendingStimuli.push({ neurons, strength });
-    }
-
     function getState(): SimState {
       const activityRec = Object.keys(lastActivitySparse).length ? lastActivitySparse : undefined;
       const flyWithMeta = {
@@ -404,18 +395,25 @@ export async function createBrainSim(
         fly: flyWithMeta,
         activity: activityRec,
         inputActivity: lastInputActivity,
+        motorLeft: lastMotorLeft,
+        motorRight: lastMotorRight,
+        motorFwd: lastMotorFwd,
+        motorLeftCount: lastMotorLeftCount,
+        motorRightCount: lastMotorRightCount,
+        motorFwdCount: lastMotorFwdCount,
+        motorLeftMagnitude: lastMotorLeftMagnitude,
+        motorRightMagnitude: lastMotorRightMagnitude,
+        motorFwdMagnitude: lastMotorFwdMagnitude,
+        feedingSugarTaken: lastFeedingSugarTaken,
         ...(lastEatenFoodId && { eatenFoodId: lastEatenFoodId }),
       };
     }
 
     return {
       step,
-      inject,
       getState,
       getTiming,
       neuronIds,
-      isRustSim: true,
-      isGpuSim: process.env.USE_CUDA === '1',
     };
   }
 }

@@ -235,7 +235,7 @@ pub fn load_connectome(path: &Path) -> Result<ConnectomeTemplate, Box<dyn std::e
         }
     }
 
-    let (motor_left, motor_right, motor_unknown) =
+    let (pre_motor_left, pre_motor_right, pre_motor_unknown) =
         if let Some(mot) =
             load_precomputed_motor_indices(path, &id_to_idx)
         {
@@ -268,8 +268,8 @@ pub fn load_connectome(path: &Path) -> Result<ConnectomeTemplate, Box<dyn std::e
         sensory_left_indices,
         sensory_right_indices,
         sensory_unknown_indices,
-        motor_left,
-        motor_right,
-        motor_unknown,
+        motor_left: pre_motor_left,
+        motor_right: pre_motor_right,
+        motor_unknown: pre_motor_unknown,
     })
 }

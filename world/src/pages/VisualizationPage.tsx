@@ -50,6 +50,8 @@ type SceneState = {
   isEpgByIndex: boolean[];
   ringDirectionByIndex: Array<THREE.Vector2 | null>;
   epgDirectionByIndex: Array<THREE.Vector2 | null>;
+  epgBinByIndex: Array<number | null>;
+  epgBinPopulation: number[];
   arrowState: {
     angleCurrentDeg: number;
     angleTargetDeg: number;
@@ -70,7 +72,8 @@ const ACTIVE_COLOR = new THREE.Color(0x6eff9e);
 const ACTIVE_RING_COLOR = new THREE.Color(0xff4fd8);
 const ACTIVE_EPG_COLOR = new THREE.Color(0xfff07a);
 const PLAYBACK_BASE_MS = 80;
-const EPG_BUMP_WINDOW_MS = 250;
+const EPG_COMPASS_BINS = 8;
+const EPG_BUMP_WINDOW_MS = 80;
 
 function controlButtonStyle(active: boolean): Record<string, string | number> {
   return {
@@ -96,6 +99,7 @@ type CompassStats = {
   epgBins: number[];
   epgWindowSpikes: number;
   epgWindowTicks: number;
+  epgWindowMs: number;
 };
 
 function normalizeAngleDeg(angleDeg: number): number {
@@ -312,6 +316,8 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
   const isEpgByIndex: boolean[] = new Array(n).fill(false);
   const ringDirectionByIndex: Array<THREE.Vector2 | null> = new Array(n).fill(null);
   const epgDirectionByIndex: Array<THREE.Vector2 | null> = new Array(n).fill(null);
+  const epgBinByIndex: Array<number | null> = new Array(n).fill(null);
+  const epgBinPopulation = new Array<number>(EPG_COMPASS_BINS).fill(0);
 
   for (let i = 0; i < n; i += 1) {
     const neuron = neurons[i]!;
@@ -330,11 +336,21 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
     }
     if (neuron.is_epg) {
       if (neuron.epg_tile_index_0_7 != null) {
-        const a = (neuron.epg_tile_index_0_7 / 8) * Math.PI * 2;
+        const tile = Math.max(0, Math.min(EPG_COMPASS_BINS - 1, neuron.epg_tile_index_0_7));
+        const a = (tile / EPG_COMPASS_BINS) * Math.PI * 2;
         epgDirectionByIndex[i] = new THREE.Vector2(Math.cos(a), Math.sin(a));
+        epgBinByIndex[i] = tile;
+        epgBinPopulation[tile] += 1;
       } else {
         const ev = new THREE.Vector2(positions[i * 3], positions[i * 3 + 1]);
-        if (ev.lengthSq() > 1e-8) epgDirectionByIndex[i] = ev.normalize();
+        if (ev.lengthSq() > 1e-8) {
+          epgDirectionByIndex[i] = ev.normalize();
+          const angle = Math.atan2(ev.y, ev.x);
+          const normalized = (angle + Math.PI) / (2 * Math.PI);
+          const bin = Math.max(0, Math.min(EPG_COMPASS_BINS - 1, Math.floor(normalized * EPG_COMPASS_BINS)));
+          epgBinByIndex[i] = bin;
+          epgBinPopulation[bin] += 1;
+        }
       }
     }
     const c = neuron.is_epg ? INACTIVE_EPG_COLOR : neuron.is_ring ? INACTIVE_RING_COLOR : INACTIVE_COLOR;
@@ -431,6 +447,8 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
     isEpgByIndex,
     ringDirectionByIndex,
     epgDirectionByIndex,
+    epgBinByIndex,
+    epgBinPopulation,
     arrowState,
     dispose,
   };
@@ -457,14 +475,15 @@ function applyTickSpikes(
   spikes: string[],
   epgWindowWeights?: Map<string, number>,
   epgWindowTicks = 1,
+  dtSec = 0.0001,
 ): CompassStats {
   const {
     colorAttr,
     idToIndex,
     isRingByIndex,
     isEpgByIndex,
-    ringDirectionByIndex,
-    epgDirectionByIndex,
+    epgBinByIndex,
+    epgBinPopulation,
   } = sceneState;
   const count = colorAttr.count;
   for (let i = 0; i < count; i += 1) {
@@ -475,8 +494,7 @@ function applyTickSpikes(
   let epgLeftCount = 0;
   let epgRightCount = 0;
   let ringActiveCount = 0;
-  const bump = new THREE.Vector2(0, 0);
-  const epgBins = new Array<number>(24).fill(0);
+  const epgBinsRaw = new Array<number>(EPG_COMPASS_BINS).fill(0);
   for (const id of spikes) {
     const idx = idToIndex.get(id);
     if (idx == null) continue;
@@ -485,40 +503,42 @@ function applyTickSpikes(
     if (isRingByIndex[idx]) ringActiveCount += 1;
     if (isEpgByIndex[idx]) {
       epgActiveCount += 1;
-      const d = epgDirectionByIndex[idx];
-      if (d) {
-        bump.add(d);
-        if (d.x < 0) epgLeftCount += 1;
-        else if (d.x > 0) epgRightCount += 1;
-        const angle = Math.atan2(d.y, d.x);
-        const normalized = (angle + Math.PI) / (2 * Math.PI);
-        const bin = Math.max(0, Math.min(epgBins.length - 1, Math.floor(normalized * epgBins.length)));
-        epgBins[bin] += 1;
-      }
+      const bin = epgBinByIndex[idx];
+      if (bin != null) epgBinsRaw[bin] += 1;
     }
   }
-  let bumpWeightTotal = epgActiveCount;
+  let windowSpikeTotal = epgActiveCount;
   if (epgWindowWeights && epgWindowWeights.size > 0) {
-    bump.set(0, 0);
-    epgBins.fill(0);
-    epgLeftCount = 0;
-    epgRightCount = 0;
-    bumpWeightTotal = 0;
+    epgBinsRaw.fill(0);
+    windowSpikeTotal = 0;
     for (const [id, weight] of epgWindowWeights.entries()) {
       if (weight <= 0) continue;
       const idx = idToIndex.get(id);
       if (idx == null || !isEpgByIndex[idx]) continue;
-      const d = epgDirectionByIndex[idx];
-      if (!d) continue;
-      bump.addScaledVector(d, weight);
-      bumpWeightTotal += weight;
-      if (d.x < 0) epgLeftCount += weight;
-      else if (d.x > 0) epgRightCount += weight;
-      const angle = Math.atan2(d.y, d.x);
-      const normalized = (angle + Math.PI) / (2 * Math.PI);
-      const bin = Math.max(0, Math.min(epgBins.length - 1, Math.floor(normalized * epgBins.length)));
-      epgBins[bin] += weight;
+      const bin = epgBinByIndex[idx];
+      if (bin == null) continue;
+      epgBinsRaw[bin] += weight;
+      windowSpikeTotal += weight;
     }
+  }
+  const epgBins = epgBinsRaw.map((v, i) => {
+    const pop = epgBinPopulation[i] ?? 0;
+    return pop > 0 ? v / pop : 0;
+  });
+  const bump = new THREE.Vector2(0, 0);
+  let bumpWeightTotal = 0;
+  epgLeftCount = 0;
+  epgRightCount = 0;
+  for (let i = 0; i < EPG_COMPASS_BINS; i += 1) {
+    const w = epgBins[i];
+    if (w <= 0) continue;
+    const a = (i / EPG_COMPASS_BINS) * Math.PI * 2;
+    const dx = Math.cos(a);
+    bump.x += w * dx;
+    bump.y += w * Math.sin(a);
+    if (dx < 0) epgLeftCount += w;
+    else if (dx > 0) epgRightCount += w;
+    bumpWeightTotal += w;
   }
   const bumpStrength = bumpWeightTotal > 0 ? bump.length() / bumpWeightTotal : 0;
   const bumpAngleDeg = bump.lengthSq() > 1e-8 ? (Math.atan2(bump.y, bump.x) * 180) / Math.PI : null;
@@ -537,8 +557,9 @@ function applyTickSpikes(
     bumpAngleDeg,
     bumpStrength,
     epgBins: epgBinNorm,
-    epgWindowSpikes: bumpWeightTotal,
+    epgWindowSpikes: windowSpikeTotal,
     epgWindowTicks,
+    epgWindowMs: epgWindowTicks * dtSec * 1000,
   };
 }
 
@@ -557,9 +578,10 @@ export default function VisualizationPage() {
     ringActiveCount: 0,
     bumpAngleDeg: null,
     bumpStrength: 0,
-    epgBins: new Array<number>(24).fill(0),
+    epgBins: new Array<number>(EPG_COMPASS_BINS).fill(0),
     epgWindowSpikes: 0,
     epgWindowTicks: 1,
+    epgWindowMs: 0,
   });
   const [error, setError] = useState<string | null>(null);
   const sceneContainerRef = useRef<HTMLDivElement | null>(null);
@@ -625,7 +647,7 @@ export default function VisualizationPage() {
       : 0.0001;
     const epgWindowTicks = Math.max(1, Math.round((EPG_BUMP_WINDOW_MS / 1000) / dtSec));
     const epgWindowWeights = buildEpgWindowWeights(replay, currentTick, epgWindowTicks);
-    const stats = applyTickSpikes(sceneRef.current, spikes, epgWindowWeights, epgWindowTicks);
+    const stats = applyTickSpikes(sceneRef.current, spikes, epgWindowWeights, epgWindowTicks, dtSec);
     let ringInputActive = 0;
     for (const id of spikes) {
       if (ringIdSet.has(id)) ringInputActive += 1;
@@ -710,7 +732,7 @@ export default function VisualizationPage() {
             {' '}| bump angle={compassStats.bumpAngleDeg == null ? 'n/a' : `${compassStats.bumpAngleDeg.toFixed(1)}deg`}
             {' '}| bump strength={compassStats.bumpStrength.toFixed(3)}
             {' '}| epg window spikes={compassStats.epgWindowSpikes}
-            {' '}| epg window={Math.round(compassStats.epgWindowTicks * (replay.ticks[0]?.time_sec || 0.0001) * 1000)}ms
+            {' '}| epg window={Math.round(compassStats.epgWindowMs)}ms
             {' '}| ring input active={compassStats.ringActiveCount}
           </div>
         ) : null}

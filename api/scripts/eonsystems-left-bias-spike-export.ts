@@ -43,9 +43,10 @@ const SOCKET_PATH = process.env.NEUROSIM_BRAIN_SOCKET || '/tmp/neurosim-brain.so
 const REQUEST_TIMEOUT_MS = Number(process.env.NEUROSIM_BRAIN_REQUEST_TIMEOUT_MS ?? 30_000);
 const TICKS = Math.max(1, Number(process.env.LEFT_BIAS_TICKS ?? 3000));
 const DT_SEC = Number(process.env.LEFT_BIAS_DT_SEC ?? 0.0001);
-const BASELINE_RATE_HZ = Math.max(0, Number(process.env.LEFT_BIAS_BASELINE_OLFACTORY_HZ ?? 2));
-const HYGRO_BASELINE_HZ = Math.max(0, Number(process.env.LEFT_BIAS_HYGRO_HZ ?? 6));
-const THERMO_BASELINE_HZ = Math.max(0, Number(process.env.LEFT_BIAS_THERMO_HZ ?? 6));
+const BASELINE_RATE_HZ = Math.max(0, Number(process.env.LEFT_BIAS_BASELINE_OLFACTORY_HZ ?? 3));
+const HYGRO_BASELINE_HZ = Math.max(0, Number(process.env.LEFT_BIAS_HYGRO_HZ ?? 8));
+const THERMO_BASELINE_HZ = Math.max(0, Number(process.env.LEFT_BIAS_THERMO_HZ ?? 8));
+const JOE_LEFT_HZ = Math.max(0, Number(process.env.LEFT_BIAS_JOE_LEFT_HZ ?? 10));
 const LEFT_SOURCES = [
   { id: 'odor-left-near', x: -10, y: 0, radius: 3.2 },
   { id: 'odor-left-mid', x: -16, y: 4, radius: 3.2 },
@@ -236,9 +237,11 @@ function augmentTicksWithSensoryBaseline(
   replay: ReplayJson,
   hygroIds: string[],
   thermoIds: string[],
-): { hygroAdded: number; thermoAdded: number } {
+  joeLeftIds: string[],
+): { hygroAdded: number; thermoAdded: number; joeLeftAdded: number } {
   let hygroAdded = 0;
   let thermoAdded = 0;
+  let joeLeftAdded = 0;
   const rng = createSeededRandom(0x1ef7a41c);
   const addGroup = (ids: string[], hz: number, tick: ReplayTick): number => {
     if (hz <= 0 || ids.length === 0) return 0;
@@ -255,11 +258,12 @@ function augmentTicksWithSensoryBaseline(
   for (const tick of replay.ticks) {
     hygroAdded += addGroup(hygroIds, HYGRO_BASELINE_HZ, tick);
     thermoAdded += addGroup(thermoIds, THERMO_BASELINE_HZ, tick);
+    joeLeftAdded += addGroup(joeLeftIds, JOE_LEFT_HZ, tick);
   }
   for (const tick of replay.ticks) {
     tick.spikes.sort();
   }
-  return { hygroAdded, thermoAdded };
+  return { hygroAdded, thermoAdded, joeLeftAdded };
 }
 
 function writeOutputs(
@@ -268,6 +272,7 @@ function writeOutputs(
   elapsedMs: number,
   hygroAdded: number,
   thermoAdded: number,
+  joeLeftAdded: number,
 ): void {
   fs.mkdirSync(LOGS_DIR, { recursive: true });
   fs.writeFileSync(OUT_JSON, `${JSON.stringify(replay, null, 2)}\n`, 'utf8');
@@ -335,8 +340,10 @@ function writeOutputs(
     `baseline_rate_hz: ${replay.meta.baseline_rate_hz}`,
     `hygro_baseline_hz: ${HYGRO_BASELINE_HZ}`,
     `thermo_baseline_hz: ${THERMO_BASELINE_HZ}`,
+    `joe_left_baseline_hz: ${JOE_LEFT_HZ}`,
     `hygro_spikes_added: ${hygroAdded}`,
     `thermo_spikes_added: ${thermoAdded}`,
+    `joe_left_spikes_added: ${joeLeftAdded}`,
     `left_sources: ${JSON.stringify(LEFT_SOURCES)}`,
     `selected_olfactory_group_left_count: ${leftOlfactory}`,
     `selected_olfactory_group_right_count: ${rightOlfactory}`,
@@ -360,9 +367,16 @@ async function main(): Promise<void> {
   const thermoIds = [...cls.values()]
     .filter((r) => r.flow === 'afferent' && r.super_class === 'sensory' && r.class === 'thermosensory')
     .map((r) => r.root_id);
-  const { hygroAdded, thermoAdded } = augmentTicksWithSensoryBaseline(replay, hygroIds, thermoIds);
+  const joeLeftIds = [...cls.values()]
+    .filter((r) => r.flow === 'afferent'
+      && r.super_class === 'sensory'
+      && r.class === 'mechanosensory'
+      && r.side === 'left'
+      && r.cell_type.startsWith('JO-E'))
+    .map((r) => r.root_id);
+  const { hygroAdded, thermoAdded, joeLeftAdded } = augmentTicksWithSensoryBaseline(replay, hygroIds, thermoIds, joeLeftIds);
   const elapsedMs = Date.now() - startedAt;
-  writeOutputs(replay, cls, elapsedMs, hygroAdded, thermoAdded);
+  writeOutputs(replay, cls, elapsedMs, hygroAdded, thermoAdded, joeLeftAdded);
   console.log(`wrote ${OUT_JSON}`);
   console.log(`wrote ${OUT_CSV}`);
   console.log(`wrote ${OUT_SUMMARY}`);

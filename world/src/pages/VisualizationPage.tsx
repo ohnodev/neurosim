@@ -9,6 +9,8 @@ type ReplayNeuron = {
   y: number;
   z: number;
   is_ring: boolean;
+  is_epg: boolean;
+  epg_tile_index_0_7?: number;
   side: string;
   hemibrain_type: string;
 };
@@ -27,6 +29,8 @@ type ReplayData = {
     unique_fired_neurons: number;
     ring_neuron_total: number;
     ring_neuron_unique_fired: number;
+    epg_neuron_total?: number;
+    epg_neuron_unique_fired?: number;
     scenario?: string;
   };
   neurons: ReplayNeuron[];
@@ -43,7 +47,9 @@ type SceneState = {
   colorAttr: THREE.BufferAttribute;
   idToIndex: Map<string, number>;
   isRingByIndex: boolean[];
+  isEpgByIndex: boolean[];
   ringDirectionByIndex: Array<THREE.Vector2 | null>;
+  epgDirectionByIndex: Array<THREE.Vector2 | null>;
   arrowState: {
     angleCurrentDeg: number;
     angleTargetDeg: number;
@@ -54,21 +60,42 @@ type SceneState = {
 };
 
 type ViewMode = 'raw' | 'aligned' | 'compass';
-type DatasetMode = 'baseline' | 'left_bias_odor' | 'phased_left_bias_odor';
+type DatasetMode = 'baseline' | 'left_bias_odor' | 'joe_toggle_300' | 'visual_cue_stripe';
+type FocusPopulation = 'all' | 'epg_only';
 
-const INACTIVE_COLOR = new THREE.Color(0x16203a);
-const INACTIVE_RING_COLOR = new THREE.Color(0x3e2c78);
+const INACTIVE_COLOR = new THREE.Color(0x2e3e5d);
+const INACTIVE_RING_COLOR = new THREE.Color(0x6b58a9);
+const INACTIVE_EPG_COLOR = new THREE.Color(0x4d6fb6);
 const ACTIVE_COLOR = new THREE.Color(0x6eff9e);
 const ACTIVE_RING_COLOR = new THREE.Color(0xff4fd8);
+const ACTIVE_EPG_COLOR = new THREE.Color(0xfff07a);
 const PLAYBACK_BASE_MS = 80;
+const EPG_BUMP_WINDOW_MS = 250;
+
+function controlButtonStyle(active: boolean): Record<string, string | number> {
+  return {
+    color: '#eef4ff',
+    background: active ? '#3a5787' : '#2a3e60',
+    border: '1px solid #6f8fc0',
+    borderRadius: 6,
+    padding: '6px 10px',
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: 'pointer',
+    opacity: active ? 1 : 0.78,
+  };
+}
 
 type CompassStats = {
+  epgActiveCount: number;
+  epgLeftCount: number;
+  epgRightCount: number;
   ringActiveCount: number;
-  ringLeftCount: number;
-  ringRightCount: number;
   bumpAngleDeg: number | null;
   bumpStrength: number;
-  ringBins: number[];
+  epgBins: number[];
+  epgWindowSpikes: number;
+  epgWindowTicks: number;
 };
 
 function normalizeAngleDeg(angleDeg: number): number {
@@ -104,7 +131,9 @@ function powerIteration(
 function computeAlignedPoints(neurons: ReplayNeuron[], alignToRing: boolean): THREE.Vector3[] {
   const points = neurons.map((n) => new THREE.Vector3(n.x, n.y, n.z));
   if (!alignToRing) return points;
-  const ring = neurons.filter((n) => n.is_ring);
+  // Prefer EPG population for compass alignment; fallback to ring neurons.
+  const anchor = neurons.filter((n) => n.is_epg);
+  const ring = anchor.length >= 3 ? anchor : neurons.filter((n) => n.is_ring);
   if (ring.length < 3) return points;
 
   const center = new THREE.Vector3();
@@ -172,10 +201,11 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
   const width = Math.max(1, container.clientWidth);
   const height = Math.max(1, container.clientHeight);
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x090d1a);
+  scene.background = new THREE.Color(0x1a2435);
+  const mostlyEpg = neurons.filter((n) => n.is_epg).length >= Math.max(8, Math.floor(neurons.length * 0.7));
 
   const camera = new THREE.PerspectiveCamera(55, width / height, 0.01, 100);
-  camera.position.set(0, 0, 2.5);
+  camera.position.set(0, 0, mostlyEpg ? 1.25 : 2.5);
 
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
   renderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
@@ -185,8 +215,8 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
-  controls.minDistance = 0.3;
-  controls.maxDistance = 8;
+  controls.minDistance = mostlyEpg ? 0.1 : 0.3;
+  controls.maxDistance = mostlyEpg ? 4 : 8;
 
   let minX = Infinity; let maxX = -Infinity;
   let minY = Infinity; let maxY = -Infinity;
@@ -195,7 +225,7 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
   if (viewMode === 'compass') {
     const ringIndices: number[] = [];
     for (let i = 0; i < neurons.length; i += 1) {
-      if (neurons[i]?.is_ring) ringIndices.push(i);
+      if (neurons[i]?.is_epg) ringIndices.push(i);
     }
     if (ringIndices.length > 3) {
       let cx = 0;
@@ -222,16 +252,45 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
         }
       }
       const targetRadius = radiusCount > 0 ? radiusSum / radiusCount : 1;
+
+      // Prefer explicit EPG tile mapping (0..7) for true functional ring layout.
+      const tileGroups = new Map<number, number[]>();
       for (const i of ringIndices) {
-        const p = aligned[i]!;
-        const dx = p.x - cx;
-        const dy = p.y - cy;
-        const r = Math.hypot(dx, dy);
-        if (r > 1e-8) {
-          p.x = cx + (dx / r) * targetRadius;
-          p.y = cy + (dy / r) * targetRadius;
+        const tile = neurons[i]?.epg_tile_index_0_7;
+        if (tile == null || tile < 0 || tile > 7) continue;
+        const group = tileGroups.get(tile) ?? [];
+        group.push(i);
+        tileGroups.set(tile, group);
+      }
+
+      if (tileGroups.size >= 4) {
+        for (const [tile, indices] of tileGroups.entries()) {
+          indices.sort((a, b) => (neurons[a]?.root_id ?? '').localeCompare(neurons[b]?.root_id ?? ''));
+          const sector = (Math.PI * 2) / 8;
+          const baseAngle = (tile / 8) * Math.PI * 2;
+          const spread = sector * 0.35;
+          for (let k = 0; k < indices.length; k += 1) {
+            const idx = indices[k]!;
+            const centered = indices.length > 1 ? (k / (indices.length - 1)) - 0.5 : 0;
+            const a = baseAngle + centered * spread;
+            const p = aligned[idx]!;
+            p.x = cx + Math.cos(a) * targetRadius;
+            p.y = cy + Math.sin(a) * targetRadius;
+            p.z = cz;
+          }
         }
-        p.z = cz;
+      } else {
+        for (const i of ringIndices) {
+          const p = aligned[i]!;
+          const dx = p.x - cx;
+          const dy = p.y - cy;
+          const r = Math.hypot(dx, dy);
+          if (r > 1e-8) {
+            p.x = cx + (dx / r) * targetRadius;
+            p.y = cy + (dy / r) * targetRadius;
+          }
+          p.z = cz;
+        }
       }
     }
   }
@@ -250,13 +309,16 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
   const colors = new Float32Array(n * 3);
   const idToIndex = new Map<string, number>();
   const isRingByIndex: boolean[] = new Array(n).fill(false);
+  const isEpgByIndex: boolean[] = new Array(n).fill(false);
   const ringDirectionByIndex: Array<THREE.Vector2 | null> = new Array(n).fill(null);
+  const epgDirectionByIndex: Array<THREE.Vector2 | null> = new Array(n).fill(null);
 
   for (let i = 0; i < n; i += 1) {
     const neuron = neurons[i]!;
     const p = aligned[i]!;
     idToIndex.set(neuron.root_id, i);
     isRingByIndex[i] = neuron.is_ring;
+    isEpgByIndex[i] = neuron.is_epg;
     positions[i * 3] = (p.x - cx) / scale;
     positions[i * 3 + 1] = (p.y - cy) / scale;
     positions[i * 3 + 2] = (p.z - cz) / scale;
@@ -266,7 +328,16 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
         ringDirectionByIndex[i] = v.normalize();
       }
     }
-    const c = neuron.is_ring ? INACTIVE_RING_COLOR : INACTIVE_COLOR;
+    if (neuron.is_epg) {
+      if (neuron.epg_tile_index_0_7 != null) {
+        const a = (neuron.epg_tile_index_0_7 / 8) * Math.PI * 2;
+        epgDirectionByIndex[i] = new THREE.Vector2(Math.cos(a), Math.sin(a));
+      } else {
+        const ev = new THREE.Vector2(positions[i * 3], positions[i * 3 + 1]);
+        if (ev.lengthSq() > 1e-8) epgDirectionByIndex[i] = ev.normalize();
+      }
+    }
+    const c = neuron.is_epg ? INACTIVE_EPG_COLOR : neuron.is_ring ? INACTIVE_RING_COLOR : INACTIVE_COLOR;
     colors[i * 3] = c.r;
     colors[i * 3 + 1] = c.g;
     colors[i * 3 + 2] = c.b;
@@ -277,11 +348,11 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
   const colorAttr = new THREE.BufferAttribute(colors, 3);
   geometry.setAttribute('color', colorAttr);
   const material = new THREE.PointsMaterial({
-    size: 0.01,
+    size: mostlyEpg ? 0.028 : 0.012,
     sizeAttenuation: true,
     vertexColors: true,
     transparent: true,
-    opacity: 0.96,
+    opacity: 1.0,
     depthWrite: false,
   });
   const points = new THREE.Points(geometry, material);
@@ -357,53 +428,118 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
     colorAttr,
     idToIndex,
     isRingByIndex,
+    isEpgByIndex,
     ringDirectionByIndex,
+    epgDirectionByIndex,
     arrowState,
     dispose,
   };
 }
 
-function applyTickSpikes(sceneState: SceneState, spikes: string[]): CompassStats {
-  const { colorAttr, idToIndex, isRingByIndex, ringDirectionByIndex } = sceneState;
+function buildEpgWindowWeights(
+  replay: ReplayData,
+  currentTick: number,
+  windowTicks: number,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  const endIdx = Math.max(0, Math.min(replay.ticks.length - 1, currentTick - 1));
+  const startIdx = Math.max(0, endIdx - windowTicks + 1);
+  for (let i = startIdx; i <= endIdx; i += 1) {
+    for (const id of replay.ticks[i]?.spikes ?? []) {
+      out.set(id, (out.get(id) ?? 0) + 1);
+    }
+  }
+  return out;
+}
+
+function applyTickSpikes(
+  sceneState: SceneState,
+  spikes: string[],
+  epgWindowWeights?: Map<string, number>,
+  epgWindowTicks = 1,
+): CompassStats {
+  const {
+    colorAttr,
+    idToIndex,
+    isRingByIndex,
+    isEpgByIndex,
+    ringDirectionByIndex,
+    epgDirectionByIndex,
+  } = sceneState;
   const count = colorAttr.count;
   for (let i = 0; i < count; i += 1) {
-    const c = isRingByIndex[i] ? INACTIVE_RING_COLOR : INACTIVE_COLOR;
+    const c = isEpgByIndex[i] ? INACTIVE_EPG_COLOR : isRingByIndex[i] ? INACTIVE_RING_COLOR : INACTIVE_COLOR;
     colorAttr.setXYZ(i, c.r, c.g, c.b);
   }
+  let epgActiveCount = 0;
+  let epgLeftCount = 0;
+  let epgRightCount = 0;
   let ringActiveCount = 0;
-  let ringLeftCount = 0;
-  let ringRightCount = 0;
   const bump = new THREE.Vector2(0, 0);
-  const ringBins = new Array<number>(24).fill(0);
+  const epgBins = new Array<number>(24).fill(0);
   for (const id of spikes) {
     const idx = idToIndex.get(id);
     if (idx == null) continue;
-    const c = isRingByIndex[idx] ? ACTIVE_RING_COLOR : ACTIVE_COLOR;
+    const c = isEpgByIndex[idx] ? ACTIVE_EPG_COLOR : isRingByIndex[idx] ? ACTIVE_RING_COLOR : ACTIVE_COLOR;
     colorAttr.setXYZ(idx, c.r, c.g, c.b);
-    if (isRingByIndex[idx]) {
-      ringActiveCount += 1;
-      const d = ringDirectionByIndex[idx];
+    if (isRingByIndex[idx]) ringActiveCount += 1;
+    if (isEpgByIndex[idx]) {
+      epgActiveCount += 1;
+      const d = epgDirectionByIndex[idx];
       if (d) {
         bump.add(d);
-        if (d.x < 0) ringLeftCount += 1;
-        else if (d.x > 0) ringRightCount += 1;
+        if (d.x < 0) epgLeftCount += 1;
+        else if (d.x > 0) epgRightCount += 1;
         const angle = Math.atan2(d.y, d.x);
         const normalized = (angle + Math.PI) / (2 * Math.PI);
-        const bin = Math.max(0, Math.min(ringBins.length - 1, Math.floor(normalized * ringBins.length)));
-        ringBins[bin] += 1;
+        const bin = Math.max(0, Math.min(epgBins.length - 1, Math.floor(normalized * epgBins.length)));
+        epgBins[bin] += 1;
       }
     }
   }
-  const bumpStrength = ringActiveCount > 0 ? bump.length() / ringActiveCount : 0;
+  let bumpWeightTotal = epgActiveCount;
+  if (epgWindowWeights && epgWindowWeights.size > 0) {
+    bump.set(0, 0);
+    epgBins.fill(0);
+    epgLeftCount = 0;
+    epgRightCount = 0;
+    bumpWeightTotal = 0;
+    for (const [id, weight] of epgWindowWeights.entries()) {
+      if (weight <= 0) continue;
+      const idx = idToIndex.get(id);
+      if (idx == null || !isEpgByIndex[idx]) continue;
+      const d = epgDirectionByIndex[idx];
+      if (!d) continue;
+      bump.addScaledVector(d, weight);
+      bumpWeightTotal += weight;
+      if (d.x < 0) epgLeftCount += weight;
+      else if (d.x > 0) epgRightCount += weight;
+      const angle = Math.atan2(d.y, d.x);
+      const normalized = (angle + Math.PI) / (2 * Math.PI);
+      const bin = Math.max(0, Math.min(epgBins.length - 1, Math.floor(normalized * epgBins.length)));
+      epgBins[bin] += weight;
+    }
+  }
+  const bumpStrength = bumpWeightTotal > 0 ? bump.length() / bumpWeightTotal : 0;
   const bumpAngleDeg = bump.lengthSq() > 1e-8 ? (Math.atan2(bump.y, bump.x) * 180) / Math.PI : null;
   if (bumpAngleDeg != null) {
     sceneState.arrowState.angleTargetDeg = normalizeAngleDeg(bumpAngleDeg);
     sceneState.arrowState.strengthTarget = Math.max(0.08, bumpStrength);
   }
   colorAttr.needsUpdate = true;
-  const ringBinMax = ringBins.reduce((m, v) => Math.max(m, v), 0);
-  const ringBinNorm = ringBinMax > 0 ? ringBins.map((v) => v / ringBinMax) : ringBins;
-  return { ringActiveCount, ringLeftCount, ringRightCount, bumpAngleDeg, bumpStrength, ringBins: ringBinNorm };
+  const epgBinMax = epgBins.reduce((m, v) => Math.max(m, v), 0);
+  const epgBinNorm = epgBinMax > 0 ? epgBins.map((v) => v / epgBinMax) : epgBins;
+  return {
+    epgActiveCount,
+    epgLeftCount,
+    epgRightCount,
+    ringActiveCount,
+    bumpAngleDeg,
+    bumpStrength,
+    epgBins: epgBinNorm,
+    epgWindowSpikes: bumpWeightTotal,
+    epgWindowTicks,
+  };
 }
 
 export default function VisualizationPage() {
@@ -412,20 +548,29 @@ export default function VisualizationPage() {
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
   const [viewMode, setViewMode] = useState<ViewMode>('compass');
-  const [datasetMode, setDatasetMode] = useState<DatasetMode>('baseline');
+  const [datasetMode, setDatasetMode] = useState<DatasetMode>('visual_cue_stripe');
+  const [focusPopulation, setFocusPopulation] = useState<FocusPopulation>('epg_only');
   const [compassStats, setCompassStats] = useState<CompassStats>({
+    epgActiveCount: 0,
+    epgLeftCount: 0,
+    epgRightCount: 0,
     ringActiveCount: 0,
-    ringLeftCount: 0,
-    ringRightCount: 0,
     bumpAngleDeg: null,
     bumpStrength: 0,
-    ringBins: new Array<number>(24).fill(0),
+    epgBins: new Array<number>(24).fill(0),
+    epgWindowSpikes: 0,
+    epgWindowTicks: 1,
   });
   const [error, setError] = useState<string | null>(null);
   const sceneContainerRef = useRef<HTMLDivElement | null>(null);
   const sceneRef = useRef<SceneState | null>(null);
 
   const neurons = useMemo(() => replay?.neurons ?? [], [replay]);
+  const ringIdSet = useMemo(() => new Set(neurons.filter((n) => n.is_ring).map((n) => n.root_id)), [neurons]);
+  const displayNeurons = useMemo(
+    () => (focusPopulation === 'epg_only' ? neurons.filter((n) => n.is_epg) : neurons),
+    [neurons, focusPopulation],
+  );
 
   useEffect(() => {
     let active = true;
@@ -436,8 +581,10 @@ export default function VisualizationPage() {
           ? '/eonsystems_brain_subset_baseline_replay.json'
           : datasetMode === 'left_bias_odor'
             ? '/eonsystems_brain_subset_left_bias_replay.json'
-            : '/eonsystems_brain_subset_phased_left_bias_replay.json';
-        const res = await fetch(datasetUrl);
+            : datasetMode === 'joe_toggle_300'
+              ? '/eonsystems_brain_subset_phased_left_bias_replay.json'
+              : '/eonsystems_brain_subset_visual_cue_replay.json';
+        const res = await fetch(`${datasetUrl}?v=${Date.now()}`, { cache: 'no-store' });
         if (!res.ok) throw new Error(`Replay not found (${res.status})`);
         const parsed = await res.json() as ReplayData;
         if (!active) return;
@@ -455,27 +602,36 @@ export default function VisualizationPage() {
 
   useEffect(() => {
     const container = sceneContainerRef.current;
-    if (!container || neurons.length === 0) return;
+    if (!container || displayNeurons.length === 0) return;
     if (sceneRef.current) {
       sceneRef.current.dispose();
       sceneRef.current = null;
     }
-    sceneRef.current = buildScene(container, neurons, viewMode);
+    sceneRef.current = buildScene(container, displayNeurons, viewMode);
     return () => {
       if (sceneRef.current) {
         sceneRef.current.dispose();
         sceneRef.current = null;
       }
     };
-  }, [neurons, viewMode]);
+  }, [displayNeurons, viewMode]);
 
   useEffect(() => {
     if (!replay || !sceneRef.current) return;
     const idx = Math.max(0, Math.min(replay.ticks.length - 1, currentTick - 1));
     const spikes = replay.ticks[idx]?.spikes ?? [];
-    const stats = applyTickSpikes(sceneRef.current, spikes);
-    setCompassStats(stats);
-  }, [replay, currentTick]);
+    const dtSec = replay.ticks.length > 1
+      ? Math.max(1e-6, replay.ticks[1].time_sec - replay.ticks[0].time_sec)
+      : 0.0001;
+    const epgWindowTicks = Math.max(1, Math.round((EPG_BUMP_WINDOW_MS / 1000) / dtSec));
+    const epgWindowWeights = buildEpgWindowWeights(replay, currentTick, epgWindowTicks);
+    const stats = applyTickSpikes(sceneRef.current, spikes, epgWindowWeights, epgWindowTicks);
+    let ringInputActive = 0;
+    for (const id of spikes) {
+      if (ringIdSet.has(id)) ringInputActive += 1;
+    }
+    setCompassStats({ ...stats, ringActiveCount: ringInputActive });
+  }, [replay, currentTick, ringIdSet]);
 
   useEffect(() => {
     if (!playing || !replay) return undefined;
@@ -493,30 +649,42 @@ export default function VisualizationPage() {
 
   const totalTicks = replay?.ticks.length ?? 1;
   const ringCount = replay?.neurons.filter((n) => n.is_ring).length ?? 0;
+  const epgCount = replay?.neurons.filter((n) => n.is_epg).length ?? 0;
   const bumpTheta = compassStats.bumpAngleDeg != null ? ((compassStats.bumpAngleDeg + 360) % 360) : null;
 
   return (
     <div style={{ height: '100%', display: 'grid', gridTemplateRows: 'auto 1fr', background: '#060a14' }}>
       <div style={{ padding: 12, display: 'grid', gap: 10, borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button type="button" onClick={() => setDatasetMode('baseline')} style={{ opacity: datasetMode === 'baseline' ? 1 : 0.65 }}>
+          <button type="button" onClick={() => setDatasetMode('visual_cue_stripe')} style={controlButtonStyle(datasetMode === 'visual_cue_stripe')}>
+            Visual cue stripe
+          </button>
+          <button type="button" onClick={() => setDatasetMode('baseline')} style={controlButtonStyle(datasetMode === 'baseline')}>
             Baseline
           </button>
-          <button type="button" onClick={() => setDatasetMode('left_bias_odor')} style={{ opacity: datasetMode === 'left_bias_odor' ? 1 : 0.65 }}>
+          <button type="button" onClick={() => setDatasetMode('left_bias_odor')} style={controlButtonStyle(datasetMode === 'left_bias_odor')}>
             Left-bias odor
           </button>
           <button
             type="button"
-            onClick={() => setDatasetMode('phased_left_bias_odor')}
-            style={{ opacity: datasetMode === 'phased_left_bias_odor' ? 1 : 0.65 }}
+            onClick={() => setDatasetMode('joe_toggle_300')}
+            style={controlButtonStyle(datasetMode === 'joe_toggle_300')}
           >
-            Phased left-bias
+            JO-E toggle 300
           </button>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button type="button" onClick={() => setViewMode('raw')} style={{ opacity: viewMode === 'raw' ? 1 : 0.65 }}>Raw</button>
-          <button type="button" onClick={() => setViewMode('aligned')} style={{ opacity: viewMode === 'aligned' ? 1 : 0.65 }}>Aligned</button>
-          <button type="button" onClick={() => setViewMode('compass')} style={{ opacity: viewMode === 'compass' ? 1 : 0.65 }}>Compass loop</button>
+          <button type="button" onClick={() => setViewMode('raw')} style={controlButtonStyle(viewMode === 'raw')}>Raw</button>
+          <button type="button" onClick={() => setViewMode('aligned')} style={controlButtonStyle(viewMode === 'aligned')}>Aligned</button>
+          <button type="button" onClick={() => setViewMode('compass')} style={controlButtonStyle(viewMode === 'compass')}>Compass loop</button>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button type="button" onClick={() => setFocusPopulation('epg_only')} style={controlButtonStyle(focusPopulation === 'epg_only')}>
+            EPG only
+          </button>
+          <button type="button" onClick={() => setFocusPopulation('all')} style={controlButtonStyle(focusPopulation === 'all')}>
+            All neurons
+          </button>
         </div>
         {replay ? (
           <PlaybackControls
@@ -533,23 +701,26 @@ export default function VisualizationPage() {
         ) : null}
         <div style={{ fontSize: 12, opacity: 0.9 }}>
           {replay
-            ? `dataset=${datasetMode} | neurons=${replay.neurons.length} (ring=${ringCount}) | ticks=${replay.ticks.length} | ring fired=${replay.meta.ring_neuron_unique_fired} | view=${viewMode}`
+            ? `dataset=${datasetMode} | scenario=${replay.meta.scenario ?? 'n/a'} | neurons=${replay.neurons.length} (ring=${ringCount}, epg=${epgCount}) | rendered=${displayNeurons.length} | ticks=${replay.ticks.length} | ring fired=${replay.meta.ring_neuron_unique_fired} | epg fired=${replay.meta.epg_neuron_unique_fired ?? 'n/a'} | view=${viewMode} | focus=${focusPopulation}`
             : 'Loading preprocessed brain subset replay...'}
         </div>
         {replay ? (
           <div style={{ fontSize: 12, opacity: 0.95 }}>
-            ring tick: active={compassStats.ringActiveCount} left={compassStats.ringLeftCount} right={compassStats.ringRightCount}
+            epg tick: active={compassStats.epgActiveCount} left={compassStats.epgLeftCount} right={compassStats.epgRightCount}
             {' '}| bump angle={compassStats.bumpAngleDeg == null ? 'n/a' : `${compassStats.bumpAngleDeg.toFixed(1)}deg`}
             {' '}| bump strength={compassStats.bumpStrength.toFixed(3)}
+            {' '}| epg window spikes={compassStats.epgWindowSpikes}
+            {' '}| epg window={Math.round(compassStats.epgWindowTicks * (replay.ticks[0]?.time_sec || 0.0001) * 1000)}ms
+            {' '}| ring input active={compassStats.ringActiveCount}
           </div>
         ) : null}
         {replay ? (
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
             <svg width="120" height="120" viewBox="-60 -60 120 120" style={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8 }}>
               <circle cx="0" cy="0" r="42" fill="none" stroke="rgba(140,120,255,0.35)" strokeWidth="2" />
-              {compassStats.ringBins.map((v, i) => {
-                const a0 = (i / compassStats.ringBins.length) * Math.PI * 2 - Math.PI / 2;
-                const a1 = ((i + 1) / compassStats.ringBins.length) * Math.PI * 2 - Math.PI / 2;
+              {compassStats.epgBins.map((v, i) => {
+                const a0 = (i / compassStats.epgBins.length) * Math.PI * 2 - Math.PI / 2;
+                const a1 = ((i + 1) / compassStats.epgBins.length) * Math.PI * 2 - Math.PI / 2;
                 const r0 = 30;
                 const r1 = 30 + v * 14;
                 const x0 = Math.cos(a0) * r0; const y0 = Math.sin(a0) * r0;
@@ -578,8 +749,8 @@ export default function VisualizationPage() {
               ) : null}
             </svg>
             <div style={{ fontSize: 11, opacity: 0.85, maxWidth: 420 }}>
-              Closed-loop compass readout: sector intensity shows ring activity distribution for this tick; arrow shows bump angle.
-              In baseline you should see wandering/noisy sectors, while directional odor should bias occupancy and produce more coherent drift.
+              EPG compass readout: sector intensity and arrow are decoded from a sliding EPG spike window for stability.
+              Ring neurons remain useful as sensory-input drive, but heading is decoded from EPG space.
             </div>
           </div>
         ) : null}

@@ -44,15 +44,10 @@ const SOCKET_PATH = process.env.NEUROSIM_BRAIN_SOCKET || '/tmp/neurosim-brain.so
 const REQUEST_TIMEOUT_MS = Number(process.env.NEUROSIM_BRAIN_REQUEST_TIMEOUT_MS ?? 30_000);
 const TICKS = Math.max(1, Number(process.env.PHASED_LEFT_BIAS_TICKS ?? 3000));
 const DT_SEC = Number(process.env.PHASED_LEFT_BIAS_DT_SEC ?? 0.0001);
-const BASELINE_RATE_HZ = Math.max(0, Number(process.env.PHASED_LEFT_BIAS_BASELINE_OLFACTORY_HZ ?? 2));
-const HYGRO_BASELINE_HZ = Math.max(0, Number(process.env.PHASED_LEFT_BIAS_HYGRO_HZ ?? 6));
-const THERMO_BASELINE_HZ = Math.max(0, Number(process.env.PHASED_LEFT_BIAS_THERMO_HZ ?? 6));
-const PHASE_SWITCH_TICK = Math.max(1, Number(process.env.PHASED_LEFT_BIAS_SWITCH_TICK ?? 1000));
-const LEFT_SOURCES = [
-  { id: 'odor-left-near', x: -10, y: 0, radius: 3.2 },
-  { id: 'odor-left-mid', x: -16, y: 4, radius: 3.2 },
-  { id: 'odor-left-far', x: -22, y: -6, radius: 3.2 },
-];
+const BASELINE_RATE_HZ = Math.max(0, Number(process.env.PHASED_LEFT_BIAS_BASELINE_OLFACTORY_HZ ?? 3));
+const ALL_AFFERENT_SENSORY_BASELINE_HZ = Math.max(0, Number(process.env.PHASED_LEFT_BIAS_ALL_SENSORY_HZ ?? 5));
+const JOE_LEFT_HZ = Math.max(0, Number(process.env.PHASED_LEFT_BIAS_JOE_LEFT_HZ ?? 10));
+const JOE_TOGGLE_BLOCK_TICKS = Math.max(1, Number(process.env.PHASED_LEFT_BIAS_JOE_TOGGLE_BLOCK_TICKS ?? 300));
 
 type BrainResponse = { error?: string };
 
@@ -196,8 +191,8 @@ async function runPhasedLeftBiasReplay(): Promise<ReplayJson> {
         rest_time_left: 0,
         dead: false,
       },
-      // Phase 1: baseline only. Phase 2: inject left-biased odor gradient.
-      sources: (i + 1) > PHASE_SWITCH_TICK ? LEFT_SOURCES : [],
+      // This phased scenario is JO-E mechanosensory only (no odor sources).
+      sources: [],
       pending: [],
     }));
     const response = await conn.request<{
@@ -216,8 +211,8 @@ async function runPhasedLeftBiasReplay(): Promise<ReplayJson> {
         ticks: ticks.length,
         dt_sec: DT_SEC,
         baseline_rate_hz: BASELINE_RATE_HZ,
-        scenario: 'phased_left_bias_odor_gradient',
-        phase_switch_tick: PHASE_SWITCH_TICK,
+        scenario: `phased_left_bias_joe_toggle_${JOE_TOGGLE_BLOCK_TICKS}`,
+        phase_switch_tick: 1,
         generated_at: new Date().toISOString(),
       },
       ticks,
@@ -237,11 +232,11 @@ function createSeededRandom(seed: number): () => number {
 
 function augmentTicksWithSensoryBaseline(
   replay: ReplayJson,
-  hygroIds: string[],
-  thermoIds: string[],
-): { hygroAdded: number; thermoAdded: number } {
-  let hygroAdded = 0;
-  let thermoAdded = 0;
+  allSensoryAfferentIds: string[],
+  joeLeftIds: string[],
+): { allSensoryAdded: number; joeLeftAdded: number } {
+  let allSensoryAdded = 0;
+  let joeLeftAdded = 0;
   const rng = createSeededRandom(0x0f4d2e91);
   const addGroup = (ids: string[], hz: number, tick: ReplayTick): number => {
     if (hz <= 0 || ids.length === 0) return 0;
@@ -256,21 +251,25 @@ function augmentTicksWithSensoryBaseline(
     return added;
   };
   for (const tick of replay.ticks) {
-    hygroAdded += addGroup(hygroIds, HYGRO_BASELINE_HZ, tick);
-    thermoAdded += addGroup(thermoIds, THERMO_BASELINE_HZ, tick);
+    allSensoryAdded += addGroup(allSensoryAfferentIds, ALL_AFFERENT_SENSORY_BASELINE_HZ, tick);
+    const blockIndex = Math.floor((tick.tick - 1) / JOE_TOGGLE_BLOCK_TICKS);
+    const joeOn = (blockIndex % 2) === 1;
+    if (joeOn) {
+      joeLeftAdded += addGroup(joeLeftIds, JOE_LEFT_HZ, tick);
+    }
   }
   for (const tick of replay.ticks) {
     tick.spikes.sort();
   }
-  return { hygroAdded, thermoAdded };
+  return { allSensoryAdded, joeLeftAdded };
 }
 
 function writeOutputs(
   replay: ReplayJson,
   cls: Map<string, ClassificationRow>,
   elapsedMs: number,
-  hygroAdded: number,
-  thermoAdded: number,
+  allSensoryAdded: number,
+  joeLeftAdded: number,
 ): void {
   fs.mkdirSync(LOGS_DIR, { recursive: true });
   fs.writeFileSync(OUT_JSON, `${JSON.stringify(replay, null, 2)}\n`, 'utf8');
@@ -331,17 +330,18 @@ function writeOutputs(
   ).length;
 
   const summary = [
-    'EonSystems phased left-bias odor replay summary',
+    'EonSystems phased left-bias JO-E toggle replay summary',
     `scenario: ${replay.meta.scenario}`,
     `ticks: ${replay.meta.ticks}`,
     `dt_sec: ${replay.meta.dt_sec}`,
     `baseline_rate_hz: ${replay.meta.baseline_rate_hz}`,
-    `hygro_baseline_hz: ${HYGRO_BASELINE_HZ}`,
-    `thermo_baseline_hz: ${THERMO_BASELINE_HZ}`,
-    `hygro_spikes_added: ${hygroAdded}`,
-    `thermo_spikes_added: ${thermoAdded}`,
+    `all_afferent_sensory_baseline_hz: ${ALL_AFFERENT_SENSORY_BASELINE_HZ}`,
+    `joe_left_baseline_hz_when_on: ${JOE_LEFT_HZ}`,
+    `all_afferent_sensory_spikes_added: ${allSensoryAdded}`,
+    `joe_left_spikes_added_toggle: ${joeLeftAdded}`,
+    `joe_toggle_block_ticks: ${JOE_TOGGLE_BLOCK_TICKS}`,
     `phase_switch_tick: ${replay.meta.phase_switch_tick}`,
-    `left_sources_after_switch: ${JSON.stringify(LEFT_SOURCES)}`,
+    `left_sources_after_switch: []`,
     `selected_olfactory_group_left_count: ${leftOlfactory}`,
     `selected_olfactory_group_right_count: ${rightOlfactory}`,
     `total_spikes: ${totalSpikes}`,
@@ -358,15 +358,19 @@ async function main(): Promise<void> {
   const startedAt = Date.now();
   const cls = loadClassificationMap();
   const replay = await runPhasedLeftBiasReplay();
-  const hygroIds = [...cls.values()]
-    .filter((r) => r.flow === 'afferent' && r.super_class === 'sensory' && r.class === 'hygrosensory')
+  const allSensoryAfferentIds = [...cls.values()]
+    .filter((r) => r.flow === 'afferent' && r.super_class === 'sensory')
     .map((r) => r.root_id);
-  const thermoIds = [...cls.values()]
-    .filter((r) => r.flow === 'afferent' && r.super_class === 'sensory' && r.class === 'thermosensory')
+  const joeLeftIds = [...cls.values()]
+    .filter((r) => r.flow === 'afferent'
+      && r.super_class === 'sensory'
+      && r.class === 'mechanosensory'
+      && r.side === 'left'
+      && r.cell_type.startsWith('JO-E'))
     .map((r) => r.root_id);
-  const { hygroAdded, thermoAdded } = augmentTicksWithSensoryBaseline(replay, hygroIds, thermoIds);
+  const { allSensoryAdded, joeLeftAdded } = augmentTicksWithSensoryBaseline(replay, allSensoryAfferentIds, joeLeftIds);
   const elapsedMs = Date.now() - startedAt;
-  writeOutputs(replay, cls, elapsedMs, hygroAdded, thermoAdded);
+  writeOutputs(replay, cls, elapsedMs, allSensoryAdded, joeLeftAdded);
   console.log(`wrote ${OUT_JSON}`);
   console.log(`wrote ${OUT_CSV}`);
   console.log(`wrote ${OUT_SUMMARY}`);

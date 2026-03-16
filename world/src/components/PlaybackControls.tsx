@@ -11,6 +11,16 @@ type PlaybackControlsProps = {
 };
 
 const SPEED_OPTIONS = [0.25, 0.5, 1, 2, 4, 8];
+const BUTTON_STYLE: Record<string, string | number> = {
+  color: '#eef4ff',
+  background: '#304d77',
+  border: '1px solid #6f8fc0',
+  borderRadius: 6,
+  padding: '6px 10px',
+  fontSize: 12,
+  fontWeight: 600,
+  cursor: 'pointer',
+};
 
 export default function PlaybackControls({
   playing,
@@ -27,16 +37,16 @@ export default function PlaybackControls({
   return (
     <div style={{ display: 'grid', gap: 10 }}>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        <button type="button" onClick={onPlayPause}>
+        <button type="button" onClick={onPlayPause} style={BUTTON_STYLE}>
           {playing ? 'Pause' : 'Play'}
         </button>
-        <button type="button" onClick={onPrevTick} disabled={tick <= 1}>
+        <button type="button" onClick={onPrevTick} disabled={tick <= 1} style={{ ...BUTTON_STYLE, opacity: tick <= 1 ? 0.55 : 1 }}>
           Prev
         </button>
-        <button type="button" onClick={onNextTick} disabled={tick >= maxTick}>
+        <button type="button" onClick={onNextTick} disabled={tick >= maxTick} style={{ ...BUTTON_STYLE, opacity: tick >= maxTick ? 0.55 : 1 }}>
           Next
         </button>
-        <span style={{ alignSelf: 'center', fontSize: 13 }}>
+        <span style={{ alignSelf: 'center', fontSize: 13, color: '#e7f0ff' }}>
           Tick {Math.min(tick, maxTick)} / {maxTick}
         </span>
       </div>
@@ -47,12 +57,19 @@ export default function PlaybackControls({
         value={Math.min(tick, maxTick)}
         onChange={(e) => onSeekTick(Number(e.target.value))}
       />
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#e7f0ff' }}>
         <label htmlFor="playback-speed">Speed</label>
         <select
           id="playback-speed"
           value={String(speed)}
           onChange={(e) => onSpeedChange(Number(e.target.value))}
+          style={{
+            color: '#eef4ff',
+            background: '#243a5b',
+            border: '1px solid #6f8fc0',
+            borderRadius: 6,
+            padding: '4px 8px',
+          }}
         >
           {SPEED_OPTIONS.map((opt) => (
             <option key={opt} value={opt}>

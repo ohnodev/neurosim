@@ -43,8 +43,10 @@ const REQUEST_TIMEOUT_MS = Number(process.env.NEUROSIM_BRAIN_REQUEST_TIMEOUT_MS 
 const TICKS = Math.max(1, Number(process.env.BASELINE_TICKS ?? 3000));
 const DT_SEC = Number(process.env.BASELINE_DT_SEC ?? 0.0001);
 const BASELINE_RATE_HZ = Math.max(0, Number(process.env.BASELINE_OLFACTORY_HZ ?? 2));
-const HYGRO_BASELINE_HZ = Math.max(0, Number(process.env.BASELINE_HYGRO_HZ ?? 6));
-const THERMO_BASELINE_HZ = Math.max(0, Number(process.env.BASELINE_THERMO_HZ ?? 6));
+const MECHANO_BASELINE_HZ = Math.max(0, Number(process.env.BASELINE_MECHANO_HZ ?? 0.5));
+const THERMO_BASELINE_HZ = Math.max(0, Number(process.env.BASELINE_THERMO_HZ ?? 0.5));
+const HYGRO_BASELINE_HZ = Math.max(0, Number(process.env.BASELINE_HYGRO_HZ ?? 0.2));
+const GUSTATORY_BASELINE_HZ = Math.max(0, Number(process.env.BASELINE_GUSTATORY_HZ ?? 0));
 
 type BrainResponse = { error?: string };
 
@@ -166,17 +168,63 @@ function loadClassificationMap(): Map<string, ClassificationRow> {
   return map;
 }
 
-async function runBaselineReplay(): Promise<ReplayJson> {
+function createSeededRandom(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (1664525 * state + 1013904223) >>> 0;
+    return state / 0x100000000;
+  };
+}
+
+type SensoryBaselineConfig = {
+  ids: string[];
+  hz: number;
+  key: 'mechanosensory' | 'thermosensory' | 'hygrosensory' | 'gustatory';
+};
+
+function selectSensoryIdsByClass(
+  cls: Map<string, ClassificationRow>,
+  sensoryClass: string,
+): string[] {
+  return [...cls.values()]
+    .filter((r) => r.flow === 'afferent' && r.super_class === 'sensory' && r.class === sensoryClass)
+    .map((r) => r.root_id);
+}
+
+async function runBaselineReplay(
+  sensoryConfigs: SensoryBaselineConfig[],
+): Promise<{ replay: ReplayJson; forcedEventsByClass: Record<string, number> }> {
   const conn = await BrainSocket.connect();
   try {
     await conn.request<{ ok: boolean }>('ping');
     const created = await conn.request<{ sim_id: number }>('create');
     const simId = created.sim_id;
+    const rng = createSeededRandom(0x5f43e21d);
+    const forcedEventsByClass: Record<string, number> = {
+      mechanosensory: 0,
+      thermosensory: 0,
+      hygrosensory: 0,
+      gustatory: 0,
+    };
     const steps = Array.from({ length: TICKS }, (_, i) => ({
       sim_id: simId,
       dt: DT_SEC,
       include_activity: true,
       olfactory_baseline_rate_hz: BASELINE_RATE_HZ,
+      forced_spikes: (() => {
+        const forced: string[] = [];
+        for (const cfg of sensoryConfigs) {
+          if (cfg.hz <= 0 || cfg.ids.length === 0) continue;
+          const p = Math.min(1, cfg.hz * DT_SEC);
+          for (const id of cfg.ids) {
+            if (rng() < p) {
+              forced.push(id);
+              forcedEventsByClass[cfg.key] += 1;
+            }
+          }
+        }
+        return forced;
+      })(),
       fly: {
         x: 0,
         y: 0,
@@ -202,7 +250,7 @@ async function runBaselineReplay(): Promise<ReplayJson> {
         spikes,
       };
     });
-    return {
+    return { replay: {
       meta: {
         ticks: ticks.length,
         dt_sec: DT_SEC,
@@ -210,56 +258,18 @@ async function runBaselineReplay(): Promise<ReplayJson> {
         generated_at: new Date().toISOString(),
       },
       ticks,
-    };
+    }, forcedEventsByClass };
   } finally {
     conn.close();
   }
-}
-
-function createSeededRandom(seed: number): () => number {
-  let state = seed >>> 0;
-  return () => {
-    state = (1664525 * state + 1013904223) >>> 0;
-    return state / 0x100000000;
-  };
-}
-
-function augmentTicksWithSensoryBaseline(
-  replay: ReplayJson,
-  hygroIds: string[],
-  thermoIds: string[],
-): { hygroAdded: number; thermoAdded: number } {
-  let hygroAdded = 0;
-  let thermoAdded = 0;
-  const rng = createSeededRandom(0x51f15e27);
-  const addGroup = (ids: string[], hz: number, tick: ReplayTick): number => {
-    if (hz <= 0 || ids.length === 0) return 0;
-    const p = Math.min(1, hz * replay.meta.dt_sec);
-    let added = 0;
-    for (const id of ids) {
-      if (rng() < p) {
-        tick.spikes.push(id);
-        added += 1;
-      }
-    }
-    return added;
-  };
-  for (const tick of replay.ticks) {
-    hygroAdded += addGroup(hygroIds, HYGRO_BASELINE_HZ, tick);
-    thermoAdded += addGroup(thermoIds, THERMO_BASELINE_HZ, tick);
-  }
-  for (const tick of replay.ticks) {
-    tick.spikes.sort();
-  }
-  return { hygroAdded, thermoAdded };
 }
 
 function writeOutputs(
   replay: ReplayJson,
   cls: Map<string, ClassificationRow>,
   elapsedMs: number,
-  hygroAdded: number,
-  thermoAdded: number,
+  sensoryCounts: Record<string, number>,
+  sensoryPopulationSizes: Record<string, number>,
 ): void {
   fs.mkdirSync(LOGS_DIR, { recursive: true });
   fs.writeFileSync(OUT_JSON, `${JSON.stringify(replay, null, 2)}\n`, 'utf8');
@@ -316,11 +326,19 @@ function writeOutputs(
     'EonSystems baseline replay summary',
     `ticks: ${replay.meta.ticks}`,
     `dt_sec: ${replay.meta.dt_sec}`,
-    `baseline_rate_hz: ${replay.meta.baseline_rate_hz}`,
+    `olfactory_baseline_hz: ${replay.meta.baseline_rate_hz}`,
+    `mechanosensory_baseline_hz: ${MECHANO_BASELINE_HZ}`,
+    `thermosensory_baseline_hz: ${THERMO_BASELINE_HZ}`,
     `hygro_baseline_hz: ${HYGRO_BASELINE_HZ}`,
-    `thermo_baseline_hz: ${THERMO_BASELINE_HZ}`,
-    `hygro_spikes_added: ${hygroAdded}`,
-    `thermo_spikes_added: ${thermoAdded}`,
+    `gustatory_baseline_hz: ${GUSTATORY_BASELINE_HZ}`,
+    `mechanosensory_pool_size: ${sensoryPopulationSizes.mechanosensory ?? 0}`,
+    `thermosensory_pool_size: ${sensoryPopulationSizes.thermosensory ?? 0}`,
+    `hygrosensory_pool_size: ${sensoryPopulationSizes.hygrosensory ?? 0}`,
+    `gustatory_pool_size: ${sensoryPopulationSizes.gustatory ?? 0}`,
+    `mechanosensory_forced_events: ${sensoryCounts.mechanosensory ?? 0}`,
+    `thermosensory_forced_events: ${sensoryCounts.thermosensory ?? 0}`,
+    `hygrosensory_forced_events: ${sensoryCounts.hygrosensory ?? 0}`,
+    `gustatory_forced_events: ${sensoryCounts.gustatory ?? 0}`,
     `total_spikes: ${totalSpikes}`,
     `first_active_tick: ${firstActiveTick}`,
     `last_active_tick: ${lastActiveTick}`,
@@ -334,16 +352,26 @@ function writeOutputs(
 async function main(): Promise<void> {
   const startedAt = Date.now();
   const cls = loadClassificationMap();
-  const replay = await runBaselineReplay();
-  const hygroIds = [...cls.values()]
-    .filter((r) => r.flow === 'afferent' && r.super_class === 'sensory' && r.class === 'hygrosensory')
-    .map((r) => r.root_id);
-  const thermoIds = [...cls.values()]
-    .filter((r) => r.flow === 'afferent' && r.super_class === 'sensory' && r.class === 'thermosensory')
-    .map((r) => r.root_id);
-  const { hygroAdded, thermoAdded } = augmentTicksWithSensoryBaseline(replay, hygroIds, thermoIds);
+  const sensoryIds = {
+    mechanosensory: selectSensoryIdsByClass(cls, 'mechanosensory'),
+    thermosensory: selectSensoryIdsByClass(cls, 'thermosensory'),
+    hygrosensory: selectSensoryIdsByClass(cls, 'hygrosensory'),
+    gustatory: selectSensoryIdsByClass(cls, 'gustatory'),
+  };
+  const sensoryConfigs: SensoryBaselineConfig[] = [
+    { key: 'mechanosensory', ids: sensoryIds.mechanosensory, hz: MECHANO_BASELINE_HZ },
+    { key: 'thermosensory', ids: sensoryIds.thermosensory, hz: THERMO_BASELINE_HZ },
+    { key: 'hygrosensory', ids: sensoryIds.hygrosensory, hz: HYGRO_BASELINE_HZ },
+    { key: 'gustatory', ids: sensoryIds.gustatory, hz: GUSTATORY_BASELINE_HZ },
+  ];
+  const { replay, forcedEventsByClass } = await runBaselineReplay(sensoryConfigs);
   const elapsedMs = Date.now() - startedAt;
-  writeOutputs(replay, cls, elapsedMs, hygroAdded, thermoAdded);
+  writeOutputs(replay, cls, elapsedMs, forcedEventsByClass, {
+    mechanosensory: sensoryIds.mechanosensory.length,
+    thermosensory: sensoryIds.thermosensory.length,
+    hygrosensory: sensoryIds.hygrosensory.length,
+    gustatory: sensoryIds.gustatory.length,
+  });
   console.log(`wrote ${OUT_JSON}`);
   console.log(`wrote ${OUT_CSV}`);
   console.log(`wrote ${OUT_SUMMARY}`);

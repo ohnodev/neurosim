@@ -38,6 +38,7 @@ const MIN_FOOD_DISTANCE: f64 = 1.0;
 pub struct BrainSim {
     n: usize,
     neuron_ids: Vec<String>,
+    neuron_index_by_id: HashMap<String, usize>,
     edges_pre: Vec<u32>,
     edges_post: Vec<u32>,
     edges_weight: Vec<f32>,
@@ -200,9 +201,15 @@ impl BrainSim {
             sanitized_viewer = (0..n as u32).collect();
         }
         let max_activity_entries = Self::readout_activity_cap();
+        let neuron_index_by_id = neuron_ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (id.clone(), i))
+            .collect();
         Self {
             n,
             neuron_ids,
+            neuron_index_by_id,
             edges_pre,
             edges_post,
             edges_weight,
@@ -373,6 +380,7 @@ impl BrainSim {
         fly: &FlyInput,
         sources: &[SourceInput],
         olfactory_baseline_rate_hz: Option<f64>,
+        forced_spikes: &[String],
     ) -> (f64, f64) {
         let dt_ms = (dt * 1000.0) as f32;
         let syn_time_factor = dt_ms / TAU_SYN_MS;
@@ -474,6 +482,9 @@ impl BrainSim {
                 );
             }
         }
+        // Causal external stimulation is handled as explicit forced spikes
+        // below (after LIF integration setup), so recurrent input in subsequent
+        // ticks sees real spike events from these neurons.
         self.rng_state = rng_state;
         // EonSystems-style alpha synapse with fixed 1.8ms delay queue.
         // Conductance update uses delayed input and the previous conductance.
@@ -513,6 +524,18 @@ impl BrainSim {
                 self.g_next[i] = 0.0;
             }
         }
+        if !forced_spikes.is_empty() {
+            for id in forced_spikes {
+                if let Some(&idx) = self.neuron_index_by_id.get(id) {
+                    if idx < self.n {
+                        spikes_next[idx] = 1;
+                        self.v[idx] = V_RESET;
+                        self.refractory[idx] = refrac_steps;
+                        self.g_next[idx] = 0.0;
+                    }
+                }
+            }
+        }
         std::mem::swap(&mut self.g, &mut self.g_next);
         self.spikes = spikes_next;
         let lif_ms = t_lif.elapsed().as_secs_f64() * 1000.0;
@@ -539,7 +562,7 @@ impl BrainSim {
         StepTiming,
         FlyStepOutput,
     ) {
-        self.step_with_options(dt, fly, sources, true, None)
+        self.step_with_options(dt, fly, sources, true, None, Vec::new())
     }
 
     pub fn step_with_options(
@@ -549,6 +572,7 @@ impl BrainSim {
         sources: Vec<SourceInput>,
         include_activity: bool,
         olfactory_baseline_rate_hz: Option<f64>,
+        forced_spikes: Vec<String>,
     ) -> (
         Vec<f32>,
         HashMap<String, f64>,
@@ -568,11 +592,11 @@ impl BrainSim {
         let (recurrent_ms, lif_ms) = {
             #[cfg(feature = "cuda")]
             {
-                self.run_step_cpu(dt, &fly, &sources, olfactory_baseline_rate_hz)
+                self.run_step_cpu(dt, &fly, &sources, olfactory_baseline_rate_hz, &forced_spikes)
             }
             #[cfg(not(feature = "cuda"))]
             {
-                self.run_step_cpu(dt, &fly, &sources, olfactory_baseline_rate_hz)
+                self.run_step_cpu(dt, &fly, &sources, olfactory_baseline_rate_hz, &forced_spikes)
             }
         };
         let kernel_ms = recurrent_ms + lif_ms;

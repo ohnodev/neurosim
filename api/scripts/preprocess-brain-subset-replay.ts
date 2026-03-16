@@ -7,6 +7,8 @@ type ReplayNeuron = {
   y: number;
   z: number;
   is_ring: boolean;
+  is_epg: boolean;
+  epg_tile_index_0_7?: number;
   side: string;
   hemibrain_type: string;
 };
@@ -25,6 +27,9 @@ type ReplayData = {
     unique_fired_neurons: number;
     ring_neuron_total: number;
     ring_neuron_unique_fired: number;
+    epg_neuron_total: number;
+    epg_neuron_unique_fired: number;
+    scenario?: string;
   };
   neurons: ReplayNeuron[];
   ticks: ReplayTick[];
@@ -45,6 +50,8 @@ const OUT_SUMMARY = process.env.OUTPUT_SUMMARY
 const OUT_JSON_PUBLIC = process.env.OUTPUT_PUBLIC_REPLAY_JSON
   ? path.resolve(process.env.OUTPUT_PUBLIC_REPLAY_JSON)
   : path.join(ROOT, 'world', 'public', 'eonsystems_brain_subset_replay.json');
+const OUTPUT_SCENARIO = process.env.OUTPUT_SCENARIO?.trim();
+const EPG_TILE_MAP_PATH = path.join(ROOT, 'data', 'epg-tile-map.json');
 
 function parseCsvLine(line: string): string[] {
   const out: string[] = [];
@@ -70,10 +77,24 @@ function parseCsvLine(line: string): string[] {
   return out;
 }
 
-function loadRingMetadata(): Map<string, { side: string; hemibrain_type: string }> {
+type ClassificationMeta = {
+  side: string;
+  hemibrain_type: string;
+  is_ring: boolean;
+  is_epg: boolean;
+};
+
+type EpgTileMap = {
+  entries?: Array<{
+    root_id?: string;
+    tile_index_0_7?: number;
+  }>;
+};
+
+function loadClassificationMeta(): Map<string, ClassificationMeta> {
   const text = fs.readFileSync(CLASSIFICATION_PATH, 'utf8');
   const lines = text.split('\n').filter((line) => line.trim().length > 0);
-  const out = new Map<string, { side: string; hemibrain_type: string }>();
+  const out = new Map<string, ClassificationMeta>();
   for (let i = 1; i < lines.length; i += 1) {
     const cols = parseCsvLine(lines[i] ?? '');
     if (cols.length < 9) continue;
@@ -85,9 +106,35 @@ function loadRingMetadata(): Map<string, { side: string; hemibrain_type: string 
     const hemibrainType = (cols[6] ?? '').trim();
     const side = (cols[8] ?? '').trim();
     if (!rootId) continue;
-    if (subClass !== 'ring_neuron') continue;
-    if (flow !== 'intrinsic' || superClass !== 'central' || neuronClass !== 'CX') continue;
-    out.set(rootId, { side, hemibrain_type: hemibrainType });
+    const isRing = subClass === 'ring_neuron'
+      && flow === 'intrinsic'
+      && superClass === 'central'
+      && neuronClass === 'CX';
+    const isEpg = flow === 'intrinsic'
+      && superClass === 'central'
+      && neuronClass === 'CX'
+      && (hemibrainType === 'EPG' || hemibrainType === 'EPGt');
+    out.set(rootId, {
+      side,
+      hemibrain_type: hemibrainType,
+      is_ring: isRing,
+      is_epg: isEpg,
+    });
+  }
+  return out;
+}
+
+function loadEpgTileMap(): Map<string, number> {
+  const out = new Map<string, number>();
+  if (!fs.existsSync(EPG_TILE_MAP_PATH)) return out;
+  const raw = fs.readFileSync(EPG_TILE_MAP_PATH, 'utf8');
+  const parsed = JSON.parse(raw) as EpgTileMap;
+  for (const entry of parsed.entries ?? []) {
+    const rootId = String(entry.root_id ?? '');
+    const idx = Number(entry.tile_index_0_7);
+    if (!rootId || !Number.isFinite(idx)) continue;
+    if (idx < 0 || idx > 7) continue;
+    out.set(rootId, idx);
   }
   return out;
 }
@@ -154,12 +201,15 @@ function parseBaselineTicks(): {
 }
 
 function buildReplay(): ReplayData {
-  const ringMeta = loadRingMetadata();
+  const classificationMeta = loadClassificationMeta();
+  const epgTileMap = loadEpgTileMap();
+  const ringIds = new Set([...classificationMeta.entries()].filter(([, m]) => m.is_ring).map(([id]) => id));
+  const epgIds = new Set([...classificationMeta.entries()].filter(([, m]) => m.is_epg).map(([id]) => id));
   const posMap = loadPositionMap();
   const { ticks, firedIds } = parseBaselineTicks();
 
-  // Include all fired neurons, and force-include the full ring-neuron subset.
-  const subsetIds = new Set<string>([...firedIds, ...ringMeta.keys()]);
+  // Include all fired neurons, plus full ring and full EPG populations.
+  const subsetIds = new Set<string>([...firedIds, ...ringIds, ...epgIds]);
   const neurons: ReplayNeuron[] = [];
   let missingPositionCount = 0;
   for (const rootId of subsetIds) {
@@ -168,15 +218,17 @@ function buildReplay(): ReplayData {
       missingPositionCount += 1;
       continue;
     }
-    const ring = ringMeta.get(rootId);
+    const cls = classificationMeta.get(rootId);
     neurons.push({
       root_id: rootId,
       x: pos.x,
       y: pos.y,
       z: pos.z,
-      is_ring: ring != null,
-      side: ring?.side ?? pos.side,
-      hemibrain_type: ring?.hemibrain_type ?? '',
+      is_ring: cls?.is_ring ?? false,
+      is_epg: cls?.is_epg ?? false,
+      epg_tile_index_0_7: epgTileMap.get(rootId),
+      side: cls?.side ?? pos.side,
+      hemibrain_type: cls?.hemibrain_type ?? '',
     });
   }
   neurons.sort((a, b) => a.root_id.localeCompare(b.root_id));
@@ -187,9 +239,11 @@ function buildReplay(): ReplayData {
   }
 
   const ringFiredIds = new Set<string>();
+  const epgFiredIds = new Set<string>();
   for (const tick of ticks) {
     for (const id of tick.spikes) {
-      if (ringMeta.has(id)) ringFiredIds.add(id);
+      if (ringIds.has(id)) ringFiredIds.add(id);
+      if (epgIds.has(id)) epgFiredIds.add(id);
     }
   }
 
@@ -199,8 +253,11 @@ function buildReplay(): ReplayData {
       source_csv: INPUT_SPIKES_PATH,
       ticks: ticks.length,
       unique_fired_neurons: firedIds.size,
-      ring_neuron_total: ringMeta.size,
+      ring_neuron_total: ringIds.size,
       ring_neuron_unique_fired: ringFiredIds.size,
+      epg_neuron_total: epgIds.size,
+      epg_neuron_unique_fired: epgFiredIds.size,
+      ...(OUTPUT_SCENARIO ? { scenario: OUTPUT_SCENARIO } : {}),
     },
     neurons,
     ticks,
@@ -215,6 +272,8 @@ function buildReplay(): ReplayData {
     `ticks: ${replay.meta.ticks}`,
     `ring_neuron_total: ${replay.meta.ring_neuron_total}`,
     `ring_neuron_unique_fired: ${replay.meta.ring_neuron_unique_fired}`,
+    `epg_neuron_total: ${replay.meta.epg_neuron_total}`,
+    `epg_neuron_unique_fired: ${replay.meta.epg_neuron_unique_fired}`,
     `output_json_logs: ${OUT_JSON_LOGS}`,
     `output_json_public: ${OUT_JSON_PUBLIC}`,
   ];

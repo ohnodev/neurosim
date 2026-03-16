@@ -87,6 +87,8 @@ struct StepParams {
     dt: f64,
     include_activity: Option<bool>,
     olfactory_baseline_rate_hz: Option<f64>,
+    #[serde(default)]
+    forced_spikes: Vec<String>,
     fly: FlyJson,
     sources: Vec<SourceJson>,
 }
@@ -371,6 +373,7 @@ fn handle(
                     srcs,
                     include_activity,
                     step.olfactory_baseline_rate_hz,
+                    step.forced_spikes,
                 );
             compute_ms_sum += timing.compute_ms;
             kernel_ms_sum += timing.kernel_ms;
@@ -511,6 +514,7 @@ fn handle(
                 srcs,
                 include_activity,
                 p.olfactory_baseline_rate_hz,
+                p.forced_spikes,
             );
         let compute_ms = timing.compute_ms;
         let mut source_lookup: HashMap<String, (f64, f64)> = HashMap::new();

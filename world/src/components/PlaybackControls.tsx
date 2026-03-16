@@ -2,15 +2,24 @@ type PlaybackControlsProps = {
   playing: boolean;
   tick: number;
   totalTicks: number;
-  speed: number;
+  speed: number | 'irl';
   onPlayPause: () => void;
   onPrevTick: () => void;
   onNextTick: () => void;
   onSeekTick: (tick: number) => void;
-  onSpeedChange: (speed: number) => void;
+  onSpeedChange: (speed: number | 'irl') => void;
 };
 
-const SPEED_OPTIONS = [0.25, 0.5, 1, 2, 4, 8];
+const SPEED_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: '0.25', label: '0.25x' },
+  { value: '0.5', label: '0.5x' },
+  { value: '1', label: '1x' },
+  { value: '2', label: '2x' },
+  { value: '4', label: '4x' },
+  { value: '8', label: '8x' },
+  { value: '16', label: '16x' },
+  { value: 'irl', label: 'IRL (1s/s)' },
+];
 const BUTTON_STYLE: Record<string, string | number> = {
   color: '#eef4ff',
   background: '#304d77',
@@ -62,7 +71,7 @@ export default function PlaybackControls({
         <select
           id="playback-speed"
           value={String(speed)}
-          onChange={(e) => onSpeedChange(Number(e.target.value))}
+          onChange={(e) => onSpeedChange(e.target.value === 'irl' ? 'irl' : Number(e.target.value))}
           style={{
             color: '#eef4ff',
             background: '#243a5b',
@@ -72,8 +81,8 @@ export default function PlaybackControls({
           }}
         >
           {SPEED_OPTIONS.map((opt) => (
-            <option key={opt} value={opt}>
-              {opt}x
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
             </option>
           ))}
         </select>

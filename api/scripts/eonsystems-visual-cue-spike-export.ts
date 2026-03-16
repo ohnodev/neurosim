@@ -69,6 +69,7 @@ const VISUAL_CUE_SWITCH_TICK = Math.max(1, Number(process.env.VISUAL_CUE_SWITCH_
 const CUE_WORLD_X = Number(process.env.VISUAL_CUE_WORLD_X ?? 20);
 const CUE_WORLD_Y = Number(process.env.VISUAL_CUE_WORLD_Y ?? 0);
 const CUE_ANGULAR_SIGMA_DEG = Math.max(5, Number(process.env.VISUAL_CUE_ANGULAR_SIGMA_DEG ?? 30));
+const VISUAL_CENTER_HALF_WIDTH_DEG = Math.max(1, Number(process.env.VISUAL_CUE_CENTER_HALF_WIDTH_DEG ?? 12));
 
 type BrainResponse = { error?: string };
 
@@ -260,12 +261,18 @@ function chooseForcedVisualSpikes(
   const cueAbsAngle = Math.atan2(CUE_WORLD_Y - fly.y, CUE_WORLD_X - fly.x);
   const cueRelAngle = normalizeAngleRad(cueAbsAngle - fly.heading);
   const sigma = (CUE_ANGULAR_SIGMA_DEG * Math.PI) / 180;
+  const centerHalfWidthRad = (VISUAL_CENTER_HALF_WIDTH_DEG * Math.PI) / 180;
   const pBase = Math.min(1, VISUAL_STRIPE_HZ * DT_SEC);
 
-  const scored = pool.map((n) => {
-    const d = normalizeAngleRad(n.prefAngleRad - cueRelAngle);
-    return { ...n, score: Math.abs(d), diff: d };
-  }).sort((a, b) => a.score - b.score).slice(0, Math.min(VISUAL_STRIPE_TARGET_COUNT, pool.length));
+  // Hard gate to center-only visual drive: no left/right channel stimulation.
+  const scored = pool
+    .map((n) => {
+      const d = normalizeAngleRad(n.prefAngleRad - cueRelAngle);
+      return { ...n, score: Math.abs(d), diff: d };
+    })
+    .filter((n) => n.score <= centerHalfWidthRad)
+    .sort((a, b) => a.score - b.score)
+    .slice(0, Math.min(VISUAL_STRIPE_TARGET_COUNT, pool.length));
 
   const out: string[] = [];
   for (const n of scored) {
@@ -356,33 +363,33 @@ async function runVisualCueReplay(
   }
 }
 
-function writeOutputs(
+async function writeOutputs(
   replay: ReplayJson,
   cls: Map<string, ClassificationRow>,
   elapsedMs: number,
   forcedSpikeEvents: number,
   visualPoolSize: number,
-): void {
+): Promise<void> {
   fs.mkdirSync(LOGS_DIR, { recursive: true });
   fs.writeFileSync(OUT_JSON, `${JSON.stringify(replay, null, 2)}\n`, 'utf8');
 
-  const csvLines = [
-    [
-      'tick',
-      'time_sec',
-      'spike_order',
-      'root_id',
-      'flow',
-      'super_class',
-      'class',
-      'sub_class',
-      'cell_type',
-      'hemibrain_type',
-      'hemilineage',
-      'side',
-      'nerve',
-    ].join(','),
-  ];
+  const csvStream = fs.createWriteStream(OUT_CSV, { encoding: 'utf8' });
+  csvStream.write([
+    'tick',
+    'time_sec',
+    'spike_order',
+    'root_id',
+    'flow',
+    'super_class',
+    'class',
+    'sub_class',
+    'cell_type',
+    'hemibrain_type',
+    'hemilineage',
+    'side',
+    'nerve',
+  ].join(','));
+  csvStream.write('\n');
   let totalSpikes = 0;
   let firstActiveTick = -1;
   let lastActiveTick = -1;
@@ -395,7 +402,7 @@ function writeOutputs(
     for (let i = 0; i < tick.spikes.length; i += 1) {
       const rootId = tick.spikes[i]!;
       const meta = cls.get(rootId);
-      csvLines.push([
+      csvStream.write([
         String(tick.tick),
         tick.time_sec.toFixed(6),
         String(i),
@@ -410,9 +417,13 @@ function writeOutputs(
         meta?.side ?? '',
         meta?.nerve ?? '',
       ].join(','));
+      csvStream.write('\n');
     }
   }
-  fs.writeFileSync(OUT_CSV, `${csvLines.join('\n')}\n`, 'utf8');
+  await new Promise<void>((resolve, reject) => {
+    csvStream.on('error', reject);
+    csvStream.end(() => resolve());
+  });
 
   const summary = [
     'EonSystems visual-cue closed-loop replay summary',
@@ -425,9 +436,12 @@ function writeOutputs(
     `visual_pool_size: ${visualPoolSize}`,
     `visual_stripe_hz: ${VISUAL_STRIPE_HZ}`,
     `visual_stripe_target_count: ${VISUAL_STRIPE_TARGET_COUNT}`,
+    `visual_center_half_width_deg: ${VISUAL_CENTER_HALF_WIDTH_DEG}`,
     `visual_cue_switch_tick: ${VISUAL_CUE_SWITCH_TICK}`,
     `visual_cue_world_xy: (${CUE_WORLD_X}, ${CUE_WORLD_Y})`,
     `visual_cue_sigma_deg: ${CUE_ANGULAR_SIGMA_DEG}`,
+    `left_right_visual_forcing: 0 (center-only gate)`,
+    `mechanosensory_forcing_hz: 0`,
     `visual_forced_spike_events: ${forcedSpikeEvents}`,
     `total_spikes: ${totalSpikes}`,
     `first_active_tick: ${firstActiveTick}`,
@@ -445,7 +459,7 @@ async function main(): Promise<void> {
   const visualPool = buildVisualAfferentPool(cls);
   const { replay, forcedSpikeEvents } = await runVisualCueReplay(visualPool);
   const elapsedMs = Date.now() - startedAt;
-  writeOutputs(replay, cls, elapsedMs, forcedSpikeEvents, visualPool.length);
+  await writeOutputs(replay, cls, elapsedMs, forcedSpikeEvents, visualPool.length);
   console.log(`wrote ${OUT_JSON}`);
   console.log(`wrote ${OUT_CSV}`);
   console.log(`wrote ${OUT_SUMMARY}`);

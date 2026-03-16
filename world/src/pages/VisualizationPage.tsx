@@ -43,8 +43,10 @@ type SceneState = {
   renderer: THREE.WebGLRenderer;
   controls: OrbitControls;
   points: THREE.Points;
+  glowPoints: THREE.Points;
   bumpArrow: THREE.ArrowHelper;
   colorAttr: THREE.BufferAttribute;
+  glowColorAttr: THREE.BufferAttribute;
   idToIndex: Map<string, number>;
   isRingByIndex: boolean[];
   isEpgByIndex: boolean[];
@@ -54,11 +56,14 @@ type SceneState = {
   epgBinPopulation: number[];
   epgHeatByIndex: number[];
   lastAppliedTick: number;
+  decodeEmaAngleDeg: number | null;
   arrowState: {
     angleCurrentDeg: number;
     angleTargetDeg: number;
     strengthCurrent: number;
     strengthTarget: number;
+    smoothingEnabled: boolean;
+    smoothAlpha: number;
   };
   dispose: () => void;
 };
@@ -66,6 +71,8 @@ type SceneState = {
 type ViewMode = 'raw' | 'aligned' | 'compass';
 type DatasetMode = 'baseline' | 'left_bias_odor' | 'joe_toggle_300' | 'visual_cue_stripe';
 type FocusPopulation = 'all' | 'epg_only';
+type DecodeMode = 'vector_norm' | 'sharpened_p2' | 'argmax_bin' | 'ema_vector';
+type PlaybackSpeed = number | 'irl';
 
 const INACTIVE_COLOR = new THREE.Color(0x2e3e5d);
 const INACTIVE_RING_COLOR = new THREE.Color(0x6b58a9);
@@ -75,13 +82,16 @@ const ACTIVE_RING_COLOR = new THREE.Color(0xff4fd8);
 const ACTIVE_EPG_COLOR = new THREE.Color(0xfff07a);
 const EPG_HEAT_ORANGE = new THREE.Color(0xff9f43);
 const EPG_HEAT_RED = new THREE.Color(0xff3b30);
+const NO_GLOW_COLOR = new THREE.Color(0x000000);
 const PLAYBACK_BASE_MS = 80;
 const EPG_COMPASS_BINS = 8;
 const EPG_BUMP_WINDOW_TICKS = 5;
-const EPG_TOP_BIN_MIN_SPIKES = 2;
 const EPG_HEAT_TAU_TICKS = 3;
 const EPG_HEAT_ADD = 0.25;
 const EPG_HEAT_MAX = 1.8;
+const EPG_EMA_ALPHA = 0.2;
+const EPG_GLOW_SIZE = 0.13;
+const EPG_GLOW_OPACITY = 0.52;
 
 function controlButtonStyle(active: boolean): Record<string, string | number> {
   return {
@@ -211,6 +221,30 @@ function computeAlignedPoints(neurons: ReplayNeuron[], alignToRing: boolean): TH
   });
 }
 
+function createGlowTexture(): THREE.Texture {
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    const texture = new THREE.Texture(canvas);
+    texture.needsUpdate = true;
+    return texture;
+  }
+  const center = size / 2;
+  const grad = ctx.createRadialGradient(center, center, 0, center, center, center);
+  grad.addColorStop(0, 'rgba(255,255,255,1.0)');
+  grad.addColorStop(0.28, 'rgba(255,255,255,0.75)');
+  grad.addColorStop(0.62, 'rgba(255,255,255,0.2)');
+  grad.addColorStop(1, 'rgba(255,255,255,0.0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, size, size);
+  const texture = new THREE.Texture(canvas);
+  texture.needsUpdate = true;
+  return texture;
+}
+
 function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode: ViewMode): SceneState {
   const width = Math.max(1, container.clientWidth);
   const height = Math.max(1, container.clientHeight);
@@ -321,6 +355,7 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
   const n = neurons.length;
   const positions = new Float32Array(n * 3);
   const colors = new Float32Array(n * 3);
+  const glowColors = new Float32Array(n * 3);
   const idToIndex = new Map<string, number>();
   const isRingByIndex: boolean[] = new Array(n).fill(false);
   const isEpgByIndex: boolean[] = new Array(n).fill(false);
@@ -368,12 +403,19 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
     colors[i * 3] = c.r;
     colors[i * 3 + 1] = c.g;
     colors[i * 3 + 2] = c.b;
+    glowColors[i * 3] = 0;
+    glowColors[i * 3 + 1] = 0;
+    glowColors[i * 3 + 2] = 0;
   }
 
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   const colorAttr = new THREE.BufferAttribute(colors, 3);
   geometry.setAttribute('color', colorAttr);
+  const glowGeometry = new THREE.BufferGeometry();
+  glowGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  const glowColorAttr = new THREE.BufferAttribute(glowColors, 3);
+  glowGeometry.setAttribute('color', glowColorAttr);
   const material = new THREE.PointsMaterial({
     size: mostlyEpg ? 0.028 : 0.012,
     sizeAttenuation: true,
@@ -384,6 +426,21 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
   });
   const points = new THREE.Points(geometry, material);
   scene.add(points);
+  const glowTexture = createGlowTexture();
+  const glowMaterial = new THREE.PointsMaterial({
+    size: mostlyEpg ? EPG_GLOW_SIZE : 0.05,
+    sizeAttenuation: true,
+    vertexColors: true,
+    transparent: true,
+    opacity: EPG_GLOW_OPACITY,
+    depthWrite: false,
+    depthTest: false,
+    blending: THREE.AdditiveBlending,
+    map: glowTexture,
+    alphaTest: 0.01,
+  });
+  const glowPoints = new THREE.Points(glowGeometry, glowMaterial);
+  scene.add(glowPoints);
   const bumpArrow = new THREE.ArrowHelper(
     new THREE.Vector3(1, 0, 0),
     new THREE.Vector3(0, 0, 0),
@@ -400,14 +457,17 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
     angleTargetDeg: 0,
     strengthCurrent: 0.2,
     strengthTarget: 0.2,
+    smoothingEnabled: true,
+    smoothAlpha: 0.18,
   };
 
   scene.add(new THREE.AmbientLight(0xffffff, 0.95));
 
   let raf = 0;
   const animate = () => {
-    arrowState.angleCurrentDeg = shortestAngleLerpDeg(arrowState.angleCurrentDeg, arrowState.angleTargetDeg, 0.18);
-    arrowState.strengthCurrent = arrowState.strengthCurrent + (arrowState.strengthTarget - arrowState.strengthCurrent) * 0.18;
+    const smoothAlpha = arrowState.smoothingEnabled ? arrowState.smoothAlpha : 1;
+    arrowState.angleCurrentDeg = shortestAngleLerpDeg(arrowState.angleCurrentDeg, arrowState.angleTargetDeg, smoothAlpha);
+    arrowState.strengthCurrent = arrowState.strengthCurrent + (arrowState.strengthTarget - arrowState.strengthCurrent) * smoothAlpha;
     const dir3 = new THREE.Vector3(
       Math.cos((arrowState.angleCurrentDeg * Math.PI) / 180),
       Math.sin((arrowState.angleCurrentDeg * Math.PI) / 180),
@@ -436,7 +496,11 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
     resizeObserver.disconnect();
     controls.dispose();
     scene.remove(bumpArrow);
+    scene.remove(glowPoints);
     scene.remove(points);
+    glowGeometry.dispose();
+    glowMaterial.dispose();
+    glowTexture.dispose();
     geometry.dispose();
     material.dispose();
     renderer.dispose();
@@ -451,8 +515,10 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
     renderer,
     controls,
     points,
+    glowPoints,
     bumpArrow,
     colorAttr,
+    glowColorAttr,
     idToIndex,
     isRingByIndex,
     isEpgByIndex,
@@ -462,6 +528,7 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
     epgBinPopulation,
     epgHeatByIndex,
     lastAppliedTick: 0,
+    decodeEmaAngleDeg: null,
     arrowState,
     dispose,
   };
@@ -492,6 +559,13 @@ function epgHeatToColor(heat: number): THREE.Color {
   return EPG_HEAT_ORANGE.clone().lerp(EPG_HEAT_RED, (t - 0.5) / 0.5);
 }
 
+function epgHeatToGlowColor(heat: number): THREE.Color {
+  const t = Math.max(0, Math.min(1, heat / EPG_HEAT_MAX));
+  if (t <= 0) return NO_GLOW_COLOR;
+  const base = ACTIVE_EPG_COLOR.clone().lerp(EPG_HEAT_RED, Math.pow(t, 0.8));
+  return base.multiplyScalar(0.15 + 0.95 * t * t);
+}
+
 function applyTickSpikes(
   sceneState: SceneState,
   spikes: string[],
@@ -499,9 +573,11 @@ function applyTickSpikes(
   epgWindowTicks = 1,
   dtSec = 0.0001,
   currentTick = 1,
+  decodeMode: DecodeMode = 'vector_norm',
 ): CompassStats {
   const {
     colorAttr,
+    glowColorAttr,
     idToIndex,
     isRingByIndex,
     isEpgByIndex,
@@ -526,6 +602,8 @@ function applyTickSpikes(
         ? INACTIVE_RING_COLOR
         : INACTIVE_COLOR;
     colorAttr.setXYZ(i, c.r, c.g, c.b);
+    const g = isEpgByIndex[i] ? epgHeatToGlowColor(epgHeatByIndex[i] ?? 0) : NO_GLOW_COLOR;
+    glowColorAttr.setXYZ(i, g.r, g.g, g.b);
   }
   let epgActiveCount = 0;
   let epgLeftCount = 0;
@@ -539,6 +617,8 @@ function applyTickSpikes(
       epgHeatByIndex[idx] = Math.min(EPG_HEAT_MAX, (epgHeatByIndex[idx] ?? 0) + EPG_HEAT_ADD);
       const c = epgHeatToColor(epgHeatByIndex[idx]);
       colorAttr.setXYZ(idx, c.r, c.g, c.b);
+      const g = epgHeatToGlowColor(epgHeatByIndex[idx]);
+      glowColorAttr.setXYZ(idx, g.r, g.g, g.b);
     } else {
       const c = isRingByIndex[idx] ? ACTIVE_RING_COLOR : ACTIVE_COLOR;
       colorAttr.setXYZ(idx, c.r, c.g, c.b);
@@ -570,15 +650,11 @@ function applyTickSpikes(
   });
   let epgTopBinIndex = 0;
   let epgTopBinSpikes = 0;
-  let epgSecondBinSpikes = 0;
-  for (let i = 0; i < epgBinsRaw.length; i += 1) {
-    const v = epgBinsRaw[i] ?? 0;
+  for (let i = 0; i < epgBins.length; i += 1) {
+    const v = epgBins[i] ?? 0;
     if (v > epgTopBinSpikes) {
-      epgSecondBinSpikes = epgTopBinSpikes;
       epgTopBinSpikes = v;
       epgTopBinIndex = i;
-    } else if (v > epgSecondBinSpikes) {
-      epgSecondBinSpikes = v;
     }
   }
   const bump = new THREE.Vector2(0, 0);
@@ -598,20 +674,46 @@ function applyTickSpikes(
   }
   const vectorBumpStrength = bumpWeightTotal > 0 ? bump.length() / bumpWeightTotal : 0;
   const vectorBumpAngleDeg = bump.lengthSq() > 1e-8 ? (Math.atan2(bump.y, bump.x) * 180) / Math.PI : null;
-  const topBinDominance = epgTopBinSpikes > 0
-    ? (epgTopBinSpikes - epgSecondBinSpikes) / epgTopBinSpikes
-    : 0;
-  const hasTopBinSignal = epgTopBinSpikes >= EPG_TOP_BIN_MIN_SPIKES && topBinDominance >= 0.15;
-  const topBinAngleDeg = (epgTopBinIndex / EPG_COMPASS_BINS) * 360;
-  const bumpAngleDeg = hasTopBinSignal ? topBinAngleDeg : vectorBumpAngleDeg;
-  const bumpStrength = hasTopBinSignal
-    ? Math.max(vectorBumpStrength, Math.min(1, epgTopBinSpikes / Math.max(1, windowSpikeTotal)))
-    : vectorBumpStrength;
+  const bumpSharp = new THREE.Vector2(0, 0);
+  let sharpWeightTotal = 0;
+  for (let i = 0; i < EPG_COMPASS_BINS; i += 1) {
+    const w = epgBins[i] * epgBins[i];
+    if (w <= 0) continue;
+    const a = (i / EPG_COMPASS_BINS) * Math.PI * 2;
+    bumpSharp.x += w * Math.cos(a);
+    bumpSharp.y += w * Math.sin(a);
+    sharpWeightTotal += w;
+  }
+  const sharpAngleDeg = bumpSharp.lengthSq() > 1e-8 ? (Math.atan2(bumpSharp.y, bumpSharp.x) * 180) / Math.PI : null;
+  const sharpStrength = sharpWeightTotal > 0 ? bumpSharp.length() / sharpWeightTotal : 0;
+
+  const argmaxAngleDeg = epgTopBinSpikes > 0 ? ((epgTopBinIndex / EPG_COMPASS_BINS) * 360) : null;
+  const argmaxStrength = epgTopBinSpikes;
+
+  let bumpAngleDeg: number | null = vectorBumpAngleDeg;
+  let bumpStrength = vectorBumpStrength;
+  if (decodeMode === 'sharpened_p2') {
+    bumpAngleDeg = sharpAngleDeg;
+    bumpStrength = sharpStrength;
+  } else if (decodeMode === 'argmax_bin') {
+    bumpAngleDeg = argmaxAngleDeg;
+    bumpStrength = argmaxStrength;
+  } else if (decodeMode === 'ema_vector') {
+    if (vectorBumpAngleDeg != null) {
+      if (sceneState.decodeEmaAngleDeg == null) sceneState.decodeEmaAngleDeg = vectorBumpAngleDeg;
+      else sceneState.decodeEmaAngleDeg = shortestAngleLerpDeg(sceneState.decodeEmaAngleDeg, vectorBumpAngleDeg, EPG_EMA_ALPHA);
+    }
+    bumpAngleDeg = sceneState.decodeEmaAngleDeg;
+    bumpStrength = vectorBumpStrength;
+  } else {
+    sceneState.decodeEmaAngleDeg = null;
+  }
   if (bumpAngleDeg != null) {
     sceneState.arrowState.angleTargetDeg = normalizeAngleDeg(bumpAngleDeg);
     sceneState.arrowState.strengthTarget = Math.max(0.08, bumpStrength);
   }
   colorAttr.needsUpdate = true;
+  glowColorAttr.needsUpdate = true;
   const epgBinMax = epgBins.reduce((m, v) => Math.max(m, v), 0);
   const epgBinNorm = epgBinMax > 0 ? epgBins.map((v) => v / epgBinMax) : epgBins;
   sceneState.lastAppliedTick = currentTick;
@@ -635,10 +737,12 @@ export default function VisualizationPage() {
   const [replay, setReplay] = useState<ReplayData | null>(null);
   const [currentTick, setCurrentTick] = useState(1);
   const [playing, setPlaying] = useState(false);
-  const [speed, setSpeed] = useState(1);
+  const [speed, setSpeed] = useState<PlaybackSpeed>(1);
   const [viewMode, setViewMode] = useState<ViewMode>('compass');
   const [datasetMode, setDatasetMode] = useState<DatasetMode>('visual_cue_stripe');
   const [focusPopulation, setFocusPopulation] = useState<FocusPopulation>('epg_only');
+  const [decodeMode, setDecodeMode] = useState<DecodeMode>('vector_norm');
+  const [arrowSmoothing, setArrowSmoothing] = useState(true);
   const [compassStats, setCompassStats] = useState<CompassStats>({
     epgActiveCount: 0,
     epgLeftCount: 0,
@@ -709,6 +813,11 @@ export default function VisualizationPage() {
   }, [displayNeurons, viewMode]);
 
   useEffect(() => {
+    if (!sceneRef.current) return;
+    sceneRef.current.arrowState.smoothingEnabled = arrowSmoothing;
+  }, [arrowSmoothing]);
+
+  useEffect(() => {
     if (!replay || !sceneRef.current) return;
     const idx = Math.max(0, Math.min(replay.ticks.length - 1, currentTick - 1));
     const spikes = replay.ticks[idx]?.spikes ?? [];
@@ -717,16 +826,28 @@ export default function VisualizationPage() {
       : 0.0001;
     const epgWindowTicks = EPG_BUMP_WINDOW_TICKS;
     const epgWindowWeights = buildEpgWindowWeights(replay, currentTick, epgWindowTicks);
-    const stats = applyTickSpikes(sceneRef.current, spikes, epgWindowWeights, epgWindowTicks, dtSec, currentTick);
+    const stats = applyTickSpikes(sceneRef.current, spikes, epgWindowWeights, epgWindowTicks, dtSec, currentTick, decodeMode);
     let ringInputActive = 0;
     for (const id of spikes) {
       if (ringIdSet.has(id)) ringInputActive += 1;
     }
     setCompassStats({ ...stats, ringActiveCount: ringInputActive });
-  }, [replay, currentTick, ringIdSet]);
+  }, [replay, currentTick, ringIdSet, decodeMode]);
 
   useEffect(() => {
     if (!playing || !replay) return undefined;
+    if (speed === 'irl') {
+      const dtSec = replay.ticks.length > 1
+        ? Math.max(1e-6, replay.ticks[1].time_sec - replay.ticks[0].time_sec)
+        : 0.0001;
+      const ticksPerSecond = Math.max(1, Math.round(1 / dtSec));
+      const intervalMs = 50;
+      const ticksPerStep = Math.max(1, Math.round((ticksPerSecond * intervalMs) / 1000));
+      const timer = window.setInterval(() => {
+        setCurrentTick((prev) => Math.min(replay.ticks.length, prev + ticksPerStep));
+      }, intervalMs);
+      return () => window.clearInterval(timer);
+    }
     const delay = Math.max(1, PLAYBACK_BASE_MS / Math.max(0.1, speed));
     const timer = window.setInterval(() => {
       setCurrentTick((prev) => (prev >= replay.ticks.length ? replay.ticks.length : prev + 1));
@@ -768,6 +889,25 @@ export default function VisualizationPage() {
             All neurons
           </button>
         </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button type="button" onClick={() => setDecodeMode('vector_norm')} style={controlButtonStyle(decodeMode === 'vector_norm')}>
+            Decode: Vector
+          </button>
+          <button type="button" onClick={() => setDecodeMode('sharpened_p2')} style={controlButtonStyle(decodeMode === 'sharpened_p2')}>
+            Decode: Sharp p2
+          </button>
+          <button type="button" onClick={() => setDecodeMode('argmax_bin')} style={controlButtonStyle(decodeMode === 'argmax_bin')}>
+            Decode: Argmax
+          </button>
+          <button type="button" onClick={() => setDecodeMode('ema_vector')} style={controlButtonStyle(decodeMode === 'ema_vector')}>
+            Decode: EMA
+          </button>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button type="button" onClick={() => setArrowSmoothing((v) => !v)} style={controlButtonStyle(arrowSmoothing)}>
+            Arrow smoothing: {arrowSmoothing ? 'ON' : 'OFF'}
+          </button>
+        </div>
         {replay ? (
           <PlaybackControls
             playing={playing}
@@ -792,10 +932,10 @@ export default function VisualizationPage() {
             textOverflow: 'ellipsis',
             fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
           }}
-          title={replay ? `scenario=${replay.meta.scenario ?? 'n/a'} | neurons=${replay.neurons.length} | rendered=${displayNeurons.length} | ticks=${replay.ticks.length} | epg fired=${replay.meta.epg_neuron_unique_fired ?? 'n/a'} | bump angle=${compassStats.bumpAngleDeg == null ? 'n/a' : `${compassStats.bumpAngleDeg.toFixed(1)}deg`} | bump strength=${compassStats.bumpStrength.toFixed(3)} | top bin=${compassStats.epgTopBinIndex}` : undefined}
+          title={replay ? `scenario=${replay.meta.scenario ?? 'n/a'} | decode=${decodeMode} | neurons=${replay.neurons.length} | rendered=${displayNeurons.length} | ticks=${replay.ticks.length} | epg fired=${replay.meta.epg_neuron_unique_fired ?? 'n/a'} | bump angle=${compassStats.bumpAngleDeg == null ? 'n/a' : `${compassStats.bumpAngleDeg.toFixed(1)}deg`} | bump strength=${compassStats.bumpStrength.toFixed(3)} | top bin=${compassStats.epgTopBinIndex}` : undefined}
         >
           {replay
-            ? `scenario=${replay.meta.scenario ?? 'n/a'} | ticks=${replay.ticks.length} | epg fired=${replay.meta.epg_neuron_unique_fired ?? 'n/a'} | bump=${compassStats.bumpAngleDeg == null ? 'n/a' : `${compassStats.bumpAngleDeg.toFixed(1)}deg`} (${compassStats.bumpStrength.toFixed(2)}) | top bin=${compassStats.epgTopBinIndex}`
+            ? `scenario=${replay.meta.scenario ?? 'n/a'} | decode=${decodeMode} | ticks=${replay.ticks.length} | epg fired=${replay.meta.epg_neuron_unique_fired ?? 'n/a'} | bump=${compassStats.bumpAngleDeg == null ? 'n/a' : `${compassStats.bumpAngleDeg.toFixed(1)}deg`} (${compassStats.bumpStrength.toFixed(2)}) | top bin=${compassStats.epgTopBinIndex}`
             : 'Loading replay...'}
         </div>
         {replay ? (

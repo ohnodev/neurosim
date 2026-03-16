@@ -264,33 +264,33 @@ async function runBaselineReplay(
   }
 }
 
-function writeOutputs(
+async function writeOutputs(
   replay: ReplayJson,
   cls: Map<string, ClassificationRow>,
   elapsedMs: number,
   sensoryCounts: Record<string, number>,
   sensoryPopulationSizes: Record<string, number>,
-): void {
+): Promise<void> {
   fs.mkdirSync(LOGS_DIR, { recursive: true });
   fs.writeFileSync(OUT_JSON, `${JSON.stringify(replay, null, 2)}\n`, 'utf8');
 
-  const csvLines = [
-    [
-      'tick',
-      'time_sec',
-      'spike_order',
-      'root_id',
-      'flow',
-      'super_class',
-      'class',
-      'sub_class',
-      'cell_type',
-      'hemibrain_type',
-      'hemilineage',
-      'side',
-      'nerve',
-    ].join(','),
-  ];
+  const csvStream = fs.createWriteStream(OUT_CSV, { encoding: 'utf8' });
+  csvStream.write([
+    'tick',
+    'time_sec',
+    'spike_order',
+    'root_id',
+    'flow',
+    'super_class',
+    'class',
+    'sub_class',
+    'cell_type',
+    'hemibrain_type',
+    'hemilineage',
+    'side',
+    'nerve',
+  ].join(','));
+  csvStream.write('\n');
   let totalSpikes = 0;
   let firstActiveTick = -1;
   let lastActiveTick = -1;
@@ -303,7 +303,7 @@ function writeOutputs(
     for (let i = 0; i < tick.spikes.length; i += 1) {
       const rootId = tick.spikes[i]!;
       const meta = cls.get(rootId);
-      csvLines.push([
+      csvStream.write([
         String(tick.tick),
         tick.time_sec.toFixed(6),
         String(i),
@@ -318,9 +318,13 @@ function writeOutputs(
         meta?.side ?? '',
         meta?.nerve ?? '',
       ].join(','));
+      csvStream.write('\n');
     }
   }
-  fs.writeFileSync(OUT_CSV, `${csvLines.join('\n')}\n`, 'utf8');
+  await new Promise<void>((resolve, reject) => {
+    csvStream.on('error', reject);
+    csvStream.end(() => resolve());
+  });
 
   const summary = [
     'EonSystems baseline replay summary',
@@ -366,7 +370,7 @@ async function main(): Promise<void> {
   ];
   const { replay, forcedEventsByClass } = await runBaselineReplay(sensoryConfigs);
   const elapsedMs = Date.now() - startedAt;
-  writeOutputs(replay, cls, elapsedMs, forcedEventsByClass, {
+  await writeOutputs(replay, cls, elapsedMs, forcedEventsByClass, {
     mechanosensory: sensoryIds.mechanosensory.length,
     thermosensory: sensoryIds.thermosensory.length,
     hygrosensory: sensoryIds.hygrosensory.length,

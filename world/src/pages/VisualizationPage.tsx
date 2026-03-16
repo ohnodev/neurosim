@@ -52,6 +52,8 @@ type SceneState = {
   epgDirectionByIndex: Array<THREE.Vector2 | null>;
   epgBinByIndex: Array<number | null>;
   epgBinPopulation: number[];
+  epgHeatByIndex: number[];
+  lastAppliedTick: number;
   arrowState: {
     angleCurrentDeg: number;
     angleTargetDeg: number;
@@ -71,9 +73,15 @@ const INACTIVE_EPG_COLOR = new THREE.Color(0x4d6fb6);
 const ACTIVE_COLOR = new THREE.Color(0x6eff9e);
 const ACTIVE_RING_COLOR = new THREE.Color(0xff4fd8);
 const ACTIVE_EPG_COLOR = new THREE.Color(0xfff07a);
+const EPG_HEAT_ORANGE = new THREE.Color(0xff9f43);
+const EPG_HEAT_RED = new THREE.Color(0xff3b30);
 const PLAYBACK_BASE_MS = 80;
 const EPG_COMPASS_BINS = 8;
-const EPG_BUMP_WINDOW_MS = 80;
+const EPG_BUMP_WINDOW_TICKS = 5;
+const EPG_TOP_BIN_MIN_SPIKES = 2;
+const EPG_HEAT_TAU_TICKS = 3;
+const EPG_HEAT_ADD = 0.25;
+const EPG_HEAT_MAX = 1.8;
 
 function controlButtonStyle(active: boolean): Record<string, string | number> {
   return {
@@ -100,6 +108,8 @@ type CompassStats = {
   epgWindowSpikes: number;
   epgWindowTicks: number;
   epgWindowMs: number;
+  epgTopBinIndex: number;
+  epgTopBinSpikes: number;
 };
 
 function normalizeAngleDeg(angleDeg: number): number {
@@ -318,6 +328,7 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
   const epgDirectionByIndex: Array<THREE.Vector2 | null> = new Array(n).fill(null);
   const epgBinByIndex: Array<number | null> = new Array(n).fill(null);
   const epgBinPopulation = new Array<number>(EPG_COMPASS_BINS).fill(0);
+  const epgHeatByIndex = new Array<number>(n).fill(0);
 
   for (let i = 0; i < n; i += 1) {
     const neuron = neurons[i]!;
@@ -449,6 +460,8 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
     epgDirectionByIndex,
     epgBinByIndex,
     epgBinPopulation,
+    epgHeatByIndex,
+    lastAppliedTick: 0,
     arrowState,
     dispose,
   };
@@ -470,12 +483,22 @@ function buildEpgWindowWeights(
   return out;
 }
 
+function epgHeatToColor(heat: number): THREE.Color {
+  const t = Math.max(0, Math.min(1, heat / EPG_HEAT_MAX));
+  if (t <= 0) return INACTIVE_EPG_COLOR.clone();
+  if (t < 0.5) {
+    return ACTIVE_EPG_COLOR.clone().lerp(EPG_HEAT_ORANGE, t / 0.5);
+  }
+  return EPG_HEAT_ORANGE.clone().lerp(EPG_HEAT_RED, (t - 0.5) / 0.5);
+}
+
 function applyTickSpikes(
   sceneState: SceneState,
   spikes: string[],
   epgWindowWeights?: Map<string, number>,
   epgWindowTicks = 1,
   dtSec = 0.0001,
+  currentTick = 1,
 ): CompassStats {
   const {
     colorAttr,
@@ -484,10 +507,24 @@ function applyTickSpikes(
     isEpgByIndex,
     epgBinByIndex,
     epgBinPopulation,
+    epgHeatByIndex,
   } = sceneState;
+  const tickDelta = sceneState.lastAppliedTick > 0 ? Math.max(1, currentTick - sceneState.lastAppliedTick) : 1;
+  if (currentTick < sceneState.lastAppliedTick) {
+    epgHeatByIndex.fill(0);
+  }
+  const decayFactor = Math.exp(-(tickDelta / EPG_HEAT_TAU_TICKS));
+  for (let i = 0; i < epgHeatByIndex.length; i += 1) {
+    epgHeatByIndex[i] *= decayFactor;
+    if (epgHeatByIndex[i] < 1e-4) epgHeatByIndex[i] = 0;
+  }
   const count = colorAttr.count;
   for (let i = 0; i < count; i += 1) {
-    const c = isEpgByIndex[i] ? INACTIVE_EPG_COLOR : isRingByIndex[i] ? INACTIVE_RING_COLOR : INACTIVE_COLOR;
+    const c = isEpgByIndex[i]
+      ? epgHeatToColor(epgHeatByIndex[i] ?? 0)
+      : isRingByIndex[i]
+        ? INACTIVE_RING_COLOR
+        : INACTIVE_COLOR;
     colorAttr.setXYZ(i, c.r, c.g, c.b);
   }
   let epgActiveCount = 0;
@@ -498,9 +535,15 @@ function applyTickSpikes(
   for (const id of spikes) {
     const idx = idToIndex.get(id);
     if (idx == null) continue;
-    const c = isEpgByIndex[idx] ? ACTIVE_EPG_COLOR : isRingByIndex[idx] ? ACTIVE_RING_COLOR : ACTIVE_COLOR;
-    colorAttr.setXYZ(idx, c.r, c.g, c.b);
-    if (isRingByIndex[idx]) ringActiveCount += 1;
+    if (isEpgByIndex[idx]) {
+      epgHeatByIndex[idx] = Math.min(EPG_HEAT_MAX, (epgHeatByIndex[idx] ?? 0) + EPG_HEAT_ADD);
+      const c = epgHeatToColor(epgHeatByIndex[idx]);
+      colorAttr.setXYZ(idx, c.r, c.g, c.b);
+    } else {
+      const c = isRingByIndex[idx] ? ACTIVE_RING_COLOR : ACTIVE_COLOR;
+      colorAttr.setXYZ(idx, c.r, c.g, c.b);
+      if (isRingByIndex[idx]) ringActiveCount += 1;
+    }
     if (isEpgByIndex[idx]) {
       epgActiveCount += 1;
       const bin = epgBinByIndex[idx];
@@ -525,6 +568,19 @@ function applyTickSpikes(
     const pop = epgBinPopulation[i] ?? 0;
     return pop > 0 ? v / pop : 0;
   });
+  let epgTopBinIndex = 0;
+  let epgTopBinSpikes = 0;
+  let epgSecondBinSpikes = 0;
+  for (let i = 0; i < epgBinsRaw.length; i += 1) {
+    const v = epgBinsRaw[i] ?? 0;
+    if (v > epgTopBinSpikes) {
+      epgSecondBinSpikes = epgTopBinSpikes;
+      epgTopBinSpikes = v;
+      epgTopBinIndex = i;
+    } else if (v > epgSecondBinSpikes) {
+      epgSecondBinSpikes = v;
+    }
+  }
   const bump = new THREE.Vector2(0, 0);
   let bumpWeightTotal = 0;
   epgLeftCount = 0;
@@ -540,8 +596,17 @@ function applyTickSpikes(
     else if (dx > 0) epgRightCount += w;
     bumpWeightTotal += w;
   }
-  const bumpStrength = bumpWeightTotal > 0 ? bump.length() / bumpWeightTotal : 0;
-  const bumpAngleDeg = bump.lengthSq() > 1e-8 ? (Math.atan2(bump.y, bump.x) * 180) / Math.PI : null;
+  const vectorBumpStrength = bumpWeightTotal > 0 ? bump.length() / bumpWeightTotal : 0;
+  const vectorBumpAngleDeg = bump.lengthSq() > 1e-8 ? (Math.atan2(bump.y, bump.x) * 180) / Math.PI : null;
+  const topBinDominance = epgTopBinSpikes > 0
+    ? (epgTopBinSpikes - epgSecondBinSpikes) / epgTopBinSpikes
+    : 0;
+  const hasTopBinSignal = epgTopBinSpikes >= EPG_TOP_BIN_MIN_SPIKES && topBinDominance >= 0.15;
+  const topBinAngleDeg = (epgTopBinIndex / EPG_COMPASS_BINS) * 360;
+  const bumpAngleDeg = hasTopBinSignal ? topBinAngleDeg : vectorBumpAngleDeg;
+  const bumpStrength = hasTopBinSignal
+    ? Math.max(vectorBumpStrength, Math.min(1, epgTopBinSpikes / Math.max(1, windowSpikeTotal)))
+    : vectorBumpStrength;
   if (bumpAngleDeg != null) {
     sceneState.arrowState.angleTargetDeg = normalizeAngleDeg(bumpAngleDeg);
     sceneState.arrowState.strengthTarget = Math.max(0.08, bumpStrength);
@@ -549,6 +614,7 @@ function applyTickSpikes(
   colorAttr.needsUpdate = true;
   const epgBinMax = epgBins.reduce((m, v) => Math.max(m, v), 0);
   const epgBinNorm = epgBinMax > 0 ? epgBins.map((v) => v / epgBinMax) : epgBins;
+  sceneState.lastAppliedTick = currentTick;
   return {
     epgActiveCount,
     epgLeftCount,
@@ -560,6 +626,8 @@ function applyTickSpikes(
     epgWindowSpikes: windowSpikeTotal,
     epgWindowTicks,
     epgWindowMs: epgWindowTicks * dtSec * 1000,
+    epgTopBinIndex,
+    epgTopBinSpikes,
   };
 }
 
@@ -582,6 +650,8 @@ export default function VisualizationPage() {
     epgWindowSpikes: 0,
     epgWindowTicks: 1,
     epgWindowMs: 0,
+    epgTopBinIndex: 0,
+    epgTopBinSpikes: 0,
   });
   const [error, setError] = useState<string | null>(null);
   const sceneContainerRef = useRef<HTMLDivElement | null>(null);
@@ -645,9 +715,9 @@ export default function VisualizationPage() {
     const dtSec = replay.ticks.length > 1
       ? Math.max(1e-6, replay.ticks[1].time_sec - replay.ticks[0].time_sec)
       : 0.0001;
-    const epgWindowTicks = Math.max(1, Math.round((EPG_BUMP_WINDOW_MS / 1000) / dtSec));
+    const epgWindowTicks = EPG_BUMP_WINDOW_TICKS;
     const epgWindowWeights = buildEpgWindowWeights(replay, currentTick, epgWindowTicks);
-    const stats = applyTickSpikes(sceneRef.current, spikes, epgWindowWeights, epgWindowTicks, dtSec);
+    const stats = applyTickSpikes(sceneRef.current, spikes, epgWindowWeights, epgWindowTicks, dtSec, currentTick);
     let ringInputActive = 0;
     for (const id of spikes) {
       if (ringIdSet.has(id)) ringInputActive += 1;
@@ -684,16 +754,6 @@ export default function VisualizationPage() {
           <button type="button" onClick={() => setDatasetMode('baseline')} style={controlButtonStyle(datasetMode === 'baseline')}>
             Baseline
           </button>
-          <button type="button" onClick={() => setDatasetMode('left_bias_odor')} style={controlButtonStyle(datasetMode === 'left_bias_odor')}>
-            Left-bias odor
-          </button>
-          <button
-            type="button"
-            onClick={() => setDatasetMode('joe_toggle_300')}
-            style={controlButtonStyle(datasetMode === 'joe_toggle_300')}
-          >
-            JO-E toggle 300
-          </button>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <button type="button" onClick={() => setViewMode('raw')} style={controlButtonStyle(viewMode === 'raw')}>Raw</button>
@@ -721,21 +781,23 @@ export default function VisualizationPage() {
             onSpeedChange={setSpeed}
           />
         ) : null}
-        <div style={{ fontSize: 12, opacity: 0.9 }}>
+        <div
+          style={{
+            fontSize: 12,
+            opacity: 0.92,
+            minHeight: 18,
+            lineHeight: '18px',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+          }}
+          title={replay ? `scenario=${replay.meta.scenario ?? 'n/a'} | neurons=${replay.neurons.length} | rendered=${displayNeurons.length} | ticks=${replay.ticks.length} | epg fired=${replay.meta.epg_neuron_unique_fired ?? 'n/a'} | bump angle=${compassStats.bumpAngleDeg == null ? 'n/a' : `${compassStats.bumpAngleDeg.toFixed(1)}deg`} | bump strength=${compassStats.bumpStrength.toFixed(3)} | top bin=${compassStats.epgTopBinIndex}` : undefined}
+        >
           {replay
-            ? `dataset=${datasetMode} | scenario=${replay.meta.scenario ?? 'n/a'} | neurons=${replay.neurons.length} (ring=${ringCount}, epg=${epgCount}) | rendered=${displayNeurons.length} | ticks=${replay.ticks.length} | ring fired=${replay.meta.ring_neuron_unique_fired} | epg fired=${replay.meta.epg_neuron_unique_fired ?? 'n/a'} | view=${viewMode} | focus=${focusPopulation}`
-            : 'Loading preprocessed brain subset replay...'}
+            ? `scenario=${replay.meta.scenario ?? 'n/a'} | ticks=${replay.ticks.length} | epg fired=${replay.meta.epg_neuron_unique_fired ?? 'n/a'} | bump=${compassStats.bumpAngleDeg == null ? 'n/a' : `${compassStats.bumpAngleDeg.toFixed(1)}deg`} (${compassStats.bumpStrength.toFixed(2)}) | top bin=${compassStats.epgTopBinIndex}`
+            : 'Loading replay...'}
         </div>
-        {replay ? (
-          <div style={{ fontSize: 12, opacity: 0.95 }}>
-            epg tick: active={compassStats.epgActiveCount} left={compassStats.epgLeftCount} right={compassStats.epgRightCount}
-            {' '}| bump angle={compassStats.bumpAngleDeg == null ? 'n/a' : `${compassStats.bumpAngleDeg.toFixed(1)}deg`}
-            {' '}| bump strength={compassStats.bumpStrength.toFixed(3)}
-            {' '}| epg window spikes={compassStats.epgWindowSpikes}
-            {' '}| epg window={Math.round(compassStats.epgWindowMs)}ms
-            {' '}| ring input active={compassStats.ringActiveCount}
-          </div>
-        ) : null}
         {replay ? (
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
             <svg width="120" height="120" viewBox="-60 -60 120 120" style={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8 }}>

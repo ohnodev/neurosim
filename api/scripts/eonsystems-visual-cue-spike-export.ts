@@ -228,10 +228,19 @@ function createSeededRandom(seed: number): () => number {
 
 function buildVisualAfferentPool(cls: Map<string, ClassificationRow>): Array<{ id: string; prefAngleRad: number }> {
   const posMap = loadPositionMap();
-  const visual = [...cls.values()].filter(
+  const visualAfferent = [...cls.values()].filter(
     (r) => r.flow === 'afferent' && r.super_class === 'sensory' && r.class === 'visual',
   );
-  const withPos = visual
+  const erRing = [...cls.values()].filter(
+    (r) => r.flow === 'intrinsic'
+      && r.super_class === 'central'
+      && r.class === 'CX'
+      && r.sub_class === 'ring_neuron'
+      && r.hemibrain_type.startsWith('ER'),
+  );
+  // Prefer ER ring neurons for visual cue drive in this connectome: they couple to compass circuitry.
+  const selectedDriverRows = erRing.length > 0 ? erRing : visualAfferent;
+  const withPos = selectedDriverRows
     .map((r) => ({ id: r.root_id, pos: posMap.get(r.root_id) }))
     .filter((x): x is { id: string; pos: { x: number; y: number } } => x.pos != null);
   const cx = median(withPos.map((x) => x.pos.x));
@@ -412,7 +421,7 @@ function writeOutputs(
     `dt_sec: ${replay.meta.dt_sec}`,
     `olfactory_baseline_rate_hz: ${replay.meta.baseline_rate_hz}`,
     `closed_loop: true`,
-    `visual_driver_population: afferent/sensory/visual`,
+    `visual_driver_population: intrinsic/central/CX/ring_neuron/ER (fallback afferent/sensory/visual)`,
     `visual_pool_size: ${visualPoolSize}`,
     `visual_stripe_hz: ${VISUAL_STRIPE_HZ}`,
     `visual_stripe_target_count: ${VISUAL_STRIPE_TARGET_COUNT}`,

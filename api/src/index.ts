@@ -47,6 +47,7 @@ const CLIENT_ACTIVITY_TTL_MS = Math.max(250, Number(process.env.NEUROSIM_CLIENT_
 const CLIENT_ACTIVITY_FLOOR = Math.min(0.4, Math.max(0.01, Number(process.env.NEUROSIM_CLIENT_ACTIVITY_FLOOR ?? 0.08)));
 const CLIENT_INPUT_ACTIVITY_DEFAULT = Math.min(0.9, Math.max(CLIENT_ACTIVITY_FLOOR, Number(process.env.NEUROSIM_CLIENT_INPUT_ACTIVITY ?? 0.55)));
 const CLASSIFICATION_CSV_PATH = path.resolve(process.cwd(), '..', 'data', 'raw', 'classification.csv');
+const OLFACTORY_AFFERENTS_PATH = path.resolve(process.cwd(), '..', 'data', 'olfactory-afferents.json');
 
 function fnv1a32(s: string): number {
   let h = 0x811c9dc5;
@@ -124,6 +125,23 @@ function loadAfferentSensoryIdsByClass(): {
 }
 
 const sensoryIdsByClass = loadAfferentSensoryIdsByClass();
+function loadOlfactoryAfferentIds(): string[] {
+  try {
+    const raw = fs.readFileSync(OLFACTORY_AFFERENTS_PATH, 'utf8');
+    const parsed = JSON.parse(raw) as {
+      left?: string[];
+      right?: string[];
+      unknown?: string[];
+    };
+    return [...(parsed.left ?? []), ...(parsed.right ?? []), ...(parsed.unknown ?? [])]
+      .map((v) => String(v))
+      .filter((v) => v.length > 0);
+  } catch {
+    return [];
+  }
+}
+const olfactoryAfferentIds = loadOlfactoryAfferentIds();
+const olfactoryAfferentSet = new Set(olfactoryAfferentIds);
 
 function computeViewerSubsetIndices(total: number): number[] {
   if (total <= VIEWER_NEURON_LIMIT) return Array.from({ length: total }, (_, i) => i);
@@ -144,18 +162,18 @@ const CUDA_ONLY = process.env.NEUROSIM_MODE === 'cuda' || process.env.USE_CUDA =
 const PROBE_RETRIES = 10;
 const PROBE_DELAY_MS = 2000;
 
-let backendInfo = { rust: true, gpu: process.env.USE_CUDA === '1' };
+let backendInfo = { engine: 'python-brain', gpu: process.env.USE_CUDA === '1' };
 let probeOk = false;
 for (let i = 0; i < PROBE_RETRIES; i++) {
   try {
     await socketClient.ping();
     console.log('[backend] handshake: API ↔ brain-service OK');
-    backendInfo = { rust: true, gpu: process.env.USE_CUDA === '1' };
+    backendInfo = { engine: 'python-brain', gpu: process.env.USE_CUDA === '1' };
     probeOk = true;
     break;
   } catch (e) {
     if (i === PROBE_RETRIES - 1) {
-      console.error('[backend] Brain service (Unix socket) unavailable after', PROBE_RETRIES, 'retries. Is neurosim-brain running?', e);
+      console.error('[backend] Brain service (Unix socket) unavailable after', PROBE_RETRIES, 'retries. Is python-brain running?', e);
       process.exit(1);
     }
     console.warn('[backend] Brain service not ready, retry', i + 1, '/', PROBE_RETRIES, 'in', PROBE_DELAY_MS, 'ms');
@@ -166,7 +184,9 @@ if (probeOk && CUDA_ONLY && !backendInfo.gpu) {
   console.error('[backend] CUDA mode required but brain-service not using GPU. Refusing to start.');
   process.exit(1);
 }
-console.log(`[backend] brain=unix-socket rust=${backendInfo.rust} gpu=${backendInfo.gpu} mode=${CUDA_ONLY ? 'cuda-only' : 'auto'}`);
+console.log(
+  `[backend] brain=unix-socket engine=${backendInfo.engine} gpu=${backendInfo.gpu} mode=${CUDA_ONLY ? 'cuda-only' : 'auto'}`,
+);
 
 const GROUND_Z = 0.35;
 const INITIAL_SPREAD = 4;
@@ -682,9 +702,8 @@ function startSim(): void {
         const avgJs = rustCalls ? Math.round(jsMs / rustCalls) : 0;
         const avgSocketRoundtrip = batchCalls ? Math.round(socketRoundtripMs / batchCalls) : 0;
         const avgSocketWait = batchCalls ? Math.round(socketWaitMs / batchCalls) : 0;
-        const timingStr = backendInfo.rust
-          ? ` stepMs=${stepMs} jsMs=${jsMs} avgStep=${avgStep} avgJs=${avgJs} maxStep=${maxStepMs} maxJs=${maxJsMs} socketRoundtripMs=${socketRoundtripMs} socketWaitMs=${socketWaitMs} avgSocketRoundtrip=${avgSocketRoundtrip} avgSocketWait=${avgSocketWait} batchCalls=${batchCalls} batchSize=${batchSize} rustCalls=${rustCalls} synthFrames=${FRAMES_PER_BATCH} payloadMs=${buildPayloadMs} schedulerLagMs=${schedulerLagMs} droppedTicks=${droppedSimTicks}`
-          : '';
+        const timingStr =
+          ` stepMs=${stepMs} jsMs=${jsMs} avgStep=${avgStep} avgJs=${avgJs} maxStep=${maxStepMs} maxJs=${maxJsMs} socketRoundtripMs=${socketRoundtripMs} socketWaitMs=${socketWaitMs} avgSocketRoundtrip=${avgSocketRoundtrip} avgSocketWait=${avgSocketWait} batchCalls=${batchCalls} batchSize=${batchSize} simCalls=${rustCalls} synthFrames=${FRAMES_PER_BATCH} payloadMs=${buildPayloadMs} schedulerLagMs=${schedulerLagMs} droppedTicks=${droppedSimTicks}`;
         console.log('[sim] t=', last?.t.toFixed(1), 'flies=', last?.flies.length ?? 0, first ? `first=(${first.x?.toFixed(2)},${first.y?.toFixed(2)})` : '', 'clients=', wsClients.size, 'loopMs=', loopMs, timingStr);
       }
     } finally {
@@ -729,7 +748,14 @@ app.get('/api/connectome', (_, res) => {
 });
 
 app.get('/api/health', (_, res) =>
-  res.json({ ok: true, backend: { rust: backendInfo.rust, gpu: backendInfo.gpu } }));
+  res.json({
+    ok: true,
+    backend: {
+      engine: backendInfo.engine,
+      gpu: backendInfo.gpu,
+      rust: backendInfo.engine === 'rust',
+    },
+  }));
 
 /** Debug position buffer for smoothness testing; only when DEBUG_POSITIONS=1 */
 const DEBUG_POSITIONS_ENABLED = process.env.DEBUG_POSITIONS === '1';
@@ -803,8 +829,17 @@ app.get('/api/neurons', (req, res) => {
 
 app.post('/api/neurosim-baseline/export', async (req, res) => {
   try {
+    const startedAt = Date.now();
     const ticks = Math.max(1, Math.min(20_000, Number(req.body?.ticks ?? 1000)));
-    const dtSec = Math.max(0.0001, Math.min(0.1, Number(req.body?.dt_sec ?? 0.001)));
+    const rawDt = req.body?.dt_sec ?? req.body?.dtSec ?? 0.001;
+    const requestedDtSec = Number(rawDt);
+    const defaultDtSec = 0.001;
+    const validRequestedDt = Number.isFinite(requestedDtSec) ? requestedDtSec : defaultDtSec;
+    // Fly-Brain exact mode is default for this export path.
+    const flyBrainExact = req.body?.flyBrainExact !== false;
+    const dtSec = flyBrainExact
+      ? 0.0001
+      : Math.max(0.0001, Math.min(0.1, validRequestedDt));
     const olfactoryBaselineHz = Math.max(0, Number(req.body?.olfactoryBaselineHz ?? 20));
     const mechanoHz = Math.max(0, Number(req.body?.mechanoHz ?? 0));
     const thermoHz = Math.max(0, Number(req.body?.thermoHz ?? 0.5));
@@ -830,9 +865,36 @@ app.post('/api/neurosim-baseline/export', async (req, res) => {
     };
 
     const { simId } = await socketClient.createSim();
+    const afferentPoolSet = new Set<string>([
+      ...olfactoryAfferentIds,
+      ...sensoryIdsByClass.mechanosensory,
+      ...sensoryIdsByClass.thermosensory,
+      ...sensoryIdsByClass.hygrosensory,
+      ...sensoryIdsByClass.gustatory,
+    ]);
+    const forcedUniqueByClass = {
+      mechanosensory: new Set<string>(),
+      thermosensory: new Set<string>(),
+      hygrosensory: new Set<string>(),
+      gustatory: new Set<string>(),
+    };
+    const forcedUniqueAfferent = new Set<string>();
+    console.log(
+      `[neurosim-baseline] afferent pools olfactory=${olfactoryAfferentIds.length} mechanosensory=${sensoryIdsByClass.mechanosensory.length} thermosensory=${sensoryIdsByClass.thermosensory.length} hygrosensory=${sensoryIdsByClass.hygrosensory.length} gustatory=${sensoryIdsByClass.gustatory.length} totalUnique=${afferentPoolSet.size}`,
+    );
+    console.log(
+      `[neurosim-baseline] start simId=${simId} ticks=${ticks} dt_sec=${dtSec} batchSize=${batchSize} olfHz=${olfactoryBaselineHz} flyBrainExact=${flyBrainExact}`,
+    );
+    if (flyBrainExact && Number.isFinite(requestedDtSec) && Math.abs(requestedDtSec - 0.0001) > 1e-12) {
+      console.log(
+        `[neurosim-baseline] forcing fly-brain dt from requested=${requestedDtSec} to dt_sec=0.0001`,
+      );
+    }
     let nextTick = 1;
-    const replayTicks: Array<{ tick: number; time_sec: number; spikes: string[] }> = [];
+    const replayTicks: Array<socketClient.ReplayTick> = [];
+    let lastProgressPct = -1;
     while (nextTick <= ticks) {
+      const batchStartedAt = Date.now();
       const take = Math.min(batchSize, ticks - nextTick + 1);
       const forcedByStep: string[][] = [];
       for (let i = 0; i < take; i += 1) {
@@ -840,6 +902,22 @@ app.post('/api/neurosim-baseline/export', async (req, res) => {
         const forcedThermo = sampleForced(sensoryIdsByClass.thermosensory, thermoHz);
         const forcedHygro = sampleForced(sensoryIdsByClass.hygrosensory, hygroHz);
         const forcedGust = sampleForced(sensoryIdsByClass.gustatory, gustatoryHz);
+        for (const id of forcedMech) {
+          forcedUniqueByClass.mechanosensory.add(id);
+          forcedUniqueAfferent.add(id);
+        }
+        for (const id of forcedThermo) {
+          forcedUniqueByClass.thermosensory.add(id);
+          forcedUniqueAfferent.add(id);
+        }
+        for (const id of forcedHygro) {
+          forcedUniqueByClass.hygrosensory.add(id);
+          forcedUniqueAfferent.add(id);
+        }
+        for (const id of forcedGust) {
+          forcedUniqueByClass.gustatory.add(id);
+          forcedUniqueAfferent.add(id);
+        }
         forcedSpikeEvents.mechanosensory += forcedMech.length;
         forcedSpikeEvents.thermosensory += forcedThermo.length;
         forcedSpikeEvents.hygrosensory += forcedHygro.length;
@@ -856,6 +934,18 @@ app.post('/api/neurosim-baseline/export', async (req, res) => {
       });
       replayTicks.push(...batch);
       nextTick += take;
+      const completed = replayTicks.length;
+      const pct = Math.floor((completed / ticks) * 100);
+      const elapsedMs = Date.now() - startedAt;
+      const batchMs = Date.now() - batchStartedAt;
+      if (pct >= lastProgressPct + 1 || completed === ticks) {
+        lastProgressPct = pct;
+        const rate = elapsedMs > 0 ? completed / (elapsedMs / 1000) : 0;
+        const etaSec = rate > 0 ? Math.max(0, (ticks - completed) / rate) : 0;
+        console.log(
+          `[neurosim-baseline] progress ${completed}/${ticks} (${pct}%) batchMs=${batchMs} elapsedMs=${elapsedMs} etaSec=${etaSec.toFixed(1)}`,
+        );
+      }
     }
 
     const neurons = connectome.neurons
@@ -878,8 +968,18 @@ app.post('/api/neurosim-baseline/export', async (req, res) => {
     let overallSpikeEvents = 0;
     const epgUnique = new Set<string>();
     let epgSpikeEvents = 0;
+    const observedAfferentUnique = new Set<string>();
+    let observedAfferentSpikeEvents = 0;
+    const observedOlfactoryUnique = new Set<string>();
+    let observedOlfactorySpikeEvents = 0;
     for (const t of replayTicks) {
-      overallSpikeEvents += t.spikes.length;
+      overallSpikeEvents += t.totalSpikeEventsStep ?? t.spikes.length;
+      const afferentFromSpikes = t.spikes.filter((id) => afferentPoolSet.has(id));
+      const olfactoryFromSpikes = t.spikes.filter((id) => olfactoryAfferentSet.has(id));
+      observedAfferentSpikeEvents += t.afferentSpikeEventsStep ?? afferentFromSpikes.length;
+      observedOlfactorySpikeEvents += t.olfactorySpikeEventsStep ?? olfactoryFromSpikes.length;
+      for (const id of t.afferentSpikeIdsStep ?? afferentFromSpikes) observedAfferentUnique.add(id);
+      for (const id of t.olfactorySpikeIdsStep ?? olfactoryFromSpikes) observedOlfactoryUnique.add(id);
       for (const id of t.spikes) {
         overallUnique.add(id);
         if (epgIds.has(id)) {
@@ -902,6 +1002,7 @@ app.post('/api/neurosim-baseline/export', async (req, res) => {
         epg_neuron_unique_fired: epgUnique.size,
         scenario: 'neurosim_natural_20hz_1000ticks',
         baseline: {
+          flyBrainExact,
           olfactoryBaselineHz,
           mechanoHz,
           thermoHz,
@@ -923,6 +1024,7 @@ app.post('/api/neurosim-baseline/export', async (req, res) => {
       'NeuroSim baseline export summary',
       `ticks: ${replayTicks.length}`,
       `dt_sec: ${dtSec}`,
+      `flyBrainExact: ${flyBrainExact}`,
       `olfactoryBaselineHz: ${olfactoryBaselineHz}`,
       `mechanoHz: ${mechanoHz}`,
       `thermoHz: ${thermoHz}`,
@@ -933,9 +1035,23 @@ app.post('/api/neurosim-baseline/export', async (req, res) => {
       `epgSpikeEvents: ${epgSpikeEvents}`,
       `epgUniqueFiredNeurons: ${epgUnique.size}`,
       `forcedSpikeEvents: ${JSON.stringify(forcedSpikeEvents)}`,
+      `forcedUniqueAfferentIds: ${forcedUniqueAfferent.size}`,
+      `forcedUniqueByClass: ${JSON.stringify({
+        mechanosensory: forcedUniqueByClass.mechanosensory.size,
+        thermosensory: forcedUniqueByClass.thermosensory.size,
+        hygrosensory: forcedUniqueByClass.hygrosensory.size,
+        gustatory: forcedUniqueByClass.gustatory.size,
+      })}`,
+      `observedAfferentSpikeEvents: ${observedAfferentSpikeEvents}`,
+      `observedAfferentUniqueFired: ${observedAfferentUnique.size}`,
+      `observedOlfactorySpikeEvents: ${observedOlfactorySpikeEvents}`,
+      `observedOlfactoryUniqueFired: ${observedOlfactoryUnique.size}`,
       `outputReplayPath: ${outPath}`,
     ];
     fs.writeFileSync(summaryPath, `${summary.join('\n')}\n`, 'utf8');
+    console.log(
+      `[neurosim-baseline] done simId=${simId} ticks=${replayTicks.length} elapsedMs=${Date.now() - startedAt} out=${outPath} forcedUniqueAfferent=${forcedUniqueAfferent.size} observedAfferentUnique=${observedAfferentUnique.size} observedOlfactoryUnique=${observedOlfactoryUnique.size}`,
+    );
     res.json({
       ok: true,
       ticks: replayTicks.length,
@@ -946,6 +1062,17 @@ app.post('/api/neurosim-baseline/export', async (req, res) => {
       epgSpikeEvents,
       epgUniqueFiredNeurons: epgUnique.size,
       forcedSpikeEvents,
+      forcedUniqueAfferentIds: forcedUniqueAfferent.size,
+      forcedUniqueByClass: {
+        mechanosensory: forcedUniqueByClass.mechanosensory.size,
+        thermosensory: forcedUniqueByClass.thermosensory.size,
+        hygrosensory: forcedUniqueByClass.hygrosensory.size,
+        gustatory: forcedUniqueByClass.gustatory.size,
+      },
+      observedAfferentSpikeEvents,
+      observedAfferentUniqueFired: observedAfferentUnique.size,
+      observedOlfactorySpikeEvents,
+      observedOlfactoryUniqueFired: observedOlfactoryUnique.size,
     });
   } catch (err) {
     console.error('[neurosim-baseline] export error:', err);

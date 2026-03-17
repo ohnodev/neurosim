@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # PM2 Manager Script for NeuroSim
-# Manages: neurosim-brain (Rust socket service), neurosim-api (Node API)
+# Manages: python-brain (Python socket service), neurosim-api (Node API)
 
 set -e
 
@@ -9,9 +9,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOGS_DIR="$SCRIPT_DIR/logs"
 ECOSYSTEM_FILE="$SCRIPT_DIR/ecosystem.config.js"
 API_DIR="$SCRIPT_DIR/api"
-BRAIN_SERVICE_DIR="$API_DIR/brain-sim-service"
+BRAIN_SERVICE_DIR="$API_DIR/python-brain"
 SERVICE="neurosim-api"
-BRAIN_SERVICE="neurosim-brain"
+BRAIN_SERVICE="python-brain"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -43,13 +43,14 @@ module.exports = {
     {
       name: '$BRAIN_SERVICE',
       cwd: '$BRAIN_SERVICE_DIR',
-      script: 'target/release/brain-service',
+      script: 'sh',
+      args: ['-c', 'conda run -n brain-fly python service.py'],
       instances: 1,
       autorestart: true,
       watch: false,
       log_file: '/dev/null',
       out_file: '/dev/null',
-      error_file: '$LOGS_DIR/neurosim-brain.log',
+      error_file: '$LOGS_DIR/python-brain.log',
       merge_logs: false,
       log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
       env_file: '$API_DIR/.env',
@@ -110,10 +111,8 @@ stop_service() {
 
 restart_service() {
     create_logs_dir
-    log_info "Building $BRAIN_SERVICE..."
-    (cd "$BRAIN_SERVICE_DIR" && cargo build --release 2>/dev/null) || \
-    (cd "$BRAIN_SERVICE_DIR" && cargo build --release --no-default-features 2>/dev/null) || \
-    { log_warning "Brain build failed, using existing binary"; }
+    log_info "Verifying $BRAIN_SERVICE Python service..."
+    (cd "$BRAIN_SERVICE_DIR" && conda run -n brain-fly python -c "import importlib; importlib.import_module('service')") || { log_error "python-brain validation failed"; exit 1; }
     log_info "Rebuilding $SERVICE..."
     (cd "$API_DIR" && npm run build) || { log_error "API build failed"; exit 1; }
     log_info "Stopping services..."
@@ -147,7 +146,7 @@ init() {
 }
 
 show_help() {
-    echo "PM2 Manager for NeuroSim (brain-service + API)"
+    echo "PM2 Manager for NeuroSim (python-brain + API)"
     echo "Usage: $0 {init|start|stop|restart|quick-restart|status|logs [N]|clean-logs|help}"
     echo "  restart       - Full restart: build brain+API, stop, start both"
     echo "  quick-restart - Restart both without rebuild"

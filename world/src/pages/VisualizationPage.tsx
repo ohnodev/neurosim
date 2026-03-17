@@ -120,6 +120,10 @@ type SceneState = {
     smoothingEnabled: boolean;
     smoothAlpha: number;
   };
+  tempC: THREE.Color;
+  tempG: THREE.Color;
+  tempEpgInactive: THREE.Color;
+  tempEpgHot: THREE.Color;
   dispose: () => void;
 };
 
@@ -142,13 +146,58 @@ const ACTIVE_DELTA7_COLOR = new THREE.Color(0xd08cff);
 const EPG_HEAT_ORANGE = new THREE.Color(0xff9f43);
 const EPG_HEAT_RED = new THREE.Color(0xff3b30);
 const NO_GLOW_COLOR = new THREE.Color(0x000000);
-/** Per-bin hue shift (0–1) so 8 EPG bins are visually distinct in the main circle. */
-const EPG_BIN_HUE_SHIFT = 0.12;
 const PLAYBACK_BASE_MS = 80;
-/** EPG compass bins: 8 = glomerulus 1–8 from label (R1+L1→0, …, R8+L8→7). L+R with same number share bin. */
-const EPG_COMPASS_BINS = 8;
+/** EPG compass bins: 16 alternating L/R wedges in anatomical order from top clockwise. */
+const EPG_COMPASS_BINS = 16;
+const EPG_SLICE_ORDER_CLOCKWISE = [
+  'L5', 'R4', 'L6', 'R3', 'L7', 'R2', 'L8', 'R1',
+  'L1', 'R8', 'L2', 'R7', 'L3', 'R6', 'L4', 'R5',
+];
+const EPG_LABEL_TO_BIN = new Map(EPG_SLICE_ORDER_CLOCKWISE.map((label, i) => [label, i]));
+
+/** Parse a two-column CSV line; supports quoted fields (RFC4180-style). processed_labels.csv must be root_id,label. */
+function parseProcessedLabelsLine(line: string): [string, string] | null {
+  const t = line.trim();
+  if (!t) return null;
+  const cols: string[] = [];
+  let i = 0;
+  while (i < t.length && cols.length < 2) {
+    if (t[i] === '"') {
+      i += 1;
+      let field = '';
+      while (i < t.length) {
+        if (t[i] === '"') {
+          i += 1;
+          if (i < t.length && t[i] === '"') {
+            field += '"';
+            i += 1;
+          } else break;
+        } else {
+          field += t[i];
+          i += 1;
+        }
+      }
+      cols.push(field);
+      if (i < t.length && t[i] === ',') i += 1;
+    } else {
+      const comma = t.indexOf(',', i);
+      const field = (comma >= 0 ? t.slice(i, comma) : t.slice(i)).trim();
+      cols.push(field);
+      i = comma >= 0 ? comma + 1 : t.length;
+    }
+  }
+  if (cols.length >= 2) return [cols[0].trim(), cols[1].trim()];
+  if (cols.length === 1) return [cols[0].trim(), ''];
+  return null;
+}
+const EPG_SLICE_COLORS = [
+  '#6b4cc4', '#8ea4e7', '#b4d7e7', '#7fd47f',
+  '#d9f095', '#f1ef9a', '#f6df99', '#f6c79c',
+  '#f2a39a', '#e18a7e', '#d978c5', '#bf5cb8',
+  '#a95ac6', '#8e67d6', '#7a7bdd', '#6f5ccf',
+];
 /** Neuron stays lit for this many ticks after spike; brightness decays linearly to transparent. */
-const SPIKE_DISPLAY_TICKS = 3;
+const SPIKE_DISPLAY_TICKS = 300;
 /** Rotate compass so right=screen right, left=screen left. Applied to spatial projection. */
 const COMPASS_ROTATION_RAD = -Math.PI / 2;
 /** Shorter window so arrow tracks current bump (was 12; with 1ms step, 5 ticks ≈ 5ms). */
@@ -159,12 +208,32 @@ const DELTA7_OPPOSITE_INHIBIT_WEIGHT = 0.55;
 const EPG_INACTIVE_BIN_PENALTY = 0.35;
 /** If a bin has this fraction of its EPG population active (in window), we point the arrow at that bin center (clear bump signal). */
 const EPG_DOMINANT_BIN_THRESHOLD = 0.8;
-const PREFERRED_REPLAY_ID = 'neurosim_natural_1000tick_replay';
+const PREFERRED_REPLAY_ID = 'neurosim_pen5000hz_1s_replay';
 const DEFAULT_REPLAY_DATASETS: ReplayDataset[] = [
   {
-    id: 'neurosim_natural_1000tick_replay',
-    label: 'neurosim natural 1000 ticks',
-    url: '/neurosim_natural_1000tick_replay.json',
+    id: 'neurosim_pen5000hz_1s_replay',
+    label: 'PEN 5000 Hz, 1 s, 10k ticks (EPG export, 4x recurrence boost)',
+    url: '/neurosim_pen5000hz_1s_replay.json',
+  },
+  {
+    id: 'neurosim_pen50hz_1s_replay',
+    label: 'PEN 50 Hz, 1 s, 10k ticks (EPG export, 4x recurrence boost)',
+    url: '/neurosim_pen50hz_1s_replay.json',
+  },
+  {
+    id: 'neurosim_pen40hz_1s_replay',
+    label: 'PEN 40 Hz, 1 s, 10k ticks (EPG export, 4x recurrence boost)',
+    url: '/neurosim_pen40hz_1s_replay.json',
+  },
+  {
+    id: 'neurosim_pen40hz_4k_leftbump_replay',
+    label: 'PEN 40 Hz 4k ticks, left +20% at 3k (60/40) → bump rotation',
+    url: '/neurosim_pen40hz_4k_leftbump_replay.json',
+  },
+  {
+    id: 'neurosim_rust_pen40hz_1s_replay',
+    label: 'Rust PEN 40 Hz, 1 s, 10k ticks (Rust brain run_steps)',
+    url: '/neurosim_rust_pen40hz_1s_replay.json',
   },
 ];
 
@@ -232,6 +301,11 @@ function compassHeatFill(v: number, alpha = 0.95): string {
 }
 
 const BIN_GAP_RAD = (Math.PI / 180) * 4;
+
+function getEpgSliceColor(bin: number | null | undefined): THREE.Color {
+  const idx = bin != null && bin >= 0 && bin < EPG_SLICE_COLORS.length ? bin : 0;
+  return new THREE.Color(EPG_SLICE_COLORS[idx] ?? '#6b4cc4');
+}
 
 function getWedgeParams(i: number, binCount: number): { wedge: number; a0: number; a1: number; midAngle: number } {
   const wedge = (Math.PI * 2) / binCount - BIN_GAP_RAD;
@@ -352,29 +426,29 @@ function createGlowTexture(): THREE.Texture {
   return texture;
 }
 
-/** Extract DM number (1–4) from hemilineage e.g. DM2_CX_d1 → 2. Fallback when no tile from replay. */
-function extractDmNumber(hemilineage: string): number {
-  const m = hemilineage?.trim().match(/^DM([1-4])_/);
-  return m ? Math.max(1, Math.min(4, Number(m[1]) ?? 0)) : 0;
+function getEffectiveEpgLabel(
+  neuron: ReplayNeuron,
+  processedLabelMap: Map<string, string> | null,
+): string | undefined {
+  const fromMap = processedLabelMap?.get(neuron.root_id);
+  if (fromMap && EPG_LABEL_TO_BIN.has(fromMap)) return fromMap;
+  const side = (neuron.side ?? '').trim().toLowerCase();
+  const tile = neuron.epg_tile_index_0_7;
+  if ((side === 'left' || side === 'right') && typeof tile === 'number') {
+    const label = `${side === 'left' ? 'L' : 'R'}${tile + 1}`;
+    if (EPG_LABEL_TO_BIN.has(label)) return label;
+  }
+  const parsed = (neuron.processed_label ?? '').toUpperCase().replace(/[^LR0-9]/g, '');
+  return EPG_LABEL_TO_BIN.has(parsed) ? parsed : undefined;
 }
-/** Fallback tile 0–7 from hemilineage when tile map lacks neuron. DM1→0,1, etc. */
-function hemilineageToTile(_side: string, hemilineage: string): number {
-  const dm = extractDmNumber(hemilineage);
-  return dm >= 1 && dm <= 4 ? (dm - 1) * 2 : 0;
-}
-/** EPG tile for compass layout: ALWAYS from epg-tile-map (canonical). Replay data is ignored for layout. */
+
 function getEffectiveEpgTile(
   neuron: ReplayNeuron,
-  epgTileMap: Map<string, number> | null,
+  processedLabelMap: Map<string, string> | null,
 ): number | undefined {
-  const fromMap = epgTileMap?.get(neuron.root_id);
-  if (fromMap != null && fromMap >= 0 && fromMap < EPG_COMPASS_BINS) return fromMap;
-  const hemilineage = neuron.hemilineage ?? '';
-  const side = (neuron.side ?? '').trim().toLowerCase();
-  if (hemilineage && (side === 'left' || side === 'right')) {
-    return Math.max(0, Math.min(EPG_COMPASS_BINS - 1, hemilineageToTile(side, hemilineage)));
-  }
-  return neuron.epg_tile_index_0_7;
+  const label = getEffectiveEpgLabel(neuron, processedLabelMap);
+  if (!label) return undefined;
+  return EPG_LABEL_TO_BIN.get(label);
 }
 
 function buildScene(
@@ -382,7 +456,7 @@ function buildScene(
   neurons: ReplayNeuron[],
   viewMode: ViewMode,
   onHover?: (neuronId: string | null) => void,
-  epgTileMap?: Map<string, number> | null,
+  epgLabelMap?: Map<string, string> | null,
   replay?: ReplayData | null,
 ): SceneState {
   const width = Math.max(1, container.clientWidth);
@@ -445,7 +519,7 @@ function buildScene(
       // Full circle: bins 0..(EPG_COMPASS_BINS-1) distributed evenly. No semicircle split (4 bins = DM1–DM4).
       const tileGroups = new Map<number, number[]>();
       for (const i of ringIndices) {
-        const tile = getEffectiveEpgTile(neurons[i]!, epgTileMap ?? null);
+        const tile = getEffectiveEpgTile(neurons[i]!, epgLabelMap ?? null);
         if (tile == null || tile < 0 || tile >= EPG_COMPASS_BINS) continue;
         const group = tileGroups.get(tile) ?? [];
         group.push(i);
@@ -514,7 +588,7 @@ function buildScene(
         let sumSin = 0; let sumCos = 0; let count = 0;
         let minA = Infinity; let maxA = -Infinity;
         for (const idx of epgIndices) {
-          const tile = getEffectiveEpgTile(neurons[idx]!, epgTileMap ?? null);
+          const tile = getEffectiveEpgTile(neurons[idx]!, epgLabelMap ?? null);
           if (tile != null && tile === b) {
             const px = aligned[idx]!.x - cxCompass;
             const py = aligned[idx]!.y - cyCompass;
@@ -605,17 +679,20 @@ function buildScene(
     isDownstreamByIndex[i] = Boolean(neuron.is_epg_downstream);
     isDelta7ByIndex[i] = Boolean(neuron.is_delta7);
     if (neuron.upstream_epg_bin_index_0_7 != null) {
-      const b = Math.max(0, Math.min(EPG_COMPASS_BINS - 1, neuron.upstream_epg_bin_index_0_7));
+      const value = neuron.upstream_epg_bin_index_0_7;
+      const b = Math.max(0, Math.min(EPG_COMPASS_BINS - 1, Math.round((value / 7) * (EPG_COMPASS_BINS - 1))));
       upstreamBinByIndex[i] = b;
       upstreamBinPopulation[b] += 1;
     }
     if (neuron.downstream_epg_bin_index_0_7 != null) {
-      const b = Math.max(0, Math.min(EPG_COMPASS_BINS - 1, neuron.downstream_epg_bin_index_0_7));
+      const value = neuron.downstream_epg_bin_index_0_7;
+      const b = Math.max(0, Math.min(EPG_COMPASS_BINS - 1, Math.round((value / 7) * (EPG_COMPASS_BINS - 1))));
       downstreamBinByIndex[i] = b;
       downstreamBinPopulation[b] += 1;
     }
     if (neuron.delta7_epg_bin_index_0_7 != null) {
-      const b = Math.max(0, Math.min(EPG_COMPASS_BINS - 1, neuron.delta7_epg_bin_index_0_7));
+      const value = neuron.delta7_epg_bin_index_0_7;
+      const b = Math.max(0, Math.min(EPG_COMPASS_BINS - 1, Math.round((value / 7) * (EPG_COMPASS_BINS - 1))));
       delta7BinByIndex[i] = b;
       delta7BinPopulation[b] += 1;
     }
@@ -629,7 +706,7 @@ function buildScene(
       }
     }
     if (neuron.is_epg) {
-      const tile = getEffectiveEpgTile(neuron, epgTileMap ?? null);
+      const tile = getEffectiveEpgTile(neuron, epgLabelMap ?? null);
       if (tile != null) {
         const t = Math.max(0, Math.min(EPG_COMPASS_BINS - 1, tile));
         const a = (t / EPG_COMPASS_BINS) * Math.PI * 2 + COMPASS_ROTATION_RAD;
@@ -649,7 +726,7 @@ function buildScene(
       }
     }
     const c = neuron.is_epg
-      ? INACTIVE_EPG_COLOR
+      ? INACTIVE_EPG_COLOR.clone().multiplyScalar(0.42)
       : neuron.is_epg_upstream
         ? INACTIVE_UPSTREAM_COLOR
         : neuron.is_epg_downstream
@@ -891,8 +968,8 @@ function buildScene(
       if (hemibrain_type) lines.push('hemibrain_type: ' + hemibrain_type);
       if (side) lines.push('side: ' + side);
       if (nerve) lines.push('nerve: ' + nerve);
-      const effTile = getEffectiveEpgTile(neuron, epgTileMap ?? null);
-      if (effTile != null) lines.push('bin: ' + effTile);
+      const effLabel = getEffectiveEpgLabel(neuron, epgLabelMap ?? null);
+      if (effLabel != null) lines.push('bin: ' + effLabel);
     } else {
       const clsParts: string[] = [];
       if (flow) clsParts.push('flow=' + flow);
@@ -978,6 +1055,10 @@ function buildScene(
     lastFrameTime,
     decodeEmaAngleDeg: null,
     arrowState,
+    tempC: new THREE.Color(),
+    tempG: new THREE.Color(),
+    tempEpgInactive: new THREE.Color(),
+    tempEpgHot: new THREE.Color(),
     dispose: () => {},
   };
 
@@ -1010,32 +1091,40 @@ function buildScene(
         }
       }
     }
+    const { tempC, tempG, tempEpgInactive, tempEpgHot } = state;
     for (let i = 0; i < colorAttr.count; i += 1) {
       const t = brightnessByIndex[i] ?? 0;
-      const c = isEpgByIndex[i]
-        ? (() => {
-            const base = t <= 0 ? INACTIVE_EPG_COLOR.clone() : t < 0.5 ? ACTIVE_EPG_COLOR.clone().lerp(EPG_HEAT_ORANGE, t / 0.5) : EPG_HEAT_ORANGE.clone().lerp(EPG_HEAT_RED, (t - 0.5) / 0.5);
-            const bin = epgBinByIndex[i];
-            if (bin != null && bin >= 0 && bin < EPG_COMPASS_BINS) {
-              const hsl = { h: 0, s: 0, l: 0 };
-              base.getHSL(hsl);
-              hsl.h = (hsl.h + (bin / EPG_COMPASS_BINS) * EPG_BIN_HUE_SHIFT) % 1;
-              base.setHSL(hsl.h, hsl.s, hsl.l);
-            }
-            return base;
-          })()
-        : isUpstreamByIndex[i]
-          ? (t <= 0 ? INACTIVE_UPSTREAM_COLOR : INACTIVE_UPSTREAM_COLOR.clone().lerp(ACTIVE_UPSTREAM_COLOR, t))
-          : isDownstreamByIndex[i]
-            ? (t <= 0 ? INACTIVE_DOWNSTREAM_COLOR : INACTIVE_DOWNSTREAM_COLOR.clone().lerp(ACTIVE_DOWNSTREAM_COLOR, t))
-            : isDelta7ByIndex[i]
-              ? (t <= 0 ? INACTIVE_DELTA7_COLOR : INACTIVE_DELTA7_COLOR.clone().lerp(ACTIVE_DELTA7_COLOR, t))
-              : isRingByIndex[i]
-                ? (t <= 0 ? INACTIVE_RING_COLOR : INACTIVE_RING_COLOR.clone().lerp(ACTIVE_RING_COLOR, t))
-                : (t <= 0 ? INACTIVE_COLOR : INACTIVE_COLOR.clone().lerp(ACTIVE_COLOR, t));
-      colorAttr.setXYZ(i, c.r, c.g, c.b);
-      const g = t <= 0 || !isEpgByIndex[i] ? NO_GLOW_COLOR : ACTIVE_EPG_COLOR.clone().lerp(EPG_HEAT_RED, t).multiplyScalar(0.22 + 1.1 * t * t);
-      glowColorAttr.setXYZ(i, g.r, g.g, g.b);
+      if (isEpgByIndex[i]) {
+        tempEpgInactive.copy(INACTIVE_EPG_COLOR).multiplyScalar(0.42);
+        if (t <= 0) {
+          tempC.copy(tempEpgInactive);
+        } else {
+          tempEpgHot.copy(tempEpgInactive).lerp(EPG_HEAT_ORANGE, 0.45).lerp(EPG_HEAT_RED, t);
+          tempC.copy(tempEpgInactive).lerp(tempEpgHot, t);
+        }
+      } else if (isUpstreamByIndex[i]) {
+        tempC.copy(INACTIVE_UPSTREAM_COLOR);
+        if (t > 0) tempC.lerp(ACTIVE_UPSTREAM_COLOR, t);
+      } else if (isDownstreamByIndex[i]) {
+        tempC.copy(INACTIVE_DOWNSTREAM_COLOR);
+        if (t > 0) tempC.lerp(ACTIVE_DOWNSTREAM_COLOR, t);
+      } else if (isDelta7ByIndex[i]) {
+        tempC.copy(INACTIVE_DELTA7_COLOR);
+        if (t > 0) tempC.lerp(ACTIVE_DELTA7_COLOR, t);
+      } else if (isRingByIndex[i]) {
+        tempC.copy(INACTIVE_RING_COLOR);
+        if (t > 0) tempC.lerp(ACTIVE_RING_COLOR, t);
+      } else {
+        tempC.copy(INACTIVE_COLOR);
+        if (t > 0) tempC.lerp(ACTIVE_COLOR, t);
+      }
+      colorAttr.setXYZ(i, tempC.r, tempC.g, tempC.b);
+      if (t <= 0 || !isEpgByIndex[i]) {
+        tempG.copy(NO_GLOW_COLOR);
+      } else {
+        tempG.copy(INACTIVE_EPG_COLOR).lerp(EPG_HEAT_RED, t).multiplyScalar(0.22 + 1.1 * t * t);
+      }
+      glowColorAttr.setXYZ(i, tempG.r, tempG.g, tempG.b);
     }
     const smoothAlpha = arrowState.smoothingEnabled ? arrowState.smoothAlpha : 1;
     arrowState.angleCurrentDeg = shortestAngleLerpDeg(arrowState.angleCurrentDeg, arrowState.angleTargetDeg, smoothAlpha);
@@ -1057,6 +1146,7 @@ function buildScene(
       }
     }
     if (biologicalEpgColorAttr && biologicalEpgIndices.length > 0) {
+      const { tempC, tempEpgInactive, tempEpgHot } = state;
       for (let k = 0; k < biologicalEpgIndices.length; k += 1) {
         const mainIndex = biologicalEpgIndices[k];
         const id = neuronIds[mainIndex];
@@ -1064,15 +1154,14 @@ function buildScene(
           biologicalEpgColorAttr.setXYZ(k, HOVER_HIGHLIGHT_COLOR.r, HOVER_HIGHLIGHT_COLOR.g, HOVER_HIGHLIGHT_COLOR.b);
         } else {
           const t = brightnessByIndex[mainIndex] ?? 0;
-          let c = t <= 0 ? INACTIVE_EPG_COLOR.clone() : t < 0.5 ? ACTIVE_EPG_COLOR.clone().lerp(EPG_HEAT_ORANGE, t / 0.5) : EPG_HEAT_ORANGE.clone().lerp(EPG_HEAT_RED, (t - 0.5) / 0.5);
-          const bin = epgBinByIndex[mainIndex];
-          if (bin != null && bin >= 0 && bin < EPG_COMPASS_BINS) {
-            const hsl = { h: 0, s: 0, l: 0 };
-            c.getHSL(hsl);
-            hsl.h = (hsl.h + (bin / EPG_COMPASS_BINS) * EPG_BIN_HUE_SHIFT) % 1;
-            c.setHSL(hsl.h, hsl.s, hsl.l);
+          tempEpgInactive.copy(INACTIVE_EPG_COLOR).multiplyScalar(0.42);
+          if (t <= 0) {
+            biologicalEpgColorAttr.setXYZ(k, tempEpgInactive.r, tempEpgInactive.g, tempEpgInactive.b);
+          } else {
+            tempEpgHot.copy(tempEpgInactive).lerp(EPG_HEAT_ORANGE, 0.45).lerp(EPG_HEAT_RED, t);
+            tempC.copy(tempEpgInactive).lerp(tempEpgHot, t);
+            biologicalEpgColorAttr.setXYZ(k, tempC.r, tempC.g, tempC.b);
           }
-          biologicalEpgColorAttr.setXYZ(k, c.r, c.g, c.b);
         }
       }
       biologicalEpgColorAttr.needsUpdate = true;
@@ -1380,6 +1469,7 @@ export default function VisualizationPage() {
   const [liveReplaySource, setLiveReplaySource] = useState<'live' | 'recording'>('live');
   const liveReplayTickCountRef = useRef(0);
   const liveReplaySourceRef = useRef<'live' | 'recording'>('live');
+  const liveReplayRef = useRef<ReplayData | null>(null);
   const liveEpgSeenRef = useRef<Set<string>>(new Set());
   const [liveEpgUniqueFired, setLiveEpgUniqueFired] = useState(0);
   const liveSimIdRef = useRef<number | null>(null);
@@ -1408,7 +1498,7 @@ export default function VisualizationPage() {
     [selectedReplayId, liveReplay, fetchedReplay],
   );
   const [arrowSmoothing, setArrowSmoothing] = useState(true);
-  const [epgTileMap, setEpgTileMap] = useState<Map<string, number> | null>(null);
+  const [epgLabelMap, setEpgLabelMap] = useState<Map<string, string> | null>(null);
   const [compassStats, setCompassStats] = useState<CompassStats>({
     epgActiveCount: 0,
     epgLeftCount: 0,
@@ -1432,18 +1522,14 @@ export default function VisualizationPage() {
 
   const neurons = useMemo(() => {
     const base = replay?.neurons ?? [];
-    if (!epgTileMap || epgTileMap.size === 0) return [];
-    return base
-      .filter((n) => epgTileMap.has(n.root_id))
-      .map((n) => ({
-        ...n,
-        is_epg: true,
-        is_ring: true,
-        is_epg_upstream: false,
-        is_epg_downstream: false,
-        is_delta7: false,
-      }));
-  }, [replay?.neurons, epgTileMap]);
+    const labelMap = epgLabelMap && epgLabelMap.size > 0 ? epgLabelMap : null;
+    return base.map((n) => {
+        const sideFromMap = labelMap?.get(n.root_id)?.startsWith('L') ? 'left' : labelMap?.get(n.root_id)?.startsWith('R') ? 'right' : undefined;
+        const effLabel = getEffectiveEpgLabel(n, labelMap ?? null);
+        const side = sideFromMap ?? (effLabel ? (effLabel.startsWith('L') ? 'left' : 'right') : n.side);
+        return { ...n, side };
+      });
+  }, [replay?.neurons, epgLabelMap]);
   const ringIdSet = useMemo(() => new Set(neurons.filter((n) => n.is_ring).map((n) => n.root_id)), [neurons]);
   const epgUniqueFired = useMemo(() => {
     if (!replay) return null;
@@ -1451,8 +1537,13 @@ export default function VisualizationPage() {
     if (typeof replay.meta.epg_neuron_unique_fired === 'number' && Number.isFinite(replay.meta.epg_neuron_unique_fired)) {
       return replay.meta.epg_neuron_unique_fired;
     }
-    if (!epgTileMap || epgTileMap.size === 0) return null;
-    const epgIds = new Set(epgTileMap.keys());
+    let epgIds: Set<string>;
+    if (epgLabelMap && epgLabelMap.size > 0) {
+      epgIds = new Set(epgLabelMap.keys());
+    } else {
+      epgIds = new Set((replay.neurons ?? []).filter((neuron) => neuron.is_epg === true).map((neuron) => neuron.root_id));
+    }
+    if (epgIds.size === 0) return null;
     const fired = new Set<string>();
     for (const tick of replay.ticks) {
       for (const id of tick.spikes ?? []) {
@@ -1460,7 +1551,7 @@ export default function VisualizationPage() {
       }
     }
     return fired.size;
-  }, [replay, epgTileMap, selectedReplayId, liveEpgUniqueFired]);
+  }, [replay, epgLabelMap, selectedReplayId, liveEpgUniqueFired]);
   const displayNeurons = useMemo(() => neurons, [neurons]);
   const selectedReplay = useMemo(
     () => replayDatasets.find((d) => d.id === selectedReplayId) ?? replayDatasets[0],
@@ -1469,15 +1560,20 @@ export default function VisualizationPage() {
 
   useEffect(() => {
     let active = true;
-    fetch('/epg-tile-map.json?v=' + Date.now(), { cache: 'no-store' })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (!active || !data?.entries) return;
-        const map = new Map<string, number>();
-        for (const e of data.entries as { root_id: string; tile_index_0_7: number }[]) {
-          if (e?.root_id != null && typeof e.tile_index_0_7 === 'number') map.set(String(e.root_id), e.tile_index_0_7);
+    fetch('/processed_labels.csv?v=' + Date.now(), { cache: 'no-store' })
+      .then((res) => (res.ok ? res.text() : ''))
+      .then((text) => {
+        if (!active || !text) return;
+        const map = new Map<string, string>();
+        const lines = text.split(/\r?\n/);
+        for (let i = 1; i < lines.length; i += 1) {
+          const parsed = parseProcessedLabelsLine(lines[i] ?? '');
+          if (!parsed) continue;
+          const [rid, labelRaw] = parsed;
+          const label = labelRaw.toUpperCase();
+          if (rid && EPG_LABEL_TO_BIN.has(label)) map.set(rid, label);
         }
-        setEpgTileMap(map);
+        setEpgLabelMap(map);
       })
       .catch(() => {});
     return () => { active = false; };
@@ -1525,6 +1621,7 @@ export default function VisualizationPage() {
             ticks: [],
           });
           setFetchedReplay(null);
+          liveReplayRef.current = null;
           setLiveReplay(null);
           setLiveTicks([]);
           setRecordedTicks([]);
@@ -1542,6 +1639,8 @@ export default function VisualizationPage() {
           if (!active) return;
           setFetchedReplay(parsed);
           setTemplateReplay(null);
+          liveReplayRef.current = null;
+          setLiveReplay(null);
         }
         setCurrentTick(1);
         setPlaying(false);
@@ -1549,6 +1648,7 @@ export default function VisualizationPage() {
         if (!active) return;
         setFetchedReplay(null);
         setTemplateReplay(null);
+        liveReplayRef.current = null;
         setLiveReplay(null);
         setLiveTicks([]);
         setRecordedTicks([]);
@@ -1573,6 +1673,7 @@ export default function VisualizationPage() {
     if (selectedReplayId !== 'neurosim_live' || !templateReplay) {
       liveReplayTickCountRef.current = 0;
       liveReplaySourceRef.current = 'live';
+      liveReplayRef.current = null;
       liveEpgSeenRef.current = new Set();
       setLiveEpgUniqueFired(0);
       setLiveReplay(null);
@@ -1580,11 +1681,17 @@ export default function VisualizationPage() {
     }
     const ticks = liveReplaySource === 'recording' ? recordedTicks : liveTicks;
     const sourceChanged = liveReplaySourceRef.current !== liveReplaySource;
-    const replayMissing = liveReplay == null;
+    const current = liveReplayRef.current;
+    const replayMissing = current == null;
     const tickReset = ticks.length < liveReplayTickCountRef.current;
-    const dtChanged = (liveReplay?.meta.dt_sec ?? liveSettings.dtSec) !== liveSettings.dtSec;
+    const dtChanged = (current?.meta.dt_sec ?? liveSettings.dtSec) !== liveSettings.dtSec;
     const fullRebuild = replayMissing || sourceChanged || tickReset || dtChanged;
-    const epgIds = epgTileMap ? new Set(epgTileMap.keys()) : null;
+    const epgIds: Set<string> | null =
+      epgLabelMap && epgLabelMap.size > 0
+        ? new Set(epgLabelMap.keys())
+        : templateReplay?.neurons
+          ? new Set(templateReplay.neurons.filter((neuron) => neuron.is_epg === true).map((neuron) => neuron.root_id))
+          : null;
 
     if (fullRebuild) {
       const seen = new Set<string>();
@@ -1597,7 +1704,7 @@ export default function VisualizationPage() {
       }
       liveEpgSeenRef.current = seen;
       setLiveEpgUniqueFired(seen.size);
-      setLiveReplay({
+      const next = {
         ...templateReplay,
         meta: {
           ...templateReplay.meta,
@@ -1607,8 +1714,10 @@ export default function VisualizationPage() {
           epg_neuron_unique_fired: seen.size,
         },
         ticks: [...ticks],
-      });
-    } else if (ticks.length > liveReplayTickCountRef.current && liveReplay != null) {
+      };
+      liveReplayRef.current = next;
+      setLiveReplay(next);
+    } else if (ticks.length > liveReplayTickCountRef.current && current != null) {
       const appended = ticks.slice(liveReplayTickCountRef.current);
       if (epgIds && epgIds.size > 0) {
         for (const t of appended) {
@@ -1619,31 +1728,35 @@ export default function VisualizationPage() {
       }
       const seenCount = liveEpgSeenRef.current.size;
       setLiveEpgUniqueFired(seenCount);
-      setLiveReplay({
-        ...liveReplay,
+      const next = {
+        ...current,
         meta: {
-          ...liveReplay.meta,
+          ...current.meta,
           dt_sec: liveSettings.dtSec,
           scenario: 'neurosim_live',
           ticks: ticks.length,
           epg_neuron_unique_fired: seenCount,
         },
-        ticks: [...liveReplay.ticks, ...appended],
-      });
-    } else if (liveReplay != null && liveReplay.meta.dt_sec !== liveSettings.dtSec) {
-      setLiveReplay({
-        ...liveReplay,
+        ticks: [...current.ticks, ...appended],
+      };
+      liveReplayRef.current = next;
+      setLiveReplay(next);
+    } else if (current != null && current.meta.dt_sec !== liveSettings.dtSec) {
+      const next = {
+        ...current,
         meta: {
-          ...liveReplay.meta,
+          ...current.meta,
           dt_sec: liveSettings.dtSec,
           scenario: 'neurosim_live',
         },
-      });
+      };
+      liveReplayRef.current = next;
+      setLiveReplay(next);
     }
 
     liveReplayTickCountRef.current = ticks.length;
     liveReplaySourceRef.current = liveReplaySource;
-  }, [selectedReplayId, templateReplay, liveReplaySource, liveTicks, recordedTicks, liveSettings.dtSec, epgTileMap, liveReplay]);
+  }, [selectedReplayId, templateReplay, liveReplaySource, liveTicks, recordedTicks, liveSettings.dtSec, epgLabelMap]);
 
   const isNeuroSimLive = selectedReplayId === 'neurosim_live';
   const apiBase = getApiBase();
@@ -1733,14 +1846,14 @@ export default function VisualizationPage() {
       sceneRef.current.dispose();
       sceneRef.current = null;
     }
-    sceneRef.current = buildScene(container, displayNeurons, viewMode, undefined, epgTileMap, replay ?? null);
+    sceneRef.current = buildScene(container, displayNeurons, viewMode, undefined, epgLabelMap, replay ?? null);
     return () => {
       if (sceneRef.current) {
         sceneRef.current.dispose();
         sceneRef.current = null;
       }
     };
-  }, [displayNeurons, viewMode, epgTileMap]);
+  }, [displayNeurons, viewMode, epgLabelMap]);
 
   useEffect(() => {
     if (!sceneRef.current) return;
@@ -2018,8 +2131,13 @@ export default function VisualizationPage() {
         </div>
         {replay ? (
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-            <svg width="152" height="152" viewBox="-60 -60 120 120" style={{ border: '1px solid rgba(255,255,255,0.12)', borderRadius: 8 }}>
-              {/* Radial dividers: 8 bins, full circle, equal 45° spacing */}
+            <svg
+              width="152"
+              height="152"
+              viewBox="-60 -60 120 120"
+              style={{ border: '1px solid rgba(255,255,255,0.12)', borderRadius: 8 }}
+            >
+              {/* Radial dividers: 16 bins, anatomical L/R ordering */}
               {Array.from({ length: EPG_COMPASS_BINS + 1 }, (_, i) => {
                 const a = (i / EPG_COMPASS_BINS) * Math.PI * 2 - Math.PI / 2;
                 return (
@@ -2031,6 +2149,45 @@ export default function VisualizationPage() {
                     stroke="rgba(255,255,255,0.25)"
                     strokeWidth="0.8"
                   />
+                );
+              })}
+              {Array.from({ length: EPG_COMPASS_BINS }, (_, i) => {
+                const { a0, a1 } = getWedgeParams(i, EPG_COMPASS_BINS);
+                const r0 = 23;
+                const r1 = 30;
+                const x0 = Math.cos(a0) * r0; const y0 = Math.sin(a0) * r0;
+                const x1 = Math.cos(a1) * r0; const y1 = Math.sin(a1) * r0;
+                const x2 = Math.cos(a1) * r1; const y2 = Math.sin(a1) * r1;
+                const x3 = Math.cos(a0) * r1; const y3 = Math.sin(a0) * r1;
+                return (
+                  <path
+                    key={`epg-slice-color-${i}`}
+                    d={`M ${x0} ${y0} L ${x1} ${y1} L ${x2} ${y2} L ${x3} ${y3} Z`}
+                    fill={EPG_SLICE_COLORS[i % EPG_SLICE_COLORS.length]}
+                    fillOpacity={0.45}
+                    stroke="rgba(255,255,255,0.2)"
+                    strokeWidth="0.4"
+                  />
+                );
+              })}
+              {Array.from({ length: EPG_COMPASS_BINS }, (_, i) => {
+                const { midAngle } = getWedgeParams(i, EPG_COMPASS_BINS);
+                const tr = 51;
+                const tx = Math.cos(midAngle) * tr;
+                const ty = Math.sin(midAngle) * tr;
+                return (
+                  <text
+                    key={`epg-slice-label-${i}`}
+                    x={tx.toFixed(3)}
+                    y={ty.toFixed(3)}
+                    textAnchor="middle"
+                    dominantBaseline="middle"
+                    fill="rgba(235,245,255,0.96)"
+                    fontSize="4.2"
+                    fontWeight="700"
+                  >
+                    {EPG_SLICE_ORDER_CLOCKWISE[i]}
+                  </text>
                 );
               })}
               <circle cx="0" cy="0" r="44" fill="none" stroke="rgba(120,200,255,0.32)" strokeWidth="1.2" />
@@ -2179,8 +2336,8 @@ export default function VisualizationPage() {
               ) : null}
             </svg>
             <div style={{ fontSize: 11, opacity: 0.85, maxWidth: 420 }}>
-              EPG compass: 8 bins (R1+L1…R8+L8 from label). L+R with same number share bin (eLife 66039).
-              Outer upstream, middle EPG, Delta7 inhibitory ring, inner downstream. Delta7 contributes opposite-side inhibition.
+              EPG compass: 16 labeled wedges using processed labels and classification side, arranged anatomically.
+              Order is fixed to match the reference slice diagram (top= L5, top-left=R5, right of L5=R4, then L6).
             </div>
           </div>
         ) : null}

@@ -618,6 +618,7 @@ impl BrainSim {
     ) -> (
         Vec<f32>,
         HashMap<String, f64>,
+        Vec<String>,
         f64,
         f64,
         f64,
@@ -644,6 +645,7 @@ impl BrainSim {
     ) -> (
         Vec<f32>,
         HashMap<String, f64>,
+        Vec<String>,
         f64,
         f64,
         f64,
@@ -672,6 +674,13 @@ impl BrainSim {
 
         let mut activity_sparse = HashMap::new();
         let mut activity: Vec<f32> = Vec::new();
+        let all_spike_ids: Vec<String> = self
+            .neuron_ids
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| self.spikes[*i] >= ACTIVITY_THRESHOLD)
+            .map(|(_, id)| id.clone())
+            .collect();
         if include_activity {
             activity = vec![0.0f32; self.n];
             let cap = self.max_activity_entries;
@@ -903,6 +912,7 @@ impl BrainSim {
         (
             activity,
             activity_sparse,
+            all_spike_ids,
             ml * MOTOR_SCALE,
             mr * MOTOR_SCALE,
             mf * MOTOR_SCALE,

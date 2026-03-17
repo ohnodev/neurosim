@@ -391,6 +391,11 @@ export interface ReplayTick {
   tick: number;
   time_sec: number;
   spikes: string[];
+  totalSpikeEventsStep?: number;
+  afferentSpikeEventsStep?: number;
+  olfactorySpikeEventsStep?: number;
+  afferentSpikeIdsStep?: string[];
+  olfactorySpikeIdsStep?: string[];
 }
 
 /** Lightweight handshake: verify brain-service is reachable. */

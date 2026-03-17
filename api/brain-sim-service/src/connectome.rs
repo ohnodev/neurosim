@@ -40,6 +40,16 @@ struct ConnectomeJson {
     connections: Vec<ConnectionJson>,
 }
 
+#[derive(Deserialize)]
+struct EpgTileMapEntryJson {
+    root_id: String,
+}
+
+#[derive(Deserialize)]
+struct EpgTileMapJson {
+    entries: Vec<EpgTileMapEntryJson>,
+}
+
 pub struct ConnectomeTemplate {
     pub neuron_ids: Vec<String>,
     pub viewer_subset_indices: Vec<u32>,
@@ -88,6 +98,23 @@ fn compute_viewer_subset_indices(neuron_ids: &[String], limit: usize) -> Vec<u32
     let mut out: Vec<u32> = ranked.into_iter().take(limit).map(|(_, idx)| idx).collect();
     out.sort_unstable();
     out
+}
+
+fn load_epg_viewer_indices(
+    connectome_path: &Path,
+    id_to_idx: &HashMap<String, u32>,
+) -> Option<Vec<u32>> {
+    let epg_map_path = connectome_path.parent()?.join("epg-tile-map.json");
+    let txt = fs::read_to_string(epg_map_path).ok()?;
+    let parsed: EpgTileMapJson = serde_json::from_str(&txt).ok()?;
+    let mut out: Vec<u32> = parsed
+        .entries
+        .iter()
+        .filter_map(|e| id_to_idx.get(&e.root_id).copied())
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    Some(out)
 }
 
 fn load_precomputed_indices(
@@ -221,17 +248,21 @@ pub fn load_connectome(path: &Path) -> Result<ConnectomeTemplate, Box<dyn std::e
     sensory_target.sort_unstable();
     sensory_target.dedup();
 
-    let viewer_subset_indices = compute_viewer_subset_indices(&neuron_ids, viewer_subset_limit());
+    let viewer_subset_indices = load_epg_viewer_indices(path, &id_to_idx)
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| compute_viewer_subset_indices(&neuron_ids, viewer_subset_limit()));
     let mut edges_pre = Vec::with_capacity(data.connections.len());
     let mut edges_post = Vec::with_capacity(data.connections.len());
     let mut edges_weight = Vec::with_capacity(data.connections.len());
     for c in &data.connections {
         if let (Some(&pre), Some(&post)) = (id_to_idx.get(&c.pre), id_to_idx.get(&c.post)) {
-            let w = c.weight.unwrap_or(1.0);
-            let wf = if w.is_finite() && w > 0.0 { w as f32 } else { 1.0 };
+            let w = c.weight.unwrap_or(0.0);
+            if !w.is_finite() {
+                continue;
+            }
             edges_pre.push(pre);
             edges_post.push(post);
-            edges_weight.push(wf.min(10.0));
+            edges_weight.push(w as f32);
         }
     }
 

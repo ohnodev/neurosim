@@ -74,17 +74,7 @@ export interface NeuronRaw {
 }
 
 export async function fetchNeurons(): Promise<{ neurons: NeuronRaw[] }> {
-  // Prefer static precomputed viewer subset to reduce API/server load.
-  try {
-    const local = await fetch('/connectome-viewer-10k.json');
-    if (local.ok) {
-      const d = await local.json();
-      if (Array.isArray(d.neurons)) return { neurons: d.neurons };
-    }
-  } catch {
-    // Fall back to API endpoint below.
-  }
-  const r = await fetch(`${getApiBase()}/api/neurons`);
+  const r = await fetch(`${getApiBase()}/api/neurons?epgOnly=1`);
   if (!r.ok) throw new Error(r.statusText || 'Failed to fetch neurons');
   const d = await r.json();
   if (!Array.isArray(d.neurons)) throw new Error('Invalid /api/neurons response');

@@ -180,6 +180,8 @@ function flushStepBatch(): void {
     return {
       sim_id: params.sim_id,
       dt: params.dt,
+      olfactory_baseline_rate_hz: params.olfactory_baseline_rate_hz,
+      forced_spikes: params.forced_spikes ?? [],
       fly: {
         x: fly.x,
         y: fly.y,
@@ -223,7 +225,7 @@ function flushStepBatch(): void {
     eaten_food_id?: string;
     feeding_sugar_taken?: number;
   }> }>(manyPayload)).then((res) => {
-    const bySim = new Map<number, {
+    const byBatchIndex: Array<{
       sim_id: number;
       activity_sparse: Record<string, number>;
       motor_left: number;
@@ -245,13 +247,12 @@ function flushStepBatch(): void {
       };
       eaten_food_id?: string;
       feeding_sugar_taken?: number;
-    }>();
-    for (const r of res.results ?? []) bySim.set(r.sim_id, r);
-    for (const q of batch) {
-      const simId = Number((q.payload as { params?: { sim_id?: number } }).params?.sim_id);
-      const item = bySim.get(simId);
+    }> = res.results ?? [];
+    for (let i = 0; i < batch.length; i += 1) {
+      const q = batch[i]!;
+      const item = byBatchIndex[i];
       if (!item) {
-        q.reject(new Error(`step_many missing result for sim ${simId}`));
+        q.reject(new Error(`step_many missing result for batch index ${i}`));
         continue;
       }
       q.resolve(item);

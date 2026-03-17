@@ -25,9 +25,9 @@ fn main() {
         .parent()
         .and_then(|p| p.parent())
         .and_then(|root| {
-            let full = root.join("data/connectome-full.json");
-            if full.exists() {
-                return Some(full);
+            let aligned = root.join("data/connectome-subset-aligned.json");
+            if aligned.exists() {
+                return Some(aligned);
             }
             let subset = root.join("data/connectome-subset.json");
             if subset.exists() {

@@ -322,7 +322,7 @@
       "hemilineage": "DM4_CX_d1",
       "tile_index_0_7": 6,
       "tile_label": "EPG_L7",
-      "parsed_from": "EPGt_R7"
+      "parsed_from": "EPGt_L7"
     },
     {
       "root_id": "720575940628493572",
@@ -358,7 +358,7 @@
       "hemilineage": "DM4_CX_d2",
       "tile_index_0_7": 7,
       "tile_label": "EPG_L9",
-      "parsed_from": "EPGt_R9"
+      "parsed_from": "EPGt_L9"
     },
     {
       "root_id": "720575940616502066",
@@ -385,7 +385,7 @@
       "hemilineage": "DM4_CX_d2",
       "tile_index_0_7": 7,
       "tile_label": "EPG_L9",
-      "parsed_from": "EPGt_R9"
+      "parsed_from": "EPGt_L9"
     },
     {
       "root_id": "720575940620419354",
@@ -394,7 +394,7 @@
       "hemilineage": "DM4_CX_d3",
       "tile_index_0_7": 7,
       "tile_label": "EPG_R9",
-      "parsed_from": "EPGt_L9"
+      "parsed_from": "EPGt_R9"
     },
     {
       "root_id": "720575940620776662",
@@ -403,7 +403,7 @@
       "hemilineage": "DM4_CX_d2",
       "tile_index_0_7": 7,
       "tile_label": "EPG_R9",
-      "parsed_from": "EPGt_L9"
+      "parsed_from": "EPGt_R9"
     },
     {
       "root_id": "720575940623852873",

@@ -123,7 +123,6 @@ type SceneState = {
 };
 
 type ViewMode = 'raw' | 'aligned' | 'compass';
-type FocusPopulation = 'all' | 'epg_with_context';
 type PlaybackSpeed = number | 'irl';
 type ReplayDataset = { id: string; label: string; url: string };
 
@@ -342,8 +341,6 @@ function createGlowTexture(): THREE.Texture {
   return texture;
 }
 
-type ClassificationLookup = Record<string, { flow?: string; super_class?: string; class?: string; sub_class?: string; cell_type?: string; hemibrain_type?: string; hemilineage?: string; side?: string; nerve?: string }>;
-
 /** Extract DM number (1–4) from hemilineage e.g. DM2_CX_d1 → 2. Fallback when no tile from replay. */
 function extractDmNumber(hemilineage: string): number {
   const m = hemilineage?.trim().match(/^DM([1-4])_/);
@@ -358,13 +355,11 @@ function hemilineageToTile(_side: string, hemilineage: string): number {
 function getEffectiveEpgTile(
   neuron: ReplayNeuron,
   epgTileMap: Map<string, number> | null,
-  classificationLookup?: ClassificationLookup | null,
 ): number | undefined {
   const fromMap = epgTileMap?.get(neuron.root_id);
   if (fromMap != null && fromMap >= 0 && fromMap < EPG_COMPASS_BINS) return fromMap;
-  const cls = classificationLookup?.[neuron.root_id];
-  const hemilineage = neuron.hemilineage ?? cls?.hemilineage ?? '';
-  const side = (neuron.side ?? cls?.side ?? '').trim().toLowerCase();
+  const hemilineage = neuron.hemilineage ?? '';
+  const side = (neuron.side ?? '').trim().toLowerCase();
   if (hemilineage && (side === 'left' || side === 'right')) {
     return Math.max(0, Math.min(EPG_COMPASS_BINS - 1, hemilineageToTile(side, hemilineage)));
   }
@@ -377,7 +372,6 @@ function buildScene(
   viewMode: ViewMode,
   onHover?: (neuronId: string | null) => void,
   epgTileMap?: Map<string, number> | null,
-  classificationLookup?: ClassificationLookup | null,
   replay?: ReplayData | null,
 ): SceneState {
   const width = Math.max(1, container.clientWidth);
@@ -440,7 +434,7 @@ function buildScene(
       // Full circle: bins 0..(EPG_COMPASS_BINS-1) distributed evenly. No semicircle split (4 bins = DM1–DM4).
       const tileGroups = new Map<number, number[]>();
       for (const i of ringIndices) {
-        const tile = getEffectiveEpgTile(neurons[i]!, epgTileMap ?? null, classificationLookup);
+        const tile = getEffectiveEpgTile(neurons[i]!, epgTileMap ?? null);
         if (tile == null || tile < 0 || tile >= EPG_COMPASS_BINS) continue;
         const group = tileGroups.get(tile) ?? [];
         group.push(i);
@@ -509,7 +503,7 @@ function buildScene(
         let sumSin = 0; let sumCos = 0; let count = 0;
         let minA = Infinity; let maxA = -Infinity;
         for (const idx of epgIndices) {
-          const tile = getEffectiveEpgTile(neurons[idx]!, epgTileMap ?? null, classificationLookup);
+          const tile = getEffectiveEpgTile(neurons[idx]!, epgTileMap ?? null);
           if (tile != null && tile === b) {
             const px = aligned[idx]!.x - cxCompass;
             const py = aligned[idx]!.y - cyCompass;
@@ -624,7 +618,7 @@ function buildScene(
       }
     }
     if (neuron.is_epg) {
-      const tile = getEffectiveEpgTile(neuron, epgTileMap ?? null, classificationLookup);
+      const tile = getEffectiveEpgTile(neuron, epgTileMap ?? null);
       if (tile != null) {
         const t = Math.max(0, Math.min(EPG_COMPASS_BINS - 1, tile));
         const a = (t / EPG_COMPASS_BINS) * Math.PI * 2 + COMPASS_ROTATION_RAD;
@@ -865,16 +859,15 @@ function buildScene(
     }
     hoveredNeuronId.current = neuron.root_id;
     onHover?.(neuron.root_id);
-    const cls = classificationLookup?.[neuron.root_id];
-    const hemilineage = neuron.hemilineage ?? cls?.hemilineage ?? '';
-    const flow = neuron.flow ?? cls?.flow ?? '';
-    const super_class = neuron.super_class ?? cls?.super_class ?? '';
-    const neuronClass = neuron.class ?? cls?.class ?? '';
-    const sub_class = neuron.sub_class ?? cls?.sub_class ?? '';
-    const cell_type = neuron.cell_type ?? cls?.cell_type ?? '';
-    const hemibrain_type = neuron.hemibrain_type ?? cls?.hemibrain_type ?? '';
-    const side = neuron.side ?? cls?.side ?? '';
-    const nerve = neuron.nerve ?? cls?.nerve ?? '';
+    const hemilineage = neuron.hemilineage ?? '';
+    const flow = neuron.flow ?? '';
+    const super_class = neuron.super_class ?? '';
+    const neuronClass = neuron.class ?? '';
+    const sub_class = neuron.sub_class ?? '';
+    const cell_type = neuron.cell_type ?? '';
+    const hemibrain_type = neuron.hemibrain_type ?? '';
+    const side = neuron.side ?? '';
+    const nerve = neuron.nerve ?? '';
     const lines: string[] = [neuron.root_id];
     if (neuron.is_epg) {
       // EPG: use classification (lineage e.g. DM2_CX_d1 drives 8 bins: 1–4 × d1–d2, left/right already correct)
@@ -887,7 +880,7 @@ function buildScene(
       if (hemibrain_type) lines.push('hemibrain_type: ' + hemibrain_type);
       if (side) lines.push('side: ' + side);
       if (nerve) lines.push('nerve: ' + nerve);
-      const effTile = getEffectiveEpgTile(neuron, epgTileMap ?? null, classificationLookup);
+      const effTile = getEffectiveEpgTile(neuron, epgTileMap ?? null);
       if (effTile != null) lines.push('bin: ' + effTile);
     } else {
       const clsParts: string[] = [];
@@ -1360,6 +1353,7 @@ const NEUROSIM_LIVE_TIER2 = {
 const NEUROSIM_LIVE_STEP_BATCH = 1;
 /** Call every 1ms so at 1ms dt we get ~real-time (1000 ticks/s). */
 const NEUROSIM_LIVE_INTERVAL_MS = 1;
+const NEUROSIM_LIVE_MAX_BACKOFF_MS = 1000;
 
 export default function VisualizationPage() {
   const [fetchedReplay, setFetchedReplay] = useState<ReplayData | null>(null);
@@ -1382,13 +1376,12 @@ export default function VisualizationPage() {
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState<PlaybackSpeed>(1);
   const [viewMode, setViewMode] = useState<ViewMode>('compass');
-  const [replayDatasets, setReplayDatasets] = useState<ReplayDataset[]>(DEFAULT_REPLAY_DATASETS);
+  const [replayDatasets] = useState<ReplayDataset[]>(DEFAULT_REPLAY_DATASETS);
   const [selectedReplayId, setSelectedReplayId] = useState<string>(
     DEFAULT_REPLAY_DATASETS.find((d) => d.id === PREFERRED_REPLAY_ID)?.id
       ?? DEFAULT_REPLAY_DATASETS[0]?.id
       ?? '',
   );
-  const [focusPopulation, setFocusPopulation] = useState<FocusPopulation>('epg_with_context');
   const replay = useMemo(() => {
     if (selectedReplayId === 'neurosim_live' && templateReplay) {
       const ticks = liveReplaySource === 'recording' ? recordedTicks : liveTicks;
@@ -1397,7 +1390,6 @@ export default function VisualizationPage() {
     return fetchedReplay;
   }, [selectedReplayId, templateReplay, fetchedReplay, liveReplaySource, liveTicks, recordedTicks, liveSettings.dtSec, liveSettings.olfactoryBaselineHz]);
   const [arrowSmoothing, setArrowSmoothing] = useState(true);
-  const [classificationLookup, setClassificationLookup] = useState<ClassificationLookup | null>(null);
   const [epgTileMap, setEpgTileMap] = useState<Map<string, number> | null>(null);
   const [compassStats, setCompassStats] = useState<CompassStats>({
     epgActiveCount: 0,
@@ -1422,31 +1414,18 @@ export default function VisualizationPage() {
 
   const neurons = useMemo(() => {
     const base = replay?.neurons ?? [];
-    return base.map((n) => {
-      const cls = classificationLookup?.[n.root_id];
-      const tagText = [
-        n.cell_type,
-        n.hemibrain_type,
-        n.class,
-        n.sub_class,
-        cls?.cell_type,
-        cls?.hemibrain_type,
-        cls?.class,
-        cls?.sub_class,
-      ]
-        .filter((v): v is string => typeof v === 'string' && v.length > 0)
-        .join(' ')
-        .toLowerCase();
-      const mappedEpg = (epgTileMap?.has(n.root_id) ?? false) || /\bepg\b/.test(tagText);
-      const inferredDelta7 = /\bdelta\s*7\b|\bdelta7\b/.test(tagText);
-      return {
+    if (!epgTileMap || epgTileMap.size === 0) return [];
+    return base
+      .filter((n) => epgTileMap.has(n.root_id))
+      .map((n) => ({
         ...n,
-        is_epg: n.is_epg || mappedEpg,
-        is_ring: n.is_ring || mappedEpg,
-        is_delta7: n.is_delta7 || inferredDelta7,
-      };
-    });
-  }, [replay?.neurons, epgTileMap, classificationLookup]);
+        is_epg: true,
+        is_ring: true,
+        is_epg_upstream: false,
+        is_epg_downstream: false,
+        is_delta7: false,
+      }));
+  }, [replay?.neurons, epgTileMap]);
   const ringIdSet = useMemo(() => new Set(neurons.filter((n) => n.is_ring).map((n) => n.root_id)), [neurons]);
   const epgUniqueFired = useMemo(() => {
     if (!replay) return null;
@@ -1463,57 +1442,11 @@ export default function VisualizationPage() {
     }
     return fired.size;
   }, [replay, epgTileMap]);
-  const displayNeurons = useMemo(() => {
-    if (viewMode === 'raw') {
-      const epgOnly = neurons.filter((n) => n.is_epg);
-      return epgOnly.length > 0 ? epgOnly : neurons;
-    }
-    if (focusPopulation === 'epg_with_context') {
-      const context = neurons.filter((n) => n.is_epg || n.is_epg_upstream || n.is_epg_downstream || n.is_delta7);
-      return context.length > 0 ? context : neurons;
-    }
-    return neurons;
-  }, [neurons, focusPopulation, viewMode]);
+  const displayNeurons = useMemo(() => neurons, [neurons]);
   const selectedReplay = useMemo(
     () => replayDatasets.find((d) => d.id === selectedReplayId) ?? replayDatasets[0],
     [replayDatasets, selectedReplayId],
   );
-
-  useEffect(() => {
-    let active = true;
-    const loadManifest = async () => {
-      try {
-        const res = await fetch(`/visualization-replays.json?v=${Date.now()}`, { cache: 'no-store' });
-        if (!res.ok) return;
-        const parsed = await res.json() as { datasets?: ReplayDataset[] };
-        if (!active) return;
-        const liveEnabled = import.meta.env.VITE_ENABLE_NEUROSIM_LIVE === '1';
-        const datasets = (parsed.datasets ?? [])
-          .filter((d) => d?.id && d?.url)
-          .filter((d) => liveEnabled || (d.id !== 'neurosim_live' && !d.url.startsWith('/api/neurosim-')));
-        if (datasets.length === 0) return;
-        setReplayDatasets(datasets);
-        setSelectedReplayId((prev) => {
-          if (datasets.some((d) => d.id === prev)) return prev;
-          const preferred = datasets.find((d) => d.id === PREFERRED_REPLAY_ID);
-          return (preferred ?? datasets[0]!).id;
-        });
-      } catch {
-        // fallback to defaults when manifest is missing
-      }
-    };
-    void loadManifest();
-    return () => { active = false; };
-  }, []);
-
-  useEffect(() => {
-    let active = true;
-    fetch('/classification-lookup.json?v=' + Date.now(), { cache: 'no-store' })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => { if (active && data) setClassificationLookup(data as ClassificationLookup); })
-      .catch(() => {});
-    return () => { active = false; };
-  }, []);
 
   useEffect(() => {
     let active = true;
@@ -1541,7 +1474,7 @@ export default function VisualizationPage() {
         const isNeuroSimLive = selectedReplay?.id === 'neurosim_live' || datasetUrl.startsWith('/api/neurosim-replay');
         if (isNeuroSimLive) {
           const apiRoot = getApiBase();
-          const neuronRes = await fetch(`${apiRoot}/api/neurons?full=1`, { cache: 'no-store' });
+          const neuronRes = await fetch(`${apiRoot}/api/neurons?full=1&epgOnly=1`, { cache: 'no-store' });
           if (!neuronRes.ok) throw new Error(`Failed to load live neuron template (${neuronRes.status})`);
           const neuronPayload = (await neuronRes.json()) as { neurons?: ApiNeuron[] };
           const templateNeurons: ReplayNeuron[] = (neuronPayload.neurons ?? []).map((n) => ({
@@ -1561,7 +1494,7 @@ export default function VisualizationPage() {
           setTemplateReplay({
             meta: {
               generated_at: new Date().toISOString(),
-              source_csv: 'api:/api/neurons?full=1',
+              source_csv: 'api:/api/neurons?full=1&epgOnly=1',
               ticks: 0,
               unique_fired_neurons: 0,
               ring_neuron_total: 0,
@@ -1592,6 +1525,12 @@ export default function VisualizationPage() {
         if (!active) return;
         setFetchedReplay(null);
         setTemplateReplay(null);
+        setLiveTicks([]);
+        setRecordedTicks([]);
+        setLiveReplaySource('live');
+        setLiveRunning(false);
+        liveSimIdRef.current = null;
+        liveNextTickRef.current = 1;
         setCurrentTick(0);
         setPlaying(false);
         setError((err as Error).message);
@@ -1604,6 +1543,7 @@ export default function VisualizationPage() {
   const isNeuroSimLive = selectedReplayId === 'neurosim_live';
   const apiBase = getApiBase();
   const liveNextTickRef = useRef(1);
+  const liveStepFailureCountRef = useRef(0);
 
   useEffect(() => {
     if (!isNeuroSimLive || !liveRunning || liveSimIdRef.current == null || !templateReplay) return;
@@ -1611,9 +1551,10 @@ export default function VisualizationPage() {
     let inFlight = false;
     let timerId: number | null = null;
     let activeController: AbortController | null = null;
-    const scheduleNext = () => {
+    const scheduleNext = (delayMs = NEUROSIM_LIVE_INTERVAL_MS) => {
       if (cancelled) return;
-      timerId = window.setTimeout(() => { void runStep(); }, NEUROSIM_LIVE_INTERVAL_MS);
+      if (timerId != null) clearTimeout(timerId);
+      timerId = window.setTimeout(() => { void runStep(); }, Math.max(1, delayMs));
     };
     const runStep = async () => {
       if (cancelled || liveSimIdRef.current == null) return;
@@ -1621,6 +1562,7 @@ export default function VisualizationPage() {
         scheduleNext();
         return;
       }
+      let nextDelayMs = NEUROSIM_LIVE_INTERVAL_MS;
       inFlight = true;
       const startTick = liveNextTickRef.current;
       const controller = new AbortController();
@@ -1650,12 +1592,20 @@ export default function VisualizationPage() {
         setLiveTicks((prev) => [...prev, ...newTicks]);
         if (recording) setRecordedTicks((prev) => [...prev, ...newTicks]);
         setCurrentTick(liveNextTickRef.current);
+        liveStepFailureCountRef.current = 0;
       } catch (err) {
-        if (!cancelled && (err as Error).name !== 'AbortError') setError((err as Error).message);
+        if (!cancelled && (err as Error).name !== 'AbortError') {
+          setError((err as Error).message);
+          liveStepFailureCountRef.current += 1;
+          nextDelayMs = Math.min(
+            NEUROSIM_LIVE_INTERVAL_MS * (2 ** liveStepFailureCountRef.current),
+            NEUROSIM_LIVE_MAX_BACKOFF_MS,
+          );
+        }
       } finally {
         inFlight = false;
         if (activeController === controller) activeController = null;
-        scheduleNext();
+        scheduleNext(nextDelayMs);
       }
     };
     void runStep();
@@ -1678,14 +1628,14 @@ export default function VisualizationPage() {
       sceneRef.current.dispose();
       sceneRef.current = null;
     }
-    sceneRef.current = buildScene(container, displayNeurons, viewMode, undefined, epgTileMap, classificationLookup, replay ?? null);
+    sceneRef.current = buildScene(container, displayNeurons, viewMode, undefined, epgTileMap, replay ?? null);
     return () => {
       if (sceneRef.current) {
         sceneRef.current.dispose();
         sceneRef.current = null;
       }
     };
-  }, [displayNeurons, viewMode, epgTileMap, classificationLookup]);
+  }, [displayNeurons, viewMode, epgTileMap]);
 
   useEffect(() => {
     if (!sceneRef.current) return;
@@ -1908,14 +1858,6 @@ export default function VisualizationPage() {
           <button type="button" onClick={() => setViewMode('raw')} style={controlButtonStyle(viewMode === 'raw')}>Raw</button>
           <button type="button" onClick={() => setViewMode('aligned')} style={controlButtonStyle(viewMode === 'aligned')}>Aligned</button>
           <button type="button" onClick={() => setViewMode('compass')} style={controlButtonStyle(viewMode === 'compass')}>Compass loop</button>
-        </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button type="button" onClick={() => setFocusPopulation('epg_with_context')} style={controlButtonStyle(focusPopulation === 'epg_with_context')}>
-            EPG + context
-          </button>
-          <button type="button" onClick={() => setFocusPopulation('all')} style={controlButtonStyle(focusPopulation === 'all')}>
-            All neurons
-          </button>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <button type="button" onClick={() => setArrowSmoothing((v) => !v)} style={controlButtonStyle(arrowSmoothing)}>

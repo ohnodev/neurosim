@@ -10,6 +10,8 @@ import { getWorld, spawnFood, removeFood, getSources, type WorldSource } from '.
 import claimsRouter from './routes/claims.js';
 import { getFlies, removeFlyAtSlot } from './services/flyStore.js';
 import { getDeployments, addDeployment, clearForTesting, deactivateDeployment } from './services/deployStore.js';
+import * as fs from 'fs';
+import * as path from 'path';
 import {
   recordFeedingPoints,
   recordFoodDepleted,
@@ -23,6 +25,20 @@ import { flushRewards } from './services/rewardDistributor.js';
 
 const PORT = Number(process.env.PORT) || 3001;
 const connectome = loadConnectome();
+const EPG_TILE_MAP_PATH = path.resolve(process.cwd(), '..', 'data', 'epg-tile-map.json');
+const epgRootIdSet = (() => {
+  try {
+    const raw = fs.readFileSync(EPG_TILE_MAP_PATH, 'utf-8');
+    const parsed = JSON.parse(raw) as { entries?: Array<{ root_id?: string }> };
+    return new Set(
+      (parsed.entries ?? [])
+        .map((e) => String(e?.root_id ?? ''))
+        .filter((id) => id.length > 0),
+    );
+  } catch {
+    return new Set<string>();
+  }
+})();
 const ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
 const MAX_SLOT_INDEX = 2;
 const VIEWER_NEURON_LIMIT = Math.max(1, Number(process.env.NEUROSIM_VIEWER_NEURON_LIMIT ?? 10_000));
@@ -694,8 +710,9 @@ if (DEBUG_POSITIONS_ENABLED) {
 
 app.get('/api/neurons', (req, res) => {
   const full = req.query.full === '1';
+  const epgOnly = req.query.epgOnly === '1';
   const neurons = connectome.neurons
-    .filter((_, i) => full || viewerNeuronIndexSet.has(i))
+    .filter((n, i) => (!epgOnly || epgRootIdSet.has(n.root_id)) && (full || viewerNeuronIndexSet.has(i)))
     .map((n) => ({
     root_id: n.root_id,
     role: n.role,
@@ -708,6 +725,7 @@ app.get('/api/neurons', (req, res) => {
   res.json({
     neurons,
     full,
+    epgOnly,
     viewerNeuronLimit: VIEWER_NEURON_LIMIT,
     viewerNeuronCount: viewerNeuronIndices.length,
     totalNeuronCount: connectome.neurons.length,

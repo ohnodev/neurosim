@@ -25,13 +25,13 @@ fn main() {
         .parent()
         .and_then(|p| p.parent())
         .and_then(|root| {
+            let parquet = root.join("data/raw/2025_Connectivity_783.parquet");
+            if parquet.exists() {
+                return Some(parquet);
+            }
             let aligned = root.join("data/connectome-subset-aligned.json");
             if aligned.exists() {
                 return Some(aligned);
-            }
-            let subset = root.join("data/connectome-subset.json");
-            if subset.exists() {
-                return Some(subset);
             }
             None
         })

@@ -1,8 +1,11 @@
 //! Load connectome from file at startup; compute neuron_ids, connections, sensory/motor indices.
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::fs::File;
 use std::fs;
 use std::path::Path;
+use parquet::file::reader::{FileReader, SerializedFileReader};
+use parquet::record::Field;
 
 #[derive(Deserialize)]
 struct LateralizedIdsJson {
@@ -48,6 +51,12 @@ struct EpgTileMapEntryJson {
 #[derive(Deserialize)]
 struct EpgTileMapJson {
     entries: Vec<EpgTileMapEntryJson>,
+}
+
+struct ParsedConnectome {
+    neuron_ids: Vec<String>,
+    neuron_meta: HashMap<String, (Option<String>, Option<String>)>,
+    connections: Vec<(String, String, Option<f64>)>,
 }
 
 pub struct ConnectomeTemplate {
@@ -171,13 +180,187 @@ fn load_precomputed_motor_indices(
 }
 
 pub fn load_connectome(path: &Path) -> Result<ConnectomeTemplate, Box<dyn std::error::Error + Send + Sync>> {
+    let parsed = load_connectome_data(path)?;
+    build_template(path, parsed)
+}
+
+fn normalize_name(name: &str) -> String {
+    name.chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
+fn field_to_id(field: &Field) -> Option<String> {
+    match field {
+        Field::Str(v) => {
+            let s = v.trim();
+            if s.is_empty() { None } else { Some(s.to_string()) }
+        }
+        Field::Int(v) => Some(v.to_string()),
+        Field::Long(v) => Some(v.to_string()),
+        Field::UInt(v) => Some(v.to_string()),
+        Field::ULong(v) => Some(v.to_string()),
+        Field::Byte(v) => Some(v.to_string()),
+        Field::Short(v) => Some(v.to_string()),
+        Field::UByte(v) => Some(v.to_string()),
+        Field::UShort(v) => Some(v.to_string()),
+        _ => None,
+    }
+}
+
+fn field_to_weight(field: &Field) -> Option<f64> {
+    match field {
+        Field::Float(v) => Some(*v as f64),
+        Field::Double(v) => Some(*v),
+        Field::Int(v) => Some(*v as f64),
+        Field::Long(v) => Some(*v as f64),
+        Field::UInt(v) => Some(*v as f64),
+        Field::ULong(v) => Some(*v as f64),
+        Field::Byte(v) => Some(*v as f64),
+        Field::Short(v) => Some(*v as f64),
+        Field::UByte(v) => Some(*v as f64),
+        Field::UShort(v) => Some(*v as f64),
+        _ => None,
+    }
+}
+
+fn pick_column<'a>(names: &'a [String], candidates: &[&str]) -> Option<&'a String> {
+    let normalized_candidates: Vec<String> = candidates.iter().map(|c| normalize_name(c)).collect();
+    names.iter().find(|name| {
+        let n = normalize_name(name);
+        normalized_candidates.iter().any(|cand| cand == &n)
+    })
+}
+
+fn load_connectome_data(path: &Path) -> Result<ParsedConnectome, Box<dyn std::error::Error + Send + Sync>> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
+        "json" => load_connectome_json(path),
+        "parquet" => load_connectome_parquet(path),
+        _ => Err(format!(
+            "unsupported connectome extension '{}' for {} (expected .json or .parquet)",
+            ext,
+            path.display()
+        )
+        .into()),
+    }
+}
+
+fn load_connectome_json(path: &Path) -> Result<ParsedConnectome, Box<dyn std::error::Error + Send + Sync>> {
     let s = fs::read_to_string(path)?;
     let data: ConnectomeJson = serde_json::from_str(&s)?;
     if data.neurons.is_empty() || data.connections.is_empty() {
         return Err("connectome has no neurons or connections".into());
     }
-
     let neuron_ids: Vec<String> = data.neurons.iter().map(|n| n.root_id.clone()).collect();
+    let mut neuron_meta = HashMap::with_capacity(data.neurons.len());
+    for n in data.neurons {
+        neuron_meta.insert(n.root_id, (n.role, n.side));
+    }
+    let connections = data
+        .connections
+        .into_iter()
+        .map(|c| (c.pre, c.post, c.weight))
+        .collect();
+    Ok(ParsedConnectome {
+        neuron_ids,
+        neuron_meta,
+        connections,
+    })
+}
+
+fn load_connectome_parquet(path: &Path) -> Result<ParsedConnectome, Box<dyn std::error::Error + Send + Sync>> {
+    let file = File::open(path)?;
+    let reader = SerializedFileReader::new(file)?;
+    let schema = reader.metadata().file_metadata().schema_descr();
+    let names: Vec<String> = schema.columns().iter().map(|c| c.path().string()).collect();
+    let pre_name = pick_column(
+        &names,
+        &["pre_root_id", "pre", "source", "from", "Presynaptic_ID", "presynaptic_id"],
+    )
+        .ok_or("parquet is missing pre neuron column (tried pre_root_id/pre/source/from/Presynaptic_ID)")?
+        .clone();
+    let post_name = pick_column(
+        &names,
+        &["post_root_id", "post", "target", "to", "Postsynaptic_ID", "postsynaptic_id"],
+    )
+        .ok_or("parquet is missing post neuron column (tried post_root_id/post/target/to/Postsynaptic_ID)")?
+        .clone();
+    let weight_name = pick_column(
+        &names,
+        &[
+            "Excitatory x Connectivity",
+            "weight",
+            "syn_count",
+            "synapse_count",
+            "Connectivity",
+            "count",
+        ],
+    )
+    .cloned();
+
+    let mut ids = Vec::<String>::new();
+    let mut seen = HashMap::<String, ()>::new();
+    let mut connections = Vec::<(String, String, Option<f64>)>::new();
+    let mut iter = reader.get_row_iter(None)?;
+    while let Some(row) = iter.next() {
+        let row = row?;
+        let mut pre: Option<String> = None;
+        let mut post: Option<String> = None;
+        let mut weight: Option<f64> = None;
+        for (name, field) in row.get_column_iter() {
+            if name == &pre_name {
+                pre = field_to_id(field);
+            } else if name == &post_name {
+                post = field_to_id(field);
+            } else if weight_name.as_deref() == Some(name) {
+                weight = field_to_weight(field);
+            }
+        }
+        let (Some(pre_id), Some(post_id)) = (pre, post) else {
+            continue;
+        };
+        if !seen.contains_key(&pre_id) {
+            seen.insert(pre_id.clone(), ());
+            ids.push(pre_id.clone());
+        }
+        if !seen.contains_key(&post_id) {
+            seen.insert(post_id.clone(), ());
+            ids.push(post_id.clone());
+        }
+        connections.push((pre_id, post_id, weight));
+    }
+
+    if ids.is_empty() || connections.is_empty() {
+        return Err("parquet connectome has no usable neuron IDs or connections".into());
+    }
+
+    eprintln!(
+        "[connectome] parquet columns pre='{}' post='{}' weight='{}' rows={} neurons={}",
+        pre_name,
+        post_name,
+        weight_name.as_deref().unwrap_or("<none>"),
+        connections.len(),
+        ids.len()
+    );
+
+    Ok(ParsedConnectome {
+        neuron_ids: ids,
+        neuron_meta: HashMap::new(),
+        connections,
+    })
+}
+
+fn build_template(
+    path: &Path,
+    data: ParsedConnectome,
+) -> Result<ConnectomeTemplate, Box<dyn std::error::Error + Send + Sync>> {
+    let neuron_ids = data.neuron_ids;
     let id_to_idx: HashMap<String, u32> = neuron_ids
         .iter()
         .enumerate()
@@ -192,20 +375,24 @@ pub fn load_connectome(path: &Path) -> Result<ConnectomeTemplate, Box<dyn std::e
     let mut motor_right = Vec::new();
     let mut motor_unknown = Vec::new();
 
-    for (i, n) in data.neurons.iter().enumerate() {
-        let role = n.role.as_deref().unwrap_or("interneuron");
+    for (i, root_id) in neuron_ids.iter().enumerate() {
+        let (role, side) = data
+            .neuron_meta
+            .get(root_id)
+            .cloned()
+            .unwrap_or((None, None));
+        let role = role.as_deref().unwrap_or("interneuron");
         match role {
             "sensory" => {
                 sensory.push(i as u32);
-                match n.side.as_deref() {
+                match side.as_deref() {
                     Some("left") => sensory_left_all.push(i as u32),
                     Some("right") => sensory_right_all.push(i as u32),
                     _ => sensory_unknown_all.push(i as u32),
                 }
             }
             "motor" => {
-                let side = n.side.as_deref().unwrap_or("unknown");
-                match side {
+                match side.as_deref().unwrap_or("unknown") {
                     "left" => motor_left.push(i as u32),
                     "right" => motor_right.push(i as u32),
                     _ => motor_unknown.push(i as u32),
@@ -215,8 +402,6 @@ pub fn load_connectome(path: &Path) -> Result<ConnectomeTemplate, Box<dyn std::e
         }
     }
 
-    // Prefer precomputed olfactory afferents from data/olfactory-afferents.json.
-    // If overlap with the currently loaded connectome is empty, fall back to all sensory neurons.
     let (sensory_left_indices, sensory_right_indices, sensory_unknown_indices) =
         if let Some(olf) =
             load_precomputed_olfactory_indices(path, &id_to_idx)
@@ -254,9 +439,9 @@ pub fn load_connectome(path: &Path) -> Result<ConnectomeTemplate, Box<dyn std::e
     let mut edges_pre = Vec::with_capacity(data.connections.len());
     let mut edges_post = Vec::with_capacity(data.connections.len());
     let mut edges_weight = Vec::with_capacity(data.connections.len());
-    for c in &data.connections {
-        if let (Some(&pre), Some(&post)) = (id_to_idx.get(&c.pre), id_to_idx.get(&c.post)) {
-            let w = c.weight.unwrap_or(0.0);
+    for (pre_id, post_id, w_opt) in &data.connections {
+        if let (Some(&pre), Some(&post)) = (id_to_idx.get(pre_id), id_to_idx.get(post_id)) {
+            let w = w_opt.unwrap_or(0.0);
             if !w.is_finite() {
                 continue;
             }

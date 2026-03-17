@@ -61,6 +61,11 @@ pub struct BrainSim {
     fly_time_left_sec: f64,
     motor_turn_ema: f64,
     rng_state: u64,
+    stim_log_every: u64,
+    step_counter: u64,
+    olf_poisson_total: u64,
+    forced_spikes_total: u64,
+    network_spikes_total: u64,
 }
 
 pub struct FlyInput {
@@ -140,6 +145,13 @@ impl BrainSim {
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(10_000);
         parsed.max(1)
+    }
+
+    fn stim_log_interval() -> u64 {
+        std::env::var("NEUROSIM_STIM_LOG_EVERY")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(100)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -251,6 +263,11 @@ impl BrainSim {
             fly_time_left_sec: FLY_TIME_MAX,
             motor_turn_ema: 0.0,
             rng_state: 0x9E3779B97F4A7C15u64,
+            stim_log_every: Self::stim_log_interval(),
+            step_counter: 0,
+            olf_poisson_total: 0,
+            forced_spikes_total: 0,
+            network_spikes_total: 0,
         }
     }
 
@@ -372,14 +389,15 @@ impl BrainSim {
         spike_amp: f32,
         rng_state: &mut u64,
         syn_input: &mut [f32],
-    ) {
+    ) -> usize {
         if rate_hz <= 0.0 || indices.is_empty() {
-            return;
+            return 0;
         }
         let p = (rate_hz * dt_sec).clamp(0.0, 1.0);
         if p <= 0.0 {
-            return;
+            return 0;
         }
+        let mut spikes_applied = 0usize;
         for &idx in indices {
             let i = idx as usize;
             if i >= syn_input.len() {
@@ -387,8 +405,10 @@ impl BrainSim {
             }
             if Self::next_uniform(rng_state) < p {
                 syn_input[i] += spike_amp;
+                spikes_applied += 1;
             }
         }
+        spikes_applied
     }
 
     fn run_step_cpu(
@@ -416,8 +436,11 @@ impl BrainSim {
         }
         let mut rng_state = self.rng_state;
         let sensory_spike_amp = SENSORY_POISSON_SCALE * RECURRENT_SCALE;
+        let mut olf_poisson_spikes = 0usize;
+        let used_olfactory_rate_hz =
+            olfactory_baseline_rate_hz.filter(|v| v.is_finite() && *v > 0.0).unwrap_or(0.0);
         if let Some(rate_hz) = olfactory_baseline_rate_hz.filter(|v| v.is_finite() && *v > 0.0) {
-            Self::apply_poisson_stimulus(
+            olf_poisson_spikes += Self::apply_poisson_stimulus(
                 &self.sensory_left_indices,
                 rate_hz,
                 dt,
@@ -425,7 +448,7 @@ impl BrainSim {
                 &mut rng_state,
                 &mut self.syn_input,
             );
-            Self::apply_poisson_stimulus(
+            olf_poisson_spikes += Self::apply_poisson_stimulus(
                 &self.sensory_right_indices,
                 rate_hz,
                 dt,
@@ -433,7 +456,7 @@ impl BrainSim {
                 &mut rng_state,
                 &mut self.syn_input,
             );
-            Self::apply_poisson_stimulus(
+            olf_poisson_spikes += Self::apply_poisson_stimulus(
                 &self.sensory_unknown_indices,
                 rate_hz,
                 dt,
@@ -445,7 +468,7 @@ impl BrainSim {
                 && self.sensory_right_indices.is_empty()
                 && self.sensory_unknown_indices.is_empty()
             {
-                Self::apply_poisson_stimulus(
+                olf_poisson_spikes += Self::apply_poisson_stimulus(
                     &self.sensory_indices,
                     rate_hz,
                     dt,
@@ -456,7 +479,7 @@ impl BrainSim {
             }
         } else {
             let sensory = self.sensory_drive(fly, sources);
-            Self::apply_poisson_stimulus(
+            olf_poisson_spikes += Self::apply_poisson_stimulus(
                 &self.sensory_left_indices,
                 sensory.left_rate_hz,
                 dt,
@@ -464,7 +487,7 @@ impl BrainSim {
                 &mut rng_state,
                 &mut self.syn_input,
             );
-            Self::apply_poisson_stimulus(
+            olf_poisson_spikes += Self::apply_poisson_stimulus(
                 &self.sensory_right_indices,
                 sensory.right_rate_hz,
                 dt,
@@ -475,7 +498,7 @@ impl BrainSim {
             let unknown_rate_hz =
                 ((sensory.left_rate_hz + sensory.right_rate_hz + sensory.center_rate_hz) / 3.0)
                     .max(0.0);
-            Self::apply_poisson_stimulus(
+            olf_poisson_spikes += Self::apply_poisson_stimulus(
                 &self.sensory_unknown_indices,
                 unknown_rate_hz,
                 dt,
@@ -490,7 +513,7 @@ impl BrainSim {
                 let fallback_hz = sensory
                     .center_rate_hz
                     .max(sensory.left_rate_hz.max(sensory.right_rate_hz));
-                Self::apply_poisson_stimulus(
+                olf_poisson_spikes += Self::apply_poisson_stimulus(
                     &self.sensory_indices,
                     fallback_hz,
                     dt,
@@ -542,6 +565,7 @@ impl BrainSim {
                 self.g_next[i] = 0.0;
             }
         }
+        let mut forced_spikes_applied = 0usize;
         if !forced_spikes.is_empty() {
             for id in forced_spikes {
                 if let Some(&idx) = self.neuron_index_by_id.get(id) {
@@ -550,9 +574,35 @@ impl BrainSim {
                         self.v[idx] = V_RESET;
                         self.refractory[idx] = refrac_steps;
                         self.g_next[idx] = 0.0;
+                        forced_spikes_applied += 1;
                     }
                 }
             }
+        }
+        let network_spikes_step = spikes_next.iter().filter(|&&v| v > 0).count() as u64;
+        self.step_counter = self.step_counter.wrapping_add(1);
+        self.olf_poisson_total = self.olf_poisson_total.saturating_add(olf_poisson_spikes as u64);
+        self.forced_spikes_total = self
+            .forced_spikes_total
+            .saturating_add(forced_spikes_applied as u64);
+        self.network_spikes_total = self.network_spikes_total.saturating_add(network_spikes_step);
+        if self.stim_log_every > 0 && self.step_counter % self.stim_log_every == 0 {
+            eprintln!(
+                "[stim] step={} dt_sec={:.6} olfactory_hz={:.3} olf_pool(L/R/U/all)={}/{}/{}/{} olf_poisson_spikes_step={} forced_spikes_step={} network_spikes_step={} olf_poisson_total={} forced_spikes_total={} network_spikes_total={}",
+                self.step_counter,
+                dt,
+                used_olfactory_rate_hz,
+                self.sensory_left_indices.len(),
+                self.sensory_right_indices.len(),
+                self.sensory_unknown_indices.len(),
+                self.sensory_indices.len(),
+                olf_poisson_spikes,
+                forced_spikes_applied,
+                network_spikes_step,
+                self.olf_poisson_total,
+                self.forced_spikes_total,
+                self.network_spikes_total
+            );
         }
         std::mem::swap(&mut self.g, &mut self.g_next);
         self.spikes = spikes_next;

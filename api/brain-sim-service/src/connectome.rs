@@ -113,7 +113,18 @@ fn load_epg_viewer_indices(
     connectome_path: &Path,
     id_to_idx: &HashMap<String, u32>,
 ) -> Option<Vec<u32>> {
-    let epg_map_path = connectome_path.parent()?.join("epg-tile-map.json");
+    let mut candidates = Vec::new();
+    if let Some(parent) = connectome_path.parent() {
+        candidates.push(parent.join("epg-tile-map.json"));
+        if let Some(grandparent) = parent.parent() {
+            candidates.push(grandparent.join("epg-tile-map.json"));
+            candidates.push(grandparent.join("data").join("epg-tile-map.json"));
+        }
+    }
+    if let Some(repo_root) = Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(|p| p.parent()) {
+        candidates.push(repo_root.join("data").join("epg-tile-map.json"));
+    }
+    let epg_map_path = candidates.into_iter().find(|p| p.exists())?;
     let txt = fs::read_to_string(epg_map_path).ok()?;
     let parsed: EpgTileMapJson = serde_json::from_str(&txt).ok()?;
     let mut out: Vec<u32> = parsed

@@ -148,7 +148,7 @@ const PLAYBACK_BASE_MS = 80;
 /** EPG compass bins: 8 = glomerulus 1–8 from label (R1+L1→0, …, R8+L8→7). L+R with same number share bin. */
 const EPG_COMPASS_BINS = 8;
 /** Neuron stays lit for this many ticks after spike; brightness decays linearly to transparent. */
-const SPIKE_DISPLAY_TICKS = 5;
+const SPIKE_DISPLAY_TICKS = 3;
 /** Rotate compass so right=screen right, left=screen left. Applied to spatial projection. */
 const COMPASS_ROTATION_RAD = -Math.PI / 2;
 /** Shorter window so arrow tracks current bump (was 12; with 1ms step, 5 ticks ≈ 5ms). */

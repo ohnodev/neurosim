@@ -3,8 +3,8 @@
 Run fly-brain baseline tiers directly (no neurosim API/brain-service) and export CSVs.
 
 Outputs:
-- world/public/eonsystems_flybrain_baseline_1ms_tier{1,2,3}_spikes.csv
-- logs/eonsystems_flybrain_baseline_1ms_tier{1,2,3}_summary.txt
+- world/public/eonsystems_flybrain_baseline_<dt>_tier{1,2,3}_spikes.csv
+- logs/eonsystems_flybrain_baseline_<dt>_tier{1,2,3}_summary.txt
 """
 
 from __future__ import annotations
@@ -38,6 +38,15 @@ def parse_float_list(value: str) -> list[float]:
     return out
 
 
+def dt_label(dt_ms: float) -> str:
+    if dt_ms <= 0:
+        raise RuntimeError(f"DT_MS must be > 0, got {dt_ms}")
+    if dt_ms.is_integer():
+        return f"{int(dt_ms)}ms"
+    token = f"{dt_ms:g}".replace(".", "p")
+    return f"{token}ms"
+
+
 def main() -> None:
     script_path = Path(__file__).resolve()
     repo_root = script_path.parent.parent
@@ -48,6 +57,7 @@ def main() -> None:
     from benchmark import path_comp, path_con, path_wt  # type: ignore
 
     dt_ms = float(os.environ.get("DT_MS", "1.0"))
+    dt_tag = dt_label(dt_ms)
     ticks = int(os.environ.get("TICKS", "2000"))
     n_run = int(os.environ.get("N_RUN", "1"))
     t_run_sec = (ticks * dt_ms) / 1000.0
@@ -114,8 +124,8 @@ def main() -> None:
         df = pd.DataFrame(rows, columns=["tick", "time_ms", "trial", "flywire_id"])
         unique_neurons = int(df["flywire_id"].nunique()) if len(df) else 0
 
-        out_csv = public_dir / f"eonsystems_flybrain_baseline_1ms_tier{tier_idx}_spikes.csv"
-        out_summary = logs_dir / f"eonsystems_flybrain_baseline_1ms_tier{tier_idx}_summary.txt"
+        out_csv = public_dir / f"eonsystems_flybrain_baseline_{dt_tag}_tier{tier_idx}_spikes.csv"
+        out_summary = logs_dir / f"eonsystems_flybrain_baseline_{dt_tag}_tier{tier_idx}_summary.txt"
         df.to_csv(out_csv, index=False)
 
         summary_lines = [

@@ -1374,9 +1374,14 @@ const NEUROSIM_LIVE_MAX_BACKOFF_MS = 1000;
 export default function VisualizationPage() {
   const [fetchedReplay, setFetchedReplay] = useState<ReplayData | null>(null);
   const [templateReplay, setTemplateReplay] = useState<ReplayData | null>(null);
+  const [liveReplay, setLiveReplay] = useState<ReplayData | null>(null);
   const [liveTicks, setLiveTicks] = useState<ReplayTick[]>([]);
   const [recordedTicks, setRecordedTicks] = useState<ReplayTick[]>([]);
   const [liveReplaySource, setLiveReplaySource] = useState<'live' | 'recording'>('live');
+  const liveReplayTickCountRef = useRef(0);
+  const liveReplaySourceRef = useRef<'live' | 'recording'>('live');
+  const liveEpgSeenRef = useRef<Set<string>>(new Set());
+  const [liveEpgUniqueFired, setLiveEpgUniqueFired] = useState(0);
   const liveSimIdRef = useRef<number | null>(null);
   const [liveRunning, setLiveRunning] = useState(false);
   const [recording, setRecording] = useState(false);
@@ -1398,13 +1403,10 @@ export default function VisualizationPage() {
       ?? DEFAULT_REPLAY_DATASETS[0]?.id
       ?? '',
   );
-  const replay = useMemo(() => {
-    if (selectedReplayId === 'neurosim_live' && templateReplay) {
-      const ticks = liveReplaySource === 'recording' ? recordedTicks : liveTicks;
-      return { ...templateReplay, meta: { ...templateReplay.meta, dt_sec: liveSettings.dtSec, scenario: 'neurosim_live' }, ticks };
-    }
-    return fetchedReplay;
-  }, [selectedReplayId, templateReplay, fetchedReplay, liveReplaySource, liveTicks, recordedTicks, liveSettings.dtSec]);
+  const replay = useMemo(
+    () => (selectedReplayId === 'neurosim_live' ? liveReplay : fetchedReplay),
+    [selectedReplayId, liveReplay, fetchedReplay],
+  );
   const [arrowSmoothing, setArrowSmoothing] = useState(true);
   const [epgTileMap, setEpgTileMap] = useState<Map<string, number> | null>(null);
   const [compassStats, setCompassStats] = useState<CompassStats>({
@@ -1445,6 +1447,7 @@ export default function VisualizationPage() {
   const ringIdSet = useMemo(() => new Set(neurons.filter((n) => n.is_ring).map((n) => n.root_id)), [neurons]);
   const epgUniqueFired = useMemo(() => {
     if (!replay) return null;
+    if (selectedReplayId === 'neurosim_live') return liveEpgUniqueFired;
     if (typeof replay.meta.epg_neuron_unique_fired === 'number' && Number.isFinite(replay.meta.epg_neuron_unique_fired)) {
       return replay.meta.epg_neuron_unique_fired;
     }
@@ -1457,7 +1460,7 @@ export default function VisualizationPage() {
       }
     }
     return fired.size;
-  }, [replay, epgTileMap]);
+  }, [replay, epgTileMap, selectedReplayId, liveEpgUniqueFired]);
   const displayNeurons = useMemo(() => neurons, [neurons]);
   const selectedReplay = useMemo(
     () => replayDatasets.find((d) => d.id === selectedReplayId) ?? replayDatasets[0],
@@ -1522,9 +1525,14 @@ export default function VisualizationPage() {
             ticks: [],
           });
           setFetchedReplay(null);
+          setLiveReplay(null);
           setLiveTicks([]);
           setRecordedTicks([]);
           setLiveReplaySource('live');
+          liveReplayTickCountRef.current = 0;
+          liveReplaySourceRef.current = 'live';
+          liveEpgSeenRef.current = new Set();
+          setLiveEpgUniqueFired(0);
           setLiveRunning(false);
           liveSimIdRef.current = null;
         } else {
@@ -1541,9 +1549,14 @@ export default function VisualizationPage() {
         if (!active) return;
         setFetchedReplay(null);
         setTemplateReplay(null);
+        setLiveReplay(null);
         setLiveTicks([]);
         setRecordedTicks([]);
         setLiveReplaySource('live');
+        liveReplayTickCountRef.current = 0;
+        liveReplaySourceRef.current = 'live';
+        liveEpgSeenRef.current = new Set();
+        setLiveEpgUniqueFired(0);
         setLiveRunning(false);
         liveSimIdRef.current = null;
         liveNextTickRef.current = 1;
@@ -1555,6 +1568,82 @@ export default function VisualizationPage() {
     void load();
     return () => { active = false; };
   }, [selectedReplay]);
+
+  useEffect(() => {
+    if (selectedReplayId !== 'neurosim_live' || !templateReplay) {
+      liveReplayTickCountRef.current = 0;
+      liveReplaySourceRef.current = 'live';
+      liveEpgSeenRef.current = new Set();
+      setLiveEpgUniqueFired(0);
+      setLiveReplay(null);
+      return;
+    }
+    const ticks = liveReplaySource === 'recording' ? recordedTicks : liveTicks;
+    const sourceChanged = liveReplaySourceRef.current !== liveReplaySource;
+    const replayMissing = liveReplay == null;
+    const tickReset = ticks.length < liveReplayTickCountRef.current;
+    const dtChanged = (liveReplay?.meta.dt_sec ?? liveSettings.dtSec) !== liveSettings.dtSec;
+    const fullRebuild = replayMissing || sourceChanged || tickReset || dtChanged;
+    const epgIds = epgTileMap ? new Set(epgTileMap.keys()) : null;
+
+    if (fullRebuild) {
+      const seen = new Set<string>();
+      if (epgIds && epgIds.size > 0) {
+        for (const t of ticks) {
+          for (const id of t.spikes ?? []) {
+            if (epgIds.has(id)) seen.add(id);
+          }
+        }
+      }
+      liveEpgSeenRef.current = seen;
+      setLiveEpgUniqueFired(seen.size);
+      setLiveReplay({
+        ...templateReplay,
+        meta: {
+          ...templateReplay.meta,
+          dt_sec: liveSettings.dtSec,
+          scenario: 'neurosim_live',
+          ticks: ticks.length,
+          epg_neuron_unique_fired: seen.size,
+        },
+        ticks: [...ticks],
+      });
+    } else if (ticks.length > liveReplayTickCountRef.current && liveReplay != null) {
+      const appended = ticks.slice(liveReplayTickCountRef.current);
+      if (epgIds && epgIds.size > 0) {
+        for (const t of appended) {
+          for (const id of t.spikes ?? []) {
+            if (epgIds.has(id)) liveEpgSeenRef.current.add(id);
+          }
+        }
+      }
+      const seenCount = liveEpgSeenRef.current.size;
+      setLiveEpgUniqueFired(seenCount);
+      setLiveReplay({
+        ...liveReplay,
+        meta: {
+          ...liveReplay.meta,
+          dt_sec: liveSettings.dtSec,
+          scenario: 'neurosim_live',
+          ticks: ticks.length,
+          epg_neuron_unique_fired: seenCount,
+        },
+        ticks: [...liveReplay.ticks, ...appended],
+      });
+    } else if (liveReplay != null && liveReplay.meta.dt_sec !== liveSettings.dtSec) {
+      setLiveReplay({
+        ...liveReplay,
+        meta: {
+          ...liveReplay.meta,
+          dt_sec: liveSettings.dtSec,
+          scenario: 'neurosim_live',
+        },
+      });
+    }
+
+    liveReplayTickCountRef.current = ticks.length;
+    liveReplaySourceRef.current = liveReplaySource;
+  }, [selectedReplayId, templateReplay, liveReplaySource, liveTicks, recordedTicks, liveSettings.dtSec, epgTileMap, liveReplay]);
 
   const isNeuroSimLive = selectedReplayId === 'neurosim_live';
   const apiBase = getApiBase();
@@ -1802,6 +1891,9 @@ export default function VisualizationPage() {
                   const data = (await res.json()) as { simId: number };
                   liveNextTickRef.current = 1;
                   setLiveTicks([]);
+                  setLiveReplaySource('live');
+                  setCurrentTick(1);
+                  setPlaying(false);
                   liveSimIdRef.current = data.simId;
                   setLiveRunning(true);
                 } catch (e) {
@@ -1833,6 +1925,9 @@ export default function VisualizationPage() {
                   liveNextTickRef.current = 1;
                   setLiveTicks([]);
                   setRecordedTicks([]);
+                  setLiveReplaySource('live');
+                  setCurrentTick(1);
+                  setPlaying(false);
                   liveSimIdRef.current = data.simId;
                   setLiveRunning(true);
                 } catch (e) {

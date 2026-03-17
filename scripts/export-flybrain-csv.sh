@@ -18,7 +18,17 @@ T_RUN="${T_RUN:-0.1}"
 N_RUN="${N_RUN:-1}"
 OUT_CSV="${OUT_CSV:-${REPO_ROOT}/world/public/eonsystems_flybrain_spikes.csv}"
 
-PARQUET_PATH="${FLY_BRAIN_DIR}/data/results/pytorch_t${T_RUN}s_n${N_RUN}.parquet"
+backend_name="${BACKEND#--}"
+case "${backend_name}" in
+  pytorch|sparse|dense)
+    ;;
+  *)
+    echo "Unsupported BACKEND='${BACKEND}'. Allowed: --pytorch, --sparse, --dense"
+    exit 1
+    ;;
+esac
+
+PARQUET_PATH="${FLY_BRAIN_DIR}/data/results/${backend_name}_t${T_RUN}s_n${N_RUN}.parquet"
 
 echo "[1/3] Running fly-brain benchmark (${BACKEND}, t_run=${T_RUN}, n_run=${N_RUN})..."
 set +e

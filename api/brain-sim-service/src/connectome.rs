@@ -131,7 +131,18 @@ fn load_precomputed_indices(
     id_to_idx: &HashMap<String, u32>,
     filename: &str,
 ) -> Option<PrecomputedIndices> {
-    let precomputed_path = connectome_path.parent()?.join(filename);
+    let mut candidates = Vec::new();
+    if let Some(parent) = connectome_path.parent() {
+        candidates.push(parent.join(filename));
+        if let Some(grandparent) = parent.parent() {
+            candidates.push(grandparent.join(filename));
+            candidates.push(grandparent.join("data").join(filename));
+        }
+    }
+    if let Some(repo_root) = Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(|p| p.parent()) {
+        candidates.push(repo_root.join("data").join(filename));
+    }
+    let precomputed_path = candidates.into_iter().find(|p| p.exists())?;
     let txt = fs::read_to_string(precomputed_path).ok()?;
     let parsed: LateralizedIdsJson = serde_json::from_str(&txt).ok()?;
     let total_left = parsed.left.len();
@@ -170,13 +181,6 @@ fn load_precomputed_olfactory_indices(
     id_to_idx: &HashMap<String, u32>,
 ) -> Option<PrecomputedIndices> {
     load_precomputed_indices(connectome_path, id_to_idx, "olfactory-afferents.json")
-}
-
-fn load_precomputed_motor_indices(
-    connectome_path: &Path,
-    id_to_idx: &HashMap<String, u32>,
-) -> Option<PrecomputedIndices> {
-    load_precomputed_indices(connectome_path, id_to_idx, "motor-efferents.json")
 }
 
 pub fn load_connectome(path: &Path) -> Result<ConnectomeTemplate, Box<dyn std::error::Error + Send + Sync>> {
@@ -451,28 +455,9 @@ fn build_template(
         }
     }
 
-    let (pre_motor_left, pre_motor_right, pre_motor_unknown) =
-        if let Some(mot) =
-            load_precomputed_motor_indices(path, &id_to_idx)
-        {
-            eprintln!(
-                "[connectome] motor precomputed total(L/R/U)={}/{}/{} overlap_in_loaded_connectome(L/R/U)={}/{}/{}",
-                mot.total_left, mot.total_right, mot.total_unknown, mot.left.len(), mot.right.len(), mot.unknown.len()
-            );
-            if !mot.left.is_empty() || !mot.right.is_empty() || !mot.unknown.is_empty() {
-                (mot.left, mot.right, mot.unknown)
-            } else {
-                eprintln!(
-                    "[connectome] zero overlap with precomputed motor IDs; using role-based motor sets from loaded connectome"
-                );
-                (motor_left, motor_right, motor_unknown)
-            }
-        } else {
-            eprintln!(
-                "[connectome] missing/invalid data/motor-efferents.json; using role-based motor sets from loaded connectome"
-            );
-            (motor_left, motor_right, motor_unknown)
-        };
+    let pre_motor_left = motor_left;
+    let pre_motor_right = motor_right;
+    let pre_motor_unknown = motor_unknown;
 
     Ok(ConnectomeTemplate {
         neuron_ids,

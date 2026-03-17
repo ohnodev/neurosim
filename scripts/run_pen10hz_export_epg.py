@@ -25,7 +25,7 @@ SOCKET_PATH = Path(os.environ.get("NEUROSIM_BRAIN_SOCKET", "/tmp/neurosim-brain.
 DT_MS = 0.1
 DT_SEC = DT_MS / 1000.0
 DURATION_MS = 1000.0
-NUM_STEPS = int(round(DURATION_MS / DT_MS))  # 10_000
+NUM_STEPS = round(DURATION_MS / DT_MS)  # 10_000
 
 
 def load_pen_ids(class_map_path: Path) -> list[str]:

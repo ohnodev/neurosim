@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import time
-from pathlib import Path
-
-import os
 from pathlib import Path
 
 SOCKET_PATH = Path(os.environ.get("NEUROSIM_BRAIN_SOCKET", "/tmp/neurosim-brain.sock"))
@@ -63,7 +61,7 @@ def main() -> None:
     print(f"Per step: {ms_per_step:.2f} ms")
     print(f"1 s sim (10k steps) at this rate: {(10000 * ms_per_step) / 1000:.1f} s wall")
     print()
-    print("Bottleneck: each step does (1, 127k) @ (127k, 127k) sparse matmul on CPU → ~25–30 ms.")
+    print("Bottleneck: each step does (1, 127k) @ (127k, 127k) sparse matmul on CPU → ~25-30 ms.")
     print("Use run_steps (one RPC for many steps) to avoid 10k round-trips; calibration uses it.")
     print("For faster runs: NEUROSIM_PYTHON_BRAIN_DEVICE=cuda if GPU available.")
 

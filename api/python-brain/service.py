@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import csv
 import json
+import math
 import os
 import sys
 import time
@@ -15,7 +16,8 @@ import torch
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SOCKET_PATH = Path(os.environ.get("NEUROSIM_BRAIN_SOCKET", "/tmp/neurosim-brain.sock"))
+_default_socket_dir = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "neurosim"
+SOCKET_PATH = Path(os.environ.get("NEUROSIM_BRAIN_SOCKET", str(_default_socket_dir / "neurosim-brain.sock")))
 BASE_SEED = 1598276117
 DEVICE_PREF = "cpu"
 _default_fly_brain = (ROOT.parent / "fly-brain-fresh").resolve()
@@ -28,6 +30,11 @@ DT_SEC = DT_MS / 1000.0
 W_SYN_MV = 0.339
 # Scale applied to EPG->EPG recurrent weights (1.0 = no change; 4.0 = 4x recurrence).
 EPG_RECURRENCE_BOOST = 4.0
+# Max steps when record_ticks=True to avoid huge tick arrays; compute-only runs can be larger.
+MAX_TICK_STEPS = 15_000
+MAX_COMPUTE_STEPS = 1_000_000
+# Canonical EPG tile map path (data/epg-tile-map.json) used by service and parity script.
+EPG_TILE_MAP_PATH = ROOT / "data" / "epg-tile-map.json"
 
 
 def _read_json(path: Path) -> Any:
@@ -131,7 +138,7 @@ class BrainService:
         return block
 
     def _load_viewer_indices(self) -> list[int]:
-        epg_map_path = ROOT / "world" / "public" / "epg-tile-map.json"
+        epg_map_path = EPG_TILE_MAP_PATH
         parsed = _read_json(epg_map_path)
         entries = parsed.get("entries", parsed if isinstance(parsed, list) else [])
         out: list[int] = []
@@ -141,7 +148,12 @@ class BrainService:
             if idx is not None:
                 out.append(idx)
         out = sorted(set(out))
-        return out if out else list(range(self.neuron_count))
+        if not out:
+            raise RuntimeError(
+                f"EPG mapping produced no indices: epg_map_path={epg_map_path!r} neuron_count={self.neuron_count}; "
+                "check that data/epg-tile-map.json matches the connectome."
+            )
+        return out
 
     def _load_olfactory_indices(self) -> list[int]:
         path = ROOT / "data" / "olfactory-afferents.json"
@@ -221,10 +233,7 @@ class BrainService:
         dt = float(params.get("dt", DT_SEC))
         if dt <= 0:
             raise ValueError(f"dt must be > 0, got {dt}")
-        substeps_f = dt / DT_SEC
-        substeps = int(round(substeps_f))
-        if substeps < 1 or abs(substeps_f - substeps) > 1e-6:
-            raise ValueError(f"dt must be a multiple of {DT_SEC}, got {dt}")
+        substeps = max(1, int(math.ceil(dt / DT_SEC)))
         include_activity = bool(params.get("include_activity", True))
         olfactory_hz = float(params.get("olfactory_baseline_rate_hz") or 0.0)
         forced_spikes = [str(x) for x in (params.get("forced_spikes") or [])]
@@ -433,9 +442,11 @@ class BrainService:
         self, sim: SimState, params: dict[str, Any]
     ) -> dict[str, Any]:
         """Run many steps in one RPC; return spike counts for specified neuron IDs. No plasticity."""
+        record_ticks = bool(params.get("record_ticks", False))
+        max_steps = MAX_TICK_STEPS if record_ticks else MAX_COMPUTE_STEPS
         num_steps = int(params.get("num_steps", 0))
-        if num_steps < 1 or num_steps > 1_000_000:
-            raise ValueError("num_steps must be in [1, 1000000]")
+        if num_steps < 1 or num_steps > max_steps:
+            raise ValueError(f"num_steps must be in [1, {max_steps}] (record_ticks={record_ticks})")
         dt = float(params.get("dt", DT_SEC))
         if dt <= 0 or dt != DT_SEC:
             raise ValueError(f"dt must be {DT_SEC} (0.1 ms)")
@@ -444,7 +455,6 @@ class BrainService:
         count_indices = [
             self.id_to_index[rid] for rid in count_neuron_ids if rid in self.id_to_index
         ]
-        record_ticks = bool(params.get("record_ticks", False))
 
         sim.rates.zero_()
         for rid, hz in stim_rates_by_id.items():
@@ -523,7 +533,7 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                 req = json.loads(line)
                 if not isinstance(req, dict):
                     raise ValueError("request must be a JSON object")
-                resp = service.handle(req)
+                resp = await asyncio.to_thread(service.handle, req)
             except Exception as exc:  # noqa: BLE001
                 resp = {"error": str(exc)}
             writer.write((json.dumps(resp, separators=(",", ":")) + "\n").encode("utf-8"))
@@ -535,10 +545,12 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
 
 async def main() -> None:
     SOCKET_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if SOCKET_PATH.parent.resolve() == _default_socket_dir.resolve():
+        os.chmod(SOCKET_PATH.parent, 0o750)
     if SOCKET_PATH.exists():
         SOCKET_PATH.unlink()
     server = await asyncio.start_unix_server(handle_client, path=str(SOCKET_PATH), limit=16 * 1024 * 1024)
-    os.chmod(SOCKET_PATH, 0o666)
+    os.chmod(SOCKET_PATH, 0o660)
     print(f"[python-brain] listening socket={SOCKET_PATH}", flush=True)
     async with server:
         await server.serve_forever()

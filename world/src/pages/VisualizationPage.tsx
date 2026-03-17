@@ -1452,18 +1452,23 @@ export default function VisualizationPage() {
 
   const neurons = useMemo(() => {
     const base = replay?.neurons ?? [];
-    if (!epgLabelMap || epgLabelMap.size === 0) return [];
+    const labelMap = epgLabelMap && epgLabelMap.size > 0 ? epgLabelMap : null;
     return base
-      .filter((n) => epgLabelMap.has(n.root_id))
-      .map((n) => ({
-        ...n,
-        side: (epgLabelMap.get(n.root_id)?.startsWith('L') ? 'left' : 'right'),
-        is_epg: true,
-        is_ring: true,
-        is_epg_upstream: false,
-        is_epg_downstream: false,
-        is_delta7: false,
-      }));
+      .filter((n) => !labelMap || labelMap.has(n.root_id))
+      .map((n) => {
+        const sideFromMap = labelMap?.get(n.root_id)?.startsWith('L') ? 'left' : labelMap?.get(n.root_id)?.startsWith('R') ? 'right' : undefined;
+        const effLabel = getEffectiveEpgLabel(n, labelMap ?? null);
+        const side = sideFromMap ?? (effLabel ? (effLabel.startsWith('L') ? 'left' : 'right') : n.side);
+        return {
+          ...n,
+          side,
+          is_epg: true,
+          is_ring: true,
+          is_epg_upstream: false,
+          is_epg_downstream: false,
+          is_delta7: false,
+        };
+      });
   }, [replay?.neurons, epgLabelMap]);
   const ringIdSet = useMemo(() => new Set(neurons.filter((n) => n.is_ring).map((n) => n.root_id)), [neurons]);
   const epgUniqueFired = useMemo(() => {

@@ -37,7 +37,7 @@ def load_benchmark_ids() -> tuple[list[str], list[str]]:
 
 def run_calibration_sweep(sugar_ids: list[str], mn9_ids: list[str], sugar_hz: float) -> float:
     """Drive sugar GRNs at sugar_hz Hz for CALIBRATION_DURATION_MS at 0.1 ms; one RPC (run_steps)."""
-    n_steps = int(round(CALIBRATION_DURATION_MS / DT_MS))  # 1000 ms / 0.1 ms = 10000 steps
+    n_steps = round(CALIBRATION_DURATION_MS / DT_MS)  # 1000 ms / 0.1 ms = 10000 steps
     dt_sec = DT_MS / 1000.0
     stim_rates = {rid: sugar_hz for rid in sugar_ids}
 

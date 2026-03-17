@@ -13,6 +13,10 @@ import torch
 
 ROOT = Path(__file__).resolve().parents[1]
 FLY = ROOT.parent / "fly-brain-fresh"
+if not FLY.exists() or not FLY.is_dir():
+    raise FileNotFoundError(
+        f"FLY brain directory not found: {FLY}. Clone fly-brain-fresh next to the scripts directory or set the correct path."
+    )
 
 TICKS = int(os.environ.get("NEUROSIM_EXPORT_TICKS", "1000"))
 DT_MS = float(os.environ.get("NEUROSIM_EXPORT_DT_MS", "1.0"))

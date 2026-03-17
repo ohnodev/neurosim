@@ -748,7 +748,14 @@ app.get('/api/connectome', (_, res) => {
 });
 
 app.get('/api/health', (_, res) =>
-  res.json({ ok: true, backend: { engine: backendInfo.engine, gpu: backendInfo.gpu } }));
+  res.json({
+    ok: true,
+    backend: {
+      engine: backendInfo.engine,
+      gpu: backendInfo.gpu,
+      rust: backendInfo.engine === 'rust',
+    },
+  }));
 
 /** Debug position buffer for smoothness testing; only when DEBUG_POSITIONS=1 */
 const DEBUG_POSITIONS_ENABLED = process.env.DEBUG_POSITIONS === '1';

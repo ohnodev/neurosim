@@ -112,7 +112,7 @@ stop_service() {
 restart_service() {
     create_logs_dir
     log_info "Verifying $BRAIN_SERVICE Python service..."
-    (cd "$BRAIN_SERVICE_DIR" && conda run -n brain-fly python -m py_compile service.py) || { log_error "python-brain validation failed"; exit 1; }
+    (cd "$BRAIN_SERVICE_DIR" && conda run -n brain-fly python -c "import importlib; importlib.import_module('service')") || { log_error "python-brain validation failed"; exit 1; }
     log_info "Rebuilding $SERVICE..."
     (cd "$API_DIR" && npm run build) || { log_error "API build failed"; exit 1; }
     log_info "Stopping services..."

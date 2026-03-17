@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
 LOGS = ROOT / "logs"
-SOCKET_PATH = Path("/tmp/neurosim-brain.sock")
+# Canonical EPG tile map (data/epg-tile-map.json); same as api/python-brain/service.py.
+EPG_TILE_MAP_PATH = ROOT / "data" / "epg-tile-map.json"
+SOCKET_PATH = Path(os.environ.get("NEUROSIM_BRAIN_SOCKET", "/tmp/neurosim-brain.sock"))
 DT_SEC = 0.0001
 TICKS = 1000
 TICKS_300 = 300
@@ -40,7 +43,7 @@ def ensure_fly_csv() -> None:
 
 
 def load_epg_ids() -> set[str]:
-    parsed = json.loads((ROOT / "world" / "public" / "epg-tile-map.json").read_text("utf-8"))
+    parsed = json.loads(EPG_TILE_MAP_PATH.read_text("utf-8"))
     return {
         str(row.get("root_id", ""))
         for row in parsed.get("entries", [])

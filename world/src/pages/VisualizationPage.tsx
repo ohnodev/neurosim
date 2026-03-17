@@ -44,11 +44,11 @@ type ReplayData = {
     unique_fired_neurons: number;
     ring_neuron_total: number;
     ring_neuron_unique_fired: number;
+    dt_sec: number;
     epg_neuron_total?: number;
     epg_neuron_unique_fired?: number;
     delta7_inhibition_profile_by_offset?: number[];
     scenario?: string;
-    dt_sec?: number;
   };
   neurons: ReplayNeuron[];
   ticks: ReplayTick[];

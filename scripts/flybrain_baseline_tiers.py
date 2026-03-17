@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import sys
+import warnings
 from pathlib import Path
 
 import pandas as pd
@@ -69,6 +70,13 @@ def main() -> None:
     if stim_scope == "global":
         stim_indices = list(range(neuron_count))
     elif stim_scope == "ids":
+        missing_stim_ids = [i for i in stim_ids if i not in flyid2i]
+        if missing_stim_ids:
+            warnings.warn(
+                "Requested STIM_IDS missing from fly-brain completeness table: "
+                + ",".join(str(i) for i in missing_stim_ids),
+                RuntimeWarning,
+            )
         stim_indices = [flyid2i[i] for i in stim_ids if i in flyid2i]
         if not stim_indices:
             raise RuntimeError("No stimulation IDs were found in fly-brain completeness table.")
@@ -100,7 +108,7 @@ def main() -> None:
                 t_ms = step * dt_ms
                 rows.extend(
                     (step + 1, t_ms, int(b), int(i2flyid[int(n)]))
-                    for b, n in zip(b_idx.tolist(), n_idx.tolist())
+                    for b, n in zip(b_idx.tolist(), n_idx.tolist(), strict=True)
                 )
 
         df = pd.DataFrame(rows, columns=["tick", "time_ms", "trial", "flywire_id"])

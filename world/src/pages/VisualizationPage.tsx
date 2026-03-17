@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import PlaybackControls from '../components/PlaybackControls';
+import { getApiBase } from '../lib/constants';
 
 type ReplayNeuron = {
   root_id: string;
@@ -20,6 +21,13 @@ type ReplayNeuron = {
   delta7_epg_bin_index_0_7?: number;
   side: string;
   hemibrain_type: string;
+  flow?: string;
+  super_class?: string;
+  class?: string;
+  sub_class?: string;
+  cell_type?: string;
+  hemilineage?: string;
+  nerve?: string;
 };
 
 type ReplayTick = {
@@ -40,10 +48,32 @@ type ReplayData = {
     epg_neuron_unique_fired?: number;
     delta7_inhibition_profile_by_offset?: number[];
     scenario?: string;
+    dt_sec?: number;
   };
   neurons: ReplayNeuron[];
   ticks: ReplayTick[];
 };
+
+type ApiNeuron = {
+  root_id: string;
+  x?: number;
+  y?: number;
+  z?: number;
+  role?: string;
+  side?: string;
+  cell_type?: string;
+};
+
+/** Per-tick duration in seconds. Prefer meta.dt_sec; else 1ms so 1000 ticks = 1s (replay tick time_sec is often wrong). */
+function getReplayDtSec(replay: ReplayData | null): number {
+  if (!replay?.ticks?.length) return 0.001;
+  const fromMeta = replay.meta.dt_sec;
+  if (typeof fromMeta === 'number' && Number.isFinite(fromMeta) && fromMeta > 0) return fromMeta;
+  return 0.001;
+}
+
+const HOVER_HIGHLIGHT_COLOR = new THREE.Color(0xffff88);
+const HOVER_HIGHLIGHT_GLOW = new THREE.Color(0xffdd44);
 
 type SceneState = {
   scene: THREE.Scene;
@@ -56,6 +86,11 @@ type SceneState = {
   colorAttr: THREE.BufferAttribute;
   glowColorAttr: THREE.BufferAttribute;
   idToIndex: Map<string, number>;
+  neuronIds: string[];
+  hoveredNeuronId: { current: string | null };
+  biologicalEpgPoints: THREE.Points | null;
+  biologicalEpgIndices: number[];
+  biologicalEpgColorAttr: THREE.BufferAttribute | null;
   isRingByIndex: boolean[];
   isEpgByIndex: boolean[];
   isUpstreamByIndex: boolean[];
@@ -71,8 +106,10 @@ type SceneState = {
   upstreamBinPopulation: number[];
   downstreamBinPopulation: number[];
   delta7BinPopulation: number[];
-  epgHeatByIndex: number[];
-  lastAppliedTick: number;
+  /** Replay + currentTick: updated by parent. Animation loop computes brightness purely from these. */
+  replay: ReplayData | null;
+  currentTick: number;
+  lastFrameTime: number;
   decodeEmaAngleDeg: number | null;
   arrowState: {
     angleCurrentDeg: number;
@@ -87,7 +124,6 @@ type SceneState = {
 
 type ViewMode = 'raw' | 'aligned' | 'compass';
 type FocusPopulation = 'all' | 'epg_with_context';
-type DecodeMode = 'vector_norm' | 'sharpened_p2' | 'argmax_bin' | 'ema_vector';
 type PlaybackSpeed = number | 'irl';
 type ReplayDataset = { id: string; label: string; url: string };
 
@@ -106,23 +142,30 @@ const ACTIVE_DELTA7_COLOR = new THREE.Color(0xd08cff);
 const EPG_HEAT_ORANGE = new THREE.Color(0xff9f43);
 const EPG_HEAT_RED = new THREE.Color(0xff3b30);
 const NO_GLOW_COLOR = new THREE.Color(0x000000);
+/** Per-bin hue shift (0–1) so 8 EPG bins are visually distinct in the main circle. */
+const EPG_BIN_HUE_SHIFT = 0.12;
 const PLAYBACK_BASE_MS = 80;
+/** EPG compass bins: 8 = glomerulus 1–8 from label (R1+L1→0, …, R8+L8→7). L+R with same number share bin. */
 const EPG_COMPASS_BINS = 8;
-const EPG_BUMP_WINDOW_TICKS = 12;
-const EPG_HEAT_TAU_TICKS = 3;
-const EPG_HEAT_ADD = 0.25;
-const EPG_HEAT_MAX = 1.8;
-const EPG_EMA_ALPHA = 0.2;
+/** Neuron stays lit for this many ticks after spike; brightness decays linearly to transparent. */
+const SPIKE_DISPLAY_TICKS = 5;
+/** Rotate compass so right=screen right, left=screen left. Applied to spatial projection. */
+const COMPASS_ROTATION_RAD = -Math.PI / 2;
+/** Shorter window so arrow tracks current bump (was 12; with 1ms step, 5 ticks ≈ 5ms). */
+const EPG_BUMP_WINDOW_TICKS = 5;
 const EPG_GLOW_SIZE = 0.13;
 const EPG_GLOW_OPACITY = 0.52;
-const UPSTREAM_BIN_WEIGHT = 0.6;
-const DOWNSTREAM_BIN_WEIGHT = 0.2;
 const DELTA7_OPPOSITE_INHIBIT_WEIGHT = 0.55;
 const EPG_INACTIVE_BIN_PENALTY = 0.35;
+/** If a bin has this fraction of its EPG population active (in window), we point the arrow at that bin center (clear bump signal). */
+const EPG_DOMINANT_BIN_THRESHOLD = 0.8;
+const PREFERRED_REPLAY_ID = 'neurosim_natural_1000tick_replay';
 const DEFAULT_REPLAY_DATASETS: ReplayDataset[] = [
-  { id: 'eonsystems_brain_subset_baseline_tier1_replay', label: 'tier 1 baseline', url: '/eonsystems_brain_subset_baseline_tier1_replay.json' },
-  { id: 'eonsystems_brain_subset_baseline_tier2_replay', label: 'tier 2 baseline', url: '/eonsystems_brain_subset_baseline_tier2_replay.json' },
-  { id: 'eonsystems_brain_subset_baseline_tier3_replay', label: 'tier 3 baseline', url: '/eonsystems_brain_subset_baseline_tier3_replay.json' },
+  {
+    id: 'neurosim_natural_1000tick_replay',
+    label: 'neurosim natural 1000 ticks',
+    url: '/neurosim_natural_1000tick_replay.json',
+  },
 ];
 
 function controlButtonStyle(active: boolean): Record<string, string | number> {
@@ -186,15 +229,6 @@ function compassHeatFill(v: number, alpha = 0.95): string {
     b = Math.round(67 - (19 * u));
   }
   return `rgba(${r},${g},${b},${alpha})`;
-}
-
-function hashStringToUnit(value: string): number {
-  let h = 2166136261 >>> 0;
-  for (let i = 0; i < value.length; i += 1) {
-    h ^= value.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return (h >>> 0) / 4294967295;
 }
 
 function powerIteration(
@@ -308,7 +342,44 @@ function createGlowTexture(): THREE.Texture {
   return texture;
 }
 
-function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode: ViewMode): SceneState {
+type ClassificationLookup = Record<string, { flow?: string; super_class?: string; class?: string; sub_class?: string; cell_type?: string; hemibrain_type?: string; hemilineage?: string; side?: string; nerve?: string }>;
+
+/** Extract DM number (1–4) from hemilineage e.g. DM2_CX_d1 → 2. Fallback when no tile from replay. */
+function extractDmNumber(hemilineage: string): number {
+  const m = hemilineage?.trim().match(/^DM([1-4])_/);
+  return m ? Math.max(1, Math.min(4, Number(m[1]) ?? 0)) : 0;
+}
+/** Fallback tile 0–7 from hemilineage when tile map lacks neuron. DM1→0,1, etc. */
+function hemilineageToTile(_side: string, hemilineage: string): number {
+  const dm = extractDmNumber(hemilineage);
+  return dm >= 1 && dm <= 4 ? (dm - 1) * 2 : 0;
+}
+/** EPG tile for compass layout: ALWAYS from epg-tile-map (canonical). Replay data is ignored for layout. */
+function getEffectiveEpgTile(
+  neuron: ReplayNeuron,
+  epgTileMap: Map<string, number> | null,
+  classificationLookup?: ClassificationLookup | null,
+): number | undefined {
+  const fromMap = epgTileMap?.get(neuron.root_id);
+  if (fromMap != null && fromMap >= 0 && fromMap < EPG_COMPASS_BINS) return fromMap;
+  const cls = classificationLookup?.[neuron.root_id];
+  const hemilineage = neuron.hemilineage ?? cls?.hemilineage ?? '';
+  const side = (neuron.side ?? cls?.side ?? '').trim().toLowerCase();
+  if (hemilineage && (side === 'left' || side === 'right')) {
+    return Math.max(0, Math.min(EPG_COMPASS_BINS - 1, hemilineageToTile(side, hemilineage)));
+  }
+  return neuron.epg_tile_index_0_7;
+}
+
+function buildScene(
+  container: HTMLDivElement,
+  neurons: ReplayNeuron[],
+  viewMode: ViewMode,
+  onHover?: (neuronId: string | null) => void,
+  epgTileMap?: Map<string, number> | null,
+  classificationLookup?: ClassificationLookup | null,
+  replay?: ReplayData | null,
+): SceneState {
   const width = Math.max(1, container.clientWidth);
   const height = Math.max(1, container.clientHeight);
   const scene = new THREE.Scene();
@@ -332,6 +403,8 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
   let minX = Infinity; let maxX = -Infinity;
   let minY = Infinity; let maxY = -Infinity;
   let minZ = Infinity; let maxZ = -Infinity;
+  let compassCenter: { x: number; y: number; z: number } | null = null;
+  let compassBaseRadius: number | null = null;
   const aligned = computeAlignedPoints(neurons, viewMode !== 'raw');
   if (viewMode === 'compass') {
     const ringIndices: number[] = [];
@@ -364,29 +437,28 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
       }
       const targetRadius = radiusCount > 0 ? radiusSum / radiusCount : 1;
 
-      // Prefer explicit EPG tile mapping (0..7) for true functional ring layout.
+      // Full circle: bins 0..(EPG_COMPASS_BINS-1) distributed evenly. No semicircle split (4 bins = DM1–DM4).
       const tileGroups = new Map<number, number[]>();
       for (const i of ringIndices) {
-        const tile = neurons[i]?.epg_tile_index_0_7;
-        if (tile == null || tile < 0 || tile > 7) continue;
+        const tile = getEffectiveEpgTile(neurons[i]!, epgTileMap ?? null, classificationLookup);
+        if (tile == null || tile < 0 || tile >= EPG_COMPASS_BINS) continue;
         const group = tileGroups.get(tile) ?? [];
         group.push(i);
         tileGroups.set(tile, group);
       }
-
-      if (tileGroups.size >= 4) {
+      if (tileGroups.size >= 2) {
+        const sector = (Math.PI * 2) / EPG_COMPASS_BINS;
+        const spread = sector * 0.35;
         for (const [tile, indices] of tileGroups.entries()) {
           indices.sort((a, b) => (neurons[a]?.root_id ?? '').localeCompare(neurons[b]?.root_id ?? ''));
-          const sector = (Math.PI * 2) / 8;
-          const baseAngle = (tile / 8) * Math.PI * 2;
-          const spread = sector * 0.35;
+          const baseAngle = (tile / EPG_COMPASS_BINS) * Math.PI * 2 + COMPASS_ROTATION_RAD;
           for (let k = 0; k < indices.length; k += 1) {
             const idx = indices[k]!;
             const centered = indices.length > 1 ? (k / (indices.length - 1)) - 0.5 : 0;
-            const a = baseAngle + centered * spread;
+            const angle = baseAngle + centered * spread;
             const p = aligned[idx]!;
-            p.x = cx + Math.cos(a) * targetRadius;
-            p.y = cy + Math.sin(a) * targetRadius;
+            p.x = cx + Math.cos(angle) * targetRadius;
+            p.y = cy + Math.sin(angle) * targetRadius;
             p.z = cz;
           }
         }
@@ -422,13 +494,38 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
       cxCompass /= epgIndices.length;
       cyCompass /= epgIndices.length;
       czCompass /= epgIndices.length;
+      compassCenter = { x: cxCompass, y: cyCompass, z: czCompass };
       let radiusSum = 0;
       for (const idx of epgIndices) {
         const p = aligned[idx]!;
         radiusSum += Math.hypot(p.x - cxCompass, p.y - cyCompass);
       }
       const baseRadius = Math.max(1e-3, radiusSum / epgIndices.length);
-      const sector = (Math.PI * 2) / EPG_COMPASS_BINS;
+      compassBaseRadius = baseRadius;
+      const binAngleByBin = new Map<number, number>();
+      const binWedgeSpanByBin = new Map<number, number>();
+      const BIN_WEDGE = (Math.PI * 2) / EPG_COMPASS_BINS - (Math.PI / 180) * 2;
+      for (let b = 0; b < EPG_COMPASS_BINS; b += 1) {
+        let sumSin = 0; let sumCos = 0; let count = 0;
+        let minA = Infinity; let maxA = -Infinity;
+        for (const idx of epgIndices) {
+          const tile = getEffectiveEpgTile(neurons[idx]!, epgTileMap ?? null, classificationLookup);
+          if (tile != null && tile === b) {
+            const px = aligned[idx]!.x - cxCompass;
+            const py = aligned[idx]!.y - cyCompass;
+            const a = Math.atan2(py, px);
+            sumSin += Math.sin(a);
+            sumCos += Math.cos(a);
+            minA = Math.min(minA, a);
+            maxA = Math.max(maxA, a);
+            count += 1;
+          }
+        }
+        binAngleByBin.set(b, count > 0 ? Math.atan2(sumSin / count, sumCos / count) : (b / EPG_COMPASS_BINS) * Math.PI * 2 + COMPASS_ROTATION_RAD);
+        binWedgeSpanByBin.set(b, count > 1 ? Math.max(0.05, maxA - minA) : BIN_WEDGE);
+      }
+      const upstreamCountByBin = new Array<number>(EPG_COMPASS_BINS).fill(0);
+      const downstreamCountByBin = new Array<number>(EPG_COMPASS_BINS).fill(0);
       for (let i = 0; i < neurons.length; i += 1) {
         const n = neurons[i]!;
         if (n.is_epg) continue;
@@ -436,9 +533,23 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
         const downBin = n.downstream_epg_bin_index_0_7;
         if (upBin == null && downBin == null) continue;
         const bin = upBin ?? downBin ?? 0;
-        const jitter = (hashStringToUnit(n.root_id) - 0.5) * sector * 0.35;
-        const angle = ((bin / EPG_COMPASS_BINS) * Math.PI * 2) + jitter;
-        const radius = upBin != null ? (baseRadius * 1.38) : (baseRadius * 0.62);
+        const centerAngle = binAngleByBin.get(bin) ?? (bin / EPG_COMPASS_BINS) * Math.PI * 2 + COMPASS_ROTATION_RAD;
+        const wedgeSpan = binWedgeSpanByBin.get(bin) ?? BIN_WEDGE;
+        let radius: number;
+        let k: number;
+        if (upBin != null) {
+          k = upstreamCountByBin[upBin]!;
+          upstreamCountByBin[upBin] = k + 1;
+          radius = baseRadius * 1.38;
+        } else {
+          k = downstreamCountByBin[downBin!]!;
+          downstreamCountByBin[downBin!] = k + 1;
+          radius = baseRadius * 0.62;
+        }
+        const nInBin = upBin != null ? upstreamCountByBin[upBin]! : downstreamCountByBin[downBin!]!;
+        const angle = nInBin > 1
+          ? centerAngle + (k - (nInBin - 1) / 2) * (wedgeSpan / (nInBin - 1))
+          : centerAngle;
         aligned[i]!.x = cxCompass + Math.cos(angle) * radius;
         aligned[i]!.y = cyCompass + Math.sin(angle) * radius;
         aligned[i]!.z = czCompass + (upBin != null ? 0.02 : -0.02);
@@ -450,10 +561,12 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
     if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
     if (p.z < minZ) minZ = p.z; if (p.z > maxZ) maxZ = p.z;
   }
-  const cx = (minX + maxX) / 2;
-  const cy = (minY + maxY) / 2;
-  const cz = (minZ + maxZ) / 2;
-  const scale = Math.max(maxX - minX, maxY - minY, maxZ - minZ, 1);
+  const cx = compassCenter != null ? compassCenter.x : (minX + maxX) / 2;
+  const cy = compassCenter != null ? compassCenter.y : (minY + maxY) / 2;
+  const cz = compassCenter != null ? compassCenter.z : (minZ + maxZ) / 2;
+  const scale = compassBaseRadius != null
+    ? Math.max(2 * compassBaseRadius * 1.5, 0.5)
+    : Math.max(maxX - minX, maxY - minY, maxZ - minZ, 1);
 
   const n = neurons.length;
   const positions = new Float32Array(n * 3);
@@ -475,7 +588,7 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
   const upstreamBinPopulation = new Array<number>(EPG_COMPASS_BINS).fill(0);
   const downstreamBinPopulation = new Array<number>(EPG_COMPASS_BINS).fill(0);
   const delta7BinPopulation = new Array<number>(EPG_COMPASS_BINS).fill(0);
-  const epgHeatByIndex = new Array<number>(n).fill(0);
+  let lastFrameTime = performance.now() / 1000;
 
   for (let i = 0; i < n; i += 1) {
     const neuron = neurons[i]!;
@@ -511,12 +624,13 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
       }
     }
     if (neuron.is_epg) {
-      if (neuron.epg_tile_index_0_7 != null) {
-        const tile = Math.max(0, Math.min(EPG_COMPASS_BINS - 1, neuron.epg_tile_index_0_7));
-        const a = (tile / EPG_COMPASS_BINS) * Math.PI * 2;
+      const tile = getEffectiveEpgTile(neuron, epgTileMap ?? null, classificationLookup);
+      if (tile != null) {
+        const t = Math.max(0, Math.min(EPG_COMPASS_BINS - 1, tile));
+        const a = (t / EPG_COMPASS_BINS) * Math.PI * 2 + COMPASS_ROTATION_RAD;
         epgDirectionByIndex[i] = new THREE.Vector2(Math.cos(a), Math.sin(a));
-        epgBinByIndex[i] = tile;
-        epgBinPopulation[tile] += 1;
+        epgBinByIndex[i] = t;
+        epgBinPopulation[t] += 1;
       } else {
         const ev = new THREE.Vector2(positions[i * 3], positions[i * 3 + 1]);
         if (ev.lengthSq() > 1e-8) {
@@ -547,6 +661,75 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
     glowColors[i * 3 + 1] = 0;
     glowColors[i * 3 + 2] = 0;
   }
+
+  // In compass view: add a second point cloud above the ring with EPG in their real biological (x,y,z) coordinates.
+  let biologicalEpgPoints: THREE.Points | null = null;
+  let biologicalEpgGeometry: THREE.BufferGeometry | null = null;
+  let biologicalEpgMaterial: THREE.PointsMaterial | null = null;
+  let biologicalEpgIndices: number[] = [];
+  if (viewMode === 'compass') {
+    const epgIndices = neurons.map((n, i) => (n.is_epg ? i : -1)).filter((i) => i >= 0);
+    biologicalEpgIndices = epgIndices;
+    if (epgIndices.length > 0) {
+      let cxRaw = 0;
+      let cyRaw = 0;
+      let czRaw = 0;
+      for (const i of epgIndices) {
+        const n = neurons[i]!;
+        cxRaw += n.x;
+        cyRaw += n.y;
+        czRaw += n.z;
+      }
+      cxRaw /= epgIndices.length;
+      cyRaw /= epgIndices.length;
+      czRaw /= epgIndices.length;
+      let rawExtent = 0;
+      for (const i of epgIndices) {
+        const n = neurons[i]!;
+        const dx = n.x - cxRaw;
+        const dy = n.y - cyRaw;
+        const dz = n.z - czRaw;
+        rawExtent = Math.max(rawExtent, Math.hypot(dx, dy, dz));
+      }
+      const rawScale = Math.max(rawExtent, 1e-9);
+      const bioPositions = new Float32Array(epgIndices.length * 3);
+      const BIO_Z_OFFSET = 1.2; // above the compass (compass at z≈0 in normalized space)
+      const BIO_SCALE = 0.5; // size of cloud relative to compass
+      for (let k = 0; k < epgIndices.length; k += 1) {
+        const n = neurons[epgIndices[k]!]!;
+        bioPositions[k * 3] = ((n.x - cxRaw) / rawScale) * BIO_SCALE;
+        bioPositions[k * 3 + 1] = ((n.y - cyRaw) / rawScale) * BIO_SCALE;
+        bioPositions[k * 3 + 2] = ((n.z - czRaw) / rawScale) * BIO_SCALE + BIO_Z_OFFSET;
+      }
+      biologicalEpgGeometry = new THREE.BufferGeometry();
+      biologicalEpgGeometry.setAttribute('position', new THREE.BufferAttribute(bioPositions, 3));
+      const bioColor = new THREE.Color(0x88aacc);
+      const bioColors = new Float32Array(epgIndices.length * 3);
+      for (let k = 0; k < epgIndices.length; k += 1) {
+        bioColors[k * 3] = bioColor.r;
+        bioColors[k * 3 + 1] = bioColor.g;
+        bioColors[k * 3 + 2] = bioColor.b;
+      }
+      biologicalEpgGeometry.setAttribute('color', new THREE.BufferAttribute(bioColors, 3));
+      biologicalEpgMaterial = new THREE.PointsMaterial({
+        size: 0.022,
+        sizeAttenuation: true,
+        vertexColors: true,
+        transparent: true,
+        opacity: 0.85,
+        depthWrite: true,
+        depthTest: true,
+      });
+      biologicalEpgPoints = new THREE.Points(biologicalEpgGeometry, biologicalEpgMaterial);
+      scene.add(biologicalEpgPoints);
+    }
+  }
+  const biologicalEpgColorAttr =
+    biologicalEpgGeometry?.getAttribute('color') instanceof THREE.BufferAttribute
+      ? (biologicalEpgGeometry.getAttribute('color') as THREE.BufferAttribute)
+      : null;
+  const hoveredNeuronId = { current: null as string | null };
+  const neuronIds = neurons.map((n) => n.root_id);
 
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
@@ -581,6 +764,58 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
   });
   const glowPoints = new THREE.Points(glowGeometry, glowMaterial);
   scene.add(glowPoints);
+
+  let connectionLines: THREE.LineSegments | null = null;
+  if (viewMode === 'compass') {
+    /** For each upstream/downstream, draw to the EPG neuron in the same bin that is closest (radially aligned).
+     * This keeps connections "right behind" the EPG neuron instead of crossing to the opposite side. */
+    const epgIndicesByBin = new Map<number, number[]>();
+    for (let i = 0; i < n; i += 1) {
+      if (isEpgByIndex[i]) {
+        const b = epgBinByIndex[i];
+        if (b != null) {
+          const list = epgIndicesByBin.get(b) ?? [];
+          list.push(i);
+          epgIndicesByBin.set(b, list);
+        }
+      }
+    }
+    const lineVertices: number[] = [];
+    for (let i = 0; i < n; i += 1) {
+      const upBin = upstreamBinByIndex[i];
+      const downBin = downstreamBinByIndex[i];
+      const bin = upBin ?? downBin;
+      if (bin == null) continue;
+      const epgIndices = epgIndicesByBin.get(bin);
+      if (!epgIndices?.length) continue;
+      const px = positions[i * 3]!; const py = positions[i * 3 + 1]!; const pz = positions[i * 3 + 2]!;
+      const uAngle = Math.atan2(py, px);
+      let bestIdx = epgIndices[0]!;
+      let bestDelta = Math.PI * 2;
+      for (const j of epgIndices) {
+        const ex = positions[j * 3]!; const ey = positions[j * 3 + 1]!;
+        const eAngle = Math.atan2(ey, ex);
+        let delta = Math.abs(eAngle - uAngle);
+        if (delta > Math.PI) delta = Math.PI * 2 - delta;
+        if (delta < bestDelta) {
+          bestDelta = delta;
+          bestIdx = j;
+        }
+      }
+      const ex = positions[bestIdx * 3]!; const ey = positions[bestIdx * 3 + 1]!; const ez = positions[bestIdx * 3 + 2]!;
+      lineVertices.push(px, py, pz, ex, ey, ez);
+    }
+    if (lineVertices.length >= 6) {
+      const lineGeometry = new THREE.BufferGeometry();
+      lineGeometry.setAttribute('position', new THREE.Float32BufferAttribute(lineVertices, 3));
+      connectionLines = new THREE.LineSegments(
+        lineGeometry,
+        new THREE.LineBasicMaterial({ color: 0x4466aa, transparent: true, opacity: 0.6, depthTest: true }),
+      );
+      scene.add(connectionLines);
+    }
+  }
+
   if (window.getComputedStyle(container).position === 'static') {
     container.style.position = 'relative';
   }
@@ -600,33 +835,82 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
   hoverTooltip.style.zIndex = '4';
   container.appendChild(hoverTooltip);
   const raycaster = new THREE.Raycaster();
-  raycaster.params.Points.threshold = mostlyEpg ? 0.04 : 0.028;
+  raycaster.params.Points.threshold = biologicalEpgPoints != null ? 0.035 : mostlyEpg ? 0.04 : 0.028;
   const pointer = new THREE.Vector2(2, 2);
   const onPointerMove = (evt: PointerEvent) => {
     const rect = renderer.domElement.getBoundingClientRect();
     pointer.x = ((evt.clientX - rect.left) / rect.width) * 2 - 1;
     pointer.y = -(((evt.clientY - rect.top) / rect.height) * 2 - 1);
     raycaster.setFromCamera(pointer, camera);
-    const hits = raycaster.intersectObject(points, false);
+    const objectsToTest: THREE.Object3D[] = [points];
+    if (biologicalEpgPoints != null) objectsToTest.push(biologicalEpgPoints);
+    const hits = raycaster.intersectObjects(objectsToTest, false);
     if (hits.length === 0 || hits[0]?.index == null) {
+      hoveredNeuronId.current = null;
+      onHover?.(null);
       hoverTooltip.style.display = 'none';
       return;
     }
-    const idx = hits[0].index as number;
+    const hit = hits[0]!;
+    const idx =
+      hit.object === biologicalEpgPoints && biologicalEpgIndices.length > 0
+        ? biologicalEpgIndices[hit.index as number] ?? -1
+        : (hit.index as number);
     const neuron = neurons[idx];
     if (!neuron) {
+      hoveredNeuronId.current = null;
+      onHover?.(null);
       hoverTooltip.style.display = 'none';
       return;
     }
-    const fullLabel = neuron.processed_label && neuron.processed_label.length > 0
-      ? neuron.processed_label
-      : (neuron.hemibrain_type || 'n/a');
-    hoverTooltip.textContent = `${neuron.root_id}\n${fullLabel}`;
+    hoveredNeuronId.current = neuron.root_id;
+    onHover?.(neuron.root_id);
+    const cls = classificationLookup?.[neuron.root_id];
+    const hemilineage = neuron.hemilineage ?? cls?.hemilineage ?? '';
+    const flow = neuron.flow ?? cls?.flow ?? '';
+    const super_class = neuron.super_class ?? cls?.super_class ?? '';
+    const neuronClass = neuron.class ?? cls?.class ?? '';
+    const sub_class = neuron.sub_class ?? cls?.sub_class ?? '';
+    const cell_type = neuron.cell_type ?? cls?.cell_type ?? '';
+    const hemibrain_type = neuron.hemibrain_type ?? cls?.hemibrain_type ?? '';
+    const side = neuron.side ?? cls?.side ?? '';
+    const nerve = neuron.nerve ?? cls?.nerve ?? '';
+    const lines: string[] = [neuron.root_id];
+    if (neuron.is_epg) {
+      // EPG: use classification (lineage e.g. DM2_CX_d1 drives 8 bins: 1–4 × d1–d2, left/right already correct)
+      if (hemilineage) lines.push('hemilineage: ' + hemilineage);
+      if (flow) lines.push('flow: ' + flow);
+      if (super_class) lines.push('super_class: ' + super_class);
+      if (neuronClass) lines.push('class: ' + neuronClass);
+      if (sub_class) lines.push('sub_class: ' + sub_class);
+      if (cell_type) lines.push('cell_type: ' + cell_type);
+      if (hemibrain_type) lines.push('hemibrain_type: ' + hemibrain_type);
+      if (side) lines.push('side: ' + side);
+      if (nerve) lines.push('nerve: ' + nerve);
+      const effTile = getEffectiveEpgTile(neuron, epgTileMap ?? null, classificationLookup);
+      if (effTile != null) lines.push('bin: ' + effTile);
+    } else {
+      const clsParts: string[] = [];
+      if (flow) clsParts.push('flow=' + flow);
+      if (super_class) clsParts.push('super_class=' + super_class);
+      if (neuronClass) clsParts.push('class=' + neuronClass);
+      if (sub_class) clsParts.push('sub_class=' + sub_class);
+      if (cell_type) clsParts.push('cell_type=' + cell_type);
+      if (hemibrain_type) clsParts.push('hemibrain_type=' + hemibrain_type);
+      if (hemilineage) clsParts.push('hemilineage=' + hemilineage);
+      if (side) clsParts.push('side=' + side);
+      if (nerve) clsParts.push('nerve=' + nerve);
+      if (clsParts.length > 0) lines.push('classification: ' + clsParts.join(', '));
+      if (lines.length === 1 && hemibrain_type) lines.push(hemibrain_type);
+    }
+    hoverTooltip.textContent = lines.join('\n');
     hoverTooltip.style.left = `${Math.max(6, evt.clientX - rect.left + 12)}px`;
     hoverTooltip.style.top = `${Math.max(6, evt.clientY - rect.top + 12)}px`;
     hoverTooltip.style.display = 'block';
   };
   const onPointerLeave = () => {
+    hoveredNeuronId.current = null;
+    onHover?.(null);
     hoverTooltip.style.display = 'none';
   };
   renderer.domElement.addEventListener('pointermove', onPointerMove);
@@ -653,8 +937,97 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
 
   scene.add(new THREE.AmbientLight(0xffffff, 0.95));
 
+  const state: SceneState = {
+    scene,
+    camera,
+    renderer,
+    controls,
+    points,
+    glowPoints,
+    bumpArrow,
+    colorAttr,
+    glowColorAttr,
+    idToIndex,
+    neuronIds,
+    hoveredNeuronId,
+    biologicalEpgPoints: biologicalEpgPoints ?? null,
+    biologicalEpgIndices,
+    biologicalEpgColorAttr,
+    isRingByIndex,
+    isEpgByIndex,
+    isUpstreamByIndex,
+    isDownstreamByIndex,
+    isDelta7ByIndex,
+    ringDirectionByIndex,
+    epgDirectionByIndex,
+    epgBinByIndex,
+    upstreamBinByIndex,
+    downstreamBinByIndex,
+    delta7BinByIndex,
+    epgBinPopulation,
+    upstreamBinPopulation,
+    downstreamBinPopulation,
+    delta7BinPopulation,
+    replay: replay ?? null,
+    currentTick: 1,
+    lastFrameTime,
+    decodeEmaAngleDeg: null,
+    arrowState,
+    dispose: () => {},
+  };
+
   let raf = 0;
   const animate = () => {
+    const now = performance.now() / 1000;
+    state.lastFrameTime = now;
+    /** Compute brightness purely from replay + currentTick. No React state, no accumulation.
+     * Neuron lit for SPIKE_DISPLAY_TICKS after spike; brightness = 1 - (ticks_ago / SPIKE_DISPLAY_TICKS). */
+    const replay = state.replay;
+    const currentTick = state.currentTick;
+    const brightnessByIndex = new Float32Array(colorAttr.count);
+    if (replay?.ticks?.length && currentTick >= 1) {
+      const startTick = Math.max(1, currentTick - SPIKE_DISPLAY_TICKS);
+      const spikeTickById = new Map<string, number>();
+      for (let t = currentTick; t >= startTick && t >= 1; t -= 1) {
+        for (const id of replay.ticks[t - 1]?.spikes ?? []) {
+          if (!spikeTickById.has(id)) spikeTickById.set(id, t);
+        }
+      }
+      for (let i = 0; i < colorAttr.count; i += 1) {
+        const spikeTick = spikeTickById.get(neuronIds[i] ?? '');
+        if (spikeTick != null) {
+          const ticksAgo = currentTick - spikeTick;
+          brightnessByIndex[i] = Math.max(0, 1 - ticksAgo / SPIKE_DISPLAY_TICKS);
+        }
+      }
+    }
+    for (let i = 0; i < colorAttr.count; i += 1) {
+      const t = brightnessByIndex[i] ?? 0;
+      const c = isEpgByIndex[i]
+        ? (() => {
+            const base = t <= 0 ? INACTIVE_EPG_COLOR.clone() : t < 0.5 ? ACTIVE_EPG_COLOR.clone().lerp(EPG_HEAT_ORANGE, t / 0.5) : EPG_HEAT_ORANGE.clone().lerp(EPG_HEAT_RED, (t - 0.5) / 0.5);
+            const bin = epgBinByIndex[i];
+            if (bin != null && bin >= 0 && bin < EPG_COMPASS_BINS) {
+              const hsl = { h: 0, s: 0, l: 0 };
+              base.getHSL(hsl);
+              hsl.h = (hsl.h + (bin / EPG_COMPASS_BINS) * EPG_BIN_HUE_SHIFT) % 1;
+              base.setHSL(hsl.h, hsl.s, hsl.l);
+            }
+            return base;
+          })()
+        : isUpstreamByIndex[i]
+          ? (t <= 0 ? INACTIVE_UPSTREAM_COLOR : INACTIVE_UPSTREAM_COLOR.clone().lerp(ACTIVE_UPSTREAM_COLOR, t))
+          : isDownstreamByIndex[i]
+            ? (t <= 0 ? INACTIVE_DOWNSTREAM_COLOR : INACTIVE_DOWNSTREAM_COLOR.clone().lerp(ACTIVE_DOWNSTREAM_COLOR, t))
+            : isDelta7ByIndex[i]
+              ? (t <= 0 ? INACTIVE_DELTA7_COLOR : INACTIVE_DELTA7_COLOR.clone().lerp(ACTIVE_DELTA7_COLOR, t))
+              : isRingByIndex[i]
+                ? (t <= 0 ? INACTIVE_RING_COLOR : INACTIVE_RING_COLOR.clone().lerp(ACTIVE_RING_COLOR, t))
+                : (t <= 0 ? INACTIVE_COLOR : INACTIVE_COLOR.clone().lerp(ACTIVE_COLOR, t));
+      colorAttr.setXYZ(i, c.r, c.g, c.b);
+      const g = t <= 0 || !isEpgByIndex[i] ? NO_GLOW_COLOR : ACTIVE_EPG_COLOR.clone().lerp(EPG_HEAT_RED, t).multiplyScalar(0.22 + 1.1 * t * t);
+      glowColorAttr.setXYZ(i, g.r, g.g, g.b);
+    }
     const smoothAlpha = arrowState.smoothingEnabled ? arrowState.smoothAlpha : 1;
     arrowState.angleCurrentDeg = shortestAngleLerpDeg(arrowState.angleCurrentDeg, arrowState.angleTargetDeg, smoothAlpha);
     arrowState.strengthCurrent = arrowState.strengthCurrent + (arrowState.strengthTarget - arrowState.strengthCurrent) * smoothAlpha;
@@ -666,6 +1039,37 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
     bumpArrow.setDirection(dir3);
     bumpArrow.setLength(0.28 + 0.52 * Math.min(1, Math.max(0.08, arrowState.strengthCurrent)), 0.07, 0.035);
     bumpArrow.setColor(ACTIVE_RING_COLOR);
+    const hoveredId = hoveredNeuronId?.current ?? null;
+    if (hoveredId != null) {
+      const mainIdx = idToIndex.get(hoveredId);
+      if (mainIdx != null && mainIdx < colorAttr.count) {
+        colorAttr.setXYZ(mainIdx, HOVER_HIGHLIGHT_COLOR.r, HOVER_HIGHLIGHT_COLOR.g, HOVER_HIGHLIGHT_COLOR.b);
+        glowColorAttr.setXYZ(mainIdx, HOVER_HIGHLIGHT_GLOW.r, HOVER_HIGHLIGHT_GLOW.g, HOVER_HIGHLIGHT_GLOW.b);
+      }
+    }
+    if (biologicalEpgColorAttr && biologicalEpgIndices.length > 0) {
+      for (let k = 0; k < biologicalEpgIndices.length; k += 1) {
+        const mainIndex = biologicalEpgIndices[k];
+        const id = neuronIds[mainIndex];
+        if (id === hoveredId) {
+          biologicalEpgColorAttr.setXYZ(k, HOVER_HIGHLIGHT_COLOR.r, HOVER_HIGHLIGHT_COLOR.g, HOVER_HIGHLIGHT_COLOR.b);
+        } else {
+          const t = brightnessByIndex[mainIndex] ?? 0;
+          let c = t <= 0 ? INACTIVE_EPG_COLOR.clone() : t < 0.5 ? ACTIVE_EPG_COLOR.clone().lerp(EPG_HEAT_ORANGE, t / 0.5) : EPG_HEAT_ORANGE.clone().lerp(EPG_HEAT_RED, (t - 0.5) / 0.5);
+          const bin = epgBinByIndex[mainIndex];
+          if (bin != null && bin >= 0 && bin < EPG_COMPASS_BINS) {
+            const hsl = { h: 0, s: 0, l: 0 };
+            c.getHSL(hsl);
+            hsl.h = (hsl.h + (bin / EPG_COMPASS_BINS) * EPG_BIN_HUE_SHIFT) % 1;
+            c.setHSL(hsl.h, hsl.s, hsl.l);
+          }
+          biologicalEpgColorAttr.setXYZ(k, c.r, c.g, c.b);
+        }
+      }
+      biologicalEpgColorAttr.needsUpdate = true;
+    }
+    colorAttr.needsUpdate = true;
+    glowColorAttr.needsUpdate = true;
     controls.update();
     renderer.render(scene, camera);
     raf = requestAnimationFrame(animate);
@@ -690,6 +1094,16 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
     if (hoverTooltip.parentNode) {
       hoverTooltip.parentNode.removeChild(hoverTooltip);
     }
+    if (biologicalEpgPoints != null) {
+      scene.remove(biologicalEpgPoints);
+      biologicalEpgGeometry?.dispose();
+      biologicalEpgMaterial?.dispose();
+    }
+    if (connectionLines != null) {
+      scene.remove(connectionLines);
+      connectionLines.geometry.dispose();
+      (connectionLines.material as THREE.Material).dispose();
+    }
     scene.remove(bumpArrow);
     scene.remove(glowPoints);
     scene.remove(points);
@@ -703,39 +1117,8 @@ function buildScene(container: HTMLDivElement, neurons: ReplayNeuron[], viewMode
       renderer.domElement.parentNode.removeChild(renderer.domElement);
     }
   };
-
-  return {
-    scene,
-    camera,
-    renderer,
-    controls,
-    points,
-    glowPoints,
-    bumpArrow,
-    colorAttr,
-    glowColorAttr,
-    idToIndex,
-    isRingByIndex,
-    isEpgByIndex,
-    isUpstreamByIndex,
-    isDownstreamByIndex,
-    isDelta7ByIndex,
-    ringDirectionByIndex,
-    epgDirectionByIndex,
-    epgBinByIndex,
-    upstreamBinByIndex,
-    downstreamBinByIndex,
-    delta7BinByIndex,
-    epgBinPopulation,
-    upstreamBinPopulation,
-    downstreamBinPopulation,
-    delta7BinPopulation,
-    epgHeatByIndex,
-    lastAppliedTick: 0,
-    decodeEmaAngleDeg: null,
-    arrowState,
-    dispose,
-  };
+  state.dispose = dispose;
+  return state;
 }
 
 function buildEpgWindowWeights(
@@ -754,35 +1137,16 @@ function buildEpgWindowWeights(
   return out;
 }
 
-function epgHeatToColor(heat: number): THREE.Color {
-  const t = Math.max(0, Math.min(1, heat / EPG_HEAT_MAX));
-  if (t <= 0) return INACTIVE_EPG_COLOR.clone();
-  if (t < 0.5) {
-    return ACTIVE_EPG_COLOR.clone().lerp(EPG_HEAT_ORANGE, t / 0.5);
-  }
-  return EPG_HEAT_ORANGE.clone().lerp(EPG_HEAT_RED, (t - 0.5) / 0.5);
-}
-
-function epgHeatToGlowColor(heat: number): THREE.Color {
-  const t = Math.max(0, Math.min(1, heat / EPG_HEAT_MAX));
-  if (t <= 0) return NO_GLOW_COLOR;
-  const base = ACTIVE_EPG_COLOR.clone().lerp(EPG_HEAT_RED, Math.pow(t, 0.8));
-  return base.multiplyScalar(0.15 + 0.95 * t * t);
-}
-
 function applyTickSpikes(
   sceneState: SceneState,
-  spikes: string[],
+  replay: ReplayData,
+  currentTick: number,
   epgWindowWeights?: Map<string, number>,
   epgWindowTicks = 1,
-  dtSec = 0.0001,
-  currentTick = 1,
-  decodeMode: DecodeMode = 'vector_norm',
+  dtSec = 0.001,
   delta7InhibitionProfileByOffset?: number[],
 ): CompassStats {
   const {
-    colorAttr,
-    glowColorAttr,
     idToIndex,
     isRingByIndex,
     isEpgByIndex,
@@ -797,34 +1161,11 @@ function applyTickSpikes(
     upstreamBinPopulation,
     downstreamBinPopulation,
     delta7BinPopulation,
-    epgHeatByIndex,
   } = sceneState;
-  const tickDelta = sceneState.lastAppliedTick > 0 ? Math.max(1, currentTick - sceneState.lastAppliedTick) : 1;
-  if (currentTick < sceneState.lastAppliedTick) {
-    epgHeatByIndex.fill(0);
-  }
-  const decayFactor = Math.exp(-(tickDelta / EPG_HEAT_TAU_TICKS));
-  for (let i = 0; i < epgHeatByIndex.length; i += 1) {
-    epgHeatByIndex[i] *= decayFactor;
-    if (epgHeatByIndex[i] < 1e-4) epgHeatByIndex[i] = 0;
-  }
-  const count = colorAttr.count;
-  for (let i = 0; i < count; i += 1) {
-    const c = isEpgByIndex[i]
-      ? epgHeatToColor(epgHeatByIndex[i] ?? 0)
-      : isUpstreamByIndex[i]
-        ? INACTIVE_UPSTREAM_COLOR
-        : isDownstreamByIndex[i]
-          ? INACTIVE_DOWNSTREAM_COLOR
-        : isDelta7ByIndex[i]
-          ? INACTIVE_DELTA7_COLOR
-          : isRingByIndex[i]
-            ? INACTIVE_RING_COLOR
-            : INACTIVE_COLOR;
-    colorAttr.setXYZ(i, c.r, c.g, c.b);
-    const g = isEpgByIndex[i] ? epgHeatToGlowColor(epgHeatByIndex[i] ?? 0) : NO_GLOW_COLOR;
-    glowColorAttr.setXYZ(i, g.r, g.g, g.b);
-  }
+  sceneState.replay = replay;
+  sceneState.currentTick = currentTick;
+
+  const spikes = replay.ticks[Math.max(0, currentTick - 1)]?.spikes ?? [];
   let epgActiveCount = 0;
   let epgLeftCount = 0;
   let epgRightCount = 0;
@@ -836,25 +1177,7 @@ function applyTickSpikes(
   for (const id of spikes) {
     const idx = idToIndex.get(id);
     if (idx == null) continue;
-    if (isEpgByIndex[idx]) {
-      epgHeatByIndex[idx] = Math.min(EPG_HEAT_MAX, (epgHeatByIndex[idx] ?? 0) + EPG_HEAT_ADD);
-      const c = epgHeatToColor(epgHeatByIndex[idx]);
-      colorAttr.setXYZ(idx, c.r, c.g, c.b);
-      const g = epgHeatToGlowColor(epgHeatByIndex[idx]);
-      glowColorAttr.setXYZ(idx, g.r, g.g, g.b);
-    } else {
-      const c = isUpstreamByIndex[idx]
-        ? ACTIVE_UPSTREAM_COLOR
-        : isDownstreamByIndex[idx]
-          ? ACTIVE_DOWNSTREAM_COLOR
-          : isDelta7ByIndex[idx]
-            ? ACTIVE_DELTA7_COLOR
-          : isRingByIndex[idx]
-            ? ACTIVE_RING_COLOR
-            : ACTIVE_COLOR;
-      colorAttr.setXYZ(idx, c.r, c.g, c.b);
-      if (isRingByIndex[idx]) ringActiveCount += 1;
-    }
+    if (isRingByIndex[idx]) ringActiveCount += 1;
     if (isEpgByIndex[idx]) {
       epgActiveCount += 1;
       const bin = epgBinByIndex[idx];
@@ -921,8 +1244,9 @@ function applyTickSpikes(
     const pop = delta7BinPopulation[i] ?? 0;
     return pop > 0 ? v / pop : 0;
   });
+  // Arrow and bump decode use EPG only (no upstream/downstream weight).
   const epgBins = epgBinsCore.map((v, i) => {
-    const support = v + (upstreamBins[i] * UPSTREAM_BIN_WEIGHT) + (downstreamBins[i] * DOWNSTREAM_BIN_WEIGHT);
+    const support = v;
     let inhib = 0;
     if (delta7InhibitionProfileByOffset && delta7InhibitionProfileByOffset.length === EPG_COMPASS_BINS) {
       for (let sourceBin = 0; sourceBin < EPG_COMPASS_BINS; sourceBin += 1) {
@@ -959,7 +1283,7 @@ function applyTickSpikes(
   for (let i = 0; i < EPG_COMPASS_BINS; i += 1) {
     const w = epgBinsSigned[i] ?? 0;
     if (Math.abs(w) <= 1e-8) continue;
-    const a = (i / EPG_COMPASS_BINS) * Math.PI * 2;
+    const a = (i / EPG_COMPASS_BINS) * Math.PI * 2 + COMPASS_ROTATION_RAD;
     const dx = Math.cos(a);
     bump.x += w * dx;
     bump.y += w * Math.sin(a);
@@ -969,47 +1293,32 @@ function applyTickSpikes(
   }
   const vectorBumpStrength = bumpWeightTotal > 0 ? bump.length() / bumpWeightTotal : 0;
   const vectorBumpAngleDeg = bump.lengthSq() > 1e-8 ? (Math.atan2(bump.y, bump.x) * 180) / Math.PI : null;
-  const bumpSharp = new THREE.Vector2(0, 0);
-  let sharpWeightTotal = 0;
-  for (let i = 0; i < EPG_COMPASS_BINS; i += 1) {
-    const signed = epgBinsSigned[i] ?? 0;
-    const w = Math.max(0, signed) * Math.max(0, signed);
-    if (w <= 0) continue;
-    const a = (i / EPG_COMPASS_BINS) * Math.PI * 2;
-    bumpSharp.x += w * Math.cos(a);
-    bumpSharp.y += w * Math.sin(a);
-    sharpWeightTotal += w;
-  }
-  const sharpAngleDeg = bumpSharp.lengthSq() > 1e-8 ? (Math.atan2(bumpSharp.y, bumpSharp.x) * 180) / Math.PI : null;
-  const sharpStrength = sharpWeightTotal > 0 ? bumpSharp.length() / sharpWeightTotal : 0;
+  sceneState.decodeEmaAngleDeg = null;
 
-  const argmaxAngleDeg = epgTopBinSpikes > 0 ? ((epgTopBinIndex / EPG_COMPASS_BINS) * 360) : null;
-  const argmaxStrength = epgTopBinSpikes;
-
+  // If a bin has a clear majority of its EPG neurons active (e.g. 80%+), point the arrow there (clear bump signal).
   let bumpAngleDeg: number | null = vectorBumpAngleDeg;
   let bumpStrength = vectorBumpStrength;
-  if (decodeMode === 'sharpened_p2') {
-    bumpAngleDeg = sharpAngleDeg;
-    bumpStrength = sharpStrength;
-  } else if (decodeMode === 'argmax_bin') {
-    bumpAngleDeg = argmaxAngleDeg;
-    bumpStrength = argmaxStrength;
-  } else if (decodeMode === 'ema_vector') {
-    if (vectorBumpAngleDeg != null) {
-      if (sceneState.decodeEmaAngleDeg == null) sceneState.decodeEmaAngleDeg = vectorBumpAngleDeg;
-      else sceneState.decodeEmaAngleDeg = shortestAngleLerpDeg(sceneState.decodeEmaAngleDeg, vectorBumpAngleDeg, EPG_EMA_ALPHA);
+  let dominantBin: number | null = null;
+  for (let i = 0; i < EPG_COMPASS_BINS; i += 1) {
+    if ((epgBinsCore[i] ?? 0) >= EPG_DOMINANT_BIN_THRESHOLD) {
+      if (dominantBin == null || (epgBinsCore[i] ?? 0) > (epgBinsCore[dominantBin] ?? 0)) {
+        dominantBin = i;
+      }
     }
-    bumpAngleDeg = sceneState.decodeEmaAngleDeg;
-    bumpStrength = vectorBumpStrength;
-  } else {
-    sceneState.decodeEmaAngleDeg = null;
   }
+  if (dominantBin != null) {
+    bumpAngleDeg = (dominantBin / EPG_COMPASS_BINS) * 360 + (COMPASS_ROTATION_RAD * 180) / Math.PI;
+    bumpStrength = Math.max(bumpStrength, 0.85);
+    epgTopBinIndex = dominantBin;
+  }
+
+  // Arrow direction and length use only EPG (+ Delta7 inhibition). Upstream/downstream are for display only.
   if (bumpAngleDeg != null) {
     sceneState.arrowState.angleTargetDeg = normalizeAngleDeg(bumpAngleDeg);
     sceneState.arrowState.strengthTarget = Math.max(0.08, bumpStrength);
   }
-  colorAttr.needsUpdate = true;
-  glowColorAttr.needsUpdate = true;
+  // biologicalEpgColorAttr is driven by fluorescence in the animate loop (heatmap).
+  // Hover highlight is also applied there. No uniform overwrite here.
   const epgBinMax = epgBins.reduce((m, v) => Math.max(m, v), 0);
   const epgBinNorm = epgBinMax > 0 ? epgBins.map((v) => v / epgBinMax) : epgBins;
   const upstreamMax = upstreamBins.reduce((m, v) => Math.max(m, v), 0);
@@ -1018,7 +1327,6 @@ function applyTickSpikes(
   const downstreamNorm = downstreamMax > 0 ? downstreamBins.map((v) => v / downstreamMax) : downstreamBins;
   const delta7Max = delta7Bins.reduce((m, v) => Math.max(m, v), 0);
   const delta7Norm = delta7Max > 0 ? delta7Bins.map((v) => v / delta7Max) : delta7Bins;
-  sceneState.lastAppliedTick = currentTick;
   return {
     epgActiveCount,
     epgLeftCount,
@@ -1038,17 +1346,59 @@ function applyTickSpikes(
   };
 }
 
+/** Mirror eonsystems tier2: 1ms dt, 30Hz olfactory, sensory 0/0.5/0.2/0 */
+const NEUROSIM_LIVE_DT_SEC = 0.001;
+const NEUROSIM_LIVE_TIER2 = {
+  olfactoryBaselineHz: 30,
+  dtSec: 0.001,
+  mechanoHz: 0,
+  thermoHz: 0.5,
+  hygroHz: 0.2,
+  gustatoryHz: 0,
+};
+/** 1 step per request = 1 tick (1ms) per update, matching eonsystems tier2; avoids "gapped" 10-tick jumps. */
+const NEUROSIM_LIVE_STEP_BATCH = 1;
+/** Call every 1ms so at 1ms dt we get ~real-time (1000 ticks/s). */
+const NEUROSIM_LIVE_INTERVAL_MS = 1;
+
 export default function VisualizationPage() {
-  const [replay, setReplay] = useState<ReplayData | null>(null);
+  const [fetchedReplay, setFetchedReplay] = useState<ReplayData | null>(null);
+  const [templateReplay, setTemplateReplay] = useState<ReplayData | null>(null);
+  const [liveTicks, setLiveTicks] = useState<ReplayTick[]>([]);
+  const [recordedTicks, setRecordedTicks] = useState<ReplayTick[]>([]);
+  const [liveReplaySource, setLiveReplaySource] = useState<'live' | 'recording'>('live');
+  const liveSimIdRef = useRef<number | null>(null);
+  const [liveRunning, setLiveRunning] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [liveSettings, setLiveSettings] = useState({
+    olfactoryBaselineHz: NEUROSIM_LIVE_TIER2.olfactoryBaselineHz,
+    dtSec: NEUROSIM_LIVE_TIER2.dtSec,
+    mechanoHz: NEUROSIM_LIVE_TIER2.mechanoHz,
+    thermoHz: NEUROSIM_LIVE_TIER2.thermoHz,
+    hygroHz: NEUROSIM_LIVE_TIER2.hygroHz,
+    gustatoryHz: NEUROSIM_LIVE_TIER2.gustatoryHz,
+  });
   const [currentTick, setCurrentTick] = useState(1);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState<PlaybackSpeed>(1);
   const [viewMode, setViewMode] = useState<ViewMode>('compass');
   const [replayDatasets, setReplayDatasets] = useState<ReplayDataset[]>(DEFAULT_REPLAY_DATASETS);
-  const [selectedReplayId, setSelectedReplayId] = useState<string>(DEFAULT_REPLAY_DATASETS[0]?.id ?? '');
+  const [selectedReplayId, setSelectedReplayId] = useState<string>(
+    DEFAULT_REPLAY_DATASETS.find((d) => d.id === PREFERRED_REPLAY_ID)?.id
+      ?? DEFAULT_REPLAY_DATASETS[0]?.id
+      ?? '',
+  );
   const [focusPopulation, setFocusPopulation] = useState<FocusPopulation>('epg_with_context');
-  const [decodeMode, setDecodeMode] = useState<DecodeMode>('ema_vector');
+  const replay = useMemo(() => {
+    if (selectedReplayId === 'neurosim_live' && templateReplay) {
+      const ticks = liveReplaySource === 'recording' ? recordedTicks : liveTicks;
+      return { ...templateReplay, meta: { ...templateReplay.meta, dt_sec: liveSettings.dtSec, scenario: 'neurosim_live' }, ticks };
+    }
+    return fetchedReplay;
+  }, [selectedReplayId, templateReplay, fetchedReplay, liveReplaySource, liveTicks, recordedTicks, liveSettings.dtSec, liveSettings.olfactoryBaselineHz]);
   const [arrowSmoothing, setArrowSmoothing] = useState(true);
+  const [classificationLookup, setClassificationLookup] = useState<ClassificationLookup | null>(null);
+  const [epgTileMap, setEpgTileMap] = useState<Map<string, number> | null>(null);
   const [compassStats, setCompassStats] = useState<CompassStats>({
     epgActiveCount: 0,
     epgLeftCount: 0,
@@ -1070,14 +1420,60 @@ export default function VisualizationPage() {
   const sceneContainerRef = useRef<HTMLDivElement | null>(null);
   const sceneRef = useRef<SceneState | null>(null);
 
-  const neurons = useMemo(() => replay?.neurons ?? [], [replay]);
+  const neurons = useMemo(() => {
+    const base = replay?.neurons ?? [];
+    return base.map((n) => {
+      const cls = classificationLookup?.[n.root_id];
+      const tagText = [
+        n.cell_type,
+        n.hemibrain_type,
+        n.class,
+        n.sub_class,
+        cls?.cell_type,
+        cls?.hemibrain_type,
+        cls?.class,
+        cls?.sub_class,
+      ]
+        .filter((v): v is string => typeof v === 'string' && v.length > 0)
+        .join(' ')
+        .toLowerCase();
+      const mappedEpg = (epgTileMap?.has(n.root_id) ?? false) || /\bepg\b/.test(tagText);
+      const inferredDelta7 = /\bdelta\s*7\b|\bdelta7\b/.test(tagText);
+      return {
+        ...n,
+        is_epg: n.is_epg || mappedEpg,
+        is_ring: n.is_ring || mappedEpg,
+        is_delta7: n.is_delta7 || inferredDelta7,
+      };
+    });
+  }, [replay?.neurons, epgTileMap, classificationLookup]);
   const ringIdSet = useMemo(() => new Set(neurons.filter((n) => n.is_ring).map((n) => n.root_id)), [neurons]);
-  const displayNeurons = useMemo(
-    () => (focusPopulation === 'epg_with_context'
-      ? neurons.filter((n) => n.is_epg || n.is_epg_upstream || n.is_epg_downstream || n.is_delta7)
-      : neurons),
-    [neurons, focusPopulation],
-  );
+  const epgUniqueFired = useMemo(() => {
+    if (!replay) return null;
+    if (typeof replay.meta.epg_neuron_unique_fired === 'number' && Number.isFinite(replay.meta.epg_neuron_unique_fired)) {
+      return replay.meta.epg_neuron_unique_fired;
+    }
+    if (!epgTileMap || epgTileMap.size === 0) return null;
+    const epgIds = new Set(epgTileMap.keys());
+    const fired = new Set<string>();
+    for (const tick of replay.ticks) {
+      for (const id of tick.spikes ?? []) {
+        if (epgIds.has(id)) fired.add(id);
+      }
+    }
+    return fired.size;
+  }, [replay, epgTileMap]);
+  const displayNeurons = useMemo(() => {
+    if (viewMode === 'raw') {
+      const epgOnly = neurons.filter((n) => n.is_epg);
+      return epgOnly.length > 0 ? epgOnly : neurons;
+    }
+    if (focusPopulation === 'epg_with_context') {
+      const context = neurons.filter((n) => n.is_epg || n.is_epg_upstream || n.is_epg_downstream || n.is_delta7);
+      return context.length > 0 ? context : neurons;
+    }
+    return neurons;
+  }, [neurons, focusPopulation, viewMode]);
   const selectedReplay = useMemo(
     () => replayDatasets.find((d) => d.id === selectedReplayId) ?? replayDatasets[0],
     [replayDatasets, selectedReplayId],
@@ -1091,10 +1487,17 @@ export default function VisualizationPage() {
         if (!res.ok) return;
         const parsed = await res.json() as { datasets?: ReplayDataset[] };
         if (!active) return;
-        const datasets = (parsed.datasets ?? []).filter((d) => d?.id && d?.url);
+        const liveEnabled = import.meta.env.VITE_ENABLE_NEUROSIM_LIVE === '1';
+        const datasets = (parsed.datasets ?? [])
+          .filter((d) => d?.id && d?.url)
+          .filter((d) => liveEnabled || (d.id !== 'neurosim_live' && !d.url.startsWith('/api/neurosim-')));
         if (datasets.length === 0) return;
         setReplayDatasets(datasets);
-        setSelectedReplayId((prev) => (datasets.some((d) => d.id === prev) ? prev : datasets[0]!.id));
+        setSelectedReplayId((prev) => {
+          if (datasets.some((d) => d.id === prev)) return prev;
+          const preferred = datasets.find((d) => d.id === PREFERRED_REPLAY_ID);
+          return (preferred ?? datasets[0]!).id;
+        });
       } catch {
         // fallback to defaults when manifest is missing
       }
@@ -1105,16 +1508,84 @@ export default function VisualizationPage() {
 
   useEffect(() => {
     let active = true;
+    fetch('/classification-lookup.json?v=' + Date.now(), { cache: 'no-store' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => { if (active && data) setClassificationLookup(data as ClassificationLookup); })
+      .catch(() => {});
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    fetch('/epg-tile-map.json?v=' + Date.now(), { cache: 'no-store' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!active || !data?.entries) return;
+        const map = new Map<string, number>();
+        for (const e of data.entries as { root_id: string; tile_index_0_7: number }[]) {
+          if (e?.root_id != null && typeof e.tile_index_0_7 === 'number') map.set(String(e.root_id), e.tile_index_0_7);
+        }
+        setEpgTileMap(map);
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
     const load = async () => {
       try {
         setError(null);
         const datasetUrl = selectedReplay?.url;
         if (!datasetUrl) throw new Error('No replay dataset selected');
-        const res = await fetch(`${datasetUrl}?v=${Date.now()}`, { cache: 'no-store' });
-        if (!res.ok) throw new Error(`Replay not found (${res.status})`);
-        const parsed = await res.json() as ReplayData;
-        if (!active) return;
-        setReplay(parsed);
+        const isNeuroSimLive = selectedReplay?.id === 'neurosim_live' || datasetUrl.startsWith('/api/neurosim-replay');
+        if (isNeuroSimLive) {
+          const apiRoot = getApiBase();
+          const neuronRes = await fetch(`${apiRoot}/api/neurons?full=1`, { cache: 'no-store' });
+          if (!neuronRes.ok) throw new Error(`Failed to load live neuron template (${neuronRes.status})`);
+          const neuronPayload = (await neuronRes.json()) as { neurons?: ApiNeuron[] };
+          const templateNeurons: ReplayNeuron[] = (neuronPayload.neurons ?? []).map((n) => ({
+            root_id: n.root_id,
+            x: typeof n.x === 'number' ? n.x : 0,
+            y: typeof n.y === 'number' ? n.y : 0,
+            z: typeof n.z === 'number' ? n.z : 0,
+            processed_label: n.cell_type,
+            is_ring: false,
+            is_epg: false,
+            side: n.side ?? 'unknown',
+            hemibrain_type: n.cell_type ?? '',
+            flow: n.role,
+            cell_type: n.cell_type,
+          }));
+          if (!active) return;
+          setTemplateReplay({
+            meta: {
+              generated_at: new Date().toISOString(),
+              source_csv: 'api:/api/neurons?full=1',
+              ticks: 0,
+              unique_fired_neurons: 0,
+              ring_neuron_total: 0,
+              ring_neuron_unique_fired: 0,
+              dt_sec: NEUROSIM_LIVE_DT_SEC,
+              scenario: 'neurosim_live',
+            },
+            neurons: templateNeurons,
+            ticks: [],
+          });
+          setFetchedReplay(null);
+          setLiveTicks([]);
+          setRecordedTicks([]);
+          setLiveReplaySource('live');
+          setLiveRunning(false);
+          liveSimIdRef.current = null;
+        } else {
+          const res = await fetch(`${datasetUrl}?v=${Date.now()}`, { cache: 'no-store' });
+          if (!res.ok) throw new Error(`Replay not found (${res.status})`);
+          const parsed = await res.json() as ReplayData;
+          if (!active) return;
+          setFetchedReplay(parsed);
+          setTemplateReplay(null);
+        }
         setCurrentTick(1);
         setPlaying(false);
       } catch (err) {
@@ -1126,6 +1597,76 @@ export default function VisualizationPage() {
     return () => { active = false; };
   }, [selectedReplay]);
 
+  const isNeuroSimLive = selectedReplayId === 'neurosim_live';
+  const apiBase = getApiBase();
+  const liveNextTickRef = useRef(1);
+
+  useEffect(() => {
+    if (!isNeuroSimLive || !liveRunning || liveSimIdRef.current == null || !templateReplay) return;
+    let cancelled = false;
+    let inFlight = false;
+    let timerId: number | null = null;
+    let activeController: AbortController | null = null;
+    const scheduleNext = () => {
+      if (cancelled) return;
+      timerId = window.setTimeout(() => { void runStep(); }, NEUROSIM_LIVE_INTERVAL_MS);
+    };
+    const runStep = async () => {
+      if (cancelled || liveSimIdRef.current == null) return;
+      if (inFlight) {
+        scheduleNext();
+        return;
+      }
+      inFlight = true;
+      const startTick = liveNextTickRef.current;
+      const controller = new AbortController();
+      activeController = controller;
+      try {
+        const res = await fetch(`${apiBase}/api/neurosim-live/step`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
+          body: JSON.stringify({
+            simId: liveSimIdRef.current,
+            count: NEUROSIM_LIVE_STEP_BATCH,
+            startTick,
+            dt_sec: liveSettings.dtSec,
+            olfactoryBaselineHz: liveSettings.olfactoryBaselineHz,
+            mechanoHz: liveSettings.mechanoHz,
+            thermoHz: liveSettings.thermoHz,
+            hygroHz: liveSettings.hygroHz,
+            gustatoryHz: liveSettings.gustatoryHz,
+          }),
+        });
+        if (!res.ok) throw new Error(`step failed: ${res.status}`);
+        const data = (await res.json()) as { ticks: ReplayTick[] };
+        if (cancelled) return;
+        const newTicks = data.ticks ?? [];
+        liveNextTickRef.current = startTick + newTicks.length;
+        setLiveTicks((prev) => [...prev, ...newTicks]);
+        if (recording) setRecordedTicks((prev) => [...prev, ...newTicks]);
+        setCurrentTick(liveNextTickRef.current);
+      } catch (err) {
+        if (!cancelled && (err as Error).name !== 'AbortError') setError((err as Error).message);
+      } finally {
+        inFlight = false;
+        if (activeController === controller) activeController = null;
+        scheduleNext();
+      }
+    };
+    void runStep();
+    return () => {
+      cancelled = true;
+      if (timerId != null) clearTimeout(timerId);
+      if (activeController) activeController.abort();
+    };
+  }, [isNeuroSimLive, liveRunning, recording, liveSettings.dtSec, liveSettings.olfactoryBaselineHz, liveSettings.mechanoHz, liveSettings.thermoHz, liveSettings.hygroHz, liveSettings.gustatoryHz, templateReplay]);
+
+  useEffect(() => {
+    if (!replay?.ticks.length || !isNeuroSimLive || liveReplaySource !== 'live') return;
+    setCurrentTick(replay.ticks.length);
+  }, [replay?.ticks.length, isNeuroSimLive, liveReplaySource]);
+
   useEffect(() => {
     const container = sceneContainerRef.current;
     if (!container || displayNeurons.length === 0) return;
@@ -1133,14 +1674,14 @@ export default function VisualizationPage() {
       sceneRef.current.dispose();
       sceneRef.current = null;
     }
-    sceneRef.current = buildScene(container, displayNeurons, viewMode);
+    sceneRef.current = buildScene(container, displayNeurons, viewMode, undefined, epgTileMap, classificationLookup, replay ?? null);
     return () => {
       if (sceneRef.current) {
         sceneRef.current.dispose();
         sceneRef.current = null;
       }
     };
-  }, [displayNeurons, viewMode]);
+  }, [displayNeurons, viewMode, epgTileMap, classificationLookup]);
 
   useEffect(() => {
     if (!sceneRef.current) return;
@@ -1149,21 +1690,20 @@ export default function VisualizationPage() {
 
   useEffect(() => {
     if (!replay || !sceneRef.current) return;
+    sceneRef.current.replay = replay;
+    sceneRef.current.currentTick = currentTick;
     const idx = Math.max(0, Math.min(replay.ticks.length - 1, currentTick - 1));
     const spikes = replay.ticks[idx]?.spikes ?? [];
-    const dtSec = replay.ticks.length > 1
-      ? Math.max(1e-6, replay.ticks[1].time_sec - replay.ticks[0].time_sec)
-      : 0.0001;
+    const dtSec = getReplayDtSec(replay);
     const epgWindowTicks = EPG_BUMP_WINDOW_TICKS;
     const epgWindowWeights = buildEpgWindowWeights(replay, currentTick, epgWindowTicks);
     const stats = applyTickSpikes(
       sceneRef.current,
-      spikes,
+      replay,
+      currentTick,
       epgWindowWeights,
       epgWindowTicks,
       dtSec,
-      currentTick,
-      decodeMode,
       replay.meta.delta7_inhibition_profile_by_offset,
     );
     let ringInputActive = 0;
@@ -1171,14 +1711,12 @@ export default function VisualizationPage() {
       if (ringIdSet.has(id)) ringInputActive += 1;
     }
     setCompassStats({ ...stats, ringActiveCount: ringInputActive });
-  }, [replay, currentTick, ringIdSet, decodeMode]);
+  }, [replay, currentTick, ringIdSet]);
 
   useEffect(() => {
     if (!playing || !replay) return undefined;
     if (speed === 'irl') {
-      const dtSec = replay.ticks.length > 1
-        ? Math.max(1e-6, replay.ticks[1].time_sec - replay.ticks[0].time_sec)
-        : 0.0001;
+      const dtSec = getReplayDtSec(replay);
       const ticksPerSecond = Math.max(1, Math.round(1 / dtSec));
       const intervalMs = 50;
       const ticksPerStep = Math.max(1, Math.round((ticksPerSecond * intervalMs) / 1000));
@@ -1200,8 +1738,6 @@ export default function VisualizationPage() {
   }, [currentTick, replay]);
 
   const totalTicks = replay?.ticks.length ?? 1;
-  const ringCount = replay?.neurons.filter((n) => n.is_ring).length ?? 0;
-  const epgCount = replay?.neurons.filter((n) => n.is_epg).length ?? 0;
   const smoothedArrowAngleDeg = sceneRef.current?.arrowState?.angleCurrentDeg;
   const bumpTheta = Number.isFinite(smoothedArrowAngleDeg)
     ? (((smoothedArrowAngleDeg as number) + 360) % 360)
@@ -1223,6 +1759,147 @@ export default function VisualizationPage() {
             </button>
           ))}
         </div>
+        {isNeuroSimLive && templateReplay ? (
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12, color: '#b8d4ff' }}>NeuroSim Live:</span>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
+              Olfactory (Hz):
+              <input
+                type="number"
+                min={0}
+                max={200}
+                value={liveSettings.olfactoryBaselineHz}
+                onChange={(e) => setLiveSettings((s) => ({ ...s, olfactoryBaselineHz: Math.max(0, Math.min(200, Number(e.target.value) || 0)) }))}
+                style={{ width: 52, padding: '2px 6px', fontSize: 12 }}
+                disabled={liveRunning}
+              />
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
+              Mechano (Hz):
+              <input
+                type="number"
+                min={0}
+                max={200}
+                value={liveSettings.mechanoHz}
+                onChange={(e) => setLiveSettings((s) => ({ ...s, mechanoHz: Math.max(0, Math.min(200, Number(e.target.value) || 0)) }))}
+                style={{ width: 52, padding: '2px 6px', fontSize: 12 }}
+                disabled={liveRunning}
+              />
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
+              Thermo (Hz):
+              <input
+                type="number"
+                min={0}
+                max={200}
+                value={liveSettings.thermoHz}
+                onChange={(e) => setLiveSettings((s) => ({ ...s, thermoHz: Math.max(0, Math.min(200, Number(e.target.value) || 0)) }))}
+                style={{ width: 52, padding: '2px 6px', fontSize: 12 }}
+                disabled={liveRunning}
+              />
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
+              Hygro (Hz):
+              <input
+                type="number"
+                min={0}
+                max={200}
+                value={liveSettings.hygroHz}
+                onChange={(e) => setLiveSettings((s) => ({ ...s, hygroHz: Math.max(0, Math.min(200, Number(e.target.value) || 0)) }))}
+                style={{ width: 52, padding: '2px 6px', fontSize: 12 }}
+                disabled={liveRunning}
+              />
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
+              Gustatory (Hz):
+              <input
+                type="number"
+                min={0}
+                max={200}
+                value={liveSettings.gustatoryHz}
+                onChange={(e) => setLiveSettings((s) => ({ ...s, gustatoryHz: Math.max(0, Math.min(200, Number(e.target.value) || 0)) }))}
+                style={{ width: 52, padding: '2px 6px', fontSize: 12 }}
+                disabled={liveRunning}
+              />
+            </label>
+            <button
+              type="button"
+              onClick={async () => {
+                setError(null);
+                try {
+                  const res = await fetch(`${apiBase}/api/neurosim-live/start`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+                  if (!res.ok) throw new Error(`start failed: ${res.status}`);
+                  const data = (await res.json()) as { simId: number };
+                  liveNextTickRef.current = 1;
+                  setLiveTicks([]);
+                  liveSimIdRef.current = data.simId;
+                  setLiveRunning(true);
+                } catch (e) {
+                  setError((e as Error).message);
+                }
+              }}
+              style={controlButtonStyle(false)}
+              disabled={liveRunning}
+            >
+              Start
+            </button>
+            <button
+              type="button"
+              onClick={() => setLiveRunning(false)}
+              style={controlButtonStyle(liveRunning)}
+              disabled={!liveRunning}
+            >
+              Pause
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                setError(null);
+                setLiveRunning(false);
+                try {
+                  const res = await fetch(`${apiBase}/api/neurosim-live/start`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+                  if (!res.ok) throw new Error(`restart failed: ${res.status}`);
+                  const data = (await res.json()) as { simId: number };
+                  liveNextTickRef.current = 1;
+                  setLiveTicks([]);
+                  setRecordedTicks([]);
+                  liveSimIdRef.current = data.simId;
+                  setLiveRunning(true);
+                } catch (e) {
+                  setError((e as Error).message);
+                }
+              }}
+              style={controlButtonStyle(false)}
+            >
+              Restart
+            </button>
+            <button
+              type="button"
+              onClick={() => setRecording((r) => !r)}
+              style={controlButtonStyle(recording)}
+            >
+              Record {recording ? '(on)' : ''}
+            </button>
+            {recordedTicks.length > 0 ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => { setLiveReplaySource('recording'); setCurrentTick(1); setPlaying(false); }}
+                  style={controlButtonStyle(liveReplaySource === 'recording')}
+                >
+                  Replay recording ({recordedTicks.length} ticks)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLiveReplaySource('live')}
+                  style={controlButtonStyle(liveReplaySource === 'live')}
+                >
+                  View live
+                </button>
+              </>
+            ) : null}
+          </div>
+        ) : null}
         <div style={{ display: 'flex', gap: 8 }}>
           <button type="button" onClick={() => setViewMode('raw')} style={controlButtonStyle(viewMode === 'raw')}>Raw</button>
           <button type="button" onClick={() => setViewMode('aligned')} style={controlButtonStyle(viewMode === 'aligned')}>Aligned</button>
@@ -1236,21 +1913,7 @@ export default function VisualizationPage() {
             All neurons
           </button>
         </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button type="button" onClick={() => setDecodeMode('vector_norm')} style={controlButtonStyle(decodeMode === 'vector_norm')}>
-            Decode: Vector
-          </button>
-          <button type="button" onClick={() => setDecodeMode('sharpened_p2')} style={controlButtonStyle(decodeMode === 'sharpened_p2')}>
-            Decode: Sharp p2
-          </button>
-          <button type="button" onClick={() => setDecodeMode('argmax_bin')} style={controlButtonStyle(decodeMode === 'argmax_bin')}>
-            Decode: Argmax
-          </button>
-          <button type="button" onClick={() => setDecodeMode('ema_vector')} style={controlButtonStyle(decodeMode === 'ema_vector')}>
-            Decode: EMA
-          </button>
-        </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <button type="button" onClick={() => setArrowSmoothing((v) => !v)} style={controlButtonStyle(arrowSmoothing)}>
             Arrow smoothing: {arrowSmoothing ? 'ON' : 'OFF'}
           </button>
@@ -1268,33 +1931,60 @@ export default function VisualizationPage() {
             onSpeedChange={setSpeed}
           />
         ) : null}
-        <div
-          style={{
-            fontSize: 12,
-            opacity: 0.92,
-            minHeight: 18,
-            lineHeight: '18px',
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-          }}
-          title={replay ? `replay=${selectedReplay?.id ?? 'n/a'} | scenario=${replay.meta.scenario ?? 'n/a'} | decode=${decodeMode} | neurons=${replay.neurons.length} | rendered=${displayNeurons.length} | ticks=${replay.ticks.length} | sim=${(replay.ticks.length * replay.meta.dt_sec).toFixed(3)}s | dt=${(replay.meta.dt_sec * 1000).toFixed(3)}ms | epg fired=${replay.meta.epg_neuron_unique_fired ?? 'n/a'} | bump angle=${compassStats.bumpAngleDeg == null ? 'n/a' : `${compassStats.bumpAngleDeg.toFixed(1)}deg`} | bump strength=${compassStats.bumpStrength.toFixed(3)} | top bin=${compassStats.epgTopBinIndex}` : undefined}
-        >
-          {replay
-            ? `replay=${selectedReplay?.id ?? 'n/a'} | scenario=${replay.meta.scenario ?? 'n/a'} | decode=${decodeMode} | ticks=${replay.ticks.length} | sim=${(replay.ticks.length * replay.meta.dt_sec).toFixed(3)}s | dt=${(replay.meta.dt_sec * 1000).toFixed(3)}ms | epg fired=${replay.meta.epg_neuron_unique_fired ?? 'n/a'} | bump=${compassStats.bumpAngleDeg == null ? 'n/a' : `${compassStats.bumpAngleDeg.toFixed(1)}deg`} (${compassStats.bumpStrength.toFixed(2)}) | top bin=${compassStats.epgTopBinIndex}`
-            : 'Loading replay...'}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div
+            style={{
+              fontSize: 12,
+              opacity: 0.92,
+              minHeight: 18,
+              lineHeight: '18px',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+              flex: 1,
+            }}
+            title={replay ? `replay=${selectedReplay?.id ?? 'n/a'} | scenario=${replay.meta.scenario ?? 'n/a'} | decode=vector | neurons=${Array.isArray(replay.neurons) ? replay.neurons.length : displayNeurons.length} | rendered=${displayNeurons.length} | ticks=${replay.ticks.length} | sim=${(replay.ticks.length * getReplayDtSec(replay)).toFixed(3)}s | dt=${(getReplayDtSec(replay) * 1000).toFixed(3)}ms | epg fired=${epgUniqueFired ?? 'n/a'} | bump angle=${compassStats.bumpAngleDeg == null ? 'n/a' : `${compassStats.bumpAngleDeg.toFixed(1)}deg`} | bump strength=${compassStats.bumpStrength.toFixed(3)} | top bin=${compassStats.epgTopBinIndex}` : undefined}
+          >
+            {replay
+              ? `replay=${selectedReplay?.id ?? 'n/a'} | scenario=${replay.meta.scenario ?? 'n/a'} | decode=vector | ticks=${replay.ticks.length} | sim=${(replay.ticks.length * getReplayDtSec(replay)).toFixed(3)}s | dt=${(getReplayDtSec(replay) * 1000).toFixed(3)}ms | epg fired=${epgUniqueFired ?? 'n/a'} | bump=${compassStats.bumpAngleDeg == null ? 'n/a' : `${compassStats.bumpAngleDeg.toFixed(1)}deg`} (${compassStats.bumpStrength.toFixed(2)}) | top bin=${compassStats.epgTopBinIndex}`
+              : 'Loading replay...'}
+          </div>
+          {replay && compassStats.bumpStrength < 0.5 ? (
+            <span
+              style={{ fontSize: 11, color: 'rgba(120,200,255,0.9)', cursor: 'help', whiteSpace: 'nowrap' }}
+              title="Weak bump? Try: (1) organic bump replay (ring drive), (2) run ≥1s, (3) full connectome, (4) match eonsystems scaling. See docs/BUMP_IMPROVEMENT_SUGGESTIONS.md"
+            >
+              Bump help
+            </span>
+          ) : null}
         </div>
         {replay ? (
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
             <svg width="152" height="152" viewBox="-60 -60 120 120" style={{ border: '1px solid rgba(255,255,255,0.12)', borderRadius: 8 }}>
+              {/* Radial dividers: 8 bins, full circle, equal 45° spacing */}
+              {Array.from({ length: EPG_COMPASS_BINS + 1 }, (_, i) => {
+                const a = (i / EPG_COMPASS_BINS) * Math.PI * 2 - Math.PI / 2;
+                return (
+                  <line
+                    key={`divider-${i}`}
+                    x1="0" y1="0"
+                    x2={(Math.cos(a) * 48).toFixed(3)}
+                    y2={(Math.sin(a) * 48).toFixed(3)}
+                    stroke="rgba(255,255,255,0.25)"
+                    strokeWidth="0.8"
+                  />
+                );
+              })}
               <circle cx="0" cy="0" r="44" fill="none" stroke="rgba(120,200,255,0.32)" strokeWidth="1.2" />
               <circle cx="0" cy="0" r="36" fill="none" stroke="rgba(208,140,255,0.28)" strokeWidth="1.2" />
               <circle cx="0" cy="0" r="30" fill="none" stroke="rgba(255,79,216,0.35)" strokeWidth="1.4" />
               <circle cx="0" cy="0" r="18" fill="none" stroke="rgba(255,170,110,0.32)" strokeWidth="1.2" />
               {compassStats.upstreamBins.map((v, i) => {
-                const a0 = (i / compassStats.upstreamBins.length) * Math.PI * 2 - Math.PI / 2;
-                const a1 = ((i + 1) / compassStats.upstreamBins.length) * Math.PI * 2 - Math.PI / 2;
+                const BIN_GAP = (Math.PI / 180) * 4;
+                const wedge = (Math.PI * 2) / compassStats.upstreamBins.length - BIN_GAP;
+                const a0 = (i / compassStats.upstreamBins.length) * Math.PI * 2 - Math.PI / 2 + BIN_GAP / 2;
+                const a1 = a0 + wedge;
                 const r0 = 44;
                 const r1 = 44 + v * 10;
                 const x0 = Math.cos(a0) * r0; const y0 = Math.sin(a0) * r0;
@@ -1312,8 +2002,10 @@ export default function VisualizationPage() {
                 );
               })}
               {compassStats.delta7Bins.map((v, i) => {
-                const a0 = (i / compassStats.delta7Bins.length) * Math.PI * 2 - Math.PI / 2;
-                const a1 = ((i + 1) / compassStats.delta7Bins.length) * Math.PI * 2 - Math.PI / 2;
+                const BIN_GAP = (Math.PI / 180) * 4;
+                const wedge = (Math.PI * 2) / compassStats.delta7Bins.length - BIN_GAP;
+                const a0 = (i / compassStats.delta7Bins.length) * Math.PI * 2 - Math.PI / 2 + BIN_GAP / 2;
+                const a1 = a0 + wedge;
                 const r0 = 36;
                 const r1 = 36 + v * 7;
                 const x0 = Math.cos(a0) * r0; const y0 = Math.sin(a0) * r0;
@@ -1331,8 +2023,10 @@ export default function VisualizationPage() {
                 );
               })}
               {compassStats.downstreamBins.map((v, i) => {
-                const a0 = (i / compassStats.downstreamBins.length) * Math.PI * 2 - Math.PI / 2;
-                const a1 = ((i + 1) / compassStats.downstreamBins.length) * Math.PI * 2 - Math.PI / 2;
+                const BIN_GAP = (Math.PI / 180) * 4;
+                const wedge = (Math.PI * 2) / compassStats.downstreamBins.length - BIN_GAP;
+                const a0 = (i / compassStats.downstreamBins.length) * Math.PI * 2 - Math.PI / 2 + BIN_GAP / 2;
+                const a1 = a0 + wedge;
                 const r0 = 18;
                 const r1 = 18 + v * 8;
                 const x0 = Math.cos(a0) * r0; const y0 = Math.sin(a0) * r0;
@@ -1349,54 +2043,76 @@ export default function VisualizationPage() {
                   />
                 );
               })}
-              {Array.from({ length: EPG_COMPASS_BINS }, (_, i) => (
-                <line
-                  key={`link-up-base-${i}`}
-                  x1={(Math.cos((i / EPG_COMPASS_BINS) * Math.PI * 2 - Math.PI / 2) * 44).toFixed(3)}
-                  y1={(Math.sin((i / EPG_COMPASS_BINS) * Math.PI * 2 - Math.PI / 2) * 44).toFixed(3)}
-                  x2={(Math.cos((i / EPG_COMPASS_BINS) * Math.PI * 2 - Math.PI / 2) * 30).toFixed(3)}
-                  y2={(Math.sin((i / EPG_COMPASS_BINS) * Math.PI * 2 - Math.PI / 2) * 30).toFixed(3)}
-                  stroke="rgba(120,200,255,0.35)"
-                  strokeWidth="1.25"
-                />
-              ))}
-              {compassStats.upstreamBins.map((v, i) => (
-                <line
-                  key={`link-up-${i}`}
-                  x1={(Math.cos((i / EPG_COMPASS_BINS) * Math.PI * 2 - Math.PI / 2) * 44).toFixed(3)}
-                  y1={(Math.sin((i / EPG_COMPASS_BINS) * Math.PI * 2 - Math.PI / 2) * 44).toFixed(3)}
-                  x2={(Math.cos((i / EPG_COMPASS_BINS) * Math.PI * 2 - Math.PI / 2) * 30).toFixed(3)}
-                  y2={(Math.sin((i / EPG_COMPASS_BINS) * Math.PI * 2 - Math.PI / 2) * 30).toFixed(3)}
-                  stroke={`rgba(120,200,255,${(0.18 + v * 0.55).toFixed(3)})`}
-                  strokeWidth="1.6"
-                />
-              ))}
-              {compassStats.delta7Bins.map((v, i) => (
-                <line
-                  key={`link-d7-${i}`}
-                  x1={(Math.cos((i / EPG_COMPASS_BINS) * Math.PI * 2 - Math.PI / 2) * 36).toFixed(3)}
-                  y1={(Math.sin((i / EPG_COMPASS_BINS) * Math.PI * 2 - Math.PI / 2) * 36).toFixed(3)}
-                  x2={(Math.cos((i / EPG_COMPASS_BINS) * Math.PI * 2 - Math.PI / 2) * 30).toFixed(3)}
-                  y2={(Math.sin((i / EPG_COMPASS_BINS) * Math.PI * 2 - Math.PI / 2) * 30).toFixed(3)}
-                  stroke={`rgba(208,140,255,${(0.16 + v * 0.52).toFixed(3)})`}
-                  strokeWidth="1.4"
-                />
-              ))}
-              {compassStats.downstreamBins.map((v, i) => (
-                <line
-                  key={`link-down-${i}`}
-                  x1={(Math.cos((i / EPG_COMPASS_BINS) * Math.PI * 2 - Math.PI / 2) * 30).toFixed(3)}
-                  y1={(Math.sin((i / EPG_COMPASS_BINS) * Math.PI * 2 - Math.PI / 2) * 30).toFixed(3)}
-                  x2={(Math.cos((i / EPG_COMPASS_BINS) * Math.PI * 2 - Math.PI / 2) * 18).toFixed(3)}
-                  y2={(Math.sin((i / EPG_COMPASS_BINS) * Math.PI * 2 - Math.PI / 2) * 18).toFixed(3)}
-                  stroke={`rgba(255,170,110,${(0.18 + v * 0.55).toFixed(3)})`}
-                  strokeWidth="1.6"
-                />
-              ))}
+              {Array.from({ length: EPG_COMPASS_BINS }, (_, i) => {
+                const BIN_GAP = (Math.PI / 180) * 4;
+                const wedge = (Math.PI * 2) / EPG_COMPASS_BINS - BIN_GAP;
+                const a = (i / EPG_COMPASS_BINS) * Math.PI * 2 - Math.PI / 2 + BIN_GAP / 2 + wedge / 2;
+                return (
+                  <line
+                    key={`link-up-base-${i}`}
+                    x1={(Math.cos(a) * 44).toFixed(3)}
+                    y1={(Math.sin(a) * 44).toFixed(3)}
+                    x2={(Math.cos(a) * 30).toFixed(3)}
+                    y2={(Math.sin(a) * 30).toFixed(3)}
+                    stroke="rgba(120,200,255,0.35)"
+                    strokeWidth="1.25"
+                  />
+                );
+              })}
+              {compassStats.upstreamBins.map((v, i) => {
+                const BIN_GAP = (Math.PI / 180) * 4;
+                const wedge = (Math.PI * 2) / EPG_COMPASS_BINS - BIN_GAP;
+                const a = (i / EPG_COMPASS_BINS) * Math.PI * 2 - Math.PI / 2 + BIN_GAP / 2 + wedge / 2;
+                return (
+                  <line
+                    key={`link-up-${i}`}
+                    x1={(Math.cos(a) * 44).toFixed(3)}
+                    y1={(Math.sin(a) * 44).toFixed(3)}
+                    x2={(Math.cos(a) * 30).toFixed(3)}
+                    y2={(Math.sin(a) * 30).toFixed(3)}
+                    stroke={`rgba(120,200,255,${(0.18 + v * 0.55).toFixed(3)})`}
+                    strokeWidth="1.6"
+                  />
+                );
+              })}
+              {compassStats.delta7Bins.map((v, i) => {
+                const BIN_GAP = (Math.PI / 180) * 4;
+                const wedge = (Math.PI * 2) / EPG_COMPASS_BINS - BIN_GAP;
+                const a = (i / EPG_COMPASS_BINS) * Math.PI * 2 - Math.PI / 2 + BIN_GAP / 2 + wedge / 2;
+                return (
+                  <line
+                    key={`link-d7-${i}`}
+                    x1={(Math.cos(a) * 36).toFixed(3)}
+                    y1={(Math.sin(a) * 36).toFixed(3)}
+                    x2={(Math.cos(a) * 30).toFixed(3)}
+                    y2={(Math.sin(a) * 30).toFixed(3)}
+                    stroke={`rgba(208,140,255,${(0.16 + v * 0.52).toFixed(3)})`}
+                    strokeWidth="1.4"
+                  />
+                );
+              })}
+              {compassStats.downstreamBins.map((v, i) => {
+                const BIN_GAP = (Math.PI / 180) * 4;
+                const wedge = (Math.PI * 2) / EPG_COMPASS_BINS - BIN_GAP;
+                const a = (i / EPG_COMPASS_BINS) * Math.PI * 2 - Math.PI / 2 + BIN_GAP / 2 + wedge / 2;
+                return (
+                  <line
+                    key={`link-down-${i}`}
+                    x1={(Math.cos(a) * 30).toFixed(3)}
+                    y1={(Math.sin(a) * 30).toFixed(3)}
+                    x2={(Math.cos(a) * 18).toFixed(3)}
+                    y2={(Math.sin(a) * 18).toFixed(3)}
+                    stroke={`rgba(255,170,110,${(0.18 + v * 0.55).toFixed(3)})`}
+                    strokeWidth="1.6"
+                  />
+                );
+              })}
               <circle cx="0" cy="0" r="42" fill="none" stroke="rgba(140,120,255,0.35)" strokeWidth="2" />
               {compassStats.epgBins.map((v, i) => {
-                const a0 = (i / compassStats.epgBins.length) * Math.PI * 2 - Math.PI / 2;
-                const a1 = ((i + 1) / compassStats.epgBins.length) * Math.PI * 2 - Math.PI / 2;
+                const BIN_GAP = (Math.PI / 180) * 4;
+                const wedge = (Math.PI * 2) / compassStats.epgBins.length - BIN_GAP;
+                const a0 = (i / compassStats.epgBins.length) * Math.PI * 2 - Math.PI / 2 + BIN_GAP / 2;
+                const a1 = a0 + wedge;
                 const r0 = 30;
                 const r1 = 30 + v * 14;
                 const x0 = Math.cos(a0) * r0; const y0 = Math.sin(a0) * r0;
@@ -1409,8 +2125,8 @@ export default function VisualizationPage() {
                     key={`bin-${i}`}
                     d={`M ${x0} ${y0} L ${x1} ${y1} L ${x2} ${y2} L ${x3} ${y3} Z`}
                     fill={compassHeatFill(v, alpha)}
-                    stroke="rgba(255,190,120,0.45)"
-                    strokeWidth="0.6"
+                    stroke="rgba(255,220,160,0.55)"
+                    strokeWidth="1"
                   />
                 );
               })}
@@ -1418,16 +2134,16 @@ export default function VisualizationPage() {
                 <line
                   x1="0"
                   y1="0"
-                  x2={(Math.cos((bumpTheta - 90) * Math.PI / 180) * 48).toFixed(3)}
-                  y2={(Math.sin((bumpTheta - 90) * Math.PI / 180) * 48).toFixed(3)}
+                  x2={(Math.cos(bumpTheta * Math.PI / 180) * 48).toFixed(3)}
+                  y2={(-Math.sin(bumpTheta * Math.PI / 180) * 48).toFixed(3)}
                   stroke="#ff4fd8"
                   strokeWidth="2.5"
                 />
               ) : null}
             </svg>
             <div style={{ fontSize: 11, opacity: 0.85, maxWidth: 420 }}>
-              EPG compass readout shows linked rings plus explicit connection spokes: outer upstream (ring/intermediate to EPG), middle EPG bins,
-              Delta7 inhibitory ring, and inner one-hop downstream. Delta7 activity contributes opposite-side inhibition during bump decoding.
+              EPG compass: 8 bins (R1+L1…R8+L8 from label). L+R with same number share bin (eLife 66039).
+              Outer upstream, middle EPG, Delta7 inhibitory ring, inner downstream. Delta7 contributes opposite-side inhibition.
             </div>
           </div>
         ) : null}

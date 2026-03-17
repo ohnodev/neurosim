@@ -1,0 +1,463 @@
+{
+  "entries": [
+    {
+      "root_id": "720575940628843458",
+      "hemibrain_type": "EPG",
+      "side": "right",
+      "hemilineage": "DM1_CX_d2",
+      "tile_index_0_7": 0,
+      "tile_label": "EPG_R1",
+      "parsed_from": "EPG_R1"
+    },
+    {
+      "root_id": "720575940629691753",
+      "hemibrain_type": "EPG",
+      "side": "left",
+      "hemilineage": "DM1_CX_d2",
+      "tile_index_0_7": 0,
+      "tile_label": "EPG_L1",
+      "parsed_from": "EPG_L1"
+    },
+    {
+      "root_id": "720575940631125036",
+      "hemibrain_type": "EPG",
+      "side": "right",
+      "hemilineage": "DM1_CX_d2",
+      "tile_index_0_7": 0,
+      "tile_label": "EPG_R1",
+      "parsed_from": "EPG_R1"
+    },
+    {
+      "root_id": "720575940635461550",
+      "hemibrain_type": "EPG",
+      "side": "left",
+      "hemilineage": "DM1_CX_d2",
+      "tile_index_0_7": 0,
+      "tile_label": "EPG_L1",
+      "parsed_from": "EPG_L1"
+    },
+    {
+      "root_id": "720575940608722371",
+      "hemibrain_type": "EPG",
+      "side": "right",
+      "hemilineage": "DM1_CX_d2",
+      "tile_index_0_7": 1,
+      "tile_label": "EPG_R2",
+      "parsed_from": "EPG_R2"
+    },
+    {
+      "root_id": "720575940613829900",
+      "hemibrain_type": "EPG",
+      "side": "right",
+      "hemilineage": "DM1_CX_d2",
+      "tile_index_0_7": 1,
+      "tile_label": "EPG_R2",
+      "parsed_from": "EPG_R2"
+    },
+    {
+      "root_id": "720575940617769851",
+      "hemibrain_type": "EPG",
+      "side": "left",
+      "hemilineage": "DM1_CX_d2",
+      "tile_index_0_7": 1,
+      "tile_label": "EPG_L2",
+      "parsed_from": "EPG_L2"
+    },
+    {
+      "root_id": "720575940642634532",
+      "hemibrain_type": "EPG",
+      "side": "left",
+      "hemilineage": "DM1_CX_d2",
+      "tile_index_0_7": 1,
+      "tile_label": "EPG_L2",
+      "parsed_from": "EPG_L2"
+    },
+    {
+      "root_id": "720575940610453427",
+      "hemibrain_type": "EPG",
+      "side": "left",
+      "hemilineage": "DM2_CX_d1",
+      "tile_index_0_7": 2,
+      "tile_label": "EPG_L3",
+      "parsed_from": "EPG_L3"
+    },
+    {
+      "root_id": "720575940613836438",
+      "hemibrain_type": "EPG",
+      "side": "right",
+      "hemilineage": "DM2_CX_d1",
+      "tile_index_0_7": 2,
+      "tile_label": "EPG_R3",
+      "parsed_from": "EPG_R3"
+    },
+    {
+      "root_id": "720575940625351354",
+      "hemibrain_type": "EPG",
+      "side": "left",
+      "hemilineage": "DM2_CX_d1",
+      "tile_index_0_7": 2,
+      "tile_label": "EPG_L3",
+      "parsed_from": "EPG_L3"
+    },
+    {
+      "root_id": "720575940630199963",
+      "hemibrain_type": "EPG",
+      "side": "right",
+      "hemilineage": "DM2_CX_d1",
+      "tile_index_0_7": 2,
+      "tile_label": "EPG_R3",
+      "parsed_from": "EPG_R3"
+    },
+    {
+      "root_id": "720575940631708836",
+      "hemibrain_type": "EPG",
+      "side": "right",
+      "hemilineage": "DM2_CX_d1",
+      "tile_index_0_7": 2,
+      "tile_label": "EPG_R3",
+      "parsed_from": "EPG_R3"
+    },
+    {
+      "root_id": "720575940638850512",
+      "hemibrain_type": "EPG",
+      "side": "left",
+      "hemilineage": "DM2_CX_d1",
+      "tile_index_0_7": 2,
+      "tile_label": "EPG_L3",
+      "parsed_from": "EPG_L3"
+    },
+    {
+      "root_id": "720575940605827761",
+      "hemibrain_type": "EPG",
+      "side": "left",
+      "hemilineage": "DM2_CX_d2",
+      "tile_index_0_7": 3,
+      "tile_label": "EPG_L4",
+      "parsed_from": "EPG_L4"
+    },
+    {
+      "root_id": "720575940614297640",
+      "hemibrain_type": "EPG",
+      "side": "right",
+      "hemilineage": "DM2_CX_d2",
+      "tile_index_0_7": 3,
+      "tile_label": "EPG_R4",
+      "parsed_from": "EPG_R4"
+    },
+    {
+      "root_id": "720575940619006272",
+      "hemibrain_type": "EPG",
+      "side": "right",
+      "hemilineage": "DM2_CX_d2",
+      "tile_index_0_7": 3,
+      "tile_label": "EPG_R4",
+      "parsed_from": "EPG_R4"
+    },
+    {
+      "root_id": "720575940623046548",
+      "hemibrain_type": "EPG",
+      "side": "left",
+      "hemilineage": "DM2_CX_d2",
+      "tile_index_0_7": 3,
+      "tile_label": "EPG_L4",
+      "parsed_from": "EPG_L4"
+    },
+    {
+      "root_id": "720575940624784280",
+      "hemibrain_type": "EPG",
+      "side": "left",
+      "hemilineage": "DM2_CX_d2",
+      "tile_index_0_7": 3,
+      "tile_label": "EPG_L4",
+      "parsed_from": "EPG_L4"
+    },
+    {
+      "root_id": "720575940626449082",
+      "hemibrain_type": "EPG",
+      "side": "right",
+      "hemilineage": "DM2_CX_d2",
+      "tile_index_0_7": 3,
+      "tile_label": "EPG_R4",
+      "parsed_from": "EPG_R4"
+    },
+    {
+      "root_id": "720575940604801993",
+      "hemibrain_type": "EPG",
+      "side": "right",
+      "hemilineage": "DM3_CX_d1",
+      "tile_index_0_7": 4,
+      "tile_label": "EPG_R5",
+      "parsed_from": "EPG_R5"
+    },
+    {
+      "root_id": "720575940619296365",
+      "hemibrain_type": "EPG",
+      "side": "left",
+      "hemilineage": "DM3_CX_d1",
+      "tile_index_0_7": 4,
+      "tile_label": "EPG_L5",
+      "parsed_from": "EPG_L5"
+    },
+    {
+      "root_id": "720575940626137895",
+      "hemibrain_type": "EPG",
+      "side": "left",
+      "hemilineage": "DM3_CX_d1",
+      "tile_index_0_7": 4,
+      "tile_label": "EPG_L5",
+      "parsed_from": "EPG_L5"
+    },
+    {
+      "root_id": "720575940627140551",
+      "hemibrain_type": "EPG",
+      "side": "right",
+      "hemilineage": "DM3_CX_d1",
+      "tile_index_0_7": 4,
+      "tile_label": "EPG_R5",
+      "parsed_from": "EPG_R5"
+    },
+    {
+      "root_id": "720575940632614295",
+      "hemibrain_type": "EPG",
+      "side": "left",
+      "hemilineage": "DM3_CX_d1",
+      "tile_index_0_7": 4,
+      "tile_label": "EPG_L5",
+      "parsed_from": "EPG_L5"
+    },
+    {
+      "root_id": "720575940632844002",
+      "hemibrain_type": "EPG",
+      "side": "right",
+      "hemilineage": "DM3_CX_d1",
+      "tile_index_0_7": 4,
+      "tile_label": "EPG_R5",
+      "parsed_from": "EPG_R5"
+    },
+    {
+      "root_id": "720575940610901930",
+      "hemibrain_type": "EPG",
+      "side": "left",
+      "hemilineage": "DM3_CX_d2",
+      "tile_index_0_7": 5,
+      "tile_label": "EPG_L6",
+      "parsed_from": "EPG_L6"
+    },
+    {
+      "root_id": "720575940611216099",
+      "hemibrain_type": "EPG",
+      "side": "right",
+      "hemilineage": "DM3_CX_d2",
+      "tile_index_0_7": 5,
+      "tile_label": "EPG_R6",
+      "parsed_from": "EPG_R6"
+    },
+    {
+      "root_id": "720575940618612952",
+      "hemibrain_type": "EPG",
+      "side": "left",
+      "hemilineage": "DM3_CX_d2",
+      "tile_index_0_7": 5,
+      "tile_label": "EPG_L6",
+      "parsed_from": "EPG_L6"
+    },
+    {
+      "root_id": "720575940620664741",
+      "hemibrain_type": "EPG",
+      "side": "right",
+      "hemilineage": "DM3_CX_d2",
+      "tile_index_0_7": 5,
+      "tile_label": "EPG_R6",
+      "parsed_from": "EPG_R6"
+    },
+    {
+      "root_id": "720575940622364771",
+      "hemibrain_type": "EPG",
+      "side": "right",
+      "hemilineage": "DM3_CX_d2",
+      "tile_index_0_7": 5,
+      "tile_label": "EPG_R6",
+      "parsed_from": "EPG_R6"
+    },
+    {
+      "root_id": "720575940658101889",
+      "hemibrain_type": "EPG",
+      "side": "left",
+      "hemilineage": "DM3_CX_d2",
+      "tile_index_0_7": 5,
+      "tile_label": "EPG_L6",
+      "parsed_from": "EPG_L6"
+    },
+    {
+      "root_id": "720575940614926475",
+      "hemibrain_type": "EPG",
+      "side": "left",
+      "hemilineage": "DM4_CX_d1",
+      "tile_index_0_7": 6,
+      "tile_label": "EPG_L7",
+      "parsed_from": "EPG_L7"
+    },
+    {
+      "root_id": "720575940620020694",
+      "hemibrain_type": "EPG",
+      "side": "right",
+      "hemilineage": "DM4_CX_d1",
+      "tile_index_0_7": 6,
+      "tile_label": "EPG_R7",
+      "parsed_from": "EPG_R7"
+    },
+    {
+      "root_id": "720575940620282906",
+      "hemibrain_type": "EPG",
+      "side": "left",
+      "hemilineage": "DM4_CX_d1",
+      "tile_index_0_7": 6,
+      "tile_label": "EPG_L7",
+      "parsed_from": "EPG_L7"
+    },
+    {
+      "root_id": "720575940626315207",
+      "hemibrain_type": "EPG",
+      "side": "left",
+      "hemilineage": "DM4_CX_d1",
+      "tile_index_0_7": 6,
+      "tile_label": "EPG_L7",
+      "parsed_from": "EPGt_R7"
+    },
+    {
+      "root_id": "720575940628493572",
+      "hemibrain_type": "EPG",
+      "side": "right",
+      "hemilineage": "DM4_CX_d1",
+      "tile_index_0_7": 6,
+      "tile_label": "EPG_R7",
+      "parsed_from": "EPG_R7"
+    },
+    {
+      "root_id": "720575940628802041",
+      "hemibrain_type": "EPG",
+      "side": "left",
+      "hemilineage": "DM4_CX_d1",
+      "tile_index_0_7": 6,
+      "tile_label": "EPG_L7",
+      "parsed_from": "EPG_L7"
+    },
+    {
+      "root_id": "720575940636730694",
+      "hemibrain_type": "EPG",
+      "side": "right",
+      "hemilineage": "DM4_CX_d1",
+      "tile_index_0_7": 6,
+      "tile_label": "EPG_R7",
+      "parsed_from": "EPG_R7"
+    },
+    {
+      "root_id": "720575940602917088",
+      "hemibrain_type": "EPGt",
+      "side": "left",
+      "hemilineage": "DM4_CX_d2",
+      "tile_index_0_7": 7,
+      "tile_label": "EPG_L9",
+      "parsed_from": "EPGt_R9"
+    },
+    {
+      "root_id": "720575940616502066",
+      "hemibrain_type": "EPG",
+      "side": "right",
+      "hemilineage": "DM4_CX_d2",
+      "tile_index_0_7": 7,
+      "tile_label": "EPG_R8",
+      "parsed_from": "EPG_R8"
+    },
+    {
+      "root_id": "720575940616569601",
+      "hemibrain_type": "EPG",
+      "side": "right",
+      "hemilineage": "DM4_CX_d2",
+      "tile_index_0_7": 7,
+      "tile_label": "EPG_R8",
+      "parsed_from": "EPG_R8"
+    },
+    {
+      "root_id": "720575940619905404",
+      "hemibrain_type": "EPGt",
+      "side": "left",
+      "hemilineage": "DM4_CX_d2",
+      "tile_index_0_7": 7,
+      "tile_label": "EPG_L9",
+      "parsed_from": "EPGt_R9"
+    },
+    {
+      "root_id": "720575940620419354",
+      "hemibrain_type": "EPGt",
+      "side": "right",
+      "hemilineage": "DM4_CX_d3",
+      "tile_index_0_7": 7,
+      "tile_label": "EPG_R9",
+      "parsed_from": "EPGt_L9"
+    },
+    {
+      "root_id": "720575940620776662",
+      "hemibrain_type": "EPGt",
+      "side": "right",
+      "hemilineage": "DM4_CX_d2",
+      "tile_index_0_7": 7,
+      "tile_label": "EPG_R9",
+      "parsed_from": "EPGt_L9"
+    },
+    {
+      "root_id": "720575940623852873",
+      "hemibrain_type": "EPG",
+      "side": "left",
+      "hemilineage": "DM4_CX_d2",
+      "tile_index_0_7": 7,
+      "tile_label": "EPG_L8",
+      "parsed_from": "EPG_L8"
+    },
+    {
+      "root_id": "720575940624096234",
+      "hemibrain_type": "EPG",
+      "side": "left",
+      "hemilineage": "DM4_CX_d2",
+      "tile_index_0_7": 7,
+      "tile_label": "EPG_L8",
+      "parsed_from": "EPG_L8"
+    },
+    {
+      "root_id": "720575940626721835",
+      "hemibrain_type": "EPG",
+      "side": "right",
+      "hemilineage": "DM4_CX_d2",
+      "tile_index_0_7": 7,
+      "tile_label": "EPG_R8",
+      "parsed_from": "EPG_R8"
+    },
+    {
+      "root_id": "720575940633719487",
+      "hemibrain_type": "EPG",
+      "side": "left",
+      "hemilineage": "DM4_CX_d2",
+      "tile_index_0_7": 7,
+      "tile_label": "EPG_L8",
+      "parsed_from": "EPG_L8"
+    },
+    {
+      "root_id": "720575940635427982",
+      "hemibrain_type": "EPG",
+      "side": "left",
+      "hemilineage": "DM4_CX_d2",
+      "tile_index_0_7": 7,
+      "tile_label": "EPG_L8",
+      "parsed_from": "EPG_L8"
+    },
+    {
+      "root_id": "720575940660921985",
+      "hemibrain_type": "EPG",
+      "side": "right",
+      "hemilineage": "DM4_CX_d3",
+      "tile_index_0_7": 7,
+      "tile_label": "EPG_R8",
+      "parsed_from": "EPG_R8"
+    }
+  ]
+}

@@ -2,54 +2,9 @@
   "generated_at": "2026-03-16T14:46:53.856Z",
   "datasets": [
     {
-      "id": "eonsystems_brain_subset_baseline_control_replay",
-      "label": "eonsystems brain subset baseline control",
-      "url": "/eonsystems_brain_subset_baseline_control_replay.json"
-    },
-    {
-      "id": "eonsystems_brain_subset_baseline_probe_replay",
-      "label": "eonsystems brain subset baseline probe",
-      "url": "/eonsystems_brain_subset_baseline_probe_replay.json"
-    },
-    {
-      "id": "eonsystems_brain_subset_baseline_replay",
-      "label": "eonsystems brain subset baseline",
-      "url": "/eonsystems_brain_subset_baseline_replay.json"
-    },
-    {
-      "id": "eonsystems_brain_subset_baseline_tier1_replay",
-      "label": "eonsystems brain subset baseline tier1",
-      "url": "/eonsystems_brain_subset_baseline_tier1_replay.json"
-    },
-    {
-      "id": "eonsystems_brain_subset_baseline_tier2_replay",
-      "label": "eonsystems brain subset baseline tier2",
-      "url": "/eonsystems_brain_subset_baseline_tier2_replay.json"
-    },
-    {
-      "id": "eonsystems_brain_subset_baseline_tier3_replay",
-      "label": "eonsystems brain subset baseline tier3",
-      "url": "/eonsystems_brain_subset_baseline_tier3_replay.json"
-    },
-    {
-      "id": "eonsystems_brain_subset_left_bias_replay",
-      "label": "eonsystems brain subset left bias",
-      "url": "/eonsystems_brain_subset_left_bias_replay.json"
-    },
-    {
-      "id": "eonsystems_brain_subset_phased_left_bias_replay",
-      "label": "eonsystems brain subset phased left bias",
-      "url": "/eonsystems_brain_subset_phased_left_bias_replay.json"
-    },
-    {
-      "id": "eonsystems_brain_subset_replay",
-      "label": "eonsystems brain subset",
-      "url": "/eonsystems_brain_subset_replay.json"
-    },
-    {
-      "id": "eonsystems_brain_subset_visual_cue_replay",
-      "label": "eonsystems brain subset visual cue",
-      "url": "/eonsystems_brain_subset_visual_cue_replay.json"
+      "id": "neurosim_natural_1000tick_replay",
+      "label": "neurosim natural 1000 ticks",
+      "url": "/neurosim_natural_1000tick_replay.json"
     }
   ]
 }

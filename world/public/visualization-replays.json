@@ -10,6 +10,16 @@
       "id": "neurosim_epg_aff10_600hz_1000ticks_replay",
       "label": "neurosim epg aff10 600hz 1000 ticks",
       "url": "/neurosim_epg_aff10_600hz_1000ticks_replay.json"
+    },
+    {
+      "id": "neurosim_epg_aff10_600hz_3000ticks_replay",
+      "label": "neurosim epg aff10 600hz 3000 ticks",
+      "url": "/neurosim_epg_aff10_600hz_3000ticks_replay.json"
+    },
+    {
+      "id": "neurosim_epg_aff10_600hz_olf5hz_3000ticks_replay",
+      "label": "neurosim epg aff10 600hz + olf 5hz 3000 ticks",
+      "url": "/neurosim_epg_aff10_600hz_olf5hz_3000ticks_replay.json"
     }
   ]
 }

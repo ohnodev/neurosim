@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import os
 import json
 import sys
 from datetime import datetime, timezone
@@ -13,12 +14,13 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 FLY = ROOT.parent / "fly-brain-fresh"
 
-SCENARIO_ID = "neurosim_epg_aff10_600hz_1000ticks"
-TICKS = 1000
-DT_MS = 1.0
+TICKS = int(os.environ.get("NEUROSIM_EXPORT_TICKS", "1000"))
+DT_MS = float(os.environ.get("NEUROSIM_EXPORT_DT_MS", "1.0"))
 DT_SEC = DT_MS / 1000.0
-HZ = 600.0
-SEED = 123
+HZ = float(os.environ.get("NEUROSIM_EXPORT_STIM_HZ", "600.0"))
+OLFACTORY_BASE_HZ = float(os.environ.get("NEUROSIM_EXPORT_OLFACTORY_BASE_HZ", "0.0"))
+SEED = int(os.environ.get("NEUROSIM_EXPORT_SEED", "123"))
+SCENARIO_ID = f"neurosim_epg_aff10_600hz_olf{int(OLFACTORY_BASE_HZ)}hz_{TICKS}ticks"
 
 AFF10 = [
     720575940626768442,
@@ -58,6 +60,17 @@ def main() -> int:
 
     epg_entries = json.loads((ROOT / "data" / "epg-tile-map.json").read_text(encoding="utf-8"))["entries"]
     epg_ids = sorted({int(e["root_id"]) for e in epg_entries})
+    olf_map = json.loads((ROOT / "data" / "olfactory-afferents.json").read_text(encoding="utf-8"))
+    olf_ids = sorted(
+        {
+            int(x)
+            for x in (
+                list(olf_map.get("left", []))
+                + list(olf_map.get("right", []))
+                + list(olf_map.get("unknown", []))
+            )
+        }
+    )
 
     class_map: dict[str, dict[str, str]] = {}
     with (ROOT / "data" / "raw" / "classification.csv").open("r", newline="", encoding="utf-8") as f:
@@ -72,6 +85,7 @@ def main() -> int:
     model = run_pytorch.TorchModel(1, weights.shape[0], DT_MS, run_pytorch.MODEL_PARAMS, weights, device="cpu")
 
     aff_idx = [flyid2i[x] for x in AFF10 if x in flyid2i]
+    olf_idx = [flyid2i[x] for x in olf_ids if x in flyid2i]
     drv_idx = [flyid2i[x] for x in DRV10 if x in flyid2i]
     epg_idx = [flyid2i[x] for x in epg_ids if x in flyid2i]
     aff_set = {str(x) for x in AFF10}
@@ -80,6 +94,8 @@ def main() -> int:
 
     conductance, delay_buffer, spikes, v, refrac = model.state_init()
     rates = torch.zeros(1, weights.shape[0])
+    if OLFACTORY_BASE_HZ > 0 and olf_idx:
+        rates[:, olf_idx] = OLFACTORY_BASE_HZ
     rates[:, aff_idx] = HZ
     gen = torch.Generator(device="cpu")
     gen.manual_seed(SEED)
@@ -151,6 +167,8 @@ def main() -> int:
             "scenario": SCENARIO_ID,
             "stimulus": {
                 "stim_rate_hz": HZ,
+                "olfactory_base_hz": OLFACTORY_BASE_HZ,
+                "olfactory_pool_size": len(olf_idx),
                 "dt_ms": DT_MS,
                 "seed": SEED,
                 "stimulated_afferent_ids": [str(x) for x in AFF10],

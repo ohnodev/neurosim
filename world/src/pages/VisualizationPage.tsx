@@ -159,12 +159,27 @@ const DELTA7_OPPOSITE_INHIBIT_WEIGHT = 0.55;
 const EPG_INACTIVE_BIN_PENALTY = 0.35;
 /** If a bin has this fraction of its EPG population active (in window), we point the arrow at that bin center (clear bump signal). */
 const EPG_DOMINANT_BIN_THRESHOLD = 0.8;
-const PREFERRED_REPLAY_ID = 'neurosim_natural_1000tick_replay';
+const PREFERRED_REPLAY_ID = 'neurosim_epg_aff10_600hz_olf5hz_3000ticks_replay';
 const DEFAULT_REPLAY_DATASETS: ReplayDataset[] = [
   {
     id: 'neurosim_natural_1000tick_replay',
     label: 'neurosim natural 1000 ticks',
     url: '/neurosim_natural_1000tick_replay.json',
+  },
+  {
+    id: 'neurosim_epg_aff10_600hz_1000ticks_replay',
+    label: 'neurosim epg aff10 600hz 1000 ticks',
+    url: '/neurosim_epg_aff10_600hz_1000ticks_replay.json',
+  },
+  {
+    id: 'neurosim_epg_aff10_600hz_3000ticks_replay',
+    label: 'neurosim epg aff10 600hz 3000 ticks',
+    url: '/neurosim_epg_aff10_600hz_3000ticks_replay.json',
+  },
+  {
+    id: 'neurosim_epg_aff10_600hz_olf5hz_3000ticks_replay',
+    label: 'neurosim epg aff10 600hz + olf 5hz 3000 ticks',
+    url: '/neurosim_epg_aff10_600hz_olf5hz_3000ticks_replay.json',
   },
 ];
 

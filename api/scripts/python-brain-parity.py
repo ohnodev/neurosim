@@ -17,6 +17,7 @@ REPORT_300 = LOGS / "python_brain_parity_300.json"
 REPORT_1000 = LOGS / "python_brain_parity_1000.json"
 SUMMARY = LOGS / "python_brain_parity_summary.txt"
 PARQUET_PATH = ROOT.parent / "fly-brain" / "data" / "results" / "pytorch_t0.1s_n1.parquet"
+OLFACTORY_AFFERENTS_PATH = ROOT / "data" / "olfactory-afferents.json"
 
 SUGAR_IDS = [
     "720575940624963786", "720575940630233916", "720575940637568838", "720575940638202345",
@@ -47,21 +48,45 @@ def load_epg_ids() -> set[str]:
     }
 
 
-def parse_fly_ticks(epg_ids: set[str]) -> list[list[str]]:
+def load_olfactory_afferent_ids() -> set[str]:
+    parsed = json.loads(OLFACTORY_AFFERENTS_PATH.read_text("utf-8"))
+    out: set[str] = set()
+    if isinstance(parsed, list):
+        for row in parsed:
+            if isinstance(row, dict):
+                rid = str(row.get("root_id", ""))
+                if rid:
+                    out.add(rid)
+            else:
+                rid = str(row)
+                if rid:
+                    out.add(rid)
+    return out
+
+
+def parse_fly_ticks(epg_ids: set[str], olfactory_ids: set[str]) -> dict:
     import csv
 
-    out = [set() for _ in range(TICKS)]
+    epg_ticks = [set() for _ in range(TICKS)]
+    olfactory_ticks = [set() for _ in range(TICKS)]
+    all_ticks = [set() for _ in range(TICKS)]
     with FLY_CSV.open("r", encoding="utf-8") as f:
         r = csv.DictReader(f)
         for row in r:
             rid = str(row.get("flywire_id", ""))
-            if rid not in epg_ids:
-                continue
             t = float(row.get("t", "0"))
             tick = round(t / DT_SEC) + 1
             if 1 <= tick <= TICKS:
-                out[tick - 1].add(rid)
-    return [sorted(s) for s in out]
+                all_ticks[tick - 1].add(rid)
+                if rid in epg_ids:
+                    epg_ticks[tick - 1].add(rid)
+                if rid in olfactory_ids:
+                    olfactory_ticks[tick - 1].add(rid)
+    return {
+        "epg": [sorted(s) for s in epg_ticks],
+        "olfactory": [sorted(s) for s in olfactory_ticks],
+        "all": [sorted(s) for s in all_ticks],
+    }
 
 
 class Rpc:
@@ -89,13 +114,18 @@ class Rpc:
             self.sock.close()
 
 
-def run_python_ticks(epg_ids: set[str]) -> list[list[str]]:
+def run_python_ticks(epg_ids: set[str]) -> dict:
     rpc = Rpc(SOCKET_PATH)
     try:
         rpc.request("ping")
         created = rpc.request("create")
         sim_id = int(created["sim_id"])
-        out: list[list[str]] = []
+        epg_ticks: list[list[str]] = []
+        olfactory_ticks: list[list[str]] = []
+        all_event_count = 0
+        all_unique: set[str] = set()
+        all_event_counts_by_tick: list[int] = []
+        all_ids_by_tick: list[list[str]] = []
         stim_rates = {rid: 200.0 for rid in SUGAR_IDS}
         batch = 100
         for start in range(0, TICKS, batch):
@@ -116,8 +146,25 @@ def run_python_ticks(epg_ids: set[str]) -> list[list[str]]:
             res = rpc.request("step_many", {"steps": steps})
             for item in res.get("results", []):
                 ids = [rid for rid in item.get("activity_sparse", {}).keys() if rid in epg_ids]
-                out.append(sorted(ids))
-        return out
+                epg_ticks.append(sorted(ids))
+                olfactory_ids = [str(rid) for rid in item.get("olfactory_spike_ids_step", [])]
+                olfactory_ticks.append(sorted(set(olfactory_ids)))
+                tick_ids = [str(rid) for rid in item.get("spike_ids", [])]
+                if not tick_ids:
+                    tick_ids = [str(rid) for rid in item.get("activity_sparse", {}).keys()]
+                tick_events = int(item.get("total_spike_events_step", len(tick_ids)))
+                all_event_count += tick_events
+                all_event_counts_by_tick.append(tick_events)
+                all_ids_by_tick.append(tick_ids)
+                all_unique.update(tick_ids)
+        return {
+            "epg": epg_ticks,
+            "olfactory": olfactory_ticks,
+            "all_event_count": all_event_count,
+            "all_unique_count": len(all_unique),
+            "all_event_counts_by_tick": all_event_counts_by_tick,
+            "all_ids_by_tick": all_ids_by_tick,
+        }
     finally:
         rpc.close()
 
@@ -159,18 +206,52 @@ def main() -> None:
     LOGS.mkdir(parents=True, exist_ok=True)
     ensure_fly_csv()
     epg_ids = load_epg_ids()
-    fly_ticks = parse_fly_ticks(epg_ids)
-    py_ticks = run_python_ticks(epg_ids)
-    report300 = compare(fly_ticks, py_ticks, TICKS_300)
-    report1000 = compare(fly_ticks, py_ticks, TICKS)
+    olfactory_ids = load_olfactory_afferent_ids()
+    fly = parse_fly_ticks(epg_ids, olfactory_ids)
+    py = run_python_ticks(epg_ids)
+    report300 = {
+        "epg": compare(fly["epg"], py["epg"], TICKS_300),
+        "olfactory": compare(fly["olfactory"], py["olfactory"], TICKS_300),
+        "all": {
+            "fly_event_count": sum(len(t) for t in fly["all"][:TICKS_300]),
+            "fly_unique_count": len({rid for tick in fly["all"][:TICKS_300] for rid in tick}),
+            "python_event_count": sum(py["all_event_counts_by_tick"][:TICKS_300]),
+            "python_unique_count": len({rid for tick in py["all_ids_by_tick"][:TICKS_300] for rid in tick}),
+            "event_count_delta": sum(py["all_event_counts_by_tick"][:TICKS_300]) - sum(len(t) for t in fly["all"][:TICKS_300]),
+            "unique_count_delta": len({rid for tick in py["all_ids_by_tick"][:TICKS_300] for rid in tick})
+            - len({rid for tick in fly["all"][:TICKS_300] for rid in tick}),
+        },
+    }
+    report1000 = {
+        "epg": compare(fly["epg"], py["epg"], TICKS),
+        "olfactory": compare(fly["olfactory"], py["olfactory"], TICKS),
+        "all": {
+            "fly_event_count": sum(len(t) for t in fly["all"][:TICKS]),
+            "fly_unique_count": len({rid for tick in fly["all"][:TICKS] for rid in tick}),
+            "python_event_count": py["all_event_count"],
+            "python_unique_count": py["all_unique_count"],
+            "event_count_delta": py["all_event_count"] - sum(len(t) for t in fly["all"][:TICKS]),
+            "unique_count_delta": py["all_unique_count"] - len({rid for tick in fly["all"][:TICKS] for rid in tick}),
+        },
+    }
     REPORT_300.write_text(json.dumps(report300, indent=2) + "\n", encoding="utf-8")
     REPORT_1000.write_text(json.dumps(report1000, indent=2) + "\n", encoding="utf-8")
     summary = "\n".join([
         "python-brain parity summary",
-        f"300_exact_tick_ratio={report300['exact_tick_ratio']:.4f}",
-        f"300_event_jaccard={report300['event_jaccard']:.4f}",
-        f"1000_exact_tick_ratio={report1000['exact_tick_ratio']:.4f}",
-        f"1000_event_jaccard={report1000['event_jaccard']:.4f}",
+        f"300_epg_exact_tick_ratio={report300['epg']['exact_tick_ratio']:.4f}",
+        f"300_epg_event_jaccard={report300['epg']['event_jaccard']:.4f}",
+        f"300_olfactory_exact_tick_ratio={report300['olfactory']['exact_tick_ratio']:.4f}",
+        f"300_olfactory_event_jaccard={report300['olfactory']['event_jaccard']:.4f}",
+        f"1000_epg_exact_tick_ratio={report1000['epg']['exact_tick_ratio']:.4f}",
+        f"1000_epg_event_jaccard={report1000['epg']['event_jaccard']:.4f}",
+        f"1000_olfactory_exact_tick_ratio={report1000['olfactory']['exact_tick_ratio']:.4f}",
+        f"1000_olfactory_event_jaccard={report1000['olfactory']['event_jaccard']:.4f}",
+        f"1000_all_fly_event_count={report1000['all']['fly_event_count']}",
+        f"1000_all_python_event_count={report1000['all']['python_event_count']}",
+        f"1000_all_event_count_delta={report1000['all']['event_count_delta']}",
+        f"1000_all_fly_unique_count={report1000['all']['fly_unique_count']}",
+        f"1000_all_python_unique_count={report1000['all']['python_unique_count']}",
+        f"1000_all_unique_count_delta={report1000['all']['unique_count_delta']}",
         f"flybrain_csv={FLY_CSV}",
         f"report_300={REPORT_300}",
         f"report_1000={REPORT_1000}",

@@ -46,6 +46,7 @@ const CLIENT_ACTIVITY_LIMIT = Math.max(1, Number(process.env.NEUROSIM_CLIENT_ACT
 const CLIENT_ACTIVITY_TTL_MS = Math.max(250, Number(process.env.NEUROSIM_CLIENT_ACTIVITY_TTL_MS ?? 4_000));
 const CLIENT_ACTIVITY_FLOOR = Math.min(0.4, Math.max(0.01, Number(process.env.NEUROSIM_CLIENT_ACTIVITY_FLOOR ?? 0.08)));
 const CLIENT_INPUT_ACTIVITY_DEFAULT = Math.min(0.9, Math.max(CLIENT_ACTIVITY_FLOOR, Number(process.env.NEUROSIM_CLIENT_INPUT_ACTIVITY ?? 0.55)));
+const CLASSIFICATION_CSV_PATH = path.resolve(process.cwd(), '..', 'data', 'raw', 'classification.csv');
 
 function fnv1a32(s: string): number {
   let h = 0x811c9dc5;
@@ -55,6 +56,74 @@ function fnv1a32(s: string): number {
   }
   return h >>> 0;
 }
+
+function parseCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        cur += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (ch === ',' && !inQuotes) {
+      out.push(cur);
+      cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  out.push(cur);
+  return out;
+}
+
+function createSeededRandom(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (1664525 * state + 1013904223) >>> 0;
+    return state / 0x100000000;
+  };
+}
+
+function loadAfferentSensoryIdsByClass(): {
+  mechanosensory: string[];
+  thermosensory: string[];
+  hygrosensory: string[];
+  gustatory: string[];
+} {
+  const out = {
+    mechanosensory: [] as string[],
+    thermosensory: [] as string[],
+    hygrosensory: [] as string[],
+    gustatory: [] as string[],
+  };
+  try {
+    const txt = fs.readFileSync(CLASSIFICATION_CSV_PATH, 'utf8');
+    const lines = txt.split('\n').filter((l) => l.trim().length > 0);
+    for (let i = 1; i < lines.length; i += 1) {
+      const cols = parseCsvLine(lines[i] ?? '');
+      if (cols.length < 4) continue;
+      const rootId = cols[0] ?? '';
+      const flow = cols[1] ?? '';
+      const superClass = cols[2] ?? '';
+      const neuronClass = cols[3] ?? '';
+      if (!rootId || flow !== 'afferent' || superClass !== 'sensory') continue;
+      if (neuronClass === 'mechanosensory') out.mechanosensory.push(rootId);
+      if (neuronClass === 'thermosensory') out.thermosensory.push(rootId);
+      if (neuronClass === 'hygrosensory') out.hygrosensory.push(rootId);
+      if (neuronClass === 'gustatory') out.gustatory.push(rootId);
+    }
+  } catch {
+    // fallback empty; request handler returns useful summary even without class IDs
+  }
+  return out;
+}
+
+const sensoryIdsByClass = loadAfferentSensoryIdsByClass();
 
 function computeViewerSubsetIndices(total: number): number[] {
   if (total <= VIEWER_NEURON_LIMIT) return Array.from({ length: total }, (_, i) => i);
@@ -730,6 +799,158 @@ app.get('/api/neurons', (req, res) => {
     viewerNeuronCount: viewerNeuronIndices.length,
     totalNeuronCount: connectome.neurons.length,
   });
+});
+
+app.post('/api/neurosim-baseline/export', async (req, res) => {
+  try {
+    const ticks = Math.max(1, Math.min(20_000, Number(req.body?.ticks ?? 1000)));
+    const dtSec = Math.max(0.0001, Math.min(0.1, Number(req.body?.dt_sec ?? 0.001)));
+    const olfactoryBaselineHz = Math.max(0, Number(req.body?.olfactoryBaselineHz ?? 20));
+    const mechanoHz = Math.max(0, Number(req.body?.mechanoHz ?? 0));
+    const thermoHz = Math.max(0, Number(req.body?.thermoHz ?? 0.5));
+    const hygroHz = Math.max(0, Number(req.body?.hygroHz ?? 0.5));
+    const gustatoryHz = Math.max(0, Number(req.body?.gustatoryHz ?? 0));
+    const batchSize = Math.max(1, Math.min(500, Number(req.body?.batchSize ?? 100)));
+    const rng = createSeededRandom(0x5f43e21d);
+    const sampleForced = (ids: string[], hz: number): string[] => {
+      if (hz <= 0 || ids.length === 0) return [];
+      const p = Math.min(1, hz * dtSec);
+      const out: string[] = [];
+      for (const id of ids) {
+        if (rng() < p) out.push(id);
+      }
+      return out;
+    };
+
+    const forcedSpikeEvents = {
+      mechanosensory: 0,
+      thermosensory: 0,
+      hygrosensory: 0,
+      gustatory: 0,
+    };
+
+    const { simId } = await socketClient.createSim();
+    let nextTick = 1;
+    const replayTicks: Array<{ tick: number; time_sec: number; spikes: string[] }> = [];
+    while (nextTick <= ticks) {
+      const take = Math.min(batchSize, ticks - nextTick + 1);
+      const forcedByStep: string[][] = [];
+      for (let i = 0; i < take; i += 1) {
+        const forcedMech = sampleForced(sensoryIdsByClass.mechanosensory, mechanoHz);
+        const forcedThermo = sampleForced(sensoryIdsByClass.thermosensory, thermoHz);
+        const forcedHygro = sampleForced(sensoryIdsByClass.hygrosensory, hygroHz);
+        const forcedGust = sampleForced(sensoryIdsByClass.gustatory, gustatoryHz);
+        forcedSpikeEvents.mechanosensory += forcedMech.length;
+        forcedSpikeEvents.thermosensory += forcedThermo.length;
+        forcedSpikeEvents.hygrosensory += forcedHygro.length;
+        forcedSpikeEvents.gustatory += forcedGust.length;
+        forcedByStep.push([...forcedMech, ...forcedThermo, ...forcedHygro, ...forcedGust]);
+      }
+      const batch = await socketClient.runReplayBatch({
+        simId,
+        dt: dtSec,
+        startTick: nextTick,
+        count: take,
+        olfactoryBaselineRateHz: olfactoryBaselineHz,
+        forcedSpikesByStep: forcedByStep,
+      });
+      replayTicks.push(...batch);
+      nextTick += take;
+    }
+
+    const neurons = connectome.neurons
+      .filter((n) => epgRootIdSet.has(n.root_id))
+      .map((n) => ({
+        root_id: n.root_id,
+        x: typeof n.x === 'number' ? n.x : 0,
+        y: typeof n.y === 'number' ? n.y : 0,
+        z: typeof n.z === 'number' ? n.z : 0,
+        processed_label: n.cell_type,
+        is_ring: true,
+        is_epg: true,
+        side: n.side ?? 'unknown',
+        hemibrain_type: n.cell_type ?? '',
+        flow: n.role,
+        cell_type: n.cell_type,
+      }));
+    const epgIds = new Set(neurons.map((n) => n.root_id));
+    const overallUnique = new Set<string>();
+    let overallSpikeEvents = 0;
+    const epgUnique = new Set<string>();
+    let epgSpikeEvents = 0;
+    for (const t of replayTicks) {
+      overallSpikeEvents += t.spikes.length;
+      for (const id of t.spikes) {
+        overallUnique.add(id);
+        if (epgIds.has(id)) {
+          epgUnique.add(id);
+          epgSpikeEvents += 1;
+        }
+      }
+    }
+
+    const replay = {
+      meta: {
+        generated_at: new Date().toISOString(),
+        source_csv: 'api:/api/neurosim-baseline/export',
+        ticks: replayTicks.length,
+        unique_fired_neurons: overallUnique.size,
+        ring_neuron_total: neurons.length,
+        ring_neuron_unique_fired: epgUnique.size,
+        dt_sec: dtSec,
+        epg_neuron_total: neurons.length,
+        epg_neuron_unique_fired: epgUnique.size,
+        scenario: 'neurosim_natural_20hz_1000ticks',
+        baseline: {
+          olfactoryBaselineHz,
+          mechanoHz,
+          thermoHz,
+          hygroHz,
+          gustatoryHz,
+          batchSize,
+          forcedSpikeEvents,
+          overallSpikeEvents,
+          epgSpikeEvents,
+        },
+      },
+      neurons,
+      ticks: replayTicks,
+    };
+    const outPath = path.resolve(process.cwd(), '..', 'world', 'public', 'neurosim_natural_1000tick_replay.json');
+    fs.writeFileSync(outPath, `${JSON.stringify(replay)}\n`, 'utf8');
+    const summaryPath = path.resolve(process.cwd(), '..', 'logs', 'neurosim_baseline_summary.txt');
+    const summary = [
+      'NeuroSim baseline export summary',
+      `ticks: ${replayTicks.length}`,
+      `dt_sec: ${dtSec}`,
+      `olfactoryBaselineHz: ${olfactoryBaselineHz}`,
+      `mechanoHz: ${mechanoHz}`,
+      `thermoHz: ${thermoHz}`,
+      `hygroHz: ${hygroHz}`,
+      `gustatoryHz: ${gustatoryHz}`,
+      `overallSpikeEvents: ${overallSpikeEvents}`,
+      `overallUniqueFiredNeurons: ${overallUnique.size}`,
+      `epgSpikeEvents: ${epgSpikeEvents}`,
+      `epgUniqueFiredNeurons: ${epgUnique.size}`,
+      `forcedSpikeEvents: ${JSON.stringify(forcedSpikeEvents)}`,
+      `outputReplayPath: ${outPath}`,
+    ];
+    fs.writeFileSync(summaryPath, `${summary.join('\n')}\n`, 'utf8');
+    res.json({
+      ok: true,
+      ticks: replayTicks.length,
+      outPath,
+      summaryPath,
+      overallSpikeEvents,
+      overallUniqueFiredNeurons: overallUnique.size,
+      epgSpikeEvents,
+      epgUniqueFiredNeurons: epgUnique.size,
+      forcedSpikeEvents,
+    });
+  } catch (err) {
+    console.error('[neurosim-baseline] export error:', err);
+    res.status(500).json({ error: (err as Error).message });
+  }
 });
 
 app.get('/api/world', (_, res) => res.json(getWorld()));

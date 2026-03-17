@@ -349,6 +349,8 @@ export interface StepManyItem {
   simId: number;
   dt: number;
   includeActivity?: boolean;
+  olfactoryBaselineRateHz?: number;
+  forcedSpikes?: string[];
   fly: {
     x: number;
     y: number;
@@ -383,6 +385,12 @@ export interface StepManyResultItem {
   recurrentMs?: number;
   lifMs?: number;
   readoutMs?: number;
+}
+
+export interface ReplayTick {
+  tick: number;
+  time_sec: number;
+  spikes: string[];
 }
 
 /** Lightweight handshake: verify brain-service is reachable. */
@@ -542,6 +550,8 @@ export async function stepMany(
         },
         sources: item.sources,
         include_activity: item.includeActivity ?? true,
+        olfactory_baseline_rate_hz: item.olfactoryBaselineRateHz,
+        forced_spikes: item.forcedSpikes ?? [],
       })),
     },
   });
@@ -583,6 +593,44 @@ export async function stepMany(
     });
   }
   return out;
+}
+
+export async function runReplayBatch(params: {
+  simId: number;
+  dt: number;
+  startTick: number;
+  count: number;
+  olfactoryBaselineRateHz?: number;
+  forcedSpikesByStep?: string[][];
+}): Promise<ReplayTick[]> {
+  const steps = Array.from({ length: params.count }, (_, i) => ({
+    sim_id: params.simId,
+    dt: params.dt,
+    include_activity: true,
+    olfactory_baseline_rate_hz: params.olfactoryBaselineRateHz,
+    forced_spikes: params.forcedSpikesByStep?.[i] ?? [],
+    fly: {
+      x: 0,
+      y: 0,
+      z: 0.35,
+      heading: 0,
+      t: (params.startTick + i - 1) * params.dt,
+      hunger: 40,
+      health: 100,
+      rest_time_left: 0,
+      dead: false,
+    },
+    sources: [],
+  }));
+  const res = await request<{ results: Array<{ activity_sparse?: Record<string, number> }> }>({
+    method: 'step_many',
+    params: { steps },
+  });
+  return (res.results ?? []).map((item, i) => ({
+    tick: params.startTick + i,
+    time_sec: (params.startTick + i) * params.dt,
+    spikes: Object.keys(item.activity_sparse ?? {}).sort(),
+  }));
 }
 
 export function isSocketAvailable(): boolean {

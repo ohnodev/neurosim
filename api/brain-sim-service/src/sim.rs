@@ -2,15 +2,12 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-#[cfg(feature = "cuda")]
-use crate::gpu::{GpuSimState, GpuStepResult};
 use crate::model_constants::{
     RECURRENT_SCALE, REFRACT_MS, TAU_MEM_MS, TAU_SYN_MS, V_RESET, V_REST, V_THRESH,
 };
 
 const STIM_RATE_HZ: f64 = 200.0;
-const SENSORY_SCALE: f64 = 12.0;
-const MAX_SENSORY_CONDUCTANCE: f64 = 16.0;
+const SENSORY_POISSON_SCALE: f32 = 250.0;
 const ACTIVITY_THRESHOLD: u8 = 1;
 const MOTOR_SCALE: f64 = 0.002;
 const MOTOR_TURN_GAIN: f64 = 220.0;
@@ -30,7 +27,8 @@ const HUNGER_DECAY: f64 = 0.8;
 const HEALTH_DECAY: f64 = 2.5;
 const MOVE_SPEED: f64 = 10.0;
 const BASELINE_EXPLORE: f64 = 0.03;
-const FEEDING_STIM_BONUS: f32 = 0.25;
+const FEEDING_STIM_BONUS: f64 = 0.25;
+const SYNAPTIC_DELAY_MS: f32 = 1.8;
 // Ignore near-zero food distance to avoid singular-like gain when the fly is
 // effectively at the food source (handled separately by consumption logic).
 const MIN_FOOD_DISTANCE: f64 = 1.0;
@@ -38,6 +36,7 @@ const MIN_FOOD_DISTANCE: f64 = 1.0;
 pub struct BrainSim {
     n: usize,
     neuron_ids: Vec<String>,
+    neuron_index_by_id: HashMap<String, usize>,
     edges_pre: Vec<u32>,
     edges_post: Vec<u32>,
     edges_weight: Vec<f32>,
@@ -50,16 +49,23 @@ pub struct BrainSim {
     motor_unknown: Vec<u32>,
     v: Vec<f32>,
     g: Vec<f32>,
+    g_next: Vec<f32>,
+    syn_input: Vec<f32>,
+    delay_buffer: Vec<f32>,
+    delay_head: usize,
+    delay_len: usize,
     refractory: Vec<u16>,
     spikes: Vec<u8>,
     viewer_indices: Vec<u32>,
     max_activity_entries: usize,
     fly_time_left_sec: f64,
     motor_turn_ema: f64,
-    #[cfg(feature = "cuda")]
-    gpu_state: Option<GpuSimState>,
-    #[cfg(feature = "cuda")]
-    cuda_only: bool,
+    rng_state: u64,
+    stim_log_every: u64,
+    step_counter: u64,
+    olf_poisson_total: u64,
+    forced_spikes_total: u64,
+    network_spikes_total: u64,
 }
 
 pub struct FlyInput {
@@ -108,18 +114,44 @@ pub struct FlyStepOutput {
 }
 
 struct SensoryDrive {
-    left: f32,
-    right: f32,
-    center: f32,
+    left_rate_hz: f64,
+    right_rate_hz: f64,
+    center_rate_hz: f64,
 }
 
 impl BrainSim {
+    fn compute_synaptic_delay_steps(dt_sec: f64) -> usize {
+        let dt_ms = dt_sec * 1000.0;
+        if !dt_ms.is_finite() || dt_ms <= 0.0 {
+            return 0;
+        }
+        ((SYNAPTIC_DELAY_MS as f64) / dt_ms).round().max(0.0) as usize
+    }
+
+    fn ensure_delay_queue_for_dt(&mut self, dt_sec: f64) {
+        let delay_steps = Self::compute_synaptic_delay_steps(dt_sec);
+        let desired_len = delay_steps.saturating_add(1);
+        if self.delay_len == desired_len {
+            return;
+        }
+        self.delay_len = desired_len;
+        self.delay_head = 0;
+        self.delay_buffer = vec![0.0f32; self.n * desired_len];
+    }
+
     fn readout_activity_cap() -> usize {
         let parsed = std::env::var("NEUROSIM_ACTIVITY_CAP")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(10_000);
         parsed.max(1)
+    }
+
+    fn stim_log_interval() -> u64 {
+        std::env::var("NEUROSIM_STIM_LOG_EVERY")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(100)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -178,6 +210,10 @@ impl BrainSim {
         let n = neuron_ids.len();
         let v = vec![V_REST; n];
         let g = vec![0.0f32; n];
+        let g_next = vec![0.0f32; n];
+        let syn_input = vec![0.0f32; n];
+        let delay_len = Self::compute_synaptic_delay_steps(0.001).saturating_add(1);
+        let delay_buffer = vec![0.0f32; n * delay_len];
         let refractory = vec![0u16; n];
         let spikes = vec![0u8; n];
         let mut sanitized_viewer: Vec<u32> = if viewer_indices.is_empty() {
@@ -194,21 +230,15 @@ impl BrainSim {
             sanitized_viewer = (0..n as u32).collect();
         }
         let max_activity_entries = Self::readout_activity_cap();
-        #[cfg(feature = "cuda")]
-        let cuda_only = std::env::var("NEUROSIM_MODE").as_deref() == Ok("cuda")
-            || std::env::var("USE_CUDA").as_deref() == Ok("1");
-        #[cfg(feature = "cuda")]
-        let gpu_state = if cuda_only {
-            match GpuSimState::new(n, &edges_pre, &edges_post, &edges_weight, &v, &g, &refractory, &spikes) {
-                Some(gpu) => Some(gpu),
-                None => panic!("[brain-service] CUDA required but GPU init failed"),
-            }
-        } else {
-            None
-        };
+        let neuron_index_by_id = neuron_ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (id.clone(), i))
+            .collect();
         Self {
             n,
             neuron_ids,
+            neuron_index_by_id,
             edges_pre,
             edges_post,
             edges_weight,
@@ -221,16 +251,23 @@ impl BrainSim {
             motor_unknown,
             v,
             g,
+            g_next,
+            syn_input,
+            delay_buffer,
+            delay_head: 0,
+            delay_len,
             refractory,
             spikes,
             viewer_indices: sanitized_viewer,
             max_activity_entries,
             fly_time_left_sec: FLY_TIME_MAX,
             motor_turn_ema: 0.0,
-            #[cfg(feature = "cuda")]
-            gpu_state,
-            #[cfg(feature = "cuda")]
-            cuda_only,
+            rng_state: 0x9E3779B97F4A7C15u64,
+            stim_log_every: Self::stim_log_interval(),
+            step_counter: 0,
+            olf_poisson_total: 0,
+            forced_spikes_total: 0,
+            network_spikes_total: 0,
         }
     }
 
@@ -267,12 +304,12 @@ impl BrainSim {
         a
     }
 
-    fn sensory_drive(&self, dt: f64, fly: &FlyInput, sources: &[SourceInput]) -> SensoryDrive {
+    fn sensory_drive(&self, fly: &FlyInput, sources: &[SourceInput]) -> SensoryDrive {
         if self.sensory_indices.is_empty() {
             return SensoryDrive {
-                left: 0.0,
-                right: 0.0,
-                center: 0.0,
+                left_rate_hz: 0.0,
+                right_rate_hz: 0.0,
+                center_rate_hz: 0.0,
             };
         }
         let hungry = fly.hunger <= 90.0;
@@ -311,30 +348,67 @@ impl BrainSim {
             right_modulation += intensity * rightness;
             center_modulation += intensity * (1.0 - 0.4 * lateral.abs());
         }
-        let to_strength = |modulation: f64| -> f32 {
+        let to_rate_hz = |modulation: f64| -> f64 {
             if modulation <= 0.0 {
                 return 0.0;
             }
-            let rate_hz = if hungry && modulation > 0.0 {
+            let mut rate_hz = if hungry && modulation > 0.0 {
                 (50.0 + modulation * STIM_RATE_HZ).min(STIM_RATE_HZ)
             } else if full {
                 30.0
             } else {
                 50.0
             };
-            let base = ((rate_hz / STIM_RATE_HZ) * SENSORY_SCALE * (dt / (1.0 / 30.0)))
-                .min(MAX_SENSORY_CONDUCTANCE) as f32;
             if near_food {
-                (base + FEEDING_STIM_BONUS).min(MAX_SENSORY_CONDUCTANCE as f32)
-            } else {
-                base
+                rate_hz = (rate_hz + STIM_RATE_HZ * FEEDING_STIM_BONUS).min(STIM_RATE_HZ);
             }
+            rate_hz
         };
         SensoryDrive {
-            left: to_strength(left_modulation),
-            right: to_strength(right_modulation),
-            center: to_strength(center_modulation),
+            left_rate_hz: to_rate_hz(left_modulation),
+            right_rate_hz: to_rate_hz(right_modulation),
+            center_rate_hz: to_rate_hz(center_modulation),
         }
+    }
+
+    fn next_uniform(state: &mut u64) -> f64 {
+        // xorshift64* PRNG. Deterministic and fast, good enough for Poisson sampling.
+        let mut x = *state;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        *state = x;
+        let y = x.wrapping_mul(0x2545F4914F6CDD1D);
+        (y as f64) / (u64::MAX as f64)
+    }
+
+    fn apply_poisson_stimulus(
+        indices: &[u32],
+        rate_hz: f64,
+        dt_sec: f64,
+        spike_amp: f32,
+        rng_state: &mut u64,
+        syn_input: &mut [f32],
+    ) -> usize {
+        if rate_hz <= 0.0 || indices.is_empty() {
+            return 0;
+        }
+        let p = (rate_hz * dt_sec).clamp(0.0, 1.0);
+        if p <= 0.0 {
+            return 0;
+        }
+        let mut spikes_applied = 0usize;
+        for &idx in indices {
+            let i = idx as usize;
+            if i >= syn_input.len() {
+                continue;
+            }
+            if Self::next_uniform(rng_state) < p {
+                syn_input[i] += spike_amp;
+                spikes_applied += 1;
+            }
+        }
+        spikes_applied
     }
 
     fn run_step_cpu(
@@ -342,63 +416,130 @@ impl BrainSim {
         dt: f64,
         fly: &FlyInput,
         sources: &[SourceInput],
+        olfactory_baseline_rate_hz: Option<f64>,
+        forced_spikes: &[String],
     ) -> (f64, f64) {
+        self.ensure_delay_queue_for_dt(dt);
         let dt_ms = (dt * 1000.0) as f32;
-        let syn_decay = (-dt_ms / TAU_SYN_MS).exp();
+        let syn_time_factor = dt_ms / TAU_SYN_MS;
         let mem_alpha = dt_ms / TAU_MEM_MS;
         let refrac_steps = Self::refrac_steps(dt);
         let t_recurrent = Instant::now();
 
-        for gi in &mut self.g {
-            *gi *= syn_decay;
-        }
+        self.syn_input.fill(0.0);
         for e in 0..self.edges_pre.len() {
             let pre = self.edges_pre[e] as usize;
             let post = self.edges_post[e] as usize;
             if pre < self.n && post < self.n && self.spikes[pre] > 0 {
-                self.g[post] += self.edges_weight[e] * RECURRENT_SCALE;
+                self.syn_input[post] += self.edges_weight[e] * RECURRENT_SCALE;
             }
         }
-        let sensory = self.sensory_drive(dt, fly, sources);
-        if sensory.left > 0.0 {
-            for &idx in &self.sensory_left_indices {
-                let i = idx as usize;
-                if i < self.n {
-                    self.g[i] += sensory.left;
-                }
+        let mut rng_state = self.rng_state;
+        let sensory_spike_amp = SENSORY_POISSON_SCALE * RECURRENT_SCALE;
+        let mut olf_poisson_spikes = 0usize;
+        let used_olfactory_rate_hz =
+            olfactory_baseline_rate_hz.filter(|v| v.is_finite() && *v > 0.0).unwrap_or(0.0);
+        if let Some(rate_hz) = olfactory_baseline_rate_hz.filter(|v| v.is_finite() && *v > 0.0) {
+            olf_poisson_spikes += Self::apply_poisson_stimulus(
+                &self.sensory_left_indices,
+                rate_hz,
+                dt,
+                sensory_spike_amp,
+                &mut rng_state,
+                &mut self.syn_input,
+            );
+            olf_poisson_spikes += Self::apply_poisson_stimulus(
+                &self.sensory_right_indices,
+                rate_hz,
+                dt,
+                sensory_spike_amp,
+                &mut rng_state,
+                &mut self.syn_input,
+            );
+            olf_poisson_spikes += Self::apply_poisson_stimulus(
+                &self.sensory_unknown_indices,
+                rate_hz,
+                dt,
+                sensory_spike_amp,
+                &mut rng_state,
+                &mut self.syn_input,
+            );
+            if self.sensory_left_indices.is_empty()
+                && self.sensory_right_indices.is_empty()
+                && self.sensory_unknown_indices.is_empty()
+            {
+                olf_poisson_spikes += Self::apply_poisson_stimulus(
+                    &self.sensory_indices,
+                    rate_hz,
+                    dt,
+                    sensory_spike_amp,
+                    &mut rng_state,
+                    &mut self.syn_input,
+                );
+            }
+        } else {
+            let sensory = self.sensory_drive(fly, sources);
+            olf_poisson_spikes += Self::apply_poisson_stimulus(
+                &self.sensory_left_indices,
+                sensory.left_rate_hz,
+                dt,
+                sensory_spike_amp,
+                &mut rng_state,
+                &mut self.syn_input,
+            );
+            olf_poisson_spikes += Self::apply_poisson_stimulus(
+                &self.sensory_right_indices,
+                sensory.right_rate_hz,
+                dt,
+                sensory_spike_amp,
+                &mut rng_state,
+                &mut self.syn_input,
+            );
+            let unknown_rate_hz =
+                ((sensory.left_rate_hz + sensory.right_rate_hz + sensory.center_rate_hz) / 3.0)
+                    .max(0.0);
+            olf_poisson_spikes += Self::apply_poisson_stimulus(
+                &self.sensory_unknown_indices,
+                unknown_rate_hz,
+                dt,
+                sensory_spike_amp,
+                &mut rng_state,
+                &mut self.syn_input,
+            );
+            if self.sensory_left_indices.is_empty()
+                && self.sensory_right_indices.is_empty()
+                && self.sensory_unknown_indices.is_empty()
+            {
+                let fallback_hz = sensory
+                    .center_rate_hz
+                    .max(sensory.left_rate_hz.max(sensory.right_rate_hz));
+                olf_poisson_spikes += Self::apply_poisson_stimulus(
+                    &self.sensory_indices,
+                    fallback_hz,
+                    dt,
+                    sensory_spike_amp,
+                    &mut rng_state,
+                    &mut self.syn_input,
+                );
             }
         }
-        if sensory.right > 0.0 {
-            for &idx in &self.sensory_right_indices {
-                let i = idx as usize;
-                if i < self.n {
-                    self.g[i] += sensory.right;
-                }
-            }
+        // Causal external stimulation is handled as explicit forced spikes
+        // below (after LIF integration setup), so recurrent input in subsequent
+        // ticks sees real spike events from these neurons.
+        self.rng_state = rng_state;
+        // EonSystems-style alpha synapse with fixed 1.8ms delay queue.
+        // Conductance update uses delayed input and the previous conductance.
+        let delayed_base = self.delay_head * self.n;
+        let syn_decay = 1.0 - syn_time_factor;
+        for i in 0..self.n {
+            let delayed = self.delay_buffer[delayed_base + i];
+            let refrac_mask = if self.refractory[i] > 0 { 0.0 } else { 1.0 };
+            self.g_next[i] = self.g[i] * syn_decay + delayed * refrac_mask;
+            // Ring-buffer equivalent of torch.roll(-1) + write-to-last:
+            // write current input into the slot we just consumed.
+            self.delay_buffer[delayed_base + i] = self.syn_input[i];
         }
-        let unknown_strength = ((sensory.left + sensory.right + sensory.center) / 3.0).max(0.0);
-        if unknown_strength > 0.0 {
-            for &idx in &self.sensory_unknown_indices {
-                let i = idx as usize;
-                if i < self.n {
-                    self.g[i] += unknown_strength;
-                }
-            }
-        }
-        if self.sensory_left_indices.is_empty()
-            && self.sensory_right_indices.is_empty()
-            && self.sensory_unknown_indices.is_empty()
-        {
-            let fallback = sensory.center.max(sensory.left.max(sensory.right));
-            if fallback > 0.0 {
-                for &idx in &self.sensory_indices {
-                    let i = idx as usize;
-                    if i < self.n {
-                        self.g[i] += fallback;
-                    }
-                }
-            }
-        }
+        self.delay_head = (self.delay_head + 1) % self.delay_len;
         let recurrent_ms = t_recurrent.elapsed().as_secs_f64() * 1000.0;
         let t_lif = Instant::now();
 
@@ -419,6 +560,51 @@ impl BrainSim {
                 self.v[i] = if v_next.is_finite() { v_next } else { V_REST };
             }
         }
+        for i in 0..self.n {
+            if spikes_next[i] > 0 {
+                self.g_next[i] = 0.0;
+            }
+        }
+        let mut forced_spikes_applied = 0usize;
+        if !forced_spikes.is_empty() {
+            for id in forced_spikes {
+                if let Some(&idx) = self.neuron_index_by_id.get(id) {
+                    if idx < self.n {
+                        spikes_next[idx] = 1;
+                        self.v[idx] = V_RESET;
+                        self.refractory[idx] = refrac_steps;
+                        self.g_next[idx] = 0.0;
+                        forced_spikes_applied += 1;
+                    }
+                }
+            }
+        }
+        let network_spikes_step = spikes_next.iter().filter(|&&v| v > 0).count() as u64;
+        self.step_counter = self.step_counter.wrapping_add(1);
+        self.olf_poisson_total = self.olf_poisson_total.saturating_add(olf_poisson_spikes as u64);
+        self.forced_spikes_total = self
+            .forced_spikes_total
+            .saturating_add(forced_spikes_applied as u64);
+        self.network_spikes_total = self.network_spikes_total.saturating_add(network_spikes_step);
+        if self.stim_log_every > 0 && self.step_counter % self.stim_log_every == 0 {
+            eprintln!(
+                "[stim] step={} dt_sec={:.6} olfactory_hz={:.3} olf_pool(L/R/U/all)={}/{}/{}/{} olf_poisson_spikes_step={} forced_spikes_step={} network_spikes_step={} olf_poisson_total={} forced_spikes_total={} network_spikes_total={}",
+                self.step_counter,
+                dt,
+                used_olfactory_rate_hz,
+                self.sensory_left_indices.len(),
+                self.sensory_right_indices.len(),
+                self.sensory_unknown_indices.len(),
+                self.sensory_indices.len(),
+                olf_poisson_spikes,
+                forced_spikes_applied,
+                network_spikes_step,
+                self.olf_poisson_total,
+                self.forced_spikes_total,
+                self.network_spikes_total
+            );
+        }
+        std::mem::swap(&mut self.g, &mut self.g_next);
         self.spikes = spikes_next;
         let lif_ms = t_lif.elapsed().as_secs_f64() * 1000.0;
         (recurrent_ms, lif_ms)
@@ -444,7 +630,7 @@ impl BrainSim {
         StepTiming,
         FlyStepOutput,
     ) {
-        self.step_with_options(dt, fly, sources, true)
+        self.step_with_options(dt, fly, sources, true, None, Vec::new())
     }
 
     pub fn step_with_options(
@@ -453,6 +639,8 @@ impl BrainSim {
         fly: FlyInput,
         sources: Vec<SourceInput>,
         include_activity: bool,
+        olfactory_baseline_rate_hz: Option<f64>,
+        forced_spikes: Vec<String>,
     ) -> (
         Vec<f32>,
         HashMap<String, f64>,
@@ -472,54 +660,11 @@ impl BrainSim {
         let (recurrent_ms, lif_ms) = {
             #[cfg(feature = "cuda")]
             {
-                let sensory = self.sensory_drive(dt, &fly, &sources);
-                if let Some(ref mut gpu) = self.gpu_state {
-                    match gpu.step(
-                        dt as f32,
-                        &self.sensory_left_indices,
-                        &self.sensory_right_indices,
-                        &self.sensory_unknown_indices,
-                        sensory.left.max(0.0),
-                        sensory.right.max(0.0),
-                        ((sensory.left + sensory.right + sensory.center) / 3.0).max(0.0),
-                    ) {
-                        Some(GpuStepResult {
-                            spikes,
-                            recurrent_ms,
-                            lif_ms,
-                        }) => {
-                            if let Some((v, g, refractory)) = gpu.host_state() {
-                                self.v = v;
-                                self.g = g;
-                                self.refractory = refractory;
-                            } else if self.cuda_only {
-                                panic!("[brain-service] CUDA required but GPU state sync failed");
-                            } else {
-                                eprintln!(
-                                    "[brain-service] GPU host_state sync failed; keeping GPU authoritative and retaining gpu_state"
-                                );
-                            }
-                            self.spikes = spikes;
-                            (recurrent_ms, lif_ms)
-                        }
-                        None if self.cuda_only => {
-                            panic!("[brain-service] CUDA required but GPU step failed")
-                        }
-                        None => {
-                            panic!(
-                                "[brain-service] GPU step failed; refusing CPU execution without authoritative GPU state sync"
-                            );
-                        }
-                    }
-                } else if self.cuda_only {
-                    panic!("[brain-service] CUDA required but GPU unavailable");
-                } else {
-                    self.run_step_cpu(dt, &fly, &sources)
-                }
+                self.run_step_cpu(dt, &fly, &sources, olfactory_baseline_rate_hz, &forced_spikes)
             }
             #[cfg(not(feature = "cuda"))]
             {
-                self.run_step_cpu(dt, &fly, &sources)
+                self.run_step_cpu(dt, &fly, &sources, olfactory_baseline_rate_hz, &forced_spikes)
             }
         };
         let kernel_ms = recurrent_ms + lif_ms;

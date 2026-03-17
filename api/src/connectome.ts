@@ -27,9 +27,12 @@ export interface Connectome {
 }
 
 const DATA_DIR = path.resolve(process.cwd(), '..', 'data');
-const FULL_PATH = path.join(DATA_DIR, 'connectome-full.json');
+const SUBSET_ALIGNED_PATH = path.join(DATA_DIR, 'connectome-subset-aligned.json');
 const SUBSET_PATH = path.join(DATA_DIR, 'connectome-subset.json');
-const DEFAULT_PATH = fs.existsSync(FULL_PATH) ? FULL_PATH : SUBSET_PATH;
+const ENV_PATH = process.env.NEUROSIM_CONNECTOME_PATH;
+const DEFAULT_PATH = ENV_PATH
+  ? path.resolve(ENV_PATH)
+  : (fs.existsSync(SUBSET_ALIGNED_PATH) ? SUBSET_ALIGNED_PATH : SUBSET_PATH);
 
 export function loadConnectome(p: string = DEFAULT_PATH): Connectome {
   const buf = fs.readFileSync(p, 'utf-8');
@@ -43,9 +46,9 @@ export function loadConnectome(p: string = DEFAULT_PATH): Connectome {
 export function buildAdjacency(connections: Connection[]): Map<string, { post: string; weight: number }[]> {
   const adj = new Map<string, { post: string; weight: number }[]>();
   for (const c of connections) {
+    if (typeof c.weight !== 'number' || !Number.isFinite(c.weight)) continue;
     const list = adj.get(c.pre) ?? [];
-    const w = typeof c.weight === 'number' && Number.isFinite(c.weight) && c.weight >= 1 ? c.weight : 1;
-    list.push({ post: c.post, weight: w });
+    list.push({ post: c.post, weight: c.weight });
     adj.set(c.pre, list);
   }
   return adj;

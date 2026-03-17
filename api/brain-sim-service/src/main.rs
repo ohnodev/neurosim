@@ -17,19 +17,21 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static NEXT_CONN_ID: AtomicU64 = AtomicU64::new(1);
 static GLOBAL_REQ_ID: AtomicU64 = AtomicU64::new(1);
 static STEP_COUNT: AtomicU64 = AtomicU64::new(0);
+const MAX_FORCED_SPIKES: usize = 4096;
+const MAX_FORCED_SPIKE_ID_LEN: usize = 128;
 
 fn main() {
     let default_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|p| p.parent())
         .and_then(|root| {
-            let full = root.join("data/connectome-full.json");
-            if full.exists() {
-                return Some(full);
+            let parquet = root.join("data/raw/2025_Connectivity_783.parquet");
+            if parquet.exists() {
+                return Some(parquet);
             }
-            let subset = root.join("data/connectome-subset.json");
-            if subset.exists() {
-                return Some(subset);
+            let aligned = root.join("data/connectome-subset-aligned.json");
+            if aligned.exists() {
+                return Some(aligned);
             }
             None
         })
@@ -86,6 +88,9 @@ struct StepParams {
     sim_id: u32,
     dt: f64,
     include_activity: Option<bool>,
+    olfactory_baseline_rate_hz: Option<f64>,
+    #[serde(default)]
+    forced_spikes: Vec<String>,
     fly: FlyJson,
     sources: Vec<SourceJson>,
 }
@@ -230,6 +235,29 @@ struct ErrResp {
     error: String,
 }
 
+fn validate_forced_spikes(forced_spikes: &[String]) -> Result<(), String> {
+    if forced_spikes.len() > MAX_FORCED_SPIKES {
+        return Err(format!(
+            "forced_spikes has {} entries; max {}",
+            forced_spikes.len(),
+            MAX_FORCED_SPIKES
+        ));
+    }
+    for (idx, id) in forced_spikes.iter().enumerate() {
+        let len = id.len();
+        if len == 0 {
+            return Err(format!("forced_spikes[{}] is empty", idx));
+        }
+        if len > MAX_FORCED_SPIKE_ID_LEN {
+            return Err(format!(
+                "forced_spikes[{}] length {} exceeds max {}",
+                idx, len, MAX_FORCED_SPIKE_ID_LEN
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn handle(
     s: &mut UnixStream,
     sims: &Mutex<HashMap<u32, BrainSim>>,
@@ -291,6 +319,17 @@ fn handle(
         let v: serde_json::Value = serde_json::from_str(line)?;
         let p: StepManyParams = serde_json::from_value(v["params"].clone())?;
         let parse_ms = t0.elapsed().as_millis();
+        let mut forced_spikes_validation_error: Option<String> = None;
+        for (i, step) in p.steps.iter().enumerate() {
+            if let Err(err) = validate_forced_spikes(&step.forced_spikes) {
+                forced_spikes_validation_error =
+                    Some(format!("invalid step_many.steps[{}].forced_spikes: {}", i, err));
+                break;
+            }
+        }
+        if let Some(error) = forced_spikes_validation_error {
+            serde_json::to_string(&ErrResp { error })?
+        } else {
         let step_count = p.steps.len();
         let mut all_sources: HashMap<String, SourceJson> = HashMap::new();
         for step in &p.steps {
@@ -364,7 +403,14 @@ fn handle(
                 timing,
                 fly_out,
             ) =
-                sim.step_with_options(step.dt, fly, srcs, include_activity);
+                sim.step_with_options(
+                    step.dt,
+                    fly,
+                    srcs,
+                    include_activity,
+                    step.olfactory_baseline_rate_hz,
+                    step.forced_spikes,
+                );
             compute_ms_sum += timing.compute_ms;
             kernel_ms_sum += timing.kernel_ms;
             recurrent_ms_sum += timing.recurrent_ms;
@@ -442,11 +488,21 @@ fn handle(
         }
         out_json
         }
+        }
     } else if line.contains("\"method\":\"step\"") {
         let t0 = Instant::now();
         let v: serde_json::Value = serde_json::from_str(line)?;
         let p: StepParams = serde_json::from_value(v["params"].clone())?;
         let parse_ms = t0.elapsed().as_millis();
+        if let Err(err) = validate_forced_spikes(&p.forced_spikes) {
+            let err_json = serde_json::to_string(&ErrResp {
+                error: format!("invalid forced_spikes: {}", err),
+            })?;
+            s.write_all(err_json.as_bytes())?;
+            s.write_all(b"\n")?;
+            s.flush()?;
+            continue;
+        }
         let mut g = sims.lock().unwrap();
         let sim = g.get_mut(&p.sim_id);
         let sim = match sim {
@@ -498,7 +554,14 @@ fn handle(
             timing,
             fly_out,
         ) =
-            sim.step_with_options(p.dt, fly, srcs, include_activity);
+            sim.step_with_options(
+                p.dt,
+                fly,
+                srcs,
+                include_activity,
+                p.olfactory_baseline_rate_hz,
+                p.forced_spikes,
+            );
         let compute_ms = timing.compute_ms;
         let mut source_lookup: HashMap<String, (f64, f64)> = HashMap::new();
         for s in &p.sources {

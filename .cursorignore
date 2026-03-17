@@ -1,0 +1,13 @@
+node_modules/
+.git/
+.cursor/
+.pm2/
+logs/**
+data/raw/**
+data/connectome-full.json
+**/*_replay.json
+**/*spikes_per_tick.csv
+**/*spikes_per_tick.json
+**/parity_*.json
+api/dist/
+api/brain-sim-service/target/

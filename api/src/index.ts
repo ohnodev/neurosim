@@ -144,18 +144,18 @@ const CUDA_ONLY = process.env.NEUROSIM_MODE === 'cuda' || process.env.USE_CUDA =
 const PROBE_RETRIES = 10;
 const PROBE_DELAY_MS = 2000;
 
-let backendInfo = { rust: true, gpu: process.env.USE_CUDA === '1' };
+let backendInfo = { engine: 'python-brain', gpu: process.env.USE_CUDA === '1' };
 let probeOk = false;
 for (let i = 0; i < PROBE_RETRIES; i++) {
   try {
     await socketClient.ping();
     console.log('[backend] handshake: API ↔ brain-service OK');
-    backendInfo = { rust: true, gpu: process.env.USE_CUDA === '1' };
+    backendInfo = { engine: 'python-brain', gpu: process.env.USE_CUDA === '1' };
     probeOk = true;
     break;
   } catch (e) {
     if (i === PROBE_RETRIES - 1) {
-      console.error('[backend] Brain service (Unix socket) unavailable after', PROBE_RETRIES, 'retries. Is neurosim-brain running?', e);
+      console.error('[backend] Brain service (Unix socket) unavailable after', PROBE_RETRIES, 'retries. Is python-brain running?', e);
       process.exit(1);
     }
     console.warn('[backend] Brain service not ready, retry', i + 1, '/', PROBE_RETRIES, 'in', PROBE_DELAY_MS, 'ms');
@@ -166,7 +166,9 @@ if (probeOk && CUDA_ONLY && !backendInfo.gpu) {
   console.error('[backend] CUDA mode required but brain-service not using GPU. Refusing to start.');
   process.exit(1);
 }
-console.log(`[backend] brain=unix-socket rust=${backendInfo.rust} gpu=${backendInfo.gpu} mode=${CUDA_ONLY ? 'cuda-only' : 'auto'}`);
+console.log(
+  `[backend] brain=unix-socket engine=${backendInfo.engine} gpu=${backendInfo.gpu} mode=${CUDA_ONLY ? 'cuda-only' : 'auto'}`,
+);
 
 const GROUND_Z = 0.35;
 const INITIAL_SPREAD = 4;
@@ -682,9 +684,8 @@ function startSim(): void {
         const avgJs = rustCalls ? Math.round(jsMs / rustCalls) : 0;
         const avgSocketRoundtrip = batchCalls ? Math.round(socketRoundtripMs / batchCalls) : 0;
         const avgSocketWait = batchCalls ? Math.round(socketWaitMs / batchCalls) : 0;
-        const timingStr = backendInfo.rust
-          ? ` stepMs=${stepMs} jsMs=${jsMs} avgStep=${avgStep} avgJs=${avgJs} maxStep=${maxStepMs} maxJs=${maxJsMs} socketRoundtripMs=${socketRoundtripMs} socketWaitMs=${socketWaitMs} avgSocketRoundtrip=${avgSocketRoundtrip} avgSocketWait=${avgSocketWait} batchCalls=${batchCalls} batchSize=${batchSize} rustCalls=${rustCalls} synthFrames=${FRAMES_PER_BATCH} payloadMs=${buildPayloadMs} schedulerLagMs=${schedulerLagMs} droppedTicks=${droppedSimTicks}`
-          : '';
+        const timingStr =
+          ` stepMs=${stepMs} jsMs=${jsMs} avgStep=${avgStep} avgJs=${avgJs} maxStep=${maxStepMs} maxJs=${maxJsMs} socketRoundtripMs=${socketRoundtripMs} socketWaitMs=${socketWaitMs} avgSocketRoundtrip=${avgSocketRoundtrip} avgSocketWait=${avgSocketWait} batchCalls=${batchCalls} batchSize=${batchSize} simCalls=${rustCalls} synthFrames=${FRAMES_PER_BATCH} payloadMs=${buildPayloadMs} schedulerLagMs=${schedulerLagMs} droppedTicks=${droppedSimTicks}`;
         console.log('[sim] t=', last?.t.toFixed(1), 'flies=', last?.flies.length ?? 0, first ? `first=(${first.x?.toFixed(2)},${first.y?.toFixed(2)})` : '', 'clients=', wsClients.size, 'loopMs=', loopMs, timingStr);
       }
     } finally {
@@ -729,7 +730,7 @@ app.get('/api/connectome', (_, res) => {
 });
 
 app.get('/api/health', (_, res) =>
-  res.json({ ok: true, backend: { rust: backendInfo.rust, gpu: backendInfo.gpu } }));
+  res.json({ ok: true, backend: { engine: backendInfo.engine, gpu: backendInfo.gpu } }));
 
 /** Debug position buffer for smoothness testing; only when DEBUG_POSITIONS=1 */
 const DEBUG_POSITIONS_ENABLED = process.env.DEBUG_POSITIONS === '1';

@@ -4,8 +4,8 @@
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
-    "postinstall": "cd brain-sim-service && (cargo build --release 2>/dev/null || cargo build --release --no-default-features 2>/dev/null) || true",
-    "build:brain-service": "cd brain-sim-service && cargo build --release --features cuda",
+    "postinstall": "echo \"postinstall: python-brain active\"",
+    "build:brain-service": "echo \"brain-sim-service disabled for python-brain cutover\"",
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",

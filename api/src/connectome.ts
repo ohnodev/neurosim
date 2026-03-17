@@ -29,12 +29,12 @@ export interface Connectome {
 const DATA_DIR = path.resolve(process.cwd(), '..', 'data');
 const SUBSET_ALIGNED_PATH = path.join(DATA_DIR, 'connectome-subset-aligned.json');
 const SUBSET_PATH = path.join(DATA_DIR, 'connectome-subset.json');
-const ENV_PATH = process.env.NEUROSIM_CONNECTOME_PATH;
 
-/** Resolve default connectome path without validating (avoids throwing at module load). */
+/** Resolve default connectome path at call-time (avoids throwing at module load). */
 export function resolveDefaultPath(): string {
-  return ENV_PATH
-    ? path.resolve(ENV_PATH)
+  const envPath = process.env.NEUROSIM_CONNECTOME_PATH;
+  return envPath
+    ? path.resolve(envPath)
     : (fs.existsSync(SUBSET_ALIGNED_PATH) ? SUBSET_ALIGNED_PATH : SUBSET_PATH);
 }
 

@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 _default_socket_dir = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "neurosim"
 SOCKET_PATH = Path(os.environ.get("NEUROSIM_BRAIN_SOCKET", str(_default_socket_dir / "neurosim-brain.sock")))
 BASE_SEED = 1598276117
-DEVICE_PREF = "cpu"
+DEVICE_PREF = os.environ.get("NEUROSIM_PYTHON_BRAIN_DEVICE", "cpu")
 _default_fly_brain = (ROOT.parent / "fly-brain-fresh").resolve()
 if not _default_fly_brain.exists():
     _default_fly_brain = (ROOT.parent / "fly-brain").resolve()
@@ -291,6 +291,9 @@ class BrainService:
                 sim.epg_trace = torch.zeros(len(self.viewer_indices), device=self.device)
 
         spike_ids: set[str] = set()
+        total_spike_events_step = 0
+        olfactory_spike_events_step = 0
+        afferent_spike_events_step = 0
         with torch.no_grad():
             for _ in range(substeps):
                 spikes_input = sim.model.poisson(sim.rates, generator=sim.generator)
@@ -335,10 +338,21 @@ class BrainService:
                     sim.epg_trace.add_(epg_now)
                 active = torch.nonzero(sim.spikes[0] > 0, as_tuple=False).flatten().tolist()
                 for i in active:
-                    spike_ids.add(self.neuron_ids[i])
+                    rid = self.neuron_ids[i]
+                    spike_ids.add(rid)
+                    total_spike_events_step += 1
+                    if rid in self.olfactory_set:
+                        olfactory_spike_events_step += 1
+                    if rid in self.afferent_sensory_set:
+                        afferent_spike_events_step += 1
         for rid in forced_spikes:
             if rid in self.id_to_index:
                 spike_ids.add(rid)
+                total_spike_events_step += 1
+                if rid in self.olfactory_set:
+                    olfactory_spike_events_step += 1
+                if rid in self.afferent_sensory_set:
+                    afferent_spike_events_step += 1
 
         step_olfactory_ids = sorted([rid for rid in spike_ids if rid in self.olfactory_set])
         step_afferent_ids = sorted([rid for rid in spike_ids if rid in self.afferent_sensory_set])
@@ -383,7 +397,7 @@ class BrainService:
             "recurrent_ms": elapsed_ms,
             "lif_ms": 0.0,
             "readout_ms": 0.0,
-            "total_spike_events_step": len(spike_ids),
+            "total_spike_events_step": total_spike_events_step,
             "spike_ids_step": sorted(spike_ids),
             "ring_epg_plasticity_enabled": plasticity_enabled,
             "ring_epg_learning_active": learning_active,
@@ -391,8 +405,8 @@ class BrainService:
                 float(sim.ring_epg_weights.mean().item())
                 if sim.ring_epg_weights is not None else 0.0
             ),
-            "olfactory_spike_events_step": len(step_olfactory_ids),
-            "afferent_spike_events_step": len(step_afferent_ids),
+            "olfactory_spike_events_step": olfactory_spike_events_step,
+            "afferent_spike_events_step": afferent_spike_events_step,
             "olfactory_spike_ids_step": step_olfactory_ids,
             "afferent_spike_ids_step": step_afferent_ids,
         }
@@ -498,10 +512,17 @@ class BrainService:
                 if record_ticks:
                     spike_idx = sim.spikes[0].nonzero(as_tuple=False).flatten().tolist()
                     spike_ids = sorted([self.neuron_ids[i] for i in spike_idx])
+                    afferent_ids = sorted([rid for rid in spike_ids if rid in self.afferent_sensory_set])
+                    olfactory_ids = sorted([rid for rid in spike_ids if rid in self.olfactory_set])
                     ticks_out.append({
                         "tick": step + 1,
                         "time_sec": round((step + 1) * dt, 6),
                         "spikes": spike_ids,
+                        "totalSpikeEventsStep": len(spike_ids),
+                        "afferentSpikeEventsStep": len(afferent_ids),
+                        "olfactorySpikeEventsStep": len(olfactory_ids),
+                        "afferentSpikeIdsStep": afferent_ids,
+                        "olfactorySpikeIdsStep": olfactory_ids,
                     })
         elapsed = time.perf_counter() - t0
         duration_sec = num_steps * dt
@@ -518,6 +539,7 @@ class BrainService:
 
 
 service = BrainService()
+service_lock = asyncio.Lock()
 
 
 async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -533,7 +555,8 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                 req = json.loads(line)
                 if not isinstance(req, dict):
                     raise ValueError("request must be a JSON object")
-                resp = await asyncio.to_thread(service.handle, req)
+                async with service_lock:
+                    resp = await asyncio.to_thread(service.handle, req)
             except Exception as exc:  # noqa: BLE001
                 resp = {"error": str(exc)}
             writer.write((json.dumps(resp, separators=(",", ":")) + "\n").encode("utf-8"))

@@ -394,8 +394,8 @@ export interface ReplayTick {
   totalSpikeEventsStep?: number;
   afferentSpikeEventsStep?: number;
   olfactorySpikeEventsStep?: number;
-  afferentSpikeIdsStep?: number[];
-  olfactorySpikeIdsStep?: number[];
+  afferentSpikeIdsStep?: string[];
+  olfactorySpikeIdsStep?: string[];
 }
 
 /** Lightweight handshake: verify brain-service is reachable. */

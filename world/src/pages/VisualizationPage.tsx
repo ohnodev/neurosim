@@ -634,17 +634,20 @@ function buildScene(
     isDownstreamByIndex[i] = Boolean(neuron.is_epg_downstream);
     isDelta7ByIndex[i] = Boolean(neuron.is_delta7);
     if (neuron.upstream_epg_bin_index_0_7 != null) {
-      const b = Math.max(0, Math.min(EPG_COMPASS_BINS - 1, neuron.upstream_epg_bin_index_0_7));
+      const value = neuron.upstream_epg_bin_index_0_7;
+      const b = Math.max(0, Math.min(EPG_COMPASS_BINS - 1, Math.round((value / 7) * (EPG_COMPASS_BINS - 1))));
       upstreamBinByIndex[i] = b;
       upstreamBinPopulation[b] += 1;
     }
     if (neuron.downstream_epg_bin_index_0_7 != null) {
-      const b = Math.max(0, Math.min(EPG_COMPASS_BINS - 1, neuron.downstream_epg_bin_index_0_7));
+      const value = neuron.downstream_epg_bin_index_0_7;
+      const b = Math.max(0, Math.min(EPG_COMPASS_BINS - 1, Math.round((value / 7) * (EPG_COMPASS_BINS - 1))));
       downstreamBinByIndex[i] = b;
       downstreamBinPopulation[b] += 1;
     }
     if (neuron.delta7_epg_bin_index_0_7 != null) {
-      const b = Math.max(0, Math.min(EPG_COMPASS_BINS - 1, neuron.delta7_epg_bin_index_0_7));
+      const value = neuron.delta7_epg_bin_index_0_7;
+      const b = Math.max(0, Math.min(EPG_COMPASS_BINS - 1, Math.round((value / 7) * (EPG_COMPASS_BINS - 1))));
       delta7BinByIndex[i] = b;
       delta7BinPopulation[b] += 1;
     }
@@ -1458,9 +1461,7 @@ export default function VisualizationPage() {
   const neurons = useMemo(() => {
     const base = replay?.neurons ?? [];
     const labelMap = epgLabelMap && epgLabelMap.size > 0 ? epgLabelMap : null;
-    return base
-      .filter((n) => !labelMap || labelMap.has(n.root_id))
-      .map((n) => {
+    return base.map((n) => {
         const sideFromMap = labelMap?.get(n.root_id)?.startsWith('L') ? 'left' : labelMap?.get(n.root_id)?.startsWith('R') ? 'right' : undefined;
         const effLabel = getEffectiveEpgLabel(n, labelMap ?? null);
         const side = sideFromMap ?? (effLabel ? (effLabel.startsWith('L') ? 'left' : 'right') : n.side);

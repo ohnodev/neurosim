@@ -19,7 +19,8 @@ import socket
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SOCKET_PATH = Path(os.environ.get("NEUROSIM_BRAIN_SOCKET", "/tmp/neurosim-brain.sock"))
+_default_socket_dir = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / "neurosim"
+SOCKET_PATH = Path(os.environ.get("NEUROSIM_BRAIN_SOCKET", str(_default_socket_dir / "neurosim-brain.sock")))
 
 # Paper: 0.1 ms timestep, 1,000 ms per trial. We do 1 trial (paper does 30 and averages).
 DT_MS = 0.1  # timestep in ms — must match paper and service NEUROSIM_PYTHON_BRAIN_DT_MS

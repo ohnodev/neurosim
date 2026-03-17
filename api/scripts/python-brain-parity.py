@@ -5,6 +5,7 @@ import json
 import os
 import socket
 from pathlib import Path
+from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -54,16 +55,29 @@ def load_epg_ids() -> set[str]:
 def load_olfactory_afferent_ids() -> set[str]:
     parsed = json.loads(OLFACTORY_AFFERENTS_PATH.read_text("utf-8"))
     out: set[str] = set()
-    if isinstance(parsed, list):
-        for row in parsed:
+
+    def add_ids(entries: Any) -> None:
+        if not isinstance(entries, list):
+            if isinstance(entries, (str, int)):
+                rid = str(entries)
+                if rid:
+                    out.add(rid)
+            return
+        for row in entries:
             if isinstance(row, dict):
-                rid = str(row.get("root_id", ""))
+                rid = str(row.get("root_id", row.get("id", "")))
                 if rid:
                     out.add(rid)
             else:
                 rid = str(row)
                 if rid:
                     out.add(rid)
+
+    if isinstance(parsed, list):
+        add_ids(parsed)
+    elif isinstance(parsed, dict):
+        for val in parsed.values():
+            add_ids(val)
     return out
 
 
@@ -152,9 +166,7 @@ def run_python_ticks(epg_ids: set[str]) -> dict:
                 epg_ticks.append(sorted(ids))
                 olfactory_ids = [str(rid) for rid in item.get("olfactory_spike_ids_step", [])]
                 olfactory_ticks.append(sorted(set(olfactory_ids)))
-                tick_ids = [str(rid) for rid in item.get("spike_ids", [])]
-                if not tick_ids:
-                    tick_ids = [str(rid) for rid in item.get("activity_sparse", {}).keys()]
+                tick_ids = sorted(set(str(rid) for rid in (item.get("spike_ids_step", []) or item.get("spike_ids", []) or list(item.get("activity_sparse", {}).keys()))))
                 tick_events = int(item.get("total_spike_events_step", len(tick_ids)))
                 all_event_count += tick_events
                 all_event_counts_by_tick.append(tick_events)
@@ -169,6 +181,10 @@ def run_python_ticks(epg_ids: set[str]) -> dict:
             "all_ids_by_tick": all_ids_by_tick,
         }
     finally:
+        try:
+            rpc.request("reset", {})
+        except Exception:
+            pass
         rpc.close()
 
 

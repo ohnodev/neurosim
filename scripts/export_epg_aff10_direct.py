@@ -24,7 +24,7 @@ DT_SEC = DT_MS / 1000.0
 HZ = float(os.environ.get("NEUROSIM_EXPORT_STIM_HZ", "600.0"))
 OLFACTORY_BASE_HZ = float(os.environ.get("NEUROSIM_EXPORT_OLFACTORY_BASE_HZ", "0.0"))
 SEED = int(os.environ.get("NEUROSIM_EXPORT_SEED", "123"))
-SCENARIO_ID = f"neurosim_epg_aff10_600hz_olf{int(OLFACTORY_BASE_HZ)}hz_{TICKS}ticks"
+SCENARIO_ID = f"neurosim_epg_aff10_{int(HZ)}hz_olf{int(OLFACTORY_BASE_HZ)}hz_{TICKS}ticks"
 
 AFF10 = [
     720575940626768442,
@@ -61,6 +61,10 @@ def main() -> int:
     out_timeline = ROOT / "world" / "public" / f"{SCENARIO_ID}_timeline.csv"
     out_aff = ROOT / "world" / "public" / f"{SCENARIO_ID}_stimulated-afferents.csv"
     out_summary = ROOT / "logs" / f"{SCENARIO_ID}_summary.json"
+    out_replay.parent.mkdir(parents=True, exist_ok=True)
+    out_timeline.parent.mkdir(parents=True, exist_ok=True)
+    out_aff.parent.mkdir(parents=True, exist_ok=True)
+    out_summary.parent.mkdir(parents=True, exist_ok=True)
 
     epg_entries = json.loads((ROOT / "data" / "epg-tile-map.json").read_text(encoding="utf-8"))["entries"]
     epg_ids = sorted({int(e["root_id"]) for e in epg_entries})

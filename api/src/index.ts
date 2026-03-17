@@ -831,12 +831,15 @@ app.post('/api/neurosim-baseline/export', async (req, res) => {
   try {
     const startedAt = Date.now();
     const ticks = Math.max(1, Math.min(20_000, Number(req.body?.ticks ?? 1000)));
-    const requestedDtSec = Number(req.body?.dt_sec ?? req.body?.dtSec ?? 0.001);
+    const rawDt = req.body?.dt_sec ?? req.body?.dtSec ?? 0.001;
+    const requestedDtSec = Number(rawDt);
+    const defaultDtSec = 0.001;
+    const validRequestedDt = Number.isFinite(requestedDtSec) ? requestedDtSec : defaultDtSec;
     // Fly-Brain exact mode is default for this export path.
     const flyBrainExact = req.body?.flyBrainExact !== false;
     const dtSec = flyBrainExact
       ? 0.0001
-      : Math.max(0.0001, Math.min(0.1, requestedDtSec));
+      : Math.max(0.0001, Math.min(0.1, validRequestedDt));
     const olfactoryBaselineHz = Math.max(0, Number(req.body?.olfactoryBaselineHz ?? 20));
     const mechanoHz = Math.max(0, Number(req.body?.mechanoHz ?? 0));
     const thermoHz = Math.max(0, Number(req.body?.thermoHz ?? 0.5));
@@ -971,10 +974,12 @@ app.post('/api/neurosim-baseline/export', async (req, res) => {
     let observedOlfactorySpikeEvents = 0;
     for (const t of replayTicks) {
       overallSpikeEvents += t.totalSpikeEventsStep ?? t.spikes.length;
-      observedAfferentSpikeEvents += t.afferentSpikeEventsStep ?? 0;
-      observedOlfactorySpikeEvents += t.olfactorySpikeEventsStep ?? 0;
-      for (const id of t.afferentSpikeIdsStep ?? []) observedAfferentUnique.add(id);
-      for (const id of t.olfactorySpikeIdsStep ?? []) observedOlfactoryUnique.add(id);
+      const afferentFromSpikes = t.spikes.filter((id) => afferentPoolSet.has(id));
+      const olfactoryFromSpikes = t.spikes.filter((id) => olfactoryAfferentSet.has(id));
+      observedAfferentSpikeEvents += t.afferentSpikeEventsStep ?? afferentFromSpikes.length;
+      observedOlfactorySpikeEvents += t.olfactorySpikeEventsStep ?? olfactoryFromSpikes.length;
+      for (const id of t.afferentSpikeIdsStep ?? afferentFromSpikes) observedAfferentUnique.add(id);
+      for (const id of t.olfactorySpikeIdsStep ?? olfactoryFromSpikes) observedOlfactoryUnique.add(id);
       for (const id of t.spikes) {
         overallUnique.add(id);
         if (epgIds.has(id)) {

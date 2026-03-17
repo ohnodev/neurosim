@@ -62,9 +62,10 @@ def main() -> int:
         print("PEN_HZ must be positive", file=sys.stderr)
         return 1
 
-    replay_filename = f"neurosim_pen{int(pen_hz)}hz_1s_replay.json"
+    pen_hz_str = str(pen_hz).replace(".", "p")
+    replay_filename = f"neurosim_pen{pen_hz_str}hz_1s_replay.json"
     out_replay = ROOT / "world" / "public" / replay_filename
-    scenario = f"neurosim_pen{int(pen_hz)}hz_1s"
+    scenario = f"neurosim_pen{pen_hz_str}hz_1s"
 
     epg_path = ROOT / "data" / "epg-tile-map.json"
     class_path = ROOT / "data" / "raw" / "classification.csv"

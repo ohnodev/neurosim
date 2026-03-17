@@ -1590,6 +1590,10 @@ export default function VisualizationPage() {
         setPlaying(false);
       } catch (err) {
         if (!active) return;
+        setFetchedReplay(null);
+        setTemplateReplay(null);
+        setCurrentTick(0);
+        setPlaying(false);
         setError((err as Error).message);
       }
     };

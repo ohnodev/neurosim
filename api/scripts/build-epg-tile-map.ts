@@ -24,7 +24,7 @@ type EpgTileEntry = {
   parsed_from: string;
 };
 
-const ROOT = path.resolve(process.cwd(), '..');
+const ROOT = path.resolve(__dirname, '..', '..');
 const RAW_DIR = path.join(ROOT, 'data', 'raw');
 const CLASSIFICATION_PATH = path.join(RAW_DIR, 'classification.csv');
 const PROCESSED_LABELS_PATH = path.join(RAW_DIR, 'processed_labels.csv');

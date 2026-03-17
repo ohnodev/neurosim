@@ -17,6 +17,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static NEXT_CONN_ID: AtomicU64 = AtomicU64::new(1);
 static GLOBAL_REQ_ID: AtomicU64 = AtomicU64::new(1);
 static STEP_COUNT: AtomicU64 = AtomicU64::new(0);
+const MAX_FORCED_SPIKES: usize = 4096;
+const MAX_FORCED_SPIKE_ID_LEN: usize = 128;
 
 fn main() {
     let default_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -233,6 +235,29 @@ struct ErrResp {
     error: String,
 }
 
+fn validate_forced_spikes(forced_spikes: &[String]) -> Result<(), String> {
+    if forced_spikes.len() > MAX_FORCED_SPIKES {
+        return Err(format!(
+            "forced_spikes has {} entries; max {}",
+            forced_spikes.len(),
+            MAX_FORCED_SPIKES
+        ));
+    }
+    for (idx, id) in forced_spikes.iter().enumerate() {
+        let len = id.len();
+        if len == 0 {
+            return Err(format!("forced_spikes[{}] is empty", idx));
+        }
+        if len > MAX_FORCED_SPIKE_ID_LEN {
+            return Err(format!(
+                "forced_spikes[{}] length {} exceeds max {}",
+                idx, len, MAX_FORCED_SPIKE_ID_LEN
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn handle(
     s: &mut UnixStream,
     sims: &Mutex<HashMap<u32, BrainSim>>,
@@ -294,6 +319,17 @@ fn handle(
         let v: serde_json::Value = serde_json::from_str(line)?;
         let p: StepManyParams = serde_json::from_value(v["params"].clone())?;
         let parse_ms = t0.elapsed().as_millis();
+        let mut forced_spikes_validation_error: Option<String> = None;
+        for (i, step) in p.steps.iter().enumerate() {
+            if let Err(err) = validate_forced_spikes(&step.forced_spikes) {
+                forced_spikes_validation_error =
+                    Some(format!("invalid step_many.steps[{}].forced_spikes: {}", i, err));
+                break;
+            }
+        }
+        if let Some(error) = forced_spikes_validation_error {
+            serde_json::to_string(&ErrResp { error })?
+        } else {
         let step_count = p.steps.len();
         let mut all_sources: HashMap<String, SourceJson> = HashMap::new();
         for step in &p.steps {
@@ -452,11 +488,21 @@ fn handle(
         }
         out_json
         }
+        }
     } else if line.contains("\"method\":\"step\"") {
         let t0 = Instant::now();
         let v: serde_json::Value = serde_json::from_str(line)?;
         let p: StepParams = serde_json::from_value(v["params"].clone())?;
         let parse_ms = t0.elapsed().as_millis();
+        if let Err(err) = validate_forced_spikes(&p.forced_spikes) {
+            let err_json = serde_json::to_string(&ErrResp {
+                error: format!("invalid forced_spikes: {}", err),
+            })?;
+            s.write_all(err_json.as_bytes())?;
+            s.write_all(b"\n")?;
+            s.flush()?;
+            continue;
+        }
         let mut g = sims.lock().unwrap();
         let sim = g.get_mut(&p.sim_id);
         let sim = match sim {

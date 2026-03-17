@@ -28,9 +28,7 @@ const HEALTH_DECAY: f64 = 2.5;
 const MOVE_SPEED: f64 = 10.0;
 const BASELINE_EXPLORE: f64 = 0.03;
 const FEEDING_STIM_BONUS: f64 = 0.25;
-const EONSYSTEMS_DT_MS: f32 = 0.1;
 const SYNAPTIC_DELAY_MS: f32 = 1.8;
-const SYNAPTIC_DELAY_STEPS: usize = (SYNAPTIC_DELAY_MS / EONSYSTEMS_DT_MS) as usize;
 // Ignore near-zero food distance to avoid singular-like gain when the fly is
 // effectively at the food source (handled separately by consumption logic).
 const MIN_FOOD_DISTANCE: f64 = 1.0;
@@ -117,6 +115,25 @@ struct SensoryDrive {
 }
 
 impl BrainSim {
+    fn compute_synaptic_delay_steps(dt_sec: f64) -> usize {
+        let dt_ms = dt_sec * 1000.0;
+        if !dt_ms.is_finite() || dt_ms <= 0.0 {
+            return 0;
+        }
+        ((SYNAPTIC_DELAY_MS as f64) / dt_ms).round().max(0.0) as usize
+    }
+
+    fn ensure_delay_queue_for_dt(&mut self, dt_sec: f64) {
+        let delay_steps = Self::compute_synaptic_delay_steps(dt_sec);
+        let desired_len = delay_steps.saturating_add(1);
+        if self.delay_len == desired_len {
+            return;
+        }
+        self.delay_len = desired_len;
+        self.delay_head = 0;
+        self.delay_buffer = vec![0.0f32; self.n * desired_len];
+    }
+
     fn readout_activity_cap() -> usize {
         let parsed = std::env::var("NEUROSIM_ACTIVITY_CAP")
             .ok()
@@ -183,7 +200,7 @@ impl BrainSim {
         let g = vec![0.0f32; n];
         let g_next = vec![0.0f32; n];
         let syn_input = vec![0.0f32; n];
-        let delay_len = SYNAPTIC_DELAY_STEPS + 1;
+        let delay_len = Self::compute_synaptic_delay_steps(0.001).saturating_add(1);
         let delay_buffer = vec![0.0f32; n * delay_len];
         let refractory = vec![0u16; n];
         let spikes = vec![0u8; n];
@@ -382,6 +399,7 @@ impl BrainSim {
         olfactory_baseline_rate_hz: Option<f64>,
         forced_spikes: &[String],
     ) -> (f64, f64) {
+        self.ensure_delay_queue_for_dt(dt);
         let dt_ms = (dt * 1000.0) as f32;
         let syn_time_factor = dt_ms / TAU_SYN_MS;
         let mem_alpha = dt_ms / TAU_MEM_MS;

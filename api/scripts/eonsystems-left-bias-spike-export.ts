@@ -273,27 +273,27 @@ function writeOutputs(
   hygroAdded: number,
   thermoAdded: number,
   joeLeftAdded: number,
-): void {
+): Promise<void> {
   fs.mkdirSync(LOGS_DIR, { recursive: true });
   fs.writeFileSync(OUT_JSON, `${JSON.stringify(replay, null, 2)}\n`, 'utf8');
 
-  const csvLines = [
-    [
-      'tick',
-      'time_sec',
-      'spike_order',
-      'root_id',
-      'flow',
-      'super_class',
-      'class',
-      'sub_class',
-      'cell_type',
-      'hemibrain_type',
-      'hemilineage',
-      'side',
-      'nerve',
-    ].join(','),
-  ];
+  const csvStream = fs.createWriteStream(OUT_CSV, { encoding: 'utf8' });
+  csvStream.write([
+    'tick',
+    'time_sec',
+    'spike_order',
+    'root_id',
+    'flow',
+    'super_class',
+    'class',
+    'sub_class',
+    'cell_type',
+    'hemibrain_type',
+    'hemilineage',
+    'side',
+    'nerve',
+  ].join(','));
+  csvStream.write('\n');
   let totalSpikes = 0;
   let firstActiveTick = -1;
   let lastActiveTick = -1;
@@ -306,7 +306,7 @@ function writeOutputs(
     for (let i = 0; i < tick.spikes.length; i += 1) {
       const rootId = tick.spikes[i]!;
       const meta = cls.get(rootId);
-      csvLines.push([
+      csvStream.write([
         String(tick.tick),
         tick.time_sec.toFixed(6),
         String(i),
@@ -321,9 +321,13 @@ function writeOutputs(
         meta?.side ?? '',
         meta?.nerve ?? '',
       ].join(','));
+      csvStream.write('\n');
     }
   }
-  fs.writeFileSync(OUT_CSV, `${csvLines.join('\n')}\n`, 'utf8');
+  await new Promise<void>((resolve, reject) => {
+    csvStream.on('error', reject);
+    csvStream.end(() => resolve());
+  });
 
   const leftOlfactory = [...cls.values()].filter(
     (r) => r.class === 'olfactory' && r.side === 'left' && r.flow === 'afferent',
@@ -376,7 +380,7 @@ async function main(): Promise<void> {
     .map((r) => r.root_id);
   const { hygroAdded, thermoAdded, joeLeftAdded } = augmentTicksWithSensoryBaseline(replay, hygroIds, thermoIds, joeLeftIds);
   const elapsedMs = Date.now() - startedAt;
-  writeOutputs(replay, cls, elapsedMs, hygroAdded, thermoAdded, joeLeftAdded);
+  await writeOutputs(replay, cls, elapsedMs, hygroAdded, thermoAdded, joeLeftAdded);
   console.log(`wrote ${OUT_JSON}`);
   console.log(`wrote ${OUT_CSV}`);
   console.log(`wrote ${OUT_SUMMARY}`);

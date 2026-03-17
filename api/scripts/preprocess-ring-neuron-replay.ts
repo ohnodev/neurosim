@@ -160,7 +160,7 @@ function writeSummary(ringMeta: Map<string, RingNeuronMeta>, spikes: SpikeRow[],
   fs.writeFileSync(OUT_SUMMARY_PATH, `${summary.join('\n')}\n`, 'utf8');
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const started = Date.now();
   const ringMeta = loadRingNeuronsFromClassification();
   const spikes = loadRingSpikes(ringMeta);
@@ -173,4 +173,11 @@ function main(): void {
   console.log(`ring_spike_events=${spikes.length}`);
 }
 
-main();
+main()
+  .catch((err) => {
+    console.error(
+      `[preprocess-ring-neuron-replay] failed (csv=${OUT_CSV_PATH}, summary=${OUT_SUMMARY_PATH}):`,
+      err,
+    );
+    process.exit(1);
+  });

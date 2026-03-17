@@ -237,6 +237,7 @@ function buildReplay(): ReplayData {
   for (const tick of ticks) {
     tick.spikes = tick.spikes.filter((id) => validIds.has(id));
   }
+  const filteredFiredIds = new Set<string>([...firedIds].filter((id) => validIds.has(id)));
 
   const ringFiredIds = new Set<string>();
   const epgFiredIds = new Set<string>();
@@ -246,17 +247,19 @@ function buildReplay(): ReplayData {
       if (epgIds.has(id)) epgFiredIds.add(id);
     }
   }
+  const filteredRingFiredIds = new Set<string>([...ringFiredIds].filter((id) => validIds.has(id)));
+  const filteredEpgFiredIds = new Set<string>([...epgFiredIds].filter((id) => validIds.has(id)));
 
   const replay: ReplayData = {
     meta: {
       generated_at: new Date().toISOString(),
       source_csv: INPUT_SPIKES_PATH,
       ticks: ticks.length,
-      unique_fired_neurons: firedIds.size,
+      unique_fired_neurons: filteredFiredIds.size,
       ring_neuron_total: ringIds.size,
-      ring_neuron_unique_fired: ringFiredIds.size,
+      ring_neuron_unique_fired: filteredRingFiredIds.size,
       epg_neuron_total: epgIds.size,
-      epg_neuron_unique_fired: epgFiredIds.size,
+      epg_neuron_unique_fired: filteredEpgFiredIds.size,
       ...(OUTPUT_SCENARIO ? { scenario: OUTPUT_SCENARIO } : {}),
     },
     neurons,
@@ -283,10 +286,10 @@ function buildReplay(): ReplayData {
 
 function main(): void {
   const started = Date.now();
-  const replay = buildReplay();
   fs.mkdirSync(path.dirname(OUT_JSON_LOGS), { recursive: true });
   fs.mkdirSync(path.dirname(OUT_SUMMARY), { recursive: true });
   fs.mkdirSync(path.dirname(OUT_JSON_PUBLIC), { recursive: true });
+  const replay = buildReplay();
   const serialized = `${JSON.stringify(replay)}\n`;
   fs.writeFileSync(OUT_JSON_LOGS, serialized, 'utf8');
   fs.writeFileSync(OUT_JSON_PUBLIC, serialized, 'utf8');

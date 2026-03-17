@@ -138,7 +138,7 @@ function loadClassificationMap(): Map<string, ClassificationRow> {
   const lines = txt.split('\n').filter((l) => l.trim().length > 0);
   const map = new Map<string, ClassificationRow>();
   for (let i = 1; i < lines.length; i += 1) {
-    const cols = parseCsvLine(lines[i]);
+    const cols = parseCsvLine(lines[i] ?? '');
     if (cols.length < 10) continue;
     const row: ClassificationRow = {
       root_id: cols[0],
@@ -199,7 +199,7 @@ function readCsvRootIds(filePath: string): Set<string> {
   const lines = txt.split('\n').filter((l) => l.trim().length > 0);
   const out = new Set<string>();
   for (let i = 1; i < lines.length; i += 1) {
-    const cols = parseCsvLine(lines[i]);
+    const cols = parseCsvLine(lines[i] ?? '');
     if (cols[0]) out.add(cols[0]);
   }
   return out;

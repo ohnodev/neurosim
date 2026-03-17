@@ -24,7 +24,21 @@ DT_SEC = DT_MS / 1000.0
 HZ = float(os.environ.get("NEUROSIM_EXPORT_STIM_HZ", "600.0"))
 OLFACTORY_BASE_HZ = float(os.environ.get("NEUROSIM_EXPORT_OLFACTORY_BASE_HZ", "0.0"))
 SEED = int(os.environ.get("NEUROSIM_EXPORT_SEED", "123"))
-SCENARIO_ID = f"neurosim_epg_aff10_{int(HZ)}hz_olf{int(OLFACTORY_BASE_HZ)}hz_{TICKS}ticks"
+
+if TICKS <= 0:
+    sys.exit(f"NEUROSIM_EXPORT_TICKS must be > 0, got TICKS={TICKS}")
+if DT_MS <= 0:
+    sys.exit(f"NEUROSIM_EXPORT_DT_MS must be > 0, got DT_MS={DT_MS}")
+if DT_SEC <= 0:
+    sys.exit(f"DT_SEC must be > 0 (derived from DT_MS), got DT_SEC={DT_SEC}")
+if HZ < 0:
+    sys.exit(f"NEUROSIM_EXPORT_STIM_HZ must be >= 0, got HZ={HZ}")
+if OLFACTORY_BASE_HZ < 0:
+    sys.exit(f"NEUROSIM_EXPORT_OLFACTORY_BASE_HZ must be >= 0, got OLFACTORY_BASE_HZ={OLFACTORY_BASE_HZ}")
+
+_hz_str = str(HZ).replace(".", "p")
+_olf_str = str(OLFACTORY_BASE_HZ).replace(".", "p")
+SCENARIO_ID = f"neurosim_epg_aff10_{_hz_str}hz_olf{_olf_str}hz_{TICKS}ticks"
 
 AFF10 = [
     720575940626768442,

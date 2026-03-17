@@ -146,6 +146,8 @@ struct CreateResp {
 #[derive(Serialize)]
 struct StepResp {
     activity_sparse: HashMap<String, f64>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    spike_ids_step: Vec<String>,
     motor_left: f64,
     motor_right: f64,
     motor_fwd: f64,
@@ -190,6 +192,46 @@ struct StepManyItemResp {
     recurrent_ms: f64,
     lif_ms: f64,
     readout_ms: f64,
+}
+
+#[derive(Deserialize)]
+struct RunStepsParams {
+    sim_id: u32,
+    num_steps: u32,
+    dt: f64,
+    #[serde(default)]
+    stim_rates_by_id: HashMap<String, f64>,
+    count_neuron_ids: Option<Vec<String>>,
+    #[serde(default)]
+    record_ticks: bool,
+}
+
+#[derive(Serialize)]
+struct ReplayTickResp {
+    tick: u32,
+    time_sec: f64,
+    spikes: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct RunStepsResp {
+    steps_done: u32,
+    duration_sec: f64,
+    wall_sec: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    spike_counts: Option<HashMap<String, u64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ticks: Option<Vec<ReplayTickResp>>,
+}
+
+/// xorshift64 for Poisson sampling in run_steps (no rand dep).
+fn xorshift64(state: &mut u64) -> f64 {
+    let mut x = *state;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    *state = x;
+    (x as f64) / (u64::MAX as f64)
 }
 
 fn apply_feeding_tick(
@@ -388,21 +430,22 @@ fn handle(
                 })
                 .collect();
             let include_activity = step.include_activity.unwrap_or(true);
-            let (
-                _activity,
-                activity_sparse,
-                motor_left,
-                motor_right,
-                motor_fwd,
-                motor_left_count,
-                motor_right_count,
-                motor_fwd_count,
-                motor_left_magnitude,
-                motor_right_magnitude,
-                motor_fwd_magnitude,
-                timing,
-                fly_out,
-            ) =
+        let (
+            _activity,
+            activity_sparse,
+            _spike_ids_step,
+            motor_left,
+            motor_right,
+            motor_fwd,
+            motor_left_count,
+            motor_right_count,
+            motor_fwd_count,
+            motor_left_magnitude,
+            motor_right_magnitude,
+            motor_fwd_magnitude,
+            timing,
+            fly_out,
+        ) =
                 sim.step_with_options(
                     step.dt,
                     fly,
@@ -542,6 +585,7 @@ fn handle(
         let (
             _activity,
             activity_sparse,
+            spike_ids_step,
             motor_left,
             motor_right,
             motor_fwd,
@@ -612,6 +656,7 @@ fn handle(
         let t2 = Instant::now();
         let out_json = serde_json::to_string(&StepResp {
             activity_sparse,
+            spike_ids_step,
             motor_left,
             motor_right,
             motor_fwd,
@@ -650,6 +695,113 @@ fn handle(
             );
         }
         out_json
+    } else if line.contains("\"method\":\"run_steps\"") || line.contains("\"method\": \"run_steps\"") {
+        let t0 = Instant::now();
+        let v: serde_json::Value = serde_json::from_str(line)?;
+        let p: RunStepsParams = serde_json::from_value(v["params"].clone())?;
+        let num_steps = p.num_steps.min(1_000_000);
+        let dt = if p.dt.is_finite() && p.dt > 0.0 {
+            p.dt
+        } else {
+            0.0001
+        };
+        let mut g = sims.lock().unwrap();
+        if !g.contains_key(&p.sim_id) {
+            drop(g);
+            serde_json::to_string(&ErrResp {
+                error: format!("sim {} not found", p.sim_id),
+            })?
+        } else {
+        let sim = g.get_mut(&p.sim_id).unwrap();
+        let count_ids = p.count_neuron_ids.as_ref().map(|v| {
+            let set: std::collections::HashSet<_> = v.iter().cloned().collect();
+            set
+        });
+        let mut spike_counts: HashMap<String, u64> = count_ids
+            .as_ref()
+            .map(|ids| ids.iter().map(|id| (id.clone(), 0u64)).collect())
+            .unwrap_or_default();
+        let mut ticks: Vec<ReplayTickResp> = if p.record_ticks {
+            Vec::with_capacity(num_steps as usize)
+        } else {
+            Vec::new()
+        };
+        let mut fly = FlyInput {
+            x: 0.0,
+            y: 0.0,
+            z: 1.0,
+            heading: 0.0,
+            t: 0.0,
+            hunger: 100.0,
+            health: 100.0,
+            rest_time_left: 0.0,
+            dead: false,
+        };
+        let mut rng: u64 = 0x853c49e6748fea9b;
+        let duration_sec = num_steps as f64 * dt;
+        for tick_idx in 0..num_steps {
+            let mut forced = Vec::new();
+            for (id, hz) in &p.stim_rates_by_id {
+                if *hz > 0.0 && hz * dt <= 1.0 && xorshift64(&mut rng) < hz * dt {
+                    forced.push(id.clone());
+                } else if *hz > 0.0 && hz * dt > 1.0 && xorshift64(&mut rng) < (hz * dt).min(1.0) {
+                    forced.push(id.clone());
+                }
+            }
+            let (_a, _sparse, spike_ids, _ml, _mr, _mf, _cl, _cr, _cf, _mlm, _mrm, _mfm, _timing, fly_out) =
+                sim.step_with_options(dt, fly, Vec::new(), true, None, forced);
+            fly = FlyInput {
+                x: fly_out.x,
+                y: fly_out.y,
+                z: fly_out.z,
+                heading: fly_out.heading,
+                t: fly_out.t,
+                hunger: fly_out.hunger,
+                health: fly_out.health,
+                rest_time_left: fly_out.rest_time_left,
+                dead: fly_out.dead,
+            };
+            if count_ids.is_some() {
+                for id in &spike_ids {
+                    if let Some(c) = spike_counts.get_mut(id) {
+                        *c += 1;
+                    }
+                }
+            }
+            if p.record_ticks {
+                let mut sorted: Vec<String> = spike_ids;
+                sorted.sort();
+                ticks.push(ReplayTickResp {
+                    tick: tick_idx,
+                    time_sec: (tick_idx as f64 + 1.0) * dt,
+                    spikes: sorted,
+                });
+            }
+        }
+        let wall_sec = t0.elapsed().as_secs_f64();
+        let run_out = RunStepsResp {
+            steps_done: num_steps,
+            duration_sec,
+            wall_sec,
+            spike_counts: if count_ids.is_some() {
+                Some(spike_counts)
+            } else {
+                None
+            },
+            ticks: if p.record_ticks { Some(ticks) } else { None },
+        };
+        eprintln!(
+            "[brain-service] req={} conn={} method=run_steps sim_id={} steps={} dt={:.6} wall_sec={:.3} pid={}",
+            req_id,
+            conn_id,
+            p.sim_id,
+            num_steps,
+            dt,
+            wall_sec,
+            std::process::id()
+        );
+        serde_json::to_string(&run_out)?
+        }
     } else {
         serde_json::to_string(&ErrResp {
             error: "unknown method".into(),

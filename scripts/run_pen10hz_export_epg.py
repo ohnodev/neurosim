@@ -13,14 +13,25 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import os
 import socket
+import stat
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SOCKET_PATH = Path(os.environ.get("NEUROSIM_BRAIN_SOCKET", "/tmp/neurosim-brain.sock"))
+
+
+def _default_brain_socket_path() -> str:
+    xdg = os.environ.get("XDG_RUNTIME_DIR")
+    if xdg:
+        return str(Path(xdg) / "neurosim" / "neurosim-brain.sock")
+    return "/tmp/neurosim/neurosim-brain.sock"
+
+
+SOCKET_PATH = Path(os.environ.get("NEUROSIM_BRAIN_SOCKET", _default_brain_socket_path()))
 
 DT_MS = 0.1
 DT_SEC = DT_MS / 1000.0
@@ -58,8 +69,8 @@ def main() -> int:
         except ValueError:
             print("Usage: run_pen10hz_export_epg.py [PEN_HZ]", file=sys.stderr)
             return 1
-    if pen_hz <= 0:
-        print("PEN_HZ must be positive", file=sys.stderr)
+    if not math.isfinite(pen_hz) or pen_hz <= 0:
+        print("PEN_HZ must be finite and positive (got non-finite or <= 0)", file=sys.stderr)
         return 1
 
     pen_hz_str = str(pen_hz).replace(".", "p")
@@ -80,14 +91,39 @@ def main() -> int:
     epg_entries, class_map = load_epg_and_class(epg_path, class_path)
     epg_ids = [str(e["root_id"]) for e in epg_entries]
 
+    if not pen_ids:
+        print(f"PEN set is empty; class_path={class_path}", file=sys.stderr)
+        return 1
+    if not epg_ids:
+        print(f"EPG set is empty; epg_path={epg_path}", file=sys.stderr)
+        return 1
+
     print(f"PEN: {len(pen_ids)} neurons at {pen_hz} Hz", flush=True)
     print(f"EPG: {len(epg_ids)} neurons, counting spikes", flush=True)
     print(f"Run: {NUM_STEPS} steps, dt={DT_MS} ms, {DURATION_MS} ms total", flush=True)
     print(f"Out: {out_replay}", flush=True)
 
+    if not SOCKET_PATH.exists():
+        print(f"Socket path does not exist: {SOCKET_PATH}", file=sys.stderr)
+        return 1
+    if not stat.S_ISSOCK(SOCKET_PATH.stat().st_mode):
+        print(f"Path is not a Unix domain socket: {SOCKET_PATH}", file=sys.stderr)
+        return 1
+
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.connect(str(SOCKET_PATH))
-    f = sock.makefile("rwb")
+    sock.settimeout(30.0)
+    try:
+        sock.connect(str(SOCKET_PATH))
+    except (socket.timeout, OSError) as e:
+        print(f"Connect failed: {e}", file=sys.stderr)
+        sock.close()
+        return 1
+    try:
+        f = sock.makefile("rwb")
+    except (socket.timeout, OSError) as e:
+        print(f"makefile failed: {e}", file=sys.stderr)
+        sock.close()
+        return 1
     try:
         f.write(b'{"method":"create","params":{}}\n')
         f.flush()
@@ -120,6 +156,9 @@ def main() -> int:
         f.write(b'{"method":"reset","params":{}}\n')
         f.flush()
         f.readline()
+    except (socket.timeout, OSError, RuntimeError) as e:
+        print(f"Socket or runtime error: {e}", file=sys.stderr)
+        raise
     finally:
         f.close()
         sock.close()

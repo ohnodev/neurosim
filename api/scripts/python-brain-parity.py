@@ -12,7 +12,18 @@ ROOT = Path(__file__).resolve().parents[2]
 LOGS = ROOT / "logs"
 # Canonical EPG tile map (data/epg-tile-map.json); same as api/python-brain/service.py.
 EPG_TILE_MAP_PATH = ROOT / "data" / "epg-tile-map.json"
-SOCKET_PATH = Path(os.environ.get("NEUROSIM_BRAIN_SOCKET", "/tmp/neurosim-brain.sock"))
+
+
+def _default_brain_socket_path() -> str:
+    xdg = os.environ.get("XDG_RUNTIME_DIR")
+    if xdg:
+        return str(Path(xdg) / "neurosim" / "neurosim-brain.sock")
+    return "/tmp/neurosim/neurosim-brain.sock"
+
+
+SOCKET_PATH = Path(
+    os.environ.get("NEUROSIM_BRAIN_SOCKET", _default_brain_socket_path())
+)
 DT_SEC = 0.0001
 TICKS = 1000
 TICKS_300 = 300

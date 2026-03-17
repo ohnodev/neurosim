@@ -226,6 +226,11 @@ const DEFAULT_REPLAY_DATASETS: ReplayDataset[] = [
     label: 'PEN 40 Hz 4k ticks, left +20% at 3k (60/40) → bump rotation',
     url: '/neurosim_pen40hz_4k_leftbump_replay.json',
   },
+  {
+    id: 'neurosim_rust_pen40hz_1s_replay',
+    label: 'Rust PEN 40 Hz, 1 s, 10k ticks (Rust brain run_steps)',
+    url: '/neurosim_rust_pen40hz_1s_replay.json',
+  },
 ];
 
 function controlButtonStyle(active: boolean): Record<string, string | number> {
@@ -1498,19 +1503,24 @@ export default function VisualizationPage() {
   const neurons = useMemo(() => {
     const base = replay?.neurons ?? [];
     const labelMap = epgLabelMap && epgLabelMap.size > 0 ? epgLabelMap : null;
+    const isReplayRow = (row: { is_epg?: boolean; is_ring?: boolean }) =>
+      row.is_epg === true || row.is_ring === true;
     return base.map((n) => {
         const sideFromMap = labelMap?.get(n.root_id)?.startsWith('L') ? 'left' : labelMap?.get(n.root_id)?.startsWith('R') ? 'right' : undefined;
         const effLabel = getEffectiveEpgLabel(n, labelMap ?? null);
         const side = sideFromMap ?? (effLabel ? (effLabel.startsWith('L') ? 'left' : 'right') : n.side);
-        return {
-          ...n,
-          side,
-          is_epg: true,
-          is_ring: true,
-          is_epg_upstream: false,
-          is_epg_downstream: false,
-          is_delta7: false,
-        };
+        if (isReplayRow(n)) {
+          return {
+            ...n,
+            side,
+            is_epg: true,
+            is_ring: true,
+            is_epg_upstream: false,
+            is_epg_downstream: false,
+            is_delta7: false,
+          };
+        }
+        return { ...n, side };
       });
   }, [replay?.neurons, epgLabelMap]);
   const ringIdSet = useMemo(() => new Set(neurons.filter((n) => n.is_ring).map((n) => n.root_id)), [neurons]);
@@ -1520,8 +1530,13 @@ export default function VisualizationPage() {
     if (typeof replay.meta.epg_neuron_unique_fired === 'number' && Number.isFinite(replay.meta.epg_neuron_unique_fired)) {
       return replay.meta.epg_neuron_unique_fired;
     }
-    if (!epgLabelMap || epgLabelMap.size === 0) return null;
-    const epgIds = new Set(epgLabelMap.keys());
+    let epgIds: Set<string>;
+    if (epgLabelMap && epgLabelMap.size > 0) {
+      epgIds = new Set(epgLabelMap.keys());
+    } else {
+      epgIds = new Set((replay.neurons ?? []).filter((neuron) => neuron.is_epg === true).map((neuron) => neuron.root_id));
+    }
+    if (epgIds.size === 0) return null;
     const fired = new Set<string>();
     for (const tick of replay.ticks) {
       for (const id of tick.spikes ?? []) {
@@ -1664,7 +1679,12 @@ export default function VisualizationPage() {
     const tickReset = ticks.length < liveReplayTickCountRef.current;
     const dtChanged = (current?.meta.dt_sec ?? liveSettings.dtSec) !== liveSettings.dtSec;
     const fullRebuild = replayMissing || sourceChanged || tickReset || dtChanged;
-    const epgIds = epgLabelMap ? new Set(epgLabelMap.keys()) : null;
+    const epgIds: Set<string> | null =
+      epgLabelMap && epgLabelMap.size > 0
+        ? new Set(epgLabelMap.keys())
+        : templateReplay?.neurons
+          ? new Set(templateReplay.neurons.filter((neuron) => neuron.is_epg === true).map((neuron) => neuron.root_id))
+          : null;
 
     if (fullRebuild) {
       const seen = new Set<string>();

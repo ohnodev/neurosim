@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import csv
 import json
+import logging
 import math
 import os
 import sys
@@ -16,6 +17,7 @@ import torch
 
 
 ROOT = Path(__file__).resolve().parents[2]
+_logger = logging.getLogger(__name__)
 _default_socket_dir = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "neurosim"
 SOCKET_PATH = Path(os.environ.get("NEUROSIM_BRAIN_SOCKET", str(_default_socket_dir / "neurosim-brain.sock")))
 BASE_SEED = 1598276117
@@ -159,7 +161,8 @@ class BrainService:
         path = ROOT / "data" / "olfactory-afferents.json"
         try:
             parsed = _read_json(path)
-        except Exception:
+        except Exception as e:
+            _logger.exception("_load_olfactory_indices failed path=%s: %s", path, e)
             return []
         ids = [str(x) for x in (parsed.get("left", []) + parsed.get("right", []) + parsed.get("unknown", []))]
         out = [self.id_to_index[rid] for rid in ids if rid in self.id_to_index]
@@ -179,7 +182,8 @@ class BrainService:
                         continue
                     if c == "CX" and sc == "ring_neuron":
                         out.append(self.id_to_index[rid])
-        except Exception:
+        except Exception as e:
+            _logger.exception("_load_ring_indices failed path=%s: %s", path, e)
             return []
         return sorted(set(out))
 
@@ -478,7 +482,7 @@ class BrainService:
         sim.external_current.zero_()
 
         spike_counts = {rid: 0 for rid in count_neuron_ids}
-        ticks_out: list[dict[str, Any]] = [] if record_ticks else []
+        ticks_out: list[dict[str, Any]] = []
         t0 = time.perf_counter()
         with torch.no_grad():
             for step in range(num_steps):

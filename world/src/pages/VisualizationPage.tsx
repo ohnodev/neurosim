@@ -109,6 +109,7 @@ type SceneState = {
   /** Replay + currentTick: updated by parent. Animation loop computes brightness purely from these. */
   replay: ReplayData | null;
   currentTick: number;
+  brightnessByIndex: Float32Array;
   lastFrameTime: number;
   decodeEmaAngleDeg: number | null;
   arrowState: {
@@ -228,6 +229,16 @@ function compassHeatFill(v: number, alpha = 0.95): string {
     b = Math.round(67 - (19 * u));
   }
   return `rgba(${r},${g},${b},${alpha})`;
+}
+
+const BIN_GAP_RAD = (Math.PI / 180) * 4;
+
+function getWedgeParams(i: number, binCount: number): { wedge: number; a0: number; a1: number; midAngle: number } {
+  const wedge = (Math.PI * 2) / binCount - BIN_GAP_RAD;
+  const a0 = (i / binCount) * Math.PI * 2 - Math.PI / 2 + BIN_GAP_RAD / 2;
+  const a1 = a0 + wedge;
+  const midAngle = a0 + wedge / 2;
+  return { wedge, a0, a1, midAngle };
 }
 
 function powerIteration(
@@ -963,6 +974,7 @@ function buildScene(
     delta7BinPopulation,
     replay: replay ?? null,
     currentTick: 1,
+    brightnessByIndex: new Float32Array(colorAttr.count),
     lastFrameTime,
     decodeEmaAngleDeg: null,
     arrowState,
@@ -977,7 +989,11 @@ function buildScene(
      * Neuron lit for SPIKE_DISPLAY_TICKS after spike; brightness = 1 - (ticks_ago / SPIKE_DISPLAY_TICKS). */
     const replay = state.replay;
     const currentTick = state.currentTick;
-    const brightnessByIndex = new Float32Array(colorAttr.count);
+    if (state.brightnessByIndex.length !== colorAttr.count) {
+      state.brightnessByIndex = new Float32Array(colorAttr.count);
+    }
+    const brightnessByIndex = state.brightnessByIndex;
+    brightnessByIndex.fill(0);
     if (replay?.ticks?.length && currentTick >= 1) {
       const startTick = Math.max(1, currentTick - SPIKE_DISPLAY_TICKS);
       const spikeTickById = new Map<string, number>();
@@ -1388,7 +1404,7 @@ export default function VisualizationPage() {
       return { ...templateReplay, meta: { ...templateReplay.meta, dt_sec: liveSettings.dtSec, scenario: 'neurosim_live' }, ticks };
     }
     return fetchedReplay;
-  }, [selectedReplayId, templateReplay, fetchedReplay, liveReplaySource, liveTicks, recordedTicks, liveSettings.dtSec, liveSettings.olfactoryBaselineHz]);
+  }, [selectedReplayId, templateReplay, fetchedReplay, liveReplaySource, liveTicks, recordedTicks, liveSettings.dtSec]);
   const [arrowSmoothing, setArrowSmoothing] = useState(true);
   const [epgTileMap, setEpgTileMap] = useState<Map<string, number> | null>(null);
   const [compassStats, setCompassStats] = useState<CompassStats>({
@@ -1927,10 +1943,7 @@ export default function VisualizationPage() {
               <circle cx="0" cy="0" r="30" fill="none" stroke="rgba(255,79,216,0.35)" strokeWidth="1.4" />
               <circle cx="0" cy="0" r="18" fill="none" stroke="rgba(255,170,110,0.32)" strokeWidth="1.2" />
               {compassStats.upstreamBins.map((v, i) => {
-                const BIN_GAP = (Math.PI / 180) * 4;
-                const wedge = (Math.PI * 2) / compassStats.upstreamBins.length - BIN_GAP;
-                const a0 = (i / compassStats.upstreamBins.length) * Math.PI * 2 - Math.PI / 2 + BIN_GAP / 2;
-                const a1 = a0 + wedge;
+                const { a0, a1 } = getWedgeParams(i, compassStats.upstreamBins.length);
                 const r0 = 44;
                 const r1 = 44 + v * 10;
                 const x0 = Math.cos(a0) * r0; const y0 = Math.sin(a0) * r0;
@@ -1948,10 +1961,7 @@ export default function VisualizationPage() {
                 );
               })}
               {compassStats.delta7Bins.map((v, i) => {
-                const BIN_GAP = (Math.PI / 180) * 4;
-                const wedge = (Math.PI * 2) / compassStats.delta7Bins.length - BIN_GAP;
-                const a0 = (i / compassStats.delta7Bins.length) * Math.PI * 2 - Math.PI / 2 + BIN_GAP / 2;
-                const a1 = a0 + wedge;
+                const { a0, a1 } = getWedgeParams(i, compassStats.delta7Bins.length);
                 const r0 = 36;
                 const r1 = 36 + v * 7;
                 const x0 = Math.cos(a0) * r0; const y0 = Math.sin(a0) * r0;
@@ -1969,10 +1979,7 @@ export default function VisualizationPage() {
                 );
               })}
               {compassStats.downstreamBins.map((v, i) => {
-                const BIN_GAP = (Math.PI / 180) * 4;
-                const wedge = (Math.PI * 2) / compassStats.downstreamBins.length - BIN_GAP;
-                const a0 = (i / compassStats.downstreamBins.length) * Math.PI * 2 - Math.PI / 2 + BIN_GAP / 2;
-                const a1 = a0 + wedge;
+                const { a0, a1 } = getWedgeParams(i, compassStats.downstreamBins.length);
                 const r0 = 18;
                 const r1 = 18 + v * 8;
                 const x0 = Math.cos(a0) * r0; const y0 = Math.sin(a0) * r0;
@@ -1990,9 +1997,7 @@ export default function VisualizationPage() {
                 );
               })}
               {Array.from({ length: EPG_COMPASS_BINS }, (_, i) => {
-                const BIN_GAP = (Math.PI / 180) * 4;
-                const wedge = (Math.PI * 2) / EPG_COMPASS_BINS - BIN_GAP;
-                const a = (i / EPG_COMPASS_BINS) * Math.PI * 2 - Math.PI / 2 + BIN_GAP / 2 + wedge / 2;
+                const { midAngle: a } = getWedgeParams(i, EPG_COMPASS_BINS);
                 return (
                   <line
                     key={`link-up-base-${i}`}
@@ -2006,9 +2011,7 @@ export default function VisualizationPage() {
                 );
               })}
               {compassStats.upstreamBins.map((v, i) => {
-                const BIN_GAP = (Math.PI / 180) * 4;
-                const wedge = (Math.PI * 2) / EPG_COMPASS_BINS - BIN_GAP;
-                const a = (i / EPG_COMPASS_BINS) * Math.PI * 2 - Math.PI / 2 + BIN_GAP / 2 + wedge / 2;
+                const { midAngle: a } = getWedgeParams(i, EPG_COMPASS_BINS);
                 return (
                   <line
                     key={`link-up-${i}`}
@@ -2022,9 +2025,7 @@ export default function VisualizationPage() {
                 );
               })}
               {compassStats.delta7Bins.map((v, i) => {
-                const BIN_GAP = (Math.PI / 180) * 4;
-                const wedge = (Math.PI * 2) / EPG_COMPASS_BINS - BIN_GAP;
-                const a = (i / EPG_COMPASS_BINS) * Math.PI * 2 - Math.PI / 2 + BIN_GAP / 2 + wedge / 2;
+                const { midAngle: a } = getWedgeParams(i, EPG_COMPASS_BINS);
                 return (
                   <line
                     key={`link-d7-${i}`}
@@ -2038,9 +2039,7 @@ export default function VisualizationPage() {
                 );
               })}
               {compassStats.downstreamBins.map((v, i) => {
-                const BIN_GAP = (Math.PI / 180) * 4;
-                const wedge = (Math.PI * 2) / EPG_COMPASS_BINS - BIN_GAP;
-                const a = (i / EPG_COMPASS_BINS) * Math.PI * 2 - Math.PI / 2 + BIN_GAP / 2 + wedge / 2;
+                const { midAngle: a } = getWedgeParams(i, EPG_COMPASS_BINS);
                 return (
                   <line
                     key={`link-down-${i}`}
@@ -2055,10 +2054,7 @@ export default function VisualizationPage() {
               })}
               <circle cx="0" cy="0" r="42" fill="none" stroke="rgba(140,120,255,0.35)" strokeWidth="2" />
               {compassStats.epgBins.map((v, i) => {
-                const BIN_GAP = (Math.PI / 180) * 4;
-                const wedge = (Math.PI * 2) / compassStats.epgBins.length - BIN_GAP;
-                const a0 = (i / compassStats.epgBins.length) * Math.PI * 2 - Math.PI / 2 + BIN_GAP / 2;
-                const a1 = a0 + wedge;
+                const { a0, a1 } = getWedgeParams(i, compassStats.epgBins.length);
                 const r0 = 30;
                 const r1 = 30 + v * 14;
                 const x0 = Math.cos(a0) * r0; const y0 = Math.sin(a0) * r0;

@@ -98,7 +98,15 @@ class BrainSocket {
       if (Date.now() > timeoutAt) {
         throw new Error(`brain socket timeout after ${REQUEST_TIMEOUT_MS}ms`);
       }
+      const remainingMs = timeoutAt - Date.now();
+      if (remainingMs <= 0) {
+        throw new Error(`brain socket timeout after ${REQUEST_TIMEOUT_MS}ms`);
+      }
       const chunk = await new Promise<string>((resolve, reject) => {
+        const timeoutId = setTimeout(() => {
+          cleanup();
+          reject(new Error(`brain socket timeout after ${REQUEST_TIMEOUT_MS}ms`));
+        }, remainingMs);
         const onData = (d: Buffer) => {
           cleanup();
           resolve(d.toString('utf8'));
@@ -112,6 +120,7 @@ class BrainSocket {
           reject(new Error('brain socket closed'));
         };
         const cleanup = () => {
+          clearTimeout(timeoutId);
           this.socket.off('data', onData);
           this.socket.off('error', onErr);
           this.socket.off('end', onEnd);
@@ -266,7 +275,7 @@ function augmentTicksWithSensoryBaseline(
   return { hygroAdded, thermoAdded, joeLeftAdded };
 }
 
-function writeOutputs(
+async function writeOutputs(
   replay: ReplayJson,
   cls: Map<string, ClassificationRow>,
   elapsedMs: number,

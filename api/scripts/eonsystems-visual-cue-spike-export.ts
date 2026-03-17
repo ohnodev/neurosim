@@ -73,6 +73,12 @@ const VISUAL_CENTER_HALF_WIDTH_DEG = Math.max(1, Number(process.env.VISUAL_CUE_C
 
 type BrainResponse = { error?: string };
 
+function escapeCsv(value: unknown): string {
+  const s = String(value ?? '');
+  const escaped = s.replace(/"/g, '""');
+  return /[",\n\r]/.test(escaped) ? `"${escaped}"` : escaped;
+}
+
 class BrainSocket {
   private socket: net.Socket;
 
@@ -412,9 +418,9 @@ async function writeOutputs(
       const rootId = tick.spikes[i]!;
       const meta = cls.get(rootId);
       csvStream.write([
-        String(tick.tick),
+        tick.tick,
         tick.time_sec.toFixed(6),
-        String(i),
+        i,
         rootId,
         meta?.flow ?? '',
         meta?.super_class ?? '',
@@ -425,7 +431,7 @@ async function writeOutputs(
         meta?.hemilineage ?? '',
         meta?.side ?? '',
         meta?.nerve ?? '',
-      ].join(','));
+      ].map(escapeCsv).join(','));
       csvStream.write('\n');
     }
   }

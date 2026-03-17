@@ -293,6 +293,8 @@ export interface CreateParams {
 export interface StepParams {
   simId: number;
   dt: number;
+  olfactory_baseline_rate_hz?: number;
+  forced_spikes?: string[];
   includeActivity?: boolean;
   fly: {
     x: number;

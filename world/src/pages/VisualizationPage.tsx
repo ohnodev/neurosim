@@ -185,6 +185,11 @@ const DEFAULT_REPLAY_DATASETS: ReplayDataset[] = [
     label: 'PEN 40 Hz, 1 s, 10k ticks (EPG export, 4x recurrence boost)',
     url: '/neurosim_pen40hz_1s_replay.json',
   },
+  {
+    id: 'neurosim_pen40hz_4k_leftbump_replay',
+    label: 'PEN 40 Hz 4k ticks, left +20% at 3k (60/40) → bump rotation',
+    url: '/neurosim_pen40hz_4k_leftbump_replay.json',
+  },
 ];
 
 function controlButtonStyle(active: boolean): Record<string, string | number> {

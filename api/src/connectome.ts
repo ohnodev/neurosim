@@ -30,9 +30,22 @@ const DATA_DIR = path.resolve(process.cwd(), '..', 'data');
 const SUBSET_ALIGNED_PATH = path.join(DATA_DIR, 'connectome-subset-aligned.json');
 const SUBSET_PATH = path.join(DATA_DIR, 'connectome-subset.json');
 const ENV_PATH = process.env.NEUROSIM_CONNECTOME_PATH;
-const DEFAULT_PATH = ENV_PATH
-  ? path.resolve(ENV_PATH)
-  : (fs.existsSync(SUBSET_ALIGNED_PATH) ? SUBSET_ALIGNED_PATH : SUBSET_PATH);
+const DEFAULT_PATH = (() => {
+  const configured = ENV_PATH
+    ? path.resolve(ENV_PATH)
+    : (fs.existsSync(SUBSET_ALIGNED_PATH) ? SUBSET_ALIGNED_PATH : SUBSET_PATH);
+  if (!configured.toLowerCase().endsWith('.json')) {
+    throw new Error(
+      `[CRITICAL] Invalid NEUROSIM_CONNECTOME_PATH for API loader: expected a JSON file, got "${configured}". Refusing startup.`,
+    );
+  }
+  if (!fs.existsSync(configured)) {
+    throw new Error(
+      `[CRITICAL] Connectome file not found: "${configured}". Refusing startup.`,
+    );
+  }
+  return configured;
+})();
 
 export function loadConnectome(p: string = DEFAULT_PATH): Connectome {
   const buf = fs.readFileSync(p, 'utf-8');

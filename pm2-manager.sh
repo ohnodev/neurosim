@@ -12,7 +12,6 @@ API_DIR="$SCRIPT_DIR/api"
 BRAIN_SERVICE_DIR="$API_DIR/python-brain"
 SERVICE="neurosim-api"
 BRAIN_SERVICE="python-brain"
-LEGACY_BRAIN_SERVICE="neurosim-brain"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -104,7 +103,6 @@ start_service() {
 }
 
 stop_service() {
-    pm2 list 2>/dev/null | grep -q "│ $LEGACY_BRAIN_SERVICE" && pm2 stop "$LEGACY_BRAIN_SERVICE" 2>/dev/null || true
     brain_exists && pm2 stop "$BRAIN_SERVICE" 2>/dev/null || true
     service_exists && pm2 stop "$SERVICE" 2>/dev/null || true
     brain_exists || service_exists || { log_warning "Not running"; return 0; }
@@ -118,7 +116,6 @@ restart_service() {
     log_info "Rebuilding $SERVICE..."
     (cd "$API_DIR" && npm run build) || { log_error "API build failed"; exit 1; }
     log_info "Stopping services..."
-    pm2 list 2>/dev/null | grep -q "│ $LEGACY_BRAIN_SERVICE" && pm2 delete "$LEGACY_BRAIN_SERVICE" 2>/dev/null || true
     brain_exists && pm2 delete "$BRAIN_SERVICE" 2>/dev/null || true
     service_exists && pm2 delete "$SERVICE" 2>/dev/null || true
     sleep 2
@@ -131,7 +128,6 @@ restart_service() {
 
 quick_restart_service() {
     log_info "Quick restart (no rebuild)..."
-    pm2 list 2>/dev/null | grep -q "│ $LEGACY_BRAIN_SERVICE" && pm2 delete "$LEGACY_BRAIN_SERVICE" 2>/dev/null || true
     pm2 restart "$BRAIN_SERVICE" 2>/dev/null || true
     sleep 1
     pm2 restart "$SERVICE" 2>/dev/null || true

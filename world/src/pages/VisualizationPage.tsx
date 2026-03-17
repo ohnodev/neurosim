@@ -120,6 +120,10 @@ type SceneState = {
     smoothingEnabled: boolean;
     smoothAlpha: number;
   };
+  tempC: THREE.Color;
+  tempG: THREE.Color;
+  tempEpgInactive: THREE.Color;
+  tempEpgHot: THREE.Color;
   dispose: () => void;
 };
 
@@ -1051,6 +1055,10 @@ function buildScene(
     lastFrameTime,
     decodeEmaAngleDeg: null,
     arrowState,
+    tempC: new THREE.Color(),
+    tempG: new THREE.Color(),
+    tempEpgInactive: new THREE.Color(),
+    tempEpgHot: new THREE.Color(),
     dispose: () => {},
   };
 
@@ -1083,29 +1091,40 @@ function buildScene(
         }
       }
     }
+    const { tempC, tempG, tempEpgInactive, tempEpgHot } = state;
     for (let i = 0; i < colorAttr.count; i += 1) {
       const t = brightnessByIndex[i] ?? 0;
-      const c = isEpgByIndex[i]
-        ? (() => {
-            const inactive = INACTIVE_EPG_COLOR.clone().multiplyScalar(0.42);
-            if (t <= 0) return inactive;
-            const hot = inactive.clone().lerp(EPG_HEAT_ORANGE, 0.45).lerp(EPG_HEAT_RED, t);
-            return inactive.clone().lerp(hot, t);
-          })()
-        : isUpstreamByIndex[i]
-          ? (t <= 0 ? INACTIVE_UPSTREAM_COLOR : INACTIVE_UPSTREAM_COLOR.clone().lerp(ACTIVE_UPSTREAM_COLOR, t))
-          : isDownstreamByIndex[i]
-            ? (t <= 0 ? INACTIVE_DOWNSTREAM_COLOR : INACTIVE_DOWNSTREAM_COLOR.clone().lerp(ACTIVE_DOWNSTREAM_COLOR, t))
-            : isDelta7ByIndex[i]
-              ? (t <= 0 ? INACTIVE_DELTA7_COLOR : INACTIVE_DELTA7_COLOR.clone().lerp(ACTIVE_DELTA7_COLOR, t))
-              : isRingByIndex[i]
-                ? (t <= 0 ? INACTIVE_RING_COLOR : INACTIVE_RING_COLOR.clone().lerp(ACTIVE_RING_COLOR, t))
-                : (t <= 0 ? INACTIVE_COLOR : INACTIVE_COLOR.clone().lerp(ACTIVE_COLOR, t));
-      colorAttr.setXYZ(i, c.r, c.g, c.b);
-      const g = t <= 0 || !isEpgByIndex[i]
-        ? NO_GLOW_COLOR
-        : INACTIVE_EPG_COLOR.clone().lerp(EPG_HEAT_RED, t).multiplyScalar(0.22 + 1.1 * t * t);
-      glowColorAttr.setXYZ(i, g.r, g.g, g.b);
+      if (isEpgByIndex[i]) {
+        tempEpgInactive.copy(INACTIVE_EPG_COLOR).multiplyScalar(0.42);
+        if (t <= 0) {
+          tempC.copy(tempEpgInactive);
+        } else {
+          tempEpgHot.copy(tempEpgInactive).lerp(EPG_HEAT_ORANGE, 0.45).lerp(EPG_HEAT_RED, t);
+          tempC.copy(tempEpgInactive).lerp(tempEpgHot, t);
+        }
+      } else if (isUpstreamByIndex[i]) {
+        tempC.copy(INACTIVE_UPSTREAM_COLOR);
+        if (t > 0) tempC.lerp(ACTIVE_UPSTREAM_COLOR, t);
+      } else if (isDownstreamByIndex[i]) {
+        tempC.copy(INACTIVE_DOWNSTREAM_COLOR);
+        if (t > 0) tempC.lerp(ACTIVE_DOWNSTREAM_COLOR, t);
+      } else if (isDelta7ByIndex[i]) {
+        tempC.copy(INACTIVE_DELTA7_COLOR);
+        if (t > 0) tempC.lerp(ACTIVE_DELTA7_COLOR, t);
+      } else if (isRingByIndex[i]) {
+        tempC.copy(INACTIVE_RING_COLOR);
+        if (t > 0) tempC.lerp(ACTIVE_RING_COLOR, t);
+      } else {
+        tempC.copy(INACTIVE_COLOR);
+        if (t > 0) tempC.lerp(ACTIVE_COLOR, t);
+      }
+      colorAttr.setXYZ(i, tempC.r, tempC.g, tempC.b);
+      if (t <= 0 || !isEpgByIndex[i]) {
+        tempG.copy(NO_GLOW_COLOR);
+      } else {
+        tempG.copy(INACTIVE_EPG_COLOR).lerp(EPG_HEAT_RED, t).multiplyScalar(0.22 + 1.1 * t * t);
+      }
+      glowColorAttr.setXYZ(i, tempG.r, tempG.g, tempG.b);
     }
     const smoothAlpha = arrowState.smoothingEnabled ? arrowState.smoothAlpha : 1;
     arrowState.angleCurrentDeg = shortestAngleLerpDeg(arrowState.angleCurrentDeg, arrowState.angleTargetDeg, smoothAlpha);
@@ -1127,6 +1146,7 @@ function buildScene(
       }
     }
     if (biologicalEpgColorAttr && biologicalEpgIndices.length > 0) {
+      const { tempC, tempEpgInactive, tempEpgHot } = state;
       for (let k = 0; k < biologicalEpgIndices.length; k += 1) {
         const mainIndex = biologicalEpgIndices[k];
         const id = neuronIds[mainIndex];
@@ -1134,13 +1154,13 @@ function buildScene(
           biologicalEpgColorAttr.setXYZ(k, HOVER_HIGHLIGHT_COLOR.r, HOVER_HIGHLIGHT_COLOR.g, HOVER_HIGHLIGHT_COLOR.b);
         } else {
           const t = brightnessByIndex[mainIndex] ?? 0;
-          const inactive = INACTIVE_EPG_COLOR.clone().multiplyScalar(0.42);
+          tempEpgInactive.copy(INACTIVE_EPG_COLOR).multiplyScalar(0.42);
           if (t <= 0) {
-            biologicalEpgColorAttr.setXYZ(k, inactive.r, inactive.g, inactive.b);
+            biologicalEpgColorAttr.setXYZ(k, tempEpgInactive.r, tempEpgInactive.g, tempEpgInactive.b);
           } else {
-            const hot = inactive.clone().lerp(EPG_HEAT_ORANGE, 0.45).lerp(EPG_HEAT_RED, t);
-            const c = inactive.clone().lerp(hot, t);
-            biologicalEpgColorAttr.setXYZ(k, c.r, c.g, c.b);
+            tempEpgHot.copy(tempEpgInactive).lerp(EPG_HEAT_ORANGE, 0.45).lerp(EPG_HEAT_RED, t);
+            tempC.copy(tempEpgInactive).lerp(tempEpgHot, t);
+            biologicalEpgColorAttr.setXYZ(k, tempC.r, tempC.g, tempC.b);
           }
         }
       }
@@ -1503,23 +1523,10 @@ export default function VisualizationPage() {
   const neurons = useMemo(() => {
     const base = replay?.neurons ?? [];
     const labelMap = epgLabelMap && epgLabelMap.size > 0 ? epgLabelMap : null;
-    const isReplayRow = (row: { is_epg?: boolean; is_ring?: boolean }) =>
-      row.is_epg === true || row.is_ring === true;
     return base.map((n) => {
         const sideFromMap = labelMap?.get(n.root_id)?.startsWith('L') ? 'left' : labelMap?.get(n.root_id)?.startsWith('R') ? 'right' : undefined;
         const effLabel = getEffectiveEpgLabel(n, labelMap ?? null);
         const side = sideFromMap ?? (effLabel ? (effLabel.startsWith('L') ? 'left' : 'right') : n.side);
-        if (isReplayRow(n)) {
-          return {
-            ...n,
-            side,
-            is_epg: true,
-            is_ring: true,
-            is_epg_upstream: false,
-            is_epg_downstream: false,
-            is_delta7: false,
-          };
-        }
         return { ...n, side };
       });
   }, [replay?.neurons, epgLabelMap]);

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Run 4000 ticks at 0.1 ms dt: PEN 40 Hz for ticks 1–3000, then left PEN 60% / right 40%
-(48 Hz left, 32 Hz right) for ticks 3001–4000 to test if the bump starts rotating.
+Run 4000 ticks at 0.1 ms dt: PEN 40 Hz for ticks 1-3000, then left PEN 60% / right 40%
+(48 Hz left, 32 Hz right) for ticks 3001-4000 to test if the bump starts rotating.
 Export replay to world/public for frontend.
 
 Usage:

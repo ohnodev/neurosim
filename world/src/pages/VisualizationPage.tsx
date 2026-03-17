@@ -150,6 +150,42 @@ const EPG_SLICE_ORDER_CLOCKWISE = [
   'L1', 'R8', 'L2', 'R7', 'L3', 'R6', 'L4', 'R5',
 ];
 const EPG_LABEL_TO_BIN = new Map(EPG_SLICE_ORDER_CLOCKWISE.map((label, i) => [label, i]));
+
+/** Parse a two-column CSV line; supports quoted fields (RFC4180-style). processed_labels.csv must be root_id,label. */
+function parseProcessedLabelsLine(line: string): [string, string] | null {
+  const t = line.trim();
+  if (!t) return null;
+  const cols: string[] = [];
+  let i = 0;
+  while (i < t.length && cols.length < 2) {
+    if (t[i] === '"') {
+      i += 1;
+      let field = '';
+      while (i < t.length) {
+        if (t[i] === '"') {
+          i += 1;
+          if (i < t.length && t[i] === '"') {
+            field += '"';
+            i += 1;
+          } else break;
+        } else {
+          field += t[i];
+          i += 1;
+        }
+      }
+      cols.push(field);
+      if (i < t.length && t[i] === ',') i += 1;
+    } else {
+      const comma = t.indexOf(',', i);
+      const field = (comma >= 0 ? t.slice(i, comma) : t.slice(i)).trim();
+      cols.push(field);
+      i = comma >= 0 ? comma + 1 : t.length;
+    }
+  }
+  if (cols.length >= 2) return [cols[0].trim(), cols[1].trim()];
+  if (cols.length === 1) return [cols[0].trim(), ''];
+  return null;
+}
 const EPG_SLICE_COLORS = [
   '#6b4cc4', '#8ea4e7', '#b4d7e7', '#7fd47f',
   '#d9f095', '#f1ef9a', '#f6df99', '#f6c79c',
@@ -1408,6 +1444,7 @@ export default function VisualizationPage() {
   const [liveReplaySource, setLiveReplaySource] = useState<'live' | 'recording'>('live');
   const liveReplayTickCountRef = useRef(0);
   const liveReplaySourceRef = useRef<'live' | 'recording'>('live');
+  const liveReplayRef = useRef<ReplayData | null>(null);
   const liveEpgSeenRef = useRef<Set<string>>(new Set());
   const [liveEpgUniqueFired, setLiveEpgUniqueFired] = useState(0);
   const liveSimIdRef = useRef<number | null>(null);
@@ -1506,11 +1543,12 @@ export default function VisualizationPage() {
       .then((text) => {
         if (!active || !text) return;
         const map = new Map<string, string>();
-        const lines = text.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
+        const lines = text.split(/\r?\n/);
         for (let i = 1; i < lines.length; i += 1) {
-          const cols = lines[i]?.split(',') ?? [];
-          const rid = String(cols[0] ?? '').trim();
-          const label = String(cols[1] ?? '').trim().toUpperCase();
+          const parsed = parseProcessedLabelsLine(lines[i] ?? '');
+          if (!parsed) continue;
+          const [rid, labelRaw] = parsed;
+          const label = labelRaw.toUpperCase();
           if (rid && EPG_LABEL_TO_BIN.has(label)) map.set(rid, label);
         }
         setEpgLabelMap(map);
@@ -1561,6 +1599,7 @@ export default function VisualizationPage() {
             ticks: [],
           });
           setFetchedReplay(null);
+          liveReplayRef.current = null;
           setLiveReplay(null);
           setLiveTicks([]);
           setRecordedTicks([]);
@@ -1578,6 +1617,8 @@ export default function VisualizationPage() {
           if (!active) return;
           setFetchedReplay(parsed);
           setTemplateReplay(null);
+          liveReplayRef.current = null;
+          setLiveReplay(null);
         }
         setCurrentTick(1);
         setPlaying(false);
@@ -1585,6 +1626,7 @@ export default function VisualizationPage() {
         if (!active) return;
         setFetchedReplay(null);
         setTemplateReplay(null);
+        liveReplayRef.current = null;
         setLiveReplay(null);
         setLiveTicks([]);
         setRecordedTicks([]);
@@ -1609,6 +1651,7 @@ export default function VisualizationPage() {
     if (selectedReplayId !== 'neurosim_live' || !templateReplay) {
       liveReplayTickCountRef.current = 0;
       liveReplaySourceRef.current = 'live';
+      liveReplayRef.current = null;
       liveEpgSeenRef.current = new Set();
       setLiveEpgUniqueFired(0);
       setLiveReplay(null);
@@ -1616,9 +1659,10 @@ export default function VisualizationPage() {
     }
     const ticks = liveReplaySource === 'recording' ? recordedTicks : liveTicks;
     const sourceChanged = liveReplaySourceRef.current !== liveReplaySource;
-    const replayMissing = liveReplay == null;
+    const current = liveReplayRef.current;
+    const replayMissing = current == null;
     const tickReset = ticks.length < liveReplayTickCountRef.current;
-    const dtChanged = (liveReplay?.meta.dt_sec ?? liveSettings.dtSec) !== liveSettings.dtSec;
+    const dtChanged = (current?.meta.dt_sec ?? liveSettings.dtSec) !== liveSettings.dtSec;
     const fullRebuild = replayMissing || sourceChanged || tickReset || dtChanged;
     const epgIds = epgLabelMap ? new Set(epgLabelMap.keys()) : null;
 
@@ -1633,7 +1677,7 @@ export default function VisualizationPage() {
       }
       liveEpgSeenRef.current = seen;
       setLiveEpgUniqueFired(seen.size);
-      setLiveReplay({
+      const next = {
         ...templateReplay,
         meta: {
           ...templateReplay.meta,
@@ -1643,8 +1687,10 @@ export default function VisualizationPage() {
           epg_neuron_unique_fired: seen.size,
         },
         ticks: [...ticks],
-      });
-    } else if (ticks.length > liveReplayTickCountRef.current && liveReplay != null) {
+      };
+      liveReplayRef.current = next;
+      setLiveReplay(next);
+    } else if (ticks.length > liveReplayTickCountRef.current && current != null) {
       const appended = ticks.slice(liveReplayTickCountRef.current);
       if (epgIds && epgIds.size > 0) {
         for (const t of appended) {
@@ -1655,31 +1701,35 @@ export default function VisualizationPage() {
       }
       const seenCount = liveEpgSeenRef.current.size;
       setLiveEpgUniqueFired(seenCount);
-      setLiveReplay({
-        ...liveReplay,
+      const next = {
+        ...current,
         meta: {
-          ...liveReplay.meta,
+          ...current.meta,
           dt_sec: liveSettings.dtSec,
           scenario: 'neurosim_live',
           ticks: ticks.length,
           epg_neuron_unique_fired: seenCount,
         },
-        ticks: [...liveReplay.ticks, ...appended],
-      });
-    } else if (liveReplay != null && liveReplay.meta.dt_sec !== liveSettings.dtSec) {
-      setLiveReplay({
-        ...liveReplay,
+        ticks: [...current.ticks, ...appended],
+      };
+      liveReplayRef.current = next;
+      setLiveReplay(next);
+    } else if (current != null && current.meta.dt_sec !== liveSettings.dtSec) {
+      const next = {
+        ...current,
         meta: {
-          ...liveReplay.meta,
+          ...current.meta,
           dt_sec: liveSettings.dtSec,
           scenario: 'neurosim_live',
         },
-      });
+      };
+      liveReplayRef.current = next;
+      setLiveReplay(next);
     }
 
     liveReplayTickCountRef.current = ticks.length;
     liveReplaySourceRef.current = liveReplaySource;
-  }, [selectedReplayId, templateReplay, liveReplaySource, liveTicks, recordedTicks, liveSettings.dtSec, epgLabelMap, liveReplay]);
+  }, [selectedReplayId, templateReplay, liveReplaySource, liveTicks, recordedTicks, liveSettings.dtSec, epgLabelMap]);
 
   const isNeuroSimLive = selectedReplayId === 'neurosim_live';
   const apiBase = getApiBase();

@@ -13,15 +13,14 @@ from __future__ import annotations
 
 import csv
 import json
-from datetime import datetime, timezone
-from pathlib import Path
-
 import os
 import socket
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SOCKET_PATH = Path(os.environ.get("NEUROSIM_BRAIN_SOCKET", "/tmp/neurosim-brain.sock"))
+SOCKET_TIMEOUT = 600.0  # seconds; run_steps can take several minutes
 
 DT_MS = 0.1
 DT_SEC = DT_MS / 1000.0
@@ -82,12 +81,23 @@ def main() -> int:
     print(f"Out: {out_replay}", flush=True)
 
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(SOCKET_TIMEOUT)
     sock.connect(str(SOCKET_PATH))
     f = sock.makefile("rwb")
     try:
+        def read_response() -> bytes:
+            try:
+                line = f.readline()
+            except socket.timeout:
+                print("Brain service socket timeout; is the service running?", flush=True)
+                raise
+            if not line:
+                raise RuntimeError("socket closed")
+            return line
+
         f.write(b'{"method":"create","params":{}}\n')
         f.flush()
-        out = json.loads(f.readline().decode("utf-8"))
+        out = json.loads(read_response().decode("utf-8"))
         if out.get("error"):
             raise RuntimeError(out["error"])
         sim_id = int(out["sim_id"])
@@ -107,10 +117,7 @@ def main() -> int:
         }
         f.write((json.dumps(req1) + "\n").encode("utf-8"))
         f.flush()
-        line = f.readline()
-        if not line:
-            raise RuntimeError("socket closed")
-        resp1 = json.loads(line.decode("utf-8"))
+        resp1 = json.loads(read_response().decode("utf-8"))
         if resp1.get("error"):
             raise RuntimeError(resp1["error"])
         ticks_a = resp1.get("ticks") or []
@@ -132,17 +139,14 @@ def main() -> int:
         }
         f.write((json.dumps(req2) + "\n").encode("utf-8"))
         f.flush()
-        line = f.readline()
-        if not line:
-            raise RuntimeError("socket closed")
-        resp2 = json.loads(line.decode("utf-8"))
+        resp2 = json.loads(read_response().decode("utf-8"))
         if resp2.get("error"):
             raise RuntimeError(resp2["error"])
         ticks_b = resp2.get("ticks") or []
 
         f.write(b'{"method":"reset","params":{}}\n')
         f.flush()
-        f.readline()
+        read_response()
     finally:
         f.close()
         sock.close()

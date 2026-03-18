@@ -1,0 +1,4 @@
+k_afferents,driver_spikes,epg_spikes,drivers_fired,epg_fired
+10,77,16,True,True
+20,333,262,True,True
+26,322,243,True,True

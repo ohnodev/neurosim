@@ -1,0 +1,95 @@
+{
+  "positive_driver_count": 100,
+  "drivers_with_direct_afferent": 10,
+  "drivers_with_direct_olfvis_afferent": 0,
+  "hop_distribution_from_any_afferent": {
+    "1": 10,
+    "2": 90
+  },
+  "hop_distribution_from_olfvis_afferent": {
+    "2": 42,
+    "3": 58
+  },
+  "top10_drivers": [
+    {
+      "driver_root_id": 720575940624452902,
+      "driver_to_epg_signed_sum": 956.0,
+      "min_hops_from_any_afferent": 1,
+      "min_hops_from_olfvis_afferent": 2,
+      "direct_afferent_edges": 5.0,
+      "direct_olfvis_edges": 0
+    },
+    {
+      "driver_root_id": 720575940617672226,
+      "driver_to_epg_signed_sum": 479.0,
+      "min_hops_from_any_afferent": 1,
+      "min_hops_from_olfvis_afferent": 2,
+      "direct_afferent_edges": 6.0,
+      "direct_olfvis_edges": 0
+    },
+    {
+      "driver_root_id": 720575940640749939,
+      "driver_to_epg_signed_sum": 455.0,
+      "min_hops_from_any_afferent": 1,
+      "min_hops_from_olfvis_afferent": 2,
+      "direct_afferent_edges": 3.0,
+      "direct_olfvis_edges": 0
+    },
+    {
+      "driver_root_id": 720575940628557178,
+      "driver_to_epg_signed_sum": 419.0,
+      "min_hops_from_any_afferent": 2,
+      "min_hops_from_olfvis_afferent": 3,
+      "direct_afferent_edges": 0.0,
+      "direct_olfvis_edges": 0
+    },
+    {
+      "driver_root_id": 720575940603823462,
+      "driver_to_epg_signed_sum": 412.0,
+      "min_hops_from_any_afferent": 2,
+      "min_hops_from_olfvis_afferent": 3,
+      "direct_afferent_edges": 0.0,
+      "direct_olfvis_edges": 0
+    },
+    {
+      "driver_root_id": 720575940628866809,
+      "driver_to_epg_signed_sum": 393.0,
+      "min_hops_from_any_afferent": 2,
+      "min_hops_from_olfvis_afferent": 2,
+      "direct_afferent_edges": 0.0,
+      "direct_olfvis_edges": 0
+    },
+    {
+      "driver_root_id": 720575940642855328,
+      "driver_to_epg_signed_sum": 392.0,
+      "min_hops_from_any_afferent": 1,
+      "min_hops_from_olfvis_afferent": 2,
+      "direct_afferent_edges": 1.0,
+      "direct_olfvis_edges": 0
+    },
+    {
+      "driver_root_id": 720575940605639858,
+      "driver_to_epg_signed_sum": 353.0,
+      "min_hops_from_any_afferent": 2,
+      "min_hops_from_olfvis_afferent": 2,
+      "direct_afferent_edges": 0.0,
+      "direct_olfvis_edges": 0
+    },
+    {
+      "driver_root_id": 720575940610249426,
+      "driver_to_epg_signed_sum": 352.0,
+      "min_hops_from_any_afferent": 2,
+      "min_hops_from_olfvis_afferent": 3,
+      "direct_afferent_edges": 0.0,
+      "direct_olfvis_edges": 0
+    },
+    {
+      "driver_root_id": 720575940620571953,
+      "driver_to_epg_signed_sum": 342.0,
+      "min_hops_from_any_afferent": 2,
+      "min_hops_from_olfvis_afferent": 3,
+      "direct_afferent_edges": 0.0,
+      "direct_olfvis_edges": 0
+    }
+  ]
+}

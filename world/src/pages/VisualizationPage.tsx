@@ -208,17 +208,17 @@ const EPG_INACTIVE_BIN_PENALTY = 0.35;
 const SHOW_BIOLOGICAL_EPG_COPY = false;
 /** If a bin has this fraction of its EPG population active (in window), we point the arrow at that bin center (clear bump signal). */
 const EPG_DOMINANT_BIN_THRESHOLD = 0.8;
-const PREFERRED_REPLAY_ID = 'neurosim_python_pen35hz_seeded_1000ticks_before_opt';
+const PREFERRED_REPLAY_ID = 'neurosim_python_pen35hz_seeded_10000ticks_after_opt';
 const DEFAULT_REPLAY_DATASETS: ReplayDataset[] = [
   {
-    id: 'neurosim_python_pen35hz_seeded_1000ticks_before_opt',
-    label: 'Python PEN 35Hz seeded, 1000 ticks (before optimization)',
-    url: '/neurosim_python_pen35hz_seeded_1000ticks_before_opt.json',
+    id: 'neurosim_python_pen35hz_seeded_10000ticks_after_opt',
+    label: 'Python PEN 35Hz seeded, 10000 ticks (after optimization)',
+    url: '/neurosim_python_pen35hz_seeded_10000ticks_after_opt.json',
   },
   {
-    id: 'neurosim_python_pen35hz_seeded_1000ticks_after_opt',
-    label: 'Python PEN 35Hz seeded, 1000 ticks (after optimization)',
-    url: '/neurosim_python_pen35hz_seeded_1000ticks_after_opt.json',
+    id: 'neurosim_rust_pen35hz_seeded_10000ticks_after_opt',
+    label: 'Rust PEN 35Hz seeded, 10000 ticks (after optimization)',
+    url: '/neurosim_rust_pen35hz_seeded_10000ticks_after_opt.json',
   },
 ];
 
@@ -566,13 +566,50 @@ function buildScene(
       cxCompass /= epgIndices.length;
       cyCompass /= epgIndices.length;
       czCompass /= epgIndices.length;
-      compassCenter = { x: cxCompass, y: cyCompass, z: czCompass };
       let radiusSum = 0;
       for (const idx of epgIndices) {
         const p = aligned[idx]!;
         radiusSum += Math.hypot(p.x - cxCompass, p.y - cyCompass);
       }
-      const baseRadius = Math.max(1e-3, radiusSum / epgIndices.length);
+      let baseRadius = Math.max(1e-3, radiusSum / epgIndices.length);
+      // Seeded parity replays use synthetic neuron coordinates (x=y=z=0). In that case,
+      // force canonical compass-ring placement so all EPG neurons are visible.
+      if (baseRadius < 0.05) {
+        baseRadius = 0.35;
+        const tileGroups = new Map<number, number[]>();
+        for (const idx of epgIndices) {
+          const tile = getEffectiveEpgTile(neurons[idx]!, epgLabelMap ?? null);
+          if (tile == null || tile < 0 || tile >= EPG_COMPASS_BINS) continue;
+          const group = tileGroups.get(tile) ?? [];
+          group.push(idx);
+          tileGroups.set(tile, group);
+        }
+        if (tileGroups.size >= 2) {
+          const sector = (Math.PI * 2) / EPG_COMPASS_BINS;
+          const spread = sector * 0.35;
+          for (const [tile, indices] of tileGroups.entries()) {
+            indices.sort((a, b) => (neurons[a]?.root_id ?? '').localeCompare(neurons[b]?.root_id ?? ''));
+            const angleCenter = sceneAngleForBin(tile, EPG_COMPASS_BINS);
+            for (let k = 0; k < indices.length; k += 1) {
+              const idx = indices[k]!;
+              const centered = indices.length > 1 ? (k / (indices.length - 1)) - 0.5 : 0;
+              const angle = angleCenter + centered * spread;
+              aligned[idx]!.x = cxCompass + Math.cos(angle) * baseRadius;
+              aligned[idx]!.y = cyCompass + Math.sin(angle) * baseRadius;
+              aligned[idx]!.z = czCompass;
+            }
+          }
+        } else {
+          for (let k = 0; k < epgIndices.length; k += 1) {
+            const idx = epgIndices[k]!;
+            const angle = sceneAngleForBin(k % EPG_COMPASS_BINS, EPG_COMPASS_BINS);
+            aligned[idx]!.x = cxCompass + Math.cos(angle) * baseRadius;
+            aligned[idx]!.y = cyCompass + Math.sin(angle) * baseRadius;
+            aligned[idx]!.z = czCompass;
+          }
+        }
+      }
+      compassCenter = { x: cxCompass, y: cyCompass, z: czCompass };
       compassBaseRadius = baseRadius;
       const binAngleByBin = new Map<number, number>();
       const binWedgeSpanByBin = new Map<number, number>();

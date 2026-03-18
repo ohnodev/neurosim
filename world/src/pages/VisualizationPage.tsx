@@ -549,7 +549,7 @@ function buildScene(
       }
     }
   }
-  if (viewMode === 'compass') {
+  if (viewMode === 'compass' && SHOW_BIOLOGICAL_EPG_COPY) {
     const epgIndices: number[] = [];
     for (let i = 0; i < neurons.length; i += 1) {
       if (neurons[i]?.is_epg) epgIndices.push(i);

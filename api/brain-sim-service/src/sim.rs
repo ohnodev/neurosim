@@ -1,6 +1,9 @@
 //! Spike-based LIF simulation logic (CPU + optional GPU).
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Instant;
+
+use crate::connectome::ConnectomeTemplate;
 
 use crate::model_constants::{
     EPG_RECURRENCE_BOOST, REFRACT_MS, TAU_MEM_MS, TAU_SYN_MS, V_RESET, V_REST, V_THRESH, W_SYN,
@@ -34,28 +37,11 @@ const SYNAPTIC_DELAY_MS: f32 = 1.8;
 const MIN_FOOD_DISTANCE: f64 = 1.0;
 
 pub struct BrainSim {
+    /// Shared connectome (loaded once at startup). Never cloned per sim.
+    template: Arc<ConnectomeTemplate>,
     n: usize,
-    neuron_ids: Vec<String>,
-    neuron_index_by_id: HashMap<String, usize>,
-    #[allow(dead_code)] // kept for GPU path / step_many
-    edges_pre: Vec<u32>,
-    #[allow(dead_code)]
-    edges_post: Vec<u32>,
-    #[allow(dead_code)]
-    edges_weight: Vec<f32>,
-    out_offsets: Vec<u32>,
-    out_post: Vec<u32>,
-    out_weight: Vec<f32>,
     w_syn: f32,
     epg_recurrence_boost: f32,
-    is_epg: Vec<u8>,
-    sensory_indices: Vec<u32>,
-    sensory_left_indices: Vec<u32>,
-    sensory_right_indices: Vec<u32>,
-    sensory_unknown_indices: Vec<u32>,
-    motor_left: Vec<u32>,
-    motor_right: Vec<u32>,
-    motor_unknown: Vec<u32>,
     v: Vec<f32>,
     g: Vec<f32>,
     g_next: Vec<f32>,
@@ -236,6 +222,42 @@ impl BrainSim {
         (out_offsets, out_post, out_weight)
     }
 
+    /// Create a sim from the shared connectome. Only allocates per-sim state (v, g, spikes, etc.); no connectome clone.
+    pub fn from_template(
+        template: Arc<ConnectomeTemplate>,
+        w_syn: f32,
+        epg_recurrence_boost: f32,
+    ) -> Self {
+        let n = template.neuron_ids.len();
+        let viewer_indices = template.viewer_subset_indices.clone();
+        let delay_len = Self::compute_synaptic_delay_steps(0.001).saturating_add(1);
+        Self {
+            template,
+            n,
+            w_syn,
+            epg_recurrence_boost,
+            v: vec![V_REST; n],
+            g: vec![0.0f32; n],
+            g_next: vec![0.0f32; n],
+            syn_input: vec![0.0f32; n],
+            delay_buffer: vec![0.0f32; n * delay_len],
+            delay_head: 0,
+            delay_len,
+            refractory: vec![0u16; n],
+            spikes: vec![0u8; n],
+            viewer_indices,
+            max_activity_entries: Self::readout_activity_cap(),
+            fly_time_left_sec: FLY_TIME_MAX,
+            motor_turn_ema: 0.0,
+            rng_state: 0x9E3779B97F4A7C15u64,
+            stim_log_every: Self::stim_log_interval(),
+            step_counter: 0,
+            olf_poisson_total: 0,
+            forced_spikes_total: 0,
+            network_spikes_total: 0,
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new_with_viewer(
         neuron_ids: Vec<String>,
@@ -256,33 +278,12 @@ impl BrainSim {
         motor_unknown: Vec<u32>,
         viewer_indices: Vec<u32>,
     ) -> Self {
-        if edges_pre.len() != edges_post.len() || edges_pre.len() != edges_weight.len() {
-            panic!(
-                "mismatched edge vector lengths: edges_pre={}, edges_post={}, edges_weight={}",
-                edges_pre.len(),
-                edges_post.len(),
-                edges_weight.len()
-            );
-        }
         let n = neuron_ids.len();
-        if out_offsets.len() != n + 1 || out_post.len() != edges_pre.len() || out_weight.len() != edges_pre.len() {
-            panic!(
-                "CSR length mismatch: out_offsets.len()={} (expected {}), out_post.len()={}, out_weight.len()={}, edges={}",
-                out_offsets.len(),
-                n + 1,
-                out_post.len(),
-                out_weight.len(),
-                edges_pre.len()
-            );
-        }
-        let v = vec![V_REST; n];
-        let g = vec![0.0f32; n];
-        let g_next = vec![0.0f32; n];
-        let syn_input = vec![0.0f32; n];
-        let delay_len = Self::compute_synaptic_delay_steps(0.001).saturating_add(1);
-        let delay_buffer = vec![0.0f32; n * delay_len];
-        let refractory = vec![0u16; n];
-        let spikes = vec![0u8; n];
+        let neuron_index_by_id: HashMap<String, usize> = neuron_ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (id.clone(), i))
+            .collect();
         let mut sanitized_viewer: Vec<u32> = if viewer_indices.is_empty() {
             (0..n as u32).collect()
         } else {
@@ -296,12 +297,6 @@ impl BrainSim {
         if sanitized_viewer.is_empty() {
             sanitized_viewer = (0..n as u32).collect();
         }
-        let max_activity_entries = Self::readout_activity_cap();
-        let neuron_index_by_id = neuron_ids
-            .iter()
-            .enumerate()
-            .map(|(i, id)| (id.clone(), i))
-            .collect();
         let mut is_epg = vec![0u8; n];
         for &idx in &sanitized_viewer {
             let i = idx as usize;
@@ -309,19 +304,17 @@ impl BrainSim {
                 is_epg[i] = 1;
             }
         }
-        Self {
-            n,
+        let template = Arc::new(ConnectomeTemplate {
             neuron_ids,
             neuron_index_by_id,
+            viewer_subset_indices: sanitized_viewer.clone(),
+            is_epg,
             edges_pre,
             edges_post,
             edges_weight,
             out_offsets,
             out_post,
             out_weight,
-            w_syn,
-            epg_recurrence_boost,
-            is_epg,
             sensory_indices,
             sensory_left_indices,
             sensory_right_indices,
@@ -329,25 +322,22 @@ impl BrainSim {
             motor_left,
             motor_right,
             motor_unknown,
-            v,
-            g,
-            g_next,
-            syn_input,
-            delay_buffer,
-            delay_head: 0,
-            delay_len,
-            refractory,
-            spikes,
-            viewer_indices: sanitized_viewer,
-            max_activity_entries,
-            fly_time_left_sec: FLY_TIME_MAX,
-            motor_turn_ema: 0.0,
-            rng_state: 0x9E3779B97F4A7C15u64,
-            stim_log_every: Self::stim_log_interval(),
-            step_counter: 0,
-            olf_poisson_total: 0,
-            forced_spikes_total: 0,
-            network_spikes_total: 0,
+        });
+        Self::from_template(template, w_syn, epg_recurrence_boost)
+    }
+
+    /// Log to stderr if any of the given IDs are not in the connectome (forced spikes for them will be dropped).
+    pub fn log_missing_forced_ids(&self, ids: &[String]) {
+        let missing: Vec<&String> = ids
+            .iter()
+            .filter(|id| !self.template.neuron_index_by_id.contains_key(*id))
+            .collect();
+        if !missing.is_empty() {
+            eprintln!(
+                "[brain-service] WARNING: {} forced-spike ID(s) not in connectome (will not spike): {:?}",
+                missing.len(),
+                missing
+            );
         }
     }
 
@@ -385,7 +375,7 @@ impl BrainSim {
     }
 
     fn sensory_drive(&self, fly: &FlyInput, sources: &[SourceInput]) -> SensoryDrive {
-        if self.sensory_indices.is_empty() {
+        if self.template.sensory_indices.is_empty() {
             return SensoryDrive {
                 left_rate_hz: 0.0,
                 right_rate_hz: 0.0,
@@ -496,6 +486,7 @@ impl BrainSim {
         dt: f64,
         fly: &FlyInput,
         sources: &[SourceInput],
+        skip_olfactory: bool,
         olfactory_baseline_rate_hz: Option<f64>,
         forced_spikes: &[String],
         stim_rates_by_id: Option<&HashMap<String, f64>>,
@@ -513,16 +504,16 @@ impl BrainSim {
             if self.spikes[i] == 0 {
                 continue;
             }
-            let start = self.out_offsets[i] as usize;
-            let end = self.out_offsets[i + 1] as usize;
-            let pre_is_epg = self.is_epg[i] > 0;
+            let start = self.template.out_offsets[i] as usize;
+            let end = self.template.out_offsets[i + 1] as usize;
+            let pre_is_epg = self.template.is_epg[i] > 0;
             for j in start..end {
-                let post = self.out_post[j] as usize;
+                let post = self.template.out_post[j] as usize;
                 if post < self.n {
-                    let mut recurrent_w = self.out_weight[j];
+                    let mut recurrent_w = self.template.out_weight[j];
                     if self.epg_recurrence_boost != 1.0
                         && pre_is_epg
-                        && self.is_epg[post] > 0
+                        && self.template.is_epg[post] > 0
                     {
                         recurrent_w *= self.epg_recurrence_boost;
                     }
@@ -533,11 +524,17 @@ impl BrainSim {
         let mut rng_state = self.rng_state;
         let sensory_spike_amp = SENSORY_POISSON_SCALE * self.w_syn;
         let mut olf_poisson_spikes = 0usize;
-        let used_olfactory_rate_hz =
-            olfactory_baseline_rate_hz.filter(|v| v.is_finite() && *v > 0.0).unwrap_or(0.0);
+        let used_olfactory_rate_hz = if skip_olfactory {
+            0.0
+        } else {
+            olfactory_baseline_rate_hz
+                .filter(|v| v.is_finite() && *v > 0.0)
+                .unwrap_or(0.0)
+        };
+        if !skip_olfactory {
         if let Some(rate_hz) = olfactory_baseline_rate_hz.filter(|v| v.is_finite() && *v > 0.0) {
             olf_poisson_spikes += Self::apply_poisson_stimulus(
-                &self.sensory_left_indices,
+                &self.template.sensory_left_indices,
                 rate_hz,
                 dt,
                 sensory_spike_amp,
@@ -545,7 +542,7 @@ impl BrainSim {
                 &mut self.syn_input,
             );
             olf_poisson_spikes += Self::apply_poisson_stimulus(
-                &self.sensory_right_indices,
+                &self.template.sensory_right_indices,
                 rate_hz,
                 dt,
                 sensory_spike_amp,
@@ -553,19 +550,19 @@ impl BrainSim {
                 &mut self.syn_input,
             );
             olf_poisson_spikes += Self::apply_poisson_stimulus(
-                &self.sensory_unknown_indices,
+                &self.template.sensory_unknown_indices,
                 rate_hz,
                 dt,
                 sensory_spike_amp,
                 &mut rng_state,
                 &mut self.syn_input,
             );
-            if self.sensory_left_indices.is_empty()
-                && self.sensory_right_indices.is_empty()
-                && self.sensory_unknown_indices.is_empty()
+            if self.template.sensory_left_indices.is_empty()
+                && self.template.sensory_right_indices.is_empty()
+                && self.template.sensory_unknown_indices.is_empty()
             {
                 olf_poisson_spikes += Self::apply_poisson_stimulus(
-                    &self.sensory_indices,
+                    &self.template.sensory_indices,
                     rate_hz,
                     dt,
                     sensory_spike_amp,
@@ -576,7 +573,7 @@ impl BrainSim {
         } else {
             let sensory = self.sensory_drive(fly, sources);
             olf_poisson_spikes += Self::apply_poisson_stimulus(
-                &self.sensory_left_indices,
+                &self.template.sensory_left_indices,
                 sensory.left_rate_hz,
                 dt,
                 sensory_spike_amp,
@@ -584,7 +581,7 @@ impl BrainSim {
                 &mut self.syn_input,
             );
             olf_poisson_spikes += Self::apply_poisson_stimulus(
-                &self.sensory_right_indices,
+                &self.template.sensory_right_indices,
                 sensory.right_rate_hz,
                 dt,
                 sensory_spike_amp,
@@ -595,22 +592,22 @@ impl BrainSim {
                 ((sensory.left_rate_hz + sensory.right_rate_hz + sensory.center_rate_hz) / 3.0)
                     .max(0.0);
             olf_poisson_spikes += Self::apply_poisson_stimulus(
-                &self.sensory_unknown_indices,
+                &self.template.sensory_unknown_indices,
                 unknown_rate_hz,
                 dt,
                 sensory_spike_amp,
                 &mut rng_state,
                 &mut self.syn_input,
             );
-            if self.sensory_left_indices.is_empty()
-                && self.sensory_right_indices.is_empty()
-                && self.sensory_unknown_indices.is_empty()
+            if self.template.sensory_left_indices.is_empty()
+                && self.template.sensory_right_indices.is_empty()
+                && self.template.sensory_unknown_indices.is_empty()
             {
                 let fallback_hz = sensory
                     .center_rate_hz
                     .max(sensory.left_rate_hz.max(sensory.right_rate_hz));
                 olf_poisson_spikes += Self::apply_poisson_stimulus(
-                    &self.sensory_indices,
+                    &self.template.sensory_indices,
                     fallback_hz,
                     dt,
                     sensory_spike_amp,
@@ -619,18 +616,23 @@ impl BrainSim {
                 );
             }
         }
+        }
         // Python parity: per-neuron stim_rates_by_id are Poisson rate injections,
-        // not direct forced spikes.
+        // not direct forced spikes. Iterate root_ids in sorted order so RNG matches
+        // across runs (HashMap iteration order is randomized per process).
         if let Some(stim_map) = stim_rates_by_id {
-            for (rid, rate_hz) in stim_map {
-                if !rate_hz.is_finite() || *rate_hz <= 0.0 {
+            let mut rids: Vec<&String> = stim_map.keys().collect();
+            rids.sort();
+            for rid in rids {
+                let rate_hz = stim_map[rid];
+                if !rate_hz.is_finite() || rate_hz <= 0.0 {
                     continue;
                 }
-                let p = (*rate_hz * dt).clamp(0.0, 1.0);
+                let p = (rate_hz * dt).clamp(0.0, 1.0);
                 if p <= 0.0 {
                     continue;
                 }
-                if let Some(&idx) = self.neuron_index_by_id.get(rid) {
+                if let Some(&idx) = self.template.neuron_index_by_id.get(rid.as_str()) {
                     if idx < self.n && Self::next_uniform(&mut rng_state) < p {
                         self.syn_input[idx] += sensory_spike_amp;
                         olf_poisson_spikes += 1;
@@ -684,7 +686,7 @@ impl BrainSim {
         let mut forced_spikes_applied = 0usize;
         if !forced_spikes.is_empty() {
             for id in forced_spikes {
-                if let Some(&idx) = self.neuron_index_by_id.get(id) {
+                if let Some(&idx) = self.template.neuron_index_by_id.get(id) {
                     if idx < self.n {
                         spikes_next[idx] = 1;
                         self.v[idx] = V_RESET;
@@ -708,10 +710,10 @@ impl BrainSim {
                 self.step_counter,
                 dt,
                 used_olfactory_rate_hz,
-                self.sensory_left_indices.len(),
-                self.sensory_right_indices.len(),
-                self.sensory_unknown_indices.len(),
-                self.sensory_indices.len(),
+                self.template.sensory_left_indices.len(),
+                self.template.sensory_right_indices.len(),
+                self.template.sensory_unknown_indices.len(),
+                self.template.sensory_indices.len(),
                 olf_poisson_spikes,
                 forced_spikes_applied,
                 network_spikes_step,
@@ -747,7 +749,7 @@ impl BrainSim {
         StepTiming,
         FlyStepOutput,
     ) {
-        self.step_with_options(dt, fly, sources, true, None, Vec::new(), None)
+        self.step_with_options(dt, fly, sources, true, false, None, Vec::new(), None)
     }
 
     pub fn step_with_options(
@@ -756,6 +758,7 @@ impl BrainSim {
         fly: FlyInput,
         sources: Vec<SourceInput>,
         include_activity: bool,
+        skip_olfactory: bool,
         olfactory_baseline_rate_hz: Option<f64>,
         forced_spikes: Vec<String>,
         stim_rates_by_id: Option<&HashMap<String, f64>>,
@@ -783,6 +786,7 @@ impl BrainSim {
                     dt,
                     &fly,
                     &sources,
+                    skip_olfactory,
                     olfactory_baseline_rate_hz,
                     &forced_spikes,
                     stim_rates_by_id,
@@ -794,6 +798,7 @@ impl BrainSim {
                     dt,
                     &fly,
                     &sources,
+                    skip_olfactory,
                     olfactory_baseline_rate_hz,
                     &forced_spikes,
                     stim_rates_by_id,
@@ -806,11 +811,12 @@ impl BrainSim {
         let mut activity_sparse = HashMap::new();
         let mut activity: Vec<f32> = Vec::new();
         let all_spike_ids: Vec<String> = self
+            .template
             .neuron_ids
             .iter()
             .enumerate()
             .filter(|(i, _)| self.spikes[*i] >= ACTIVITY_THRESHOLD)
-            .map(|(_, id)| id.clone())
+            .map(|(_, id): (usize, &String)| id.clone())
             .collect();
         if include_activity {
             activity = vec![0.0f32; self.n];
@@ -820,7 +826,7 @@ impl BrainSim {
                 if self.spikes[i] >= ACTIVITY_THRESHOLD {
                     activity[i] = 1.0;
                     if activity_sparse.len() < cap {
-                        if let Some(id) = self.neuron_ids.get(i) {
+                        if let Some(id) = self.template.neuron_ids.get(i) {
                             activity_sparse.insert(id.clone(), 1.0);
                         }
                     }
@@ -842,7 +848,7 @@ impl BrainSim {
         let mut ml_count = 0.0f64;
         let mut mr_count = 0.0f64;
         let mut mf_count = 0.0f64;
-        for &i in &self.motor_left {
+        for &i in &self.template.motor_left {
             let idx = i as usize;
             if idx < self.n {
                 let spike = self.spikes[idx] as f64;
@@ -852,7 +858,7 @@ impl BrainSim {
                 }
             }
         }
-        for &i in &self.motor_right {
+        for &i in &self.template.motor_right {
             let idx = i as usize;
             if idx < self.n {
                 let spike = self.spikes[idx] as f64;
@@ -862,7 +868,7 @@ impl BrainSim {
                 }
             }
         }
-        for &i in &self.motor_unknown {
+        for &i in &self.template.motor_unknown {
             let idx = i as usize;
             if idx < self.n {
                 let spike = self.spikes[idx] as f64;
@@ -919,15 +925,15 @@ impl BrainSim {
 
             // Use per-side firing rates (not raw counts) to avoid fixed turn bias
             // when motor bank sizes differ (e.g. 52 left vs 54 right neurons).
-            let ml_rate = if self.motor_left.is_empty() {
+            let ml_rate = if self.template.motor_left.is_empty() {
                 0.0
             } else {
-                ml / self.motor_left.len() as f64
+                ml / self.template.motor_left.len() as f64
             };
-            let mr_rate = if self.motor_right.is_empty() {
+            let mr_rate = if self.template.motor_right.is_empty() {
                 0.0
             } else {
-                mr / self.motor_right.len() as f64
+                mr / self.template.motor_right.len() as f64
             };
             // Steering needs stronger influence than forward drive so small L/R
             // imbalances (e.g. +/-3..5 spikes) still produce visible turns.

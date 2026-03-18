@@ -12,10 +12,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 # Use a dedicated socket so we don't clash with python-brain
 SOCKET_PATH = Path(os.environ.get("NEUROSIM_BRAIN_SOCKET_RUST", "/tmp/neurosim-rust-bench.sock"))
-CONNECTOME_PATH = os.environ.get("NEUROSIM_CONNECTOME_PATH", str(ROOT / "data" / "raw" / "2025_Connectivity_783.parquet"))
+# Single connectome (same as brain-service); no env override.
+CONNECTOME_PATH = ROOT / "data" / "raw" / "2025_Connectivity_783.parquet"
 DT_SEC = 0.0001  # 0.1 ms
 N_WARMUP = 5
 N_STEPS = 100
+RUN_STEPS_COUNT = int(os.environ.get("NEUROSIM_BENCHMARK_RUN_STEPS", "5000"))
 
 # Rust step expects: sim_id, dt, include_activity, fly, sources
 DEFAULT_FLY = {
@@ -42,21 +44,28 @@ def main() -> int:
             file=sys.stderr,
         )
         print(
-            f"  NEUROSIM_BRAIN_SOCKET={SOCKET_PATH} NEUROSIM_CONNECTOME_PATH={CONNECTOME_PATH} "
-            "api/brain-sim-service/target/release/brain-service &",
+            f"  NEUROSIM_BRAIN_SOCKET={SOCKET_PATH} api/brain-sim-service/target/release/brain-service &",
             file=sys.stderr,
         )
         return 1
 
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     sock.settimeout(60.0)
+
+    t_connect = time.perf_counter()
     sock.connect(str(SOCKET_PATH))
+    connect_sec = time.perf_counter() - t_connect
+    print(f"[timing] connect: {connect_sec:.3f} s")
+
     f = sock.makefile("rwb")
     try:
         # create
+        t_create = time.perf_counter()
         f.write(b'{"method":"create","params":{}}\n')
         f.flush()
         out = json.loads(f.readline().decode("utf-8"))
+        create_sec = time.perf_counter() - t_create
+        print(f"[timing] create (round-trip): {create_sec:.3f} s")
         if out.get("error"):
             print("Error (create):", out["error"], file=sys.stderr)
             return 1
@@ -77,10 +86,13 @@ def main() -> int:
         msg0 = (json.dumps(step_payload(0.0)) + "\n").encode("utf-8")
 
         # warmup
+        t_warmup = time.perf_counter()
         for i in range(N_WARMUP):
             f.write(msg0)
             f.flush()
             f.readline()
+        warmup_sec = time.perf_counter() - t_warmup
+        print(f"[timing] warmup ({N_WARMUP} steps): {warmup_sec:.3f} s")
 
         # timed run: 100 steps
         t0 = time.perf_counter()
@@ -91,6 +103,34 @@ def main() -> int:
             f.flush()
             f.readline()
         elapsed = time.perf_counter() - t0
+        print(f"[timing] {N_STEPS} steps (total): {elapsed:.3f} s")
+
+        # run_steps benchmark (one RPC, with record_ticks; server logs parse/steps_loop/serialize)
+        count_ids = []
+        csv_path = ROOT / "data" / "forced_epg_r4_l6_neurons.csv"
+        if csv_path.exists():
+            import csv
+            with open(csv_path, newline="") as fp:
+                for row in csv.DictReader(fp):
+                    if row.get("root_id"):
+                        count_ids.append(row["root_id"].strip())
+        count_ids = count_ids[:6] if count_ids else []
+        run_steps_payload = {
+            "method": "run_steps",
+            "params": {
+                "sim_id": sim_id,
+                "num_steps": RUN_STEPS_COUNT,
+                "dt": DT_SEC,
+                "record_ticks": True,
+                "count_neuron_ids": count_ids if count_ids else None,
+            },
+        }
+        t_run_steps = time.perf_counter()
+        f.write((json.dumps(run_steps_payload) + "\n").encode("utf-8"))
+        f.flush()
+        line = f.readline().decode("utf-8")
+        run_steps_sec = time.perf_counter() - t_run_steps
+        print(f"[timing] run_steps({RUN_STEPS_COUNT} steps, record_ticks=True): {run_steps_sec:.3f} s (see server stderr for parse/steps_loop/serialize)")
 
         # Rust service has no "reset"; just close
     finally:
@@ -98,8 +138,9 @@ def main() -> int:
         sock.close()
 
     ms_per_step = (elapsed / N_STEPS) * 1000
+    print()
     print(f"Rust brain-service: {N_STEPS} steps @ dt=0.1 ms (0.0001 s)")
-    print(f"  Total: {elapsed:.3f} s")
+    print(f"  Total steps: {elapsed:.3f} s")
     print(f"  Per step: {ms_per_step:.2f} ms")
     print(f"  1 s sim (10k steps) at this rate: {(10000 * ms_per_step) / 1000:.1f} s wall")
     return 0

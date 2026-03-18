@@ -294,6 +294,8 @@ export interface StepParams {
   simId: number;
   dt: number;
   olfactory_baseline_rate_hz?: number;
+  /** When present and non-empty: PEN_a rates for this step; olfactory/sensory drive is skipped. */
+  ratesById?: Record<string, number>;
   forced_spikes?: string[];
   includeActivity?: boolean;
   fly: {
@@ -338,6 +340,8 @@ export interface StepResult {
   };
   eatenFoodId?: string;
   feedingSugarTaken?: number;
+  /** EPG bump heading in degrees (math convention), when available. */
+  bumpAngleDeg?: number | null;
   computeMs?: number;
   kernelMs?: number;
   recurrentMs?: number;
@@ -404,9 +408,91 @@ export async function ping(): Promise<void> {
   if (!res?.ok) throw new Error('brain-service ping failed');
 }
 
-export async function createSim(_params?: CreateParams): Promise<{ simId: number }> {
-  const res = await request<{ sim_id: number }>({ method: 'create', params: {} });
+export async function createSim(params?: CreateParams & {
+  rngSeed?: number;
+  epgRecurrenceBoost?: number;
+}): Promise<{ simId: number }> {
+  const p: JsonObj = {};
+  if (params?.rngSeed != null && Number.isFinite(params.rngSeed)) {
+    p.rng_seed = Math.floor(params.rngSeed as number);
+  }
+  if (params?.epgRecurrenceBoost != null && Number.isFinite(params.epgRecurrenceBoost)) {
+    p.epg_recurrence_boost = params.epgRecurrenceBoost as number;
+  }
+  const res = await request<{ sim_id: number }>({ method: 'create', params: p });
   return { simId: res.sim_id };
+}
+
+/** Continuous live sim: set PEN_a L/R Hz (applies on next step). Optional ratesById overrides per neuron. */
+export async function liveSetPenA(
+  leftHz: number,
+  rightHz: number,
+  ratesById?: Record<string, number>,
+): Promise<void> {
+  const params: { left_hz: number; right_hz: number; rates_by_id?: Record<string, number> } = {
+    left_hz: leftHz,
+    right_hz: rightHz,
+  };
+  if (ratesById && Object.keys(ratesById).length > 0) {
+    params.rates_by_id = ratesById;
+  }
+  await request<{ ok?: boolean }>({ method: 'live_set_pen_a', params });
+}
+
+export async function liveReadTicks(
+  afterTick: number,
+  maxTicks = 2000,
+): Promise<{
+  ticks: Array<{ tick: number; time_sec: number; spikes: string[] }>;
+  latest_tick: number;
+  dt_sec: number;
+}> {
+  return request({
+    method: 'live_read_ticks',
+    params: {
+      after_tick: Math.max(0, Math.floor(afterTick)),
+      max_ticks: Math.min(8000, Math.max(1, Math.floor(maxTicks))),
+    },
+  });
+}
+
+export async function liveStatus(): Promise<{
+  ok?: boolean;
+  latest_tick: number;
+  left_hz: number;
+  right_hz: number;
+  dt_sec: number;
+}> {
+  return request({
+    method: 'live_status',
+    params: {},
+  });
+}
+
+export async function runSteps(params: {
+  simId: number;
+  numSteps: number;
+  dt: number;
+  stimRatesById: Record<string, number>;
+  countNeuronIds?: string[];
+  recordTicks: boolean;
+}): Promise<{
+  steps_done: number;
+  duration_sec: number;
+  wall_sec: number;
+  ticks?: Array<{ tick: number; time_sec: number; spikes: string[] }>;
+}> {
+  return request({
+    method: 'run_steps',
+    params: {
+      sim_id: params.simId,
+      num_steps: Math.min(1_000_000, Math.max(1, Math.floor(params.numSteps))),
+      dt: params.dt,
+      stim_rates_by_id: params.stimRatesById,
+      count_neuron_ids: params.countNeuronIds,
+      record_ticks: params.recordTicks,
+    },
+  });
 }
 
 export async function stepSim(params: StepParams): Promise<StepResult> {
@@ -437,6 +523,7 @@ export async function stepSim(params: StepParams): Promise<StepResult> {
     };
     eaten_food_id?: string;
     feeding_sugar_taken?: number;
+    bump_angle_deg?: number | null;
     compute_ms?: number;
     kernel_ms?: number;
     recurrent_ms?: number;
@@ -460,6 +547,9 @@ export async function stepSim(params: StepParams): Promise<StepResult> {
       },
       sources: params.sources,
       include_activity: params.includeActivity ?? true,
+      ...(params.ratesById && Object.keys(params.ratesById).length > 0
+        ? { rates_by_id: params.ratesById }
+        : {}),
     },
   });
   return {
@@ -490,6 +580,7 @@ export async function stepSim(params: StepParams): Promise<StepResult> {
     },
     eatenFoodId: res.eaten_food_id,
     feedingSugarTaken: res.feeding_sugar_taken,
+    bumpAngleDeg: res.bump_angle_deg ?? null,
     computeMs: res.compute_ms,
     kernelMs: res.kernel_ms,
     recurrentMs: res.recurrent_ms,

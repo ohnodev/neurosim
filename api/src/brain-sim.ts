@@ -31,6 +31,8 @@ export interface SimState {
   motorFwdMagnitude?: number;
   eatenFoodId?: string;
   feedingSugarTaken?: number;
+  /** EPG bump heading in degrees (from Rust step), when available. */
+  bumpAngleDeg?: number | null;
 }
 
 /** Brain sim uses the Rust service via Unix socket only. Connectome loaded by brain-service at startup. */
@@ -166,6 +168,7 @@ export async function createBrainSim(
     let lastInputActivity: Record<string, number> | undefined;
     let lastEatenFoodId: string | undefined;
     let lastFeedingSugarTaken = 0;
+    let lastBumpAngleDeg: number | null | undefined;
     let lastMotorLeft = 0;
     let lastMotorRight = 0;
     let lastMotorFwd = 0;
@@ -180,6 +183,7 @@ export async function createBrainSim(
       dt: number,
       sources: WorldSource[],
       includeActivity = true,
+      penARatesById?: Record<string, number>,
     ): Promise<{
       activitySparse: Record<string, number>;
       motorLeft: number;
@@ -207,6 +211,7 @@ export async function createBrainSim(
       };
       eatenFoodId?: string;
       feedingSugarTaken?: number;
+      bumpAngleDeg?: number | null;
       computeMs?: number;
       kernelMs?: number;
       recurrentMs?: number;
@@ -229,22 +234,27 @@ export async function createBrainSim(
         dt,
         includeActivity,
         fly: flyInput,
-        // Rust handles sensory drive from world source geometry.
         sources: sources.map((s) => ({ id: s.id, x: s.x, y: s.y, radius: s.radius })),
+        ...(penARatesById && Object.keys(penARatesById).length > 0 ? { ratesById: penARatesById } : {}),
       });
     }
 
-    async function step(dt: number, options?: { includeActivity?: boolean }): Promise<SimState> {
+    async function step(
+      dt: number,
+      options?: { includeActivity?: boolean; penARatesById?: Record<string, number> },
+    ): Promise<SimState> {
       const includeActivity = options?.includeActivity ?? true;
+      const penARatesById = options?.penARatesById;
       const stepStart = performance.now();
       if (fly.dead) {
         const t = fly.t + dt;
         fly = { ...fly, t };
-        const act = await runRustStep(dt, getSources(), includeActivity);
+        const act = await runRustStep(dt, getSources(), includeActivity, penARatesById);
         lastActivitySparse = act.activitySparse;
         lastInputActivity = undefined;
         lastEatenFoodId = undefined;
         lastFeedingSugarTaken = 0;
+        lastBumpAngleDeg = act.bumpAngleDeg ?? null;
         lastMotorLeft = act.motorLeft ?? 0;
         lastMotorRight = act.motorRight ?? 0;
         lastMotorFwd = act.motorFwd ?? 0;
@@ -278,11 +288,15 @@ export async function createBrainSim(
           motorRightMagnitude: lastMotorRightMagnitude,
           motorFwdMagnitude: lastMotorFwdMagnitude,
           eatenFoodId: lastEatenFoodId,
+          bumpAngleDeg: lastBumpAngleDeg,
         };
       }
 
       const currentSources = getSources();
-      const directional = estimateDirectionalSensoryInput(dt, fly, currentSources);
+      const directional =
+        penARatesById && Object.keys(penARatesById).length > 0
+          ? { left: 0, right: 0, center: 0 }
+          : estimateDirectionalSensoryInput(dt, fly, currentSources);
       const leftStrength = directional.left > 0 ? Math.max(0.05, Math.min(0.95, directional.left)) : 0;
       const rightStrength = directional.right > 0 ? Math.max(0.05, Math.min(0.95, directional.right)) : 0;
       const centerStrength = directional.center > 0 ? Math.max(0.05, Math.min(0.95, directional.center)) : 0;
@@ -301,7 +315,7 @@ export async function createBrainSim(
       lastInputActivity = inputActivityRec;
 
       const rustStart = performance.now();
-      const result = await runRustStep(dt, currentSources, includeActivity);
+      const result = await runRustStep(dt, currentSources, includeActivity, penARatesById);
       lastRustMs = Math.round(performance.now() - rustStart);
       lastSocketTiming = socketClient.getLastRequestTiming();
       lastRustTiming = {
@@ -343,6 +357,7 @@ export async function createBrainSim(
       const activityRec = Object.keys(activitySparse).length ? activitySparse : undefined;
       lastEatenFoodId = result.eatenFoodId;
       lastFeedingSugarTaken = result.feedingSugarTaken ?? 0;
+      lastBumpAngleDeg = result.bumpAngleDeg ?? null;
       lastJsMs = Math.round(performance.now() - stepStart - lastRustMs);
 
       return {
@@ -361,6 +376,7 @@ export async function createBrainSim(
         motorFwdMagnitude: lastMotorFwdMagnitude,
         feedingSugarTaken: lastFeedingSugarTaken,
         ...(result.eatenFoodId && { eatenFoodId: result.eatenFoodId }),
+        bumpAngleDeg: lastBumpAngleDeg,
       };
     }
 
@@ -406,6 +422,7 @@ export async function createBrainSim(
         motorFwdMagnitude: lastMotorFwdMagnitude,
         feedingSugarTaken: lastFeedingSugarTaken,
         ...(lastEatenFoodId && { eatenFoodId: lastEatenFoodId }),
+        bumpAngleDeg: lastBumpAngleDeg,
       };
     }
 

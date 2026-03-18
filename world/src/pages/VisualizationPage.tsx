@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import PlaybackControls from '../components/PlaybackControls';
+import { useNotification } from '../contexts/NotificationContext';
 import { getApiBase } from '../lib/constants';
 
 type ReplayNeuron = {
@@ -49,6 +50,7 @@ type ReplayData = {
     epg_neuron_unique_fired?: number;
     delta7_inhibition_profile_by_offset?: number[];
     scenario?: string;
+    note?: string;
   };
   neurons: ReplayNeuron[];
   ticks: ReplayTick[];
@@ -208,17 +210,17 @@ const EPG_INACTIVE_BIN_PENALTY = 0.35;
 const SHOW_BIOLOGICAL_EPG_COPY = false;
 /** If a bin has this fraction of its EPG population active (in window), we point the arrow at that bin center (clear bump signal). */
 const EPG_DOMINANT_BIN_THRESHOLD = 0.8;
-const PREFERRED_REPLAY_ID = 'neurosim_python_pen35hz_seeded_10000ticks_after_opt';
+const PREFERRED_REPLAY_ID = 'neurosim_rust_pen_L100_R0_B0_100k_rec3p5x_replay';
 const DEFAULT_REPLAY_DATASETS: ReplayDataset[] = [
   {
-    id: 'neurosim_python_pen35hz_seeded_10000ticks_after_opt',
-    label: 'Python PEN 35Hz seeded, 10000 ticks (after optimization)',
-    url: '/neurosim_python_pen35hz_seeded_10000ticks_after_opt.json',
+    id: 'neurosim_rust_pen_L100_R0_B0_100k_rec3p5x_replay',
+    label: 'Baseline replay (PEN_a L100 R0, 100k, 3.5× EPG rec)',
+    url: '/neurosim_rust_pen_L100_R0_B0_100k_rec3p5x_replay.json',
   },
   {
-    id: 'neurosim_rust_pen35hz_seeded_10000ticks_after_opt',
-    label: 'Rust PEN 35Hz seeded, 10000 ticks (after optimization)',
-    url: '/neurosim_rust_pen35hz_seeded_10000ticks_after_opt.json',
+    id: 'neurosim_live',
+    label: 'Live — tweak PEN_a L/R Hz (3.5× EPG rec, seed 17290319, record)',
+    url: 'neurosim_live',
   },
 ];
 
@@ -444,6 +446,13 @@ function getEffectiveEpgTile(
   return EPG_LABEL_TO_BIN.get(label);
 }
 
+function isCompassEpgNeuron(neuron: ReplayNeuron): boolean {
+  if (!neuron.is_epg) return false;
+  // Exclude EPGt (L9/R9-like) from compass bins L1-R8.
+  const hb = (neuron.hemibrain_type ?? '').trim().toUpperCase();
+  return hb !== 'EPGT';
+}
+
 function buildScene(
   container: HTMLDivElement,
   neurons: ReplayNeuron[],
@@ -456,7 +465,7 @@ function buildScene(
   const height = Math.max(1, container.clientHeight);
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x1a2435);
-  const mostlyEpg = neurons.filter((n) => n.is_epg).length >= Math.max(8, Math.floor(neurons.length * 0.7));
+  const mostlyEpg = neurons.filter((n) => isCompassEpgNeuron(n)).length >= Math.max(8, Math.floor(neurons.length * 0.7));
 
   const camera = new THREE.PerspectiveCamera(55, width / height, 0.01, 100);
   camera.position.set(0, 0, mostlyEpg ? 1.25 : 2.5);
@@ -481,7 +490,7 @@ function buildScene(
   if (viewMode === 'compass') {
     const ringIndices: number[] = [];
     for (let i = 0; i < neurons.length; i += 1) {
-      if (neurons[i]?.is_epg) ringIndices.push(i);
+      if (neurons[i] && isCompassEpgNeuron(neurons[i]!)) ringIndices.push(i);
     }
     if (ringIndices.length > 3) {
       let cx = 0;
@@ -552,7 +561,7 @@ function buildScene(
   if (viewMode === 'compass') {
     const epgIndices: number[] = [];
     for (let i = 0; i < neurons.length; i += 1) {
-      if (neurons[i]?.is_epg) epgIndices.push(i);
+      if (neurons[i] && isCompassEpgNeuron(neurons[i]!)) epgIndices.push(i);
     }
     if (epgIndices.length > 3) {
       let cxCompass = 0;
@@ -708,7 +717,7 @@ function buildScene(
     const p = aligned[i]!;
     idToIndex.set(neuron.root_id, i);
     isRingByIndex[i] = neuron.is_ring;
-    isEpgByIndex[i] = neuron.is_epg;
+    isEpgByIndex[i] = isCompassEpgNeuron(neuron);
     isUpstreamByIndex[i] = Boolean(neuron.is_epg_upstream);
     isDownstreamByIndex[i] = Boolean(neuron.is_epg_downstream);
     isDelta7ByIndex[i] = Boolean(neuron.is_delta7);
@@ -739,7 +748,7 @@ function buildScene(
         ringDirectionByIndex[i] = v.normalize();
       }
     }
-    if (neuron.is_epg) {
+    if (isCompassEpgNeuron(neuron)) {
       const tile = getEffectiveEpgTile(neuron, epgLabelMap ?? null);
       if (tile != null) {
         const t = Math.max(0, Math.min(EPG_COMPASS_BINS - 1, tile));
@@ -758,7 +767,7 @@ function buildScene(
         }
       }
     }
-    const c = neuron.is_epg
+    const c = isCompassEpgNeuron(neuron)
       ? INACTIVE_EPG_COLOR.clone().multiplyScalar(0.42)
       : neuron.is_epg_upstream
         ? INACTIVE_UPSTREAM_COLOR
@@ -1111,11 +1120,12 @@ function buildScene(
           if (!spikeTickById.has(id)) spikeTickById.set(id, t);
         }
       }
-      for (let i = 0; i < colorAttr.count; i += 1) {
-        const spikeTick = spikeTickById.get(neuronIds[i] ?? '');
-        if (spikeTick != null) {
+      for (const [id, spikeTick] of spikeTickById) {
+        const idx = idToIndex.get(id);
+        if (idx != null && idx < colorAttr.count) {
           const ticksAgo = currentTick - spikeTick;
-          brightnessByIndex[i] = Math.max(0, 1 - ticksAgo / SPIKE_DISPLAY_TICKS);
+          const b = Math.max(0, 1 - ticksAgo / SPIKE_DISPLAY_TICKS);
+          if (b > (brightnessByIndex[idx] ?? 0)) brightnessByIndex[idx] = b;
         }
       }
     }
@@ -1472,21 +1482,11 @@ function applyTickSpikes(
   };
 }
 
-/** Mirror eonsystems tier2: 1ms dt, 30Hz olfactory, sensory 0/0.5/0.2/0 */
-const NEUROSIM_LIVE_DT_SEC = 0.001;
-const NEUROSIM_LIVE_TIER2 = {
-  olfactoryBaselineHz: 30,
-  dtSec: 0.001,
-  mechanoHz: 0,
-  thermoHz: 0.5,
-  hygroHz: 0.2,
-  gustatoryHz: 0,
-};
-/** 1 step per request = 1 tick (1ms) per update, matching eonsystems tier2; avoids "gapped" 10-tick jumps. */
-const NEUROSIM_LIVE_STEP_BATCH = 1;
-/** Call every 1ms so at 1ms dt we get ~real-time (1000 ticks/s). */
-const NEUROSIM_LIVE_INTERVAL_MS = 1;
-const NEUROSIM_LIVE_MAX_BACKOFF_MS = 1000;
+const NEUROSIM_LIVE_DT_SEC = 0.0001;
+const NEUROSIM_LIVE_POLL_MS = 20;
+const NEUROSIM_LIVE_MAX_TICKS_PER_POLL = 3000;
+const NEUROSIM_LIVE_MAX_STORED_TICKS = 100_000;
+const NEUROSIM_LIVE_MAX_BACKOFF_MS = 2000;
 
 export default function VisualizationPage() {
   const [fetchedReplay, setFetchedReplay] = useState<ReplayData | null>(null);
@@ -1500,17 +1500,25 @@ export default function VisualizationPage() {
   const liveReplayRef = useRef<ReplayData | null>(null);
   const liveEpgSeenRef = useRef<Set<string>>(new Set());
   const [liveEpgUniqueFired, setLiveEpgUniqueFired] = useState(0);
-  const liveSimIdRef = useRef<number | null>(null);
-  const [liveRunning, setLiveRunning] = useState(false);
   const [recording, setRecording] = useState(false);
-  const [liveSettings, setLiveSettings] = useState({
-    olfactoryBaselineHz: NEUROSIM_LIVE_TIER2.olfactoryBaselineHz,
-    dtSec: NEUROSIM_LIVE_TIER2.dtSec,
-    mechanoHz: NEUROSIM_LIVE_TIER2.mechanoHz,
-    thermoHz: NEUROSIM_LIVE_TIER2.thermoHz,
-    hygroHz: NEUROSIM_LIVE_TIER2.hygroHz,
-    gustatoryHz: NEUROSIM_LIVE_TIER2.gustatoryHz,
-  });
+  const [liveSettings, setLiveSettings] = useState({ dtSec: NEUROSIM_LIVE_DT_SEC });
+  /** Draft values; server uses last Apply (starts at 0 / 0). */
+  const [penALeftHz, setPenALeftHz] = useState(0);
+  const [penARightHz, setPenARightHz] = useState(0);
+  const [appliedPenLeft, setAppliedPenLeft] = useState(0);
+  const [appliedPenRight, setAppliedPenRight] = useState(0);
+  const [applyBusy, setApplyBusy] = useState(false);
+  const [liveAutoplay, setLiveAutoplay] = useState(true);
+  const [latestLiveTickNumber, setLatestLiveTickNumber] = useState(0);
+  const [penANeurons, setPenANeurons] = useState<{ left: Array<{ id: string; label: string }>; right: Array<{ id: string; label: string }> }>({ left: [], right: [] });
+  const [penARatesById, setPenARatesById] = useState<Record<string, number>>({});
+  const notification = useNotification();
+  const liveAfterTickRef = useRef(0);
+  const livePollFailRef = useRef(0);
+  const recordingRef = useRef(false);
+  useEffect(() => {
+    recordingRef.current = recording;
+  }, [recording]);
   const [currentTick, setCurrentTick] = useState(1);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState<PlaybackSpeed>(1);
@@ -1562,15 +1570,15 @@ export default function VisualizationPage() {
   const epgUniqueFired = useMemo(() => {
     if (!replay) return null;
     if (selectedReplayId === 'neurosim_live') return liveEpgUniqueFired;
-    const epgUniqueFromMeta = replay.meta?.epg_neuron_unique_fired;
-    if (typeof epgUniqueFromMeta === 'number' && Number.isFinite(epgUniqueFromMeta)) {
-      return epgUniqueFromMeta;
-    }
     let epgIds: Set<string>;
     if (epgLabelMap && epgLabelMap.size > 0) {
-      epgIds = new Set(epgLabelMap.keys());
+      epgIds = new Set(
+        (replay.neurons ?? [])
+          .filter((neuron) => epgLabelMap.has(neuron.root_id) && isCompassEpgNeuron(neuron))
+          .map((neuron) => neuron.root_id),
+      );
     } else {
-      epgIds = new Set((replay.neurons ?? []).filter((neuron) => neuron.is_epg === true).map((neuron) => neuron.root_id));
+      epgIds = new Set((replay.neurons ?? []).filter((neuron) => isCompassEpgNeuron(neuron)).map((neuron) => neuron.root_id));
     }
     if (epgIds.size === 0) return null;
     const fired = new Set<string>();
@@ -1584,7 +1592,7 @@ export default function VisualizationPage() {
   const displayNeurons = useMemo(() => {
     const seen = new Set<string>();
     return neurons.filter((neuron) => {
-      if (!neuron.is_epg) return false;
+      if (!isCompassEpgNeuron(neuron)) return false;
       if (seen.has(neuron.root_id)) return false;
       seen.add(neuron.root_id);
       return true;
@@ -1635,8 +1643,8 @@ export default function VisualizationPage() {
             y: typeof n.y === 'number' ? n.y : 0,
             z: typeof n.z === 'number' ? n.z : 0,
             processed_label: n.cell_type,
-            is_ring: false,
-            is_epg: false,
+            is_ring: true,
+            is_epg: true,
             side: n.side ?? 'unknown',
             hemibrain_type: n.cell_type ?? '',
             flow: n.role,
@@ -1667,8 +1675,6 @@ export default function VisualizationPage() {
           liveReplaySourceRef.current = 'live';
           liveEpgSeenRef.current = new Set();
           setLiveEpgUniqueFired(0);
-          setLiveRunning(false);
-          liveSimIdRef.current = null;
         } else {
           const res = await fetch(`${datasetUrl}?v=${Date.now()}`, { cache: 'no-store' });
           if (!res.ok) throw new Error(`Replay not found (${res.status})`);
@@ -1694,9 +1700,7 @@ export default function VisualizationPage() {
         liveReplaySourceRef.current = 'live';
         liveEpgSeenRef.current = new Set();
         setLiveEpgUniqueFired(0);
-        setLiveRunning(false);
-        liveSimIdRef.current = null;
-        liveNextTickRef.current = 1;
+        liveAfterTickRef.current = 0;
         setCurrentTick(0);
         setPlaying(false);
         setError((err as Error).message);
@@ -1778,6 +1782,31 @@ export default function VisualizationPage() {
       };
       liveReplayRef.current = next;
       setLiveReplay(next);
+    } else if (current != null && ticks !== current.ticks) {
+      // Buffer replaced at cap (same length, new content) – sync replay so live view advances
+      const seen = new Set<string>();
+      if (epgIds && epgIds.size > 0) {
+        for (const t of ticks) {
+          for (const id of t.spikes ?? []) {
+            if (epgIds.has(id)) seen.add(id);
+          }
+        }
+      }
+      liveEpgSeenRef.current = seen;
+      setLiveEpgUniqueFired(seen.size);
+      const next = {
+        ...current,
+        meta: {
+          ...current.meta,
+          dt_sec: liveSettings.dtSec,
+          scenario: 'neurosim_live',
+          ticks: ticks.length,
+          epg_neuron_unique_fired: seen.size,
+        },
+        ticks: [...ticks],
+      };
+      liveReplayRef.current = next;
+      setLiveReplay(next);
     } else if (current != null && current.meta.dt_sec !== liveSettings.dtSec) {
       const next = {
         ...current,
@@ -1797,84 +1826,119 @@ export default function VisualizationPage() {
 
   const isNeuroSimLive = selectedReplayId === 'neurosim_live';
   const apiBase = getApiBase();
-  const liveNextTickRef = useRef(1);
-  const liveStepFailureCountRef = useRef(0);
 
   useEffect(() => {
-    if (!isNeuroSimLive || !liveRunning || liveSimIdRef.current == null || !templateReplay) return;
+    if (!isNeuroSimLive) return;
     let cancelled = false;
-    let inFlight = false;
+    fetch(`${apiBase}/api/neurosim-live/pen-a-neurons`)
+      .then((r) => r.json())
+      .then((data: { left?: Array<{ id: string; label: string }>; right?: Array<{ id: string; label: string }> }) => {
+        if (!cancelled) setPenANeurons({ left: data.left ?? [], right: data.right ?? [] });
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [isNeuroSimLive, apiBase]);
+
+  useEffect(() => {
+    if (!isNeuroSimLive || !templateReplay) return;
+    let cancelled = false;
     let timerId: number | null = null;
-    let activeController: AbortController | null = null;
-    const scheduleNext = (delayMs = NEUROSIM_LIVE_INTERVAL_MS) => {
-      if (cancelled) return;
+    const schedule = (fn: () => void, ms: number) => {
       if (timerId != null) clearTimeout(timerId);
-      timerId = window.setTimeout(() => { void runStep(); }, Math.max(1, delayMs));
+      timerId = window.setTimeout(fn, ms);
     };
-    const runStep = async () => {
-      if (cancelled || liveSimIdRef.current == null) return;
-      if (inFlight) {
-        scheduleNext();
-        return;
-      }
-      let nextDelayMs = NEUROSIM_LIVE_INTERVAL_MS;
-      inFlight = true;
-      const startTick = liveNextTickRef.current;
-      const controller = new AbortController();
-      activeController = controller;
+    const init = async () => {
       try {
-        const res = await fetch(`${apiBase}/api/neurosim-live/step`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          signal: controller.signal,
-          body: JSON.stringify({
-            simId: liveSimIdRef.current,
-            count: NEUROSIM_LIVE_STEP_BATCH,
-            startTick,
-            dt_sec: liveSettings.dtSec,
-            olfactoryBaselineHz: liveSettings.olfactoryBaselineHz,
-            mechanoHz: liveSettings.mechanoHz,
-            thermoHz: liveSettings.thermoHz,
-            hygroHz: liveSettings.hygroHz,
-            gustatoryHz: liveSettings.gustatoryHz,
-          }),
-        });
-        if (!res.ok) throw new Error(`step failed: ${res.status}`);
-        const data = (await res.json()) as { ticks: ReplayTick[] };
+        setError(null);
+        const st = await fetch(`${apiBase}/api/neurosim-live/status`);
+        if (!st.ok) throw new Error(`live status ${st.status}`);
+        const j = (await st.json()) as {
+          latestTick?: number;
+          dtSec?: number;
+          penALeftHz?: number;
+          penARightHz?: number;
+        };
         if (cancelled) return;
-        const newTicks = data.ticks ?? [];
-        liveNextTickRef.current = startTick + newTicks.length;
-        setLiveTicks((prev) => [...prev, ...newTicks]);
-        if (recording) setRecordedTicks((prev) => [...prev, ...newTicks]);
-        setCurrentTick(liveNextTickRef.current);
-        liveStepFailureCountRef.current = 0;
-      } catch (err) {
-        if (!cancelled && (err as Error).name !== 'AbortError') {
-          setError((err as Error).message);
-          liveStepFailureCountRef.current += 1;
-          nextDelayMs = Math.min(
-            NEUROSIM_LIVE_INTERVAL_MS * (2 ** liveStepFailureCountRef.current),
-            NEUROSIM_LIVE_MAX_BACKOFF_MS,
-          );
-        }
-      } finally {
-        inFlight = false;
-        if (activeController === controller) activeController = null;
-        scheduleNext(nextDelayMs);
+        const latest = Math.max(0, Math.floor(j.latestTick ?? 0));
+        liveAfterTickRef.current = latest;
+        setLatestLiveTickNumber(latest);
+        setAppliedPenLeft(j.penALeftHz ?? 0);
+        setAppliedPenRight(j.penARightHz ?? 0);
+        setPenALeftHz(j.penALeftHz ?? 0);
+        setPenARightHz(j.penARightHz ?? 0);
+        if (typeof j.dtSec === 'number' && j.dtSec > 0) setLiveSettings({ dtSec: j.dtSec });
+        setLiveTicks([]);
+        setRecordedTicks([]);
+        livePollFailRef.current = 0;
+      } catch (e) {
+        if (!cancelled) setError((e as Error).message);
       }
     };
-    void runStep();
+    void init();
+    const poll = async () => {
+      if (cancelled) return;
+      try {
+        const after = liveAfterTickRef.current;
+        const res = await fetch(
+          `${apiBase}/api/neurosim-live/ticks?after=${after}&max=${NEUROSIM_LIVE_MAX_TICKS_PER_POLL}`,
+        );
+        if (!res.ok) throw new Error(`live ticks ${res.status}`);
+        const data = (await res.json()) as {
+          ticks?: ReplayTick[];
+          latestTick?: number;
+          dtSec?: number;
+        };
+        if (cancelled) return;
+        if (typeof data.dtSec === 'number' && data.dtSec > 0) {
+          setLiveSettings({ dtSec: data.dtSec });
+        }
+        const batch = data.ticks ?? [];
+        const latestFromServer = data.latestTick ?? 0;
+        if (latestFromServer > 0) setLatestLiveTickNumber(latestFromServer);
+        if (batch.length > 0) {
+          const last = batch[batch.length - 1]!.tick;
+          liveAfterTickRef.current = last;
+          setLiveTicks((prev) => {
+            const merged = [...prev, ...batch];
+            return merged.length > NEUROSIM_LIVE_MAX_STORED_TICKS
+              ? merged.slice(-NEUROSIM_LIVE_MAX_STORED_TICKS)
+              : merged;
+          });
+          if (recordingRef.current) {
+            setRecordedTicks((prev) => {
+              const merged = [...prev, ...batch];
+              return merged.length > NEUROSIM_LIVE_MAX_STORED_TICKS * 2
+                ? merged.slice(-NEUROSIM_LIVE_MAX_STORED_TICKS)
+                : merged;
+            });
+          }
+        }
+        livePollFailRef.current = 0;
+      } catch (err) {
+        if (!cancelled) {
+          setError((err as Error).message);
+          livePollFailRef.current += 1;
+        }
+      }
+      if (!cancelled) {
+        const backoff = Math.min(
+          NEUROSIM_LIVE_POLL_MS * 2 ** livePollFailRef.current,
+          NEUROSIM_LIVE_MAX_BACKOFF_MS,
+        );
+        schedule(() => void poll(), Math.max(NEUROSIM_LIVE_POLL_MS, backoff));
+      }
+    };
+    schedule(() => void poll(), NEUROSIM_LIVE_POLL_MS);
     return () => {
       cancelled = true;
       if (timerId != null) clearTimeout(timerId);
-      if (activeController) activeController.abort();
     };
-  }, [isNeuroSimLive, liveRunning, recording, liveSettings.dtSec, liveSettings.olfactoryBaselineHz, liveSettings.mechanoHz, liveSettings.thermoHz, liveSettings.hygroHz, liveSettings.gustatoryHz, templateReplay]);
+  }, [isNeuroSimLive, templateReplay, apiBase]);
 
   useEffect(() => {
-    if (!replay?.ticks.length || !isNeuroSimLive || liveReplaySource !== 'live') return;
+    if (!replay?.ticks.length || !isNeuroSimLive || liveReplaySource !== 'live' || !liveAutoplay) return;
     setCurrentTick(replay.ticks.length);
-  }, [replay?.ticks.length, isNeuroSimLive, liveReplaySource]);
+  }, [replay, replay?.ticks.length, isNeuroSimLive, liveReplaySource, liveAutoplay]);
 
   useEffect(() => {
     const container = sceneContainerRef.current;
@@ -1946,7 +2010,10 @@ export default function VisualizationPage() {
     if (currentTick >= replay.ticks.length) setPlaying(false);
   }, [currentTick, replay]);
 
-  const totalTicks = replay?.ticks.length ?? 1;
+  const totalTicks =
+    isNeuroSimLive && liveReplaySource === 'live' && latestLiveTickNumber > 0
+      ? latestLiveTickNumber
+      : replay?.ticks.length ?? 1;
   const smoothedArrowAngleDeg = sceneRef.current?.arrowState?.angleCurrentDeg;
   const bumpTheta = Number.isFinite(smoothedArrowAngleDeg)
     ? (((smoothedArrowAngleDeg as number) + 360) % 360)
@@ -1981,124 +2048,179 @@ export default function VisualizationPage() {
         </div>
         {isNeuroSimLive && templateReplay ? (
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 12, color: '#b8d4ff' }}>NeuroSim Live:</span>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
-              Olfactory (Hz):
+            <span style={{ fontSize: 12, color: '#9ec5ff', maxWidth: 420 }}>
+              One continuous sim runs inside brain-service from startup (0 Hz until you apply). EPG spikes stream here; Apply updates PEN_a input on the fly.
+            </span>
+            <span style={{ fontSize: 11, color: '#7a9cc4' }}>
+              Active input: L={appliedPenLeft} R={appliedPenRight} Hz
+            </span>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+              Left PEN_a
+              <input
+                type="range"
+                min={0}
+                max={200}
+                value={Math.min(200, penALeftHz)}
+                onChange={(e) => setPenALeftHz(Math.max(0, Math.min(500, Number(e.target.value) || 0)))}
+                style={{ width: 120 }}
+              />
               <input
                 type="number"
                 min={0}
-                max={200}
-                value={liveSettings.olfactoryBaselineHz}
-                onChange={(e) => setLiveSettings((s) => ({ ...s, olfactoryBaselineHz: Math.max(0, Math.min(200, Number(e.target.value) || 0)) }))}
-                style={{ width: 52, padding: '2px 6px', fontSize: 12 }}
-                disabled={liveRunning}
+                max={500}
+                value={penALeftHz}
+                onChange={(e) => setPenALeftHz(Math.max(0, Math.min(500, Number(e.target.value) || 0)))}
+                style={{ width: 48, padding: '2px 4px', fontSize: 12 }}
               />
             </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
-              Mechano (Hz):
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+              Right PEN_a
+              <input
+                type="range"
+                min={0}
+                max={200}
+                value={Math.min(200, penARightHz)}
+                onChange={(e) => setPenARightHz(Math.max(0, Math.min(500, Number(e.target.value) || 0)))}
+                style={{ width: 120 }}
+              />
               <input
                 type="number"
                 min={0}
-                max={200}
-                value={liveSettings.mechanoHz}
-                onChange={(e) => setLiveSettings((s) => ({ ...s, mechanoHz: Math.max(0, Math.min(200, Number(e.target.value) || 0)) }))}
-                style={{ width: 52, padding: '2px 6px', fontSize: 12 }}
-                disabled={liveRunning}
+                max={500}
+                value={penARightHz}
+                onChange={(e) => setPenARightHz(Math.max(0, Math.min(500, Number(e.target.value) || 0)))}
+                style={{ width: 48, padding: '2px 4px', fontSize: 12 }}
               />
             </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
-              Thermo (Hz):
-              <input
-                type="number"
-                min={0}
-                max={200}
-                value={liveSettings.thermoHz}
-                onChange={(e) => setLiveSettings((s) => ({ ...s, thermoHz: Math.max(0, Math.min(200, Number(e.target.value) || 0)) }))}
-                style={{ width: 52, padding: '2px 6px', fontSize: 12 }}
-                disabled={liveRunning}
-              />
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
-              Hygro (Hz):
-              <input
-                type="number"
-                min={0}
-                max={200}
-                value={liveSettings.hygroHz}
-                onChange={(e) => setLiveSettings((s) => ({ ...s, hygroHz: Math.max(0, Math.min(200, Number(e.target.value) || 0)) }))}
-                style={{ width: 52, padding: '2px 6px', fontSize: 12 }}
-                disabled={liveRunning}
-              />
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
-              Gustatory (Hz):
-              <input
-                type="number"
-                min={0}
-                max={200}
-                value={liveSettings.gustatoryHz}
-                onChange={(e) => setLiveSettings((s) => ({ ...s, gustatoryHz: Math.max(0, Math.min(200, Number(e.target.value) || 0)) }))}
-                style={{ width: 52, padding: '2px 6px', fontSize: 12 }}
-                disabled={liveRunning}
-              />
-            </label>
+            <details open style={{ fontSize: 12, color: '#b8d4ff', marginTop: 8 }}>
+              <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Per-neuron PEN_a (Hz) — override global L/R</summary>
+              <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 8 }}>
+                {penANeurons.left.length === 0 && penANeurons.right.length === 0 ? (
+                  <span style={{ color: '#f0a050' }}>Loading PEN_a list…</span>
+                ) : null}
+                <div>
+                  <div style={{ marginBottom: 4, fontWeight: 600 }}>Left (L1–L10)</div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {penANeurons.left.map(({ id, label }) => (
+                      <label key={id} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <span style={{ minWidth: 24 }}>{label}</span>
+                        <input
+                          type="number"
+                          min={0}
+                          max={500}
+                          placeholder={String(penALeftHz)}
+                          value={penARatesById[id] ?? ''}
+                          onChange={(e) => {
+                            const v = e.target.value === '' ? undefined : Number(e.target.value);
+                            setPenARatesById((prev) => {
+                              const next = { ...prev };
+                              if (v == null || !Number.isFinite(v)) delete next[id];
+                              else next[id] = Math.max(0, Math.min(500, v));
+                              return next;
+                            });
+                          }}
+                          style={{ width: 44, padding: '2px 4px', fontSize: 11 }}
+                        />
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ marginBottom: 4, fontWeight: 600 }}>Right (R1–R10)</div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {penANeurons.right.map(({ id, label }) => (
+                      <label key={id} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <span style={{ minWidth: 24 }}>{label}</span>
+                        <input
+                          type="number"
+                          min={0}
+                          max={500}
+                          placeholder={String(penARightHz)}
+                          value={penARatesById[id] ?? ''}
+                          onChange={(e) => {
+                            const v = e.target.value === '' ? undefined : Number(e.target.value);
+                            setPenARatesById((prev) => {
+                              const next = { ...prev };
+                              if (v == null || !Number.isFinite(v)) delete next[id];
+                              else next[id] = Math.max(0, Math.min(500, v));
+                              return next;
+                            });
+                          }}
+                          style={{ width: 44, padding: '2px 4px', fontSize: 11 }}
+                        />
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </details>
             <button
               type="button"
               onClick={async () => {
                 setError(null);
+                setApplyBusy(true);
                 try {
-                  const res = await fetch(`${apiBase}/api/neurosim-live/start`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-                  if (!res.ok) throw new Error(`start failed: ${res.status}`);
-                  const data = (await res.json()) as { simId: number };
-                  liveNextTickRef.current = 1;
-                  setLiveTicks([]);
-                  setLiveReplaySource('live');
-                  setCurrentTick(1);
-                  setPlaying(false);
-                  liveSimIdRef.current = data.simId;
-                  setLiveRunning(true);
+                  const ratesById: Record<string, number> = {};
+                  for (const { id } of penANeurons.left) {
+                    const v = penARatesById[id];
+                    ratesById[id] = typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : penALeftHz;
+                  }
+                  for (const { id } of penANeurons.right) {
+                    const v = penARatesById[id];
+                    ratesById[id] = typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : penARightHz;
+                  }
+                  const res = await fetch(`${apiBase}/api/neurosim-live/apply`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      penALeftHz: penALeftHz,
+                      penARightHz: penARightHz,
+                      ratesById,
+                    }),
+                  });
+                  const data = (await res.json().catch(() => ({}))) as { penALeftHz?: number; penARightHz?: number; error?: string };
+                  if (!res.ok) throw new Error(data?.error ?? `apply failed: ${res.status}`);
+                  const appliedL = data.penALeftHz ?? penALeftHz;
+                  const appliedR = data.penARightHz ?? penARightHz;
+                  setAppliedPenLeft(appliedL);
+                  setAppliedPenRight(appliedR);
+                  const overrides: string[] = [];
+                  for (const { id, label } of penANeurons.left) {
+                    const v = ratesById[id];
+                    if (typeof v === 'number' && v !== appliedL) overrides.push(`${label}=${v}`);
+                  }
+                  for (const { id, label } of penANeurons.right) {
+                    const v = ratesById[id];
+                    if (typeof v === 'number' && v !== appliedR) overrides.push(`${label}=${v}`);
+                  }
+                  const msg =
+                    overrides.length > 0
+                      ? `PEN_a updated: ${overrides.join(', ')} Hz`
+                      : `PEN_a applied: L=${appliedL} R=${appliedR} Hz`;
+                  notification.show(msg, 'success');
+                  setTimeout(() => notification.hide(), 2500);
                 } catch (e) {
-                  setError((e as Error).message);
+                  const msg = (e as Error).message;
+                  setError(msg);
+                  notification.show(msg, 'error');
+                  setTimeout(() => notification.hide(), 4000);
+                } finally {
+                  setApplyBusy(false);
                 }
               }}
               style={controlButtonStyle(false)}
-              disabled={liveRunning}
+              disabled={applyBusy}
             >
-              Start
+              Apply PEN_a Hz
             </button>
-            <button
-              type="button"
-              onClick={() => setLiveRunning(false)}
-              style={controlButtonStyle(liveRunning)}
-              disabled={!liveRunning}
-            >
-              Pause
-            </button>
-            <button
-              type="button"
-              onClick={async () => {
-                setError(null);
-                setLiveRunning(false);
-                try {
-                  const res = await fetch(`${apiBase}/api/neurosim-live/start`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-                  if (!res.ok) throw new Error(`restart failed: ${res.status}`);
-                  const data = (await res.json()) as { simId: number };
-                  liveNextTickRef.current = 1;
-                  setLiveTicks([]);
-                  setRecordedTicks([]);
-                  setLiveReplaySource('live');
-                  setCurrentTick(1);
-                  setPlaying(false);
-                  liveSimIdRef.current = data.simId;
-                  setLiveRunning(true);
-                } catch (e) {
-                  setError((e as Error).message);
-                }
-              }}
-              style={controlButtonStyle(false)}
-            >
-              Restart
-            </button>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={liveAutoplay}
+                onChange={(e) => setLiveAutoplay(e.target.checked)}
+              />
+              Autoplay live
+            </label>
             <button
               type="button"
               onClick={() => setRecording((r) => !r)}
@@ -2122,6 +2244,34 @@ export default function VisualizationPage() {
                 >
                   View live
                 </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!templateReplay) return;
+                    const payload: ReplayData = {
+                      meta: {
+                        ...templateReplay.meta,
+                        generated_at: new Date().toISOString(),
+                        source_csv: 'neurosim-live/recording',
+                        ticks: recordedTicks.length,
+                        scenario: 'neurosim_live_pen_a_recording',
+                        dt_sec: liveSettings.dtSec,
+                        note: `Continuous live sim; applied PEN_a last L=${appliedPenLeft} R=${appliedPenRight} Hz`,
+                      },
+                      neurons: templateReplay.neurons,
+                      ticks: recordedTicks,
+                    };
+                    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+                    const a = document.createElement('a');
+                    a.href = URL.createObjectURL(blob);
+                    a.download = `neurosim_live_pen_a_${Date.now()}.json`;
+                    a.click();
+                    URL.revokeObjectURL(a.href);
+                  }}
+                  style={controlButtonStyle(false)}
+                >
+                  Download JSON
+                </button>
               </>
             ) : null}
           </div>
@@ -2139,13 +2289,20 @@ export default function VisualizationPage() {
         {replay ? (
           <PlaybackControls
             playing={playing}
-            tick={currentTick}
+            tick={
+              isNeuroSimLive && liveReplaySource === 'live' && liveAutoplay && currentTick === replay.ticks.length && latestLiveTickNumber > 0
+                ? latestLiveTickNumber
+                : currentTick
+            }
             totalTicks={totalTicks}
             speed={speed}
             onPlayPause={() => setPlaying((p) => !p)}
             onPrevTick={() => setCurrentTick((t) => Math.max(1, t - 1))}
-            onNextTick={() => setCurrentTick((t) => Math.min(totalTicks, t + 1))}
-            onSeekTick={(tick) => setCurrentTick(Math.max(1, Math.min(totalTicks, tick)))}
+            onNextTick={() => setCurrentTick((t) => Math.min(replay?.ticks.length ?? totalTicks, t + 1))}
+            onSeekTick={(tick) => {
+              const max = isNeuroSimLive && replay ? replay.ticks.length : totalTicks;
+              setCurrentTick(Math.max(1, Math.min(max, tick)));
+            }}
             onSpeedChange={setSpeed}
           />
         ) : null}

@@ -7,6 +7,12 @@ import { loadConnectome } from './connectome.js';
 import { createBrainSim } from './brain-sim.js';
 import * as socketClient from './brain-socket-client.js';
 import { getWorld, spawnFood, removeFood, getSources, type WorldSource } from './world.js';
+import {
+  getWorldPenPresets,
+  WORLD_COMPASS_DEG,
+  WORLD_COMPASS_STEP_DEG,
+  type WorldCompassPosition,
+} from './world-pen-presets.js';
 import claimsRouter from './routes/claims.js';
 import { getFlies, removeFlyAtSlot } from './services/flyStore.js';
 import { getDeployments, addDeployment, clearForTesting, deactivateDeployment } from './services/deployStore.js';
@@ -80,6 +86,72 @@ function parseCsvLine(line: string): string[] {
   }
   out.push(cur);
   return out;
+}
+
+function loadPenABySide(): { left: string[]; right: string[] } {
+  const left = new Set<string>();
+  const right = new Set<string>();
+  try {
+    if (!fs.existsSync(CLASSIFICATION_CSV_PATH)) {
+      return { left: [], right: [] };
+    }
+    const raw = fs.readFileSync(CLASSIFICATION_CSV_PATH, 'utf-8');
+    const lines = raw.split(/\r?\n/);
+    if (lines.length < 2) return { left: [], right: [] };
+    const header = parseCsvLine(lines[0]!);
+    const col = (name: string) => header.indexOf(name);
+    const iRid = col('root_id');
+    const iHb = col('hemibrain_type');
+    const iSide = col('side');
+    if (iRid < 0 || iHb < 0) return { left: [], right: [] };
+    for (let li = 1; li < lines.length; li++) {
+      const row = lines[li];
+      if (!row) continue;
+      const cols = parseCsvLine(row);
+      const rid = (cols[iRid] ?? '').trim();
+      if (!rid) continue;
+      const htype = (cols[iHb] ?? '').trim();
+      if (!htype.startsWith('PEN_a')) continue;
+      const side = (iSide >= 0 ? (cols[iSide] ?? '') : '').trim().toLowerCase();
+      if (side === 'left') left.add(rid);
+      else if (side === 'right') right.add(rid);
+    }
+  } catch (e) {
+    console.error('[neurosim-live] PEN_a load failed', e);
+  }
+  return { left: [...left].sort(), right: [...right].sort() };
+}
+
+const PEN_A_BY_SIDE = loadPenABySide();
+const EPG_IDS_FOR_RUN_STEPS = [...epgRootIdSet].sort();
+
+/** World 3-position PEN_a presets (11PM, 3PM, 8PM). */
+const WORLD_PEN_PRESETS = getWorldPenPresets(PEN_A_BY_SIDE);
+
+/** Per-sim next PEN_a preset for world steering. Index = sim index. */
+const penPresetBySimIndex: WorldCompassPosition[] = [];
+
+const ODOR_DETECTION_RADIUS = 34;
+
+function normalizeAngleDeg(deg: number): number {
+  let a = deg;
+  while (a > 180) a -= 360;
+  while (a < -180) a += 360;
+  return a;
+}
+
+/** Pick the world compass position (11PM, 3PM, 8PM) closest to the given target angle in degrees. */
+function chooseWorldPresetFromAngleDeg(angleToTargetDeg: number): WorldCompassPosition {
+  let best: WorldCompassPosition = '11PM';
+  let bestDiff = Infinity;
+  for (const pos of ['11PM', '3PM', '8PM'] as const) {
+    const d = Math.abs(normalizeAngleDeg(angleToTargetDeg - WORLD_COMPASS_DEG[pos]));
+    if (d < bestDiff) {
+      bestDiff = d;
+      best = pos;
+    }
+  }
+  return best;
 }
 
 function createSeededRandom(seed: number): () => number {
@@ -157,10 +229,10 @@ function computeViewerSubsetIndices(total: number): number[] {
 const viewerNeuronIndices = computeViewerSubsetIndices(connectome.neurons.length);
 const viewerNeuronIndexSet = new Set<number>(viewerNeuronIndices);
 
-/** Brain sim uses Unix socket only. Probe connects to brain-service; retry a few times for PM2 start-order. */
+/** Brain sim uses Unix socket only. Probe connects to brain-service; retry for PM2 start-order. */
 const CUDA_ONLY = process.env.NEUROSIM_MODE === 'cuda' || process.env.USE_CUDA === '1';
-const PROBE_RETRIES = 10;
-const PROBE_DELAY_MS = 2000;
+const PROBE_RETRIES = 40;
+const PROBE_DELAY_MS = 3000;
 
 let backendInfo = { engine: 'python-brain', gpu: process.env.USE_CUDA === '1' };
 let probeOk = false;
@@ -233,6 +305,7 @@ function removeSimAtIndex(simIndex: number): { address: string; slotIndex: numbe
   const deployment = findDeploymentBySimIndex(simIndex);
   sims.splice(simIndex, 1);
   simActivityTrail.splice(simIndex, 1);
+  penPresetBySimIndex.splice(simIndex, 1);
 
   for (const [address, slotMap] of deployedFlies) {
     for (const [slotIndex, mappedIndex] of slotMap) {
@@ -266,6 +339,7 @@ async function addFlyToSim(spawnKey?: string): Promise<number> {
   });
   sims.push(sim);
   simActivityTrail.push(new Map());
+  penPresetBySimIndex.push('11PM');
   return sims.length - 1;
 }
 
@@ -337,11 +411,12 @@ function buildClientPayload(
       rightMagnitude: number;
       fwdMagnitude: number;
     } | undefined)[];
+    bumpAngleDegs: (number | null)[];
   }[],
 ): void {
   const nowMs = Date.now();
   const sources = getSources();
-  const clientFrames = frames.map((f) => ({ t: f.t, flies: f.flies }));
+  const clientFrames = frames.map((f) => ({ t: f.t, flies: f.flies, bumpAngleDegs: f.bumpAngleDegs }));
   const lastFrame = frames[frames.length - 1];
   for (const ws of wsClients) {
     if (ws.readyState !== 1) continue;
@@ -508,17 +583,18 @@ function startSim(): void {
         flies: ReturnType<typeof sims[0]['getState']>['fly'][];
         activities: (Record<string, number> | undefined)[];
         inputActivities: (Record<string, number> | undefined)[];
-    motorReadouts: ({
-      left: number;
-      right: number;
-      fwd: number;
-      leftCount: number;
-      rightCount: number;
-      fwdCount: number;
-      leftMagnitude: number;
-      rightMagnitude: number;
-      fwdMagnitude: number;
-    } | undefined)[];
+        motorReadouts: ({
+          left: number;
+          right: number;
+          fwd: number;
+          leftCount: number;
+          rightCount: number;
+          fwdCount: number;
+          leftMagnitude: number;
+          rightMagnitude: number;
+          fwdMagnitude: number;
+        } | undefined)[];
+        bumpAngleDegs: (number | null)[];
       }[] = [];
 
       const transitions: Array<{
@@ -537,6 +613,7 @@ function startSim(): void {
         motorLeftMagnitude?: number;
         motorRightMagnitude?: number;
         motorFwdMagnitude?: number;
+        bumpAngleDeg?: number | null;
       }> = [];
 
       const beforeStates = sims.map((s) => s.getState());
@@ -548,7 +625,14 @@ function startSim(): void {
         }
       }
       const states = await Promise.all(
-        sims.map((s, idx) => s.step(batchDt, { includeActivity: viewedSimIndexes.has(idx) })),
+        sims.map((s, idx) => {
+          const preset = penPresetBySimIndex[idx] ?? '11PM';
+          const ratesById = WORLD_PEN_PRESETS[preset];
+          return s.step(batchDt, {
+            includeActivity: viewedSimIndexes.has(idx),
+            penARatesById: ratesById,
+          });
+        }),
       );
       const activityNowMs = Date.now();
       const deadSimIndexes: number[] = [];
@@ -598,23 +682,6 @@ function startSim(): void {
             recordFeedingPoints(deployment.address, deployment.slotIndex, state.feedingSugarTaken ?? 0);
           }
         }
-        transitions.push({
-          fromFly: before.fly,
-          toFly: state.fly,
-          fromT: before.t,
-          toT: state.t,
-          activity: state.activity,
-          inputActivity: state.inputActivity,
-          motorLeft: state.motorLeft,
-          motorRight: state.motorRight,
-          motorFwd: state.motorFwd,
-          motorLeftCount: state.motorLeftCount,
-          motorRightCount: state.motorRightCount,
-          motorFwdCount: state.motorFwdCount,
-          motorLeftMagnitude: state.motorLeftMagnitude,
-          motorRightMagnitude: state.motorRightMagnitude,
-          motorFwdMagnitude: state.motorFwdMagnitude,
-        });
         if (state.activity && simActivityTrail[j]) {
           const trail = simActivityTrail[j]!;
           for (const [id, value] of Object.entries(state.activity)) {
@@ -636,6 +703,31 @@ function startSim(): void {
         if (state.fly.dead || (state.fly.health ?? 100) <= 0) {
           deadSimIndexes.push(j);
         }
+
+        // Sanity check: use only 11PM (L1:50, L2:50, L6:50), never change fly heading from bump.
+        // So the fly keeps a constant direction; we only observe if the compass (bump) stays stable.
+        let toFly = state.fly;
+        const bumpDeg = state.bumpAngleDeg ?? null;
+        // Do NOT set toFly.heading from bumpDeg — keep fly direction fixed for this test.
+
+        transitions.push({
+          fromFly: before.fly,
+          toFly,
+          fromT: before.t,
+          toT: state.t,
+          activity: state.activity,
+          inputActivity: state.inputActivity,
+          motorLeft: state.motorLeft,
+          motorRight: state.motorRight,
+          motorFwd: state.motorFwd,
+          motorLeftCount: state.motorLeftCount,
+          motorRightCount: state.motorRightCount,
+          motorFwdCount: state.motorFwdCount,
+          motorLeftMagnitude: state.motorLeftMagnitude,
+          motorRightMagnitude: state.motorRightMagnitude,
+          motorFwdMagnitude: state.motorFwdMagnitude,
+          bumpAngleDeg: bumpDeg ?? undefined,
+        });
       }
 
       if (deadSimIndexes.length > 0) {
@@ -687,7 +779,8 @@ function startSim(): void {
             : undefined,
         );
         const t = transitions.length ? lerp(transitions[0].fromT, transitions[0].toT, alpha) : 0;
-        frames.push({ t, flies, activities, inputActivities, motorReadouts });
+        const bumpAngleDegs = transitions.map((tr) => tr.bumpAngleDeg ?? null);
+        frames.push({ t, flies, activities, inputActivities, motorReadouts, bumpAngleDegs });
       }
       const beforePayload = performance.now();
       buildClientPayload(frames);
@@ -825,6 +918,68 @@ app.get('/api/neurons', (req, res) => {
     viewerNeuronCount: viewerNeuronIndices.length,
     totalNeuronCount: connectome.neurons.length,
   });
+});
+
+/** Return PEN_a neuron list for live per-neuron controls (id + label L1..L10, R1..R10). */
+app.get('/api/neurosim-live/pen-a-neurons', (_req, res) => {
+  const left = PEN_A_BY_SIDE.left.map((id, i) => ({ id, label: `L${i + 1}` }));
+  const right = PEN_A_BY_SIDE.right.map((id, i) => ({ id, label: `R${i + 1}` }));
+  res.json({ left, right });
+});
+
+/** Brain-service runs one continuous sim from startup; we only read ticks + apply Hz. */
+app.get('/api/neurosim-live/status', async (_req, res) => {
+  try {
+    const s = await socketClient.liveStatus();
+    res.json({
+      ok: true,
+      latestTick: s.latest_tick,
+      penALeftHz: s.left_hz,
+      penARightHz: s.right_hz,
+      dtSec: s.dt_sec,
+    });
+  } catch (e) {
+    console.error('[neurosim-live/status]', e);
+    res.status(500).json({ error: (e as Error).message ?? String(e) });
+  }
+});
+
+app.get('/api/neurosim-live/ticks', async (req, res) => {
+  try {
+    const after = Math.max(0, Math.floor(Number(req.query.after ?? 0)));
+    const max = Math.max(1, Math.min(8000, Math.floor(Number(req.query.max ?? 2000))));
+    const out = await socketClient.liveReadTicks(after, max);
+    res.json({
+      ticks: out.ticks ?? [],
+      latestTick: out.latest_tick,
+      dtSec: out.dt_sec,
+    });
+  } catch (e) {
+    console.error('[neurosim-live/ticks]', e);
+    res.status(500).json({ error: (e as Error).message ?? String(e) });
+  }
+});
+
+app.post('/api/neurosim-live/apply', async (req, res) => {
+  try {
+    const left = Math.max(0, Math.min(500, Number(req.body?.penALeftHz ?? 0)));
+    const right = Math.max(0, Math.min(500, Number(req.body?.penARightHz ?? 0)));
+    const ratesById = req.body?.ratesById as Record<string, number> | undefined;
+    const merged: Record<string, number> = {};
+    for (const id of PEN_A_BY_SIDE.left) {
+      const v = ratesById?.[id];
+      merged[id] = Number.isFinite(Number(v)) ? Math.min(500, Math.max(0, Number(v))) : left;
+    }
+    for (const id of PEN_A_BY_SIDE.right) {
+      const v = ratesById?.[id];
+      merged[id] = Number.isFinite(Number(v)) ? Math.min(500, Math.max(0, Number(v))) : right;
+    }
+    await socketClient.liveSetPenA(left, right, merged);
+    res.json({ ok: true, penALeftHz: left, penARightHz: right });
+  } catch (e) {
+    console.error('[neurosim-live/apply]', e);
+    res.status(500).json({ error: (e as Error).message ?? String(e) });
+  }
 });
 
 app.post('/api/neurosim-baseline/export', async (req, res) => {

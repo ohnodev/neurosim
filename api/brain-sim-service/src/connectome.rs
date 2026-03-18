@@ -1,4 +1,8 @@
 //! Load connectome from file at startup; compute neuron_ids, connections, sensory/motor indices.
+//!
+//! **Full connectome:** We load ALL connections in the file. There is no filtering by neuron type,
+//! region, or edge count. The connectome file (parquet or JSON) must contain the complete
+//! fly-brain graph (e.g. FlyWire / full fly brain) so that every synapse is simulated.
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs::File;
@@ -61,7 +65,11 @@ struct ParsedConnectome {
 
 pub struct ConnectomeTemplate {
     pub neuron_ids: Vec<String>,
+    /// id -> index for fast lookup (forced spikes, activity).
+    pub neuron_index_by_id: HashMap<String, usize>,
     pub viewer_subset_indices: Vec<u32>,
+    /// is_epg[i] = 1 if neuron i is in viewer subset (used for recurrence boost).
+    pub is_epg: Vec<u8>,
     pub edges_pre: Vec<u32>,
     pub edges_post: Vec<u32>,
     pub edges_weight: Vec<f32>,
@@ -329,6 +337,7 @@ fn load_connectome_parquet(path: &Path) -> Result<ParsedConnectome, Box<dyn std:
     let mut ids = Vec::<String>::new();
     let mut seen = HashMap::<String, ()>::new();
     let mut connections = Vec::<(String, String, Option<f64>)>::new();
+    // Load every row (full connectome; no edge filtering).
     let mut iter = reader.get_row_iter(None)?;
     while let Some(row) = iter.next() {
         let row = row?;
@@ -461,6 +470,7 @@ fn build_template(
     let mut edges_pre = Vec::with_capacity(data.connections.len());
     let mut edges_post = Vec::with_capacity(data.connections.len());
     let mut edges_weight = Vec::with_capacity(data.connections.len());
+    // Include every connection (full connectome). Only skip invalid weight (non-finite or zero).
     // Store raw synapse count from connectome (Excitatory x Connectivity); W_SYN applied in sim step.
     for (pre_id, post_id, w_opt) in &data.connections {
         if let (Some(&pre), Some(&post)) = (id_to_idx.get(pre_id), id_to_idx.get(post_id)) {
@@ -505,9 +515,24 @@ fn build_template(
     let pre_motor_right = motor_right;
     let pre_motor_unknown = motor_unknown;
 
+    let neuron_index_by_id: HashMap<String, usize> = neuron_ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| (id.clone(), i))
+        .collect();
+    let mut is_epg = vec![0u8; n];
+    for &idx in &viewer_subset_indices {
+        let i = idx as usize;
+        if i < n {
+            is_epg[i] = 1;
+        }
+    }
+
     Ok(ConnectomeTemplate {
         neuron_ids,
+        neuron_index_by_id,
         viewer_subset_indices,
+        is_epg,
         edges_pre,
         edges_post,
         edges_weight,

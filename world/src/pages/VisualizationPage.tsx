@@ -577,9 +577,13 @@ function buildScene(
       if (baseRadius < 0.05) {
         baseRadius = 0.35;
         const tileGroups = new Map<number, number[]>();
+        const unassigned: number[] = [];
         for (const idx of epgIndices) {
           const tile = getEffectiveEpgTile(neurons[idx]!, epgLabelMap ?? null);
-          if (tile == null || tile < 0 || tile >= EPG_COMPASS_BINS) continue;
+          if (tile == null || tile < 0 || tile >= EPG_COMPASS_BINS) {
+            unassigned.push(idx);
+            continue;
+          }
           const group = tileGroups.get(tile) ?? [];
           group.push(idx);
           tileGroups.set(tile, group);
@@ -598,6 +602,14 @@ function buildScene(
               aligned[idx]!.y = cyCompass + Math.sin(angle) * baseRadius;
               aligned[idx]!.z = czCompass;
             }
+          }
+          // Ensure every EPG is on the compass ring, even if processed label/tile is missing.
+          for (let k = 0; k < unassigned.length; k += 1) {
+            const idx = unassigned[k]!;
+            const angle = sceneAngleForBin(k % EPG_COMPASS_BINS, EPG_COMPASS_BINS);
+            aligned[idx]!.x = cxCompass + Math.cos(angle) * baseRadius;
+            aligned[idx]!.y = cyCompass + Math.sin(angle) * baseRadius;
+            aligned[idx]!.z = czCompass;
           }
         } else {
           for (let k = 0; k < epgIndices.length; k += 1) {

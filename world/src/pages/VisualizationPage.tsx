@@ -2103,7 +2103,10 @@ export default function VisualizationPage() {
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                     {penANeurons.left.map(({ id, label }) => (
                       <label key={id} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                        <span style={{ minWidth: 24 }}>{label}</span>
+                        <span style={{ minWidth: 24, display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+                          <span>{label}</span>
+                          <span style={{ fontSize: 9, color: '#6a8aaa', fontWeight: 400 }}>{id}</span>
+                        </span>
                         <input
                           type="number"
                           min={0}
@@ -2130,7 +2133,10 @@ export default function VisualizationPage() {
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                     {penANeurons.right.map(({ id, label }) => (
                       <label key={id} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                        <span style={{ minWidth: 24 }}>{label}</span>
+                        <span style={{ minWidth: 24, display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+                          <span>{label}</span>
+                          <span style={{ fontSize: 9, color: '#6a8aaa', fontWeight: 400 }}>{id}</span>
+                        </span>
                         <input
                           type="number"
                           min={0}

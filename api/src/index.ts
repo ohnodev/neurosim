@@ -11,6 +11,7 @@ import {
   getWorldPenPresets,
   WORLD_COMPASS_DEG,
   WORLD_COMPASS_STEP_DEG,
+  WORLD_SIM_DT_SEC,
   type WorldCompassPosition,
 } from './world-pen-presets.js';
 import claimsRouter from './routes/claims.js';
@@ -130,6 +131,20 @@ const WORLD_PEN_PRESETS = getWorldPenPresets(PEN_A_BY_SIDE);
 
 /** Per-sim next PEN_a preset for world steering. Index = sim index. */
 const penPresetBySimIndex: WorldCompassPosition[] = [];
+
+/** Per-sim smoothed bump angle (deg) for stable heading and compass. */
+const smoothedBumpBySimIndex: (number | null)[] = [];
+
+const BUMP_SMOOTH_ALPHA = 0.12; // strong smoothing so L1/L2/L6-only input gives stable direction
+
+function smoothBumpDeg(prev: number | null, next: number, alpha: number): number {
+  if (prev == null) return next;
+  let d = ((next - prev + 540) % 360) - 180;
+  let out = prev + d * alpha;
+  out = ((out % 360) + 360) % 360;
+  if (out > 180) out -= 360;
+  return out;
+}
 
 const ODOR_DETECTION_RADIUS = 34;
 
@@ -306,6 +321,7 @@ function removeSimAtIndex(simIndex: number): { address: string; slotIndex: numbe
   sims.splice(simIndex, 1);
   simActivityTrail.splice(simIndex, 1);
   penPresetBySimIndex.splice(simIndex, 1);
+  smoothedBumpBySimIndex.splice(simIndex, 1);
 
   for (const [address, slotMap] of deployedFlies) {
     for (const [slotIndex, mappedIndex] of slotMap) {
@@ -340,6 +356,7 @@ async function addFlyToSim(spawnKey?: string): Promise<number> {
   sims.push(sim);
   simActivityTrail.push(new Map());
   penPresetBySimIndex.push('11PM');
+  smoothedBumpBySimIndex.push(null);
   return sims.length - 1;
 }
 
@@ -367,10 +384,12 @@ try {
 }
 let simRunning = false;
 let simIntervalId: ReturnType<typeof setInterval> | null = null;
-/** 250ms interval; client keeps 1s buffer for smooth interpolation */
+/** 8 batches/sec (125ms) for world; client keeps 1s buffer for smooth interpolation. */
 const SIM_FPS = 30;
-const BATCH_MS = 250;
+const BATCH_MS = 125;
 const FRAMES_PER_BATCH = Math.round(SIM_FPS * BATCH_MS / 1000);
+/** One run_steps call per batch: advance 0.125s sim time (1:1 real time at 8 batches/sec). */
+const WORLD_STEPS_PER_BATCH = Math.max(1, Math.round(0.125 / WORLD_SIM_DT_SEC));
 const BRAIN_INIT_GRACE_MS = Number(process.env.NEUROSIM_BRAIN_INIT_GRACE_MS ?? 10_000);
 let connectionStep = 0;
 let nextBatchDueAt = 0;
@@ -412,11 +431,17 @@ function buildClientPayload(
       fwdMagnitude: number;
     } | undefined)[];
     bumpAngleDegs: (number | null)[];
+    epgBinsPerSim: (number[] | null)[];
   }[],
 ): void {
   const nowMs = Date.now();
   const sources = getSources();
-  const clientFrames = frames.map((f) => ({ t: f.t, flies: f.flies, bumpAngleDegs: f.bumpAngleDegs }));
+  const clientFrames = frames.map((f) => ({
+    t: f.t,
+    flies: f.flies,
+    bumpAngleDegs: f.bumpAngleDegs,
+    epgBinsPerSim: f.epgBinsPerSim,
+  }));
   const lastFrame = frames[frames.length - 1];
   for (const ws of wsClients) {
     if (ws.readyState !== 1) continue;
@@ -577,7 +602,6 @@ function startSim(): void {
       let batchCalls = 0;
       let batchSize = 0;
       const dtFrame = 1 / SIM_FPS;
-      const batchDt = dtFrame * FRAMES_PER_BATCH;
       const frames: {
         t: number;
         flies: ReturnType<typeof sims[0]['getState']>['fly'][];
@@ -595,6 +619,7 @@ function startSim(): void {
           fwdMagnitude: number;
         } | undefined)[];
         bumpAngleDegs: (number | null)[];
+        epgBinsPerSim: (number[] | null)[];
       }[] = [];
 
       const transitions: Array<{
@@ -614,6 +639,7 @@ function startSim(): void {
         motorRightMagnitude?: number;
         motorFwdMagnitude?: number;
         bumpAngleDeg?: number | null;
+        epgBins?: number[] | null;
       }> = [];
 
       const beforeStates = sims.map((s) => s.getState());
@@ -624,14 +650,18 @@ function startSim(): void {
           viewedSimIndexes.add(idx);
         }
       }
+      const currentSources = getSources();
       const states = await Promise.all(
-        sims.map((s, idx) => {
+        sims.map(async (s, idx) => {
           const preset = penPresetBySimIndex[idx] ?? '11PM';
           const ratesById = WORLD_PEN_PRESETS[preset];
-          return s.step(batchDt, {
-            includeActivity: viewedSimIndexes.has(idx),
-            penARatesById: ratesById,
-          });
+          const state = await (s as { stepBatch?: (dt: number, n: number, src: WorldSource[], rates?: Record<string, number>) => Promise<ReturnType<typeof sims[0]['getState']>> }).stepBatch?.(
+            WORLD_SIM_DT_SEC,
+            WORLD_STEPS_PER_BATCH,
+            currentSources,
+            ratesById,
+          );
+          return state ?? s.getState();
         }),
       );
       const activityNowMs = Date.now();
@@ -704,11 +734,18 @@ function startSim(): void {
           deadSimIndexes.push(j);
         }
 
-        // Sanity check: use only 11PM (L1:50, L2:50, L6:50), never change fly heading from bump.
-        // So the fly keeps a constant direction; we only observe if the compass (bump) stays stable.
+        // Position 1 only: 11PM (L1:50, L2:50, L6:50). Smooth bump so heading and compass are stable.
         let toFly = state.fly;
-        const bumpDeg = state.bumpAngleDeg ?? null;
-        // Do NOT set toFly.heading from bumpDeg — keep fly direction fixed for this test.
+        const rawBump = state.bumpAngleDeg ?? null;
+        const smoothed =
+          rawBump != null
+            ? smoothBumpDeg(smoothedBumpBySimIndex[j] ?? null, rawBump, BUMP_SMOOTH_ALPHA)
+            : null;
+        if (smoothed != null) smoothedBumpBySimIndex[j] = smoothed;
+
+        if (smoothed != null) {
+          toFly = { ...toFly, heading: (smoothed * Math.PI) / 180 };
+        }
 
         transitions.push({
           fromFly: before.fly,
@@ -726,7 +763,8 @@ function startSim(): void {
           motorLeftMagnitude: state.motorLeftMagnitude,
           motorRightMagnitude: state.motorRightMagnitude,
           motorFwdMagnitude: state.motorFwdMagnitude,
-          bumpAngleDeg: bumpDeg ?? undefined,
+          bumpAngleDeg: smoothed ?? rawBump ?? undefined,
+          epgBins: state.epgBins ?? undefined,
         });
       }
 
@@ -780,7 +818,8 @@ function startSim(): void {
         );
         const t = transitions.length ? lerp(transitions[0].fromT, transitions[0].toT, alpha) : 0;
         const bumpAngleDegs = transitions.map((tr) => tr.bumpAngleDeg ?? null);
-        frames.push({ t, flies, activities, inputActivities, motorReadouts, bumpAngleDegs });
+        const epgBinsPerSim = transitions.map((tr) => tr.epgBins ?? null);
+        frames.push({ t, flies, activities, inputActivities, motorReadouts, bumpAngleDegs, epgBinsPerSim });
       }
       const beforePayload = performance.now();
       buildClientPayload(frames);

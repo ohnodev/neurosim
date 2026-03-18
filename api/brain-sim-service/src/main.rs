@@ -90,12 +90,15 @@ fn load_epg_id_to_bin() -> HashMap<String, u8> {
     out
 }
 
-/// Vector sum of EPG bin activities -> bump angle in degrees (math convention, matches frontend compass).
-fn compute_bump_angle_deg(activity_sparse: &HashMap<String, f64>, epg_id_to_bin: &HashMap<String, u8>) -> Option<f64> {
-    if epg_id_to_bin.is_empty() {
-        return None;
-    }
+/// Fill 16 EPG bins from activity_sparse and return (bump_angle_deg, normalized bins 0..1 for frontend).
+fn compute_bump_and_epg_bins(
+    activity_sparse: &HashMap<String, f64>,
+    epg_id_to_bin: &HashMap<String, u8>,
+) -> (Option<f64>, [f64; 16]) {
     let mut bins: [f64; 16] = [0.0; 16];
+    if epg_id_to_bin.is_empty() {
+        return (None, bins);
+    }
     for (id, &w) in activity_sparse {
         if let Some(&bin) = epg_id_to_bin.get(id) {
             if (bin as usize) < 16 {
@@ -113,11 +116,18 @@ fn compute_bump_angle_deg(activity_sparse: &HashMap<String, f64>, epg_id_to_bin:
             sum_sin += w * rad.sin();
         }
     }
-    if sum_cos.abs() < 1e-10 && sum_sin.abs() < 1e-10 {
-        return None;
+    let bump_deg = if sum_cos.abs() < 1e-10 && sum_sin.abs() < 1e-10 {
+        None
+    } else {
+        Some(sum_sin.atan2(sum_cos).to_degrees())
+    };
+    let max_bin = bins.iter().cloned().fold(0.0f64, f64::max);
+    if max_bin > 0.0 {
+        for v in &mut bins {
+            *v /= max_bin;
+        }
     }
-    let deg = sum_sin.atan2(sum_cos).to_degrees();
-    Some(deg)
+    (bump_deg, bins)
 }
 
 fn main() {
@@ -498,7 +508,7 @@ struct SourceJson {
     radius: f64,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct FlyRespJson {
     x: f64,
     y: f64,
@@ -548,6 +558,8 @@ struct StepResp {
     feeding_sugar_taken: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     bump_angle_deg: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    epg_bins: Option<Vec<f64>>,
     compute_ms: f64,
     kernel_ms: f64,
     recurrent_ms: f64,
@@ -613,6 +625,13 @@ struct RunStepsParams {
     record_ticks: bool,
     #[serde(default)]
     forced_spike_schedule: Option<Vec<ForcedSpikeScheduleEntry>>,
+    /// When set with fly/sources, use as initial state and return final state (one round-trip for world loop).
+    #[serde(default)]
+    return_final_state: bool,
+    #[serde(default)]
+    fly: Option<FlyJson>,
+    #[serde(default)]
+    sources: Option<Vec<SourceJson>>,
 }
 
 #[derive(Serialize)]
@@ -631,6 +650,24 @@ struct RunStepsResp {
     spike_counts: Option<HashMap<String, u64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     ticks: Option<Vec<ReplayTickResp>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fly: Option<FlyRespJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    activity_sparse: Option<HashMap<String, f64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bump_angle_deg: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    epg_bins: Option<Vec<f64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    motor_left: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    motor_right: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    motor_fwd: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    eaten_food_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    feeding_sugar_taken: Option<f64>,
 }
 
 fn apply_feeding_tick(
@@ -1272,7 +1309,8 @@ fn handle(
             apply_feeding_tick(&mut fg, &source_lookup, &mut one);
         }
         let one_out = one.pop().unwrap();
-        let bump_angle_deg = compute_bump_angle_deg(&activity_sparse, epg_id_to_bin);
+        let (bump_angle_deg, epg_bins_arr) = compute_bump_and_epg_bins(&activity_sparse, epg_id_to_bin);
+        let epg_bins = Some(epg_bins_arr.to_vec());
         let t2 = Instant::now();
         let out_json = serde_json::to_string(&StepResp {
             activity_sparse,
@@ -1290,6 +1328,7 @@ fn handle(
             eaten_food_id: one_out.eaten_food_id,
             feeding_sugar_taken: one_out.feeding_sugar_taken,
             bump_angle_deg,
+            epg_bins,
             compute_ms: timing.compute_ms,
             kernel_ms: timing.kernel_ms,
             recurrent_ms: timing.recurrent_ms,
@@ -1369,18 +1408,53 @@ fn handle(
         } else {
             Vec::new()
         };
-        let mut fly = FlyInput {
-            x: 0.0,
-            y: 0.0,
-            z: 1.0,
-            heading: 0.0,
-            t: 0.0,
-            hunger: 100.0,
-            health: 100.0,
-            rest_time_left: 0.0,
-            dead: false,
-        };
+        let mut fly = p
+            .fly
+            .as_ref()
+            .map(|f| FlyInput {
+                x: f.x,
+                y: f.y,
+                z: f.z,
+                heading: f.heading,
+                t: f.t,
+                hunger: f.hunger,
+                health: f.health,
+                rest_time_left: f.rest_time_left,
+                dead: f.dead,
+            })
+            .unwrap_or_else(|| FlyInput {
+                x: 0.0,
+                y: 0.0,
+                z: 1.0,
+                heading: 0.0,
+                t: 0.0,
+                hunger: 100.0,
+                health: 100.0,
+                rest_time_left: 0.0,
+                dead: false,
+            });
+        let srcs: Vec<SourceInput> = p
+            .sources
+            .as_ref()
+            .map(|s| {
+                s.iter()
+                    .map(|x| SourceInput {
+                        id: x.id.clone(),
+                        x: x.x,
+                        y: x.y,
+                        radius: x.radius,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         let duration_sec = num_steps as f64 * dt;
+        let mut last_activity_sparse: HashMap<String, f64> = HashMap::new();
+        let mut last_motor_left = 0.0f64;
+        let mut last_motor_right = 0.0f64;
+        let mut last_motor_fwd = 0.0f64;
+        let mut last_eaten_food_id: Option<String> = None;
+        let mut last_feeding_sugar_taken = 0.0f64;
+        let mut last_feeding_candidate_id: Option<String> = None;
         // Log once if any forced-spike IDs are not in the connectome (they will be silently dropped).
         if let Some(ref schedule) = p.forced_spike_schedule {
             let all_forced: Vec<String> = schedule
@@ -1418,17 +1492,26 @@ fn handle(
                         }
                     }
                 }
-                let (_a, _sparse, spike_ids, _ml, _mr, _mf, _cl, _cr, _cf, _mlm, _mrm, _mfm, _timing, fly_out) =
+                let (_a, activity_sparse, spike_ids, ml, mr, mf, _cl, _cr, _cf, _mlm, _mrm, _mfm, _timing, fly_out) =
                     sim.step_with_options(
                         dt,
                         fly,
-                        Vec::new(),
+                        srcs.clone(),
                         true,
                         false,
                         None,
                         forced_spikes,
                         Some(stim_map),
                     );
+                if p.return_final_state {
+                    last_activity_sparse = activity_sparse;
+                    last_motor_left = ml;
+                    last_motor_right = mr;
+                    last_motor_fwd = mf;
+                    last_eaten_food_id = fly_out.eaten_food_id.clone();
+                    last_feeding_sugar_taken = fly_out.feeding_sugar_taken;
+                    last_feeding_candidate_id = fly_out.feeding_candidate_id.clone();
+                }
                 fly = FlyInput {
                     x: fly_out.x,
                     y: fly_out.y,
@@ -1466,6 +1549,70 @@ fn handle(
         let steps_loop_ms = t_loop_start.elapsed().as_secs_f64() * 1000.0;
         let wall_sec = t0.elapsed().as_secs_f64();
         let t_serial_start = Instant::now();
+        let (resp_fly, resp_activity, resp_bump, resp_epg_bins, resp_motor_left, resp_motor_right, resp_motor_fwd, resp_eaten_food_id, resp_feeding_sugar_taken) =
+            if p.return_final_state {
+                let mut one = vec![StepManyItemResp {
+                    sim_id: p.sim_id,
+                    activity_sparse: HashMap::new(),
+                    motor_left: 0.0,
+                    motor_right: 0.0,
+                    motor_fwd: 0.0,
+                    motor_left_count: 0.0,
+                    motor_right_count: 0.0,
+                    motor_fwd_count: 0.0,
+                    motor_left_magnitude: 0.0,
+                    motor_right_magnitude: 0.0,
+                    motor_fwd_magnitude: 0.0,
+                    fly: FlyRespJson {
+                        x: fly.x,
+                        y: fly.y,
+                        z: fly.z,
+                        heading: fly.heading,
+                        t: fly.t,
+                        hunger: fly.hunger,
+                        health: fly.health,
+                        dead: fly.dead,
+                        fly_time_left: 6.0,
+                        rest_time_left: 0.0,
+                        rest_duration: 4.0,
+                        feeding: false,
+                    },
+                    eaten_food_id: last_eaten_food_id.clone(),
+                    feeding_sugar_taken: last_feeding_sugar_taken,
+                    feeding_candidate_id: last_feeding_candidate_id.clone(),
+                    dt,
+                    compute_ms: 0.0,
+                    kernel_ms: 0.0,
+                    recurrent_ms: 0.0,
+                    lif_ms: 0.0,
+                    readout_ms: 0.0,
+                }];
+                let mut source_lookup: HashMap<String, (f64, f64)> = HashMap::new();
+                if let Some(ref sources) = p.sources {
+                    for s in sources {
+                        source_lookup.insert(s.id.clone(), (s.x, s.y));
+                    }
+                    let mut fg = food_state.lock().unwrap();
+                    fg.sync(sources.iter().map(|s| s.id.clone()));
+                    apply_feeding_tick(&mut *fg, &source_lookup, &mut one);
+                }
+                let (bump_angle_deg, epg_bins_arr) =
+                    compute_bump_and_epg_bins(&last_activity_sparse, epg_id_to_bin);
+                let item = &one[0];
+                (
+                    Some(item.fly.clone()),
+                    Some(last_activity_sparse),
+                    bump_angle_deg,
+                    Some(epg_bins_arr.to_vec()),
+                    Some(last_motor_left),
+                    Some(last_motor_right),
+                    Some(last_motor_fwd),
+                    item.eaten_food_id.clone(),
+                    Some(item.feeding_sugar_taken),
+                )
+            } else {
+                (None, None, None, None, None, None, None, None, None)
+            };
         let run_out = RunStepsResp {
             steps_done: num_steps,
             duration_sec,
@@ -1476,6 +1623,15 @@ fn handle(
                 None
             },
             ticks: if p.record_ticks { Some(ticks) } else { None },
+            fly: resp_fly,
+            activity_sparse: resp_activity,
+            bump_angle_deg: resp_bump,
+            epg_bins: resp_epg_bins,
+            motor_left: resp_motor_left,
+            motor_right: resp_motor_right,
+            motor_fwd: resp_motor_fwd,
+            eaten_food_id: resp_eaten_food_id,
+            feeding_sugar_taken: resp_feeding_sugar_taken,
         };
         let json_str = serde_json::to_string(&run_out)?;
         let serialize_ms = t_serial_start.elapsed().as_secs_f64() * 1000.0;

@@ -75,6 +75,7 @@ pub struct FlyInput {
     pub dead: bool,
 }
 
+#[derive(Clone)]
 pub struct SourceInput {
     pub id: String,
     pub x: f64,
@@ -623,8 +624,9 @@ impl BrainSim {
         if let Some(stim_map) = stim_rates_by_id {
             let mut rids: Vec<&String> = stim_map.keys().collect();
             rids.sort();
-            for rid in rids {
-                let rate_hz = stim_map[rid];
+            let mut found = 0usize;
+            for rid in &rids {
+                let rate_hz = stim_map[*rid];
                 if !rate_hz.is_finite() || rate_hz <= 0.0 {
                     continue;
                 }
@@ -637,7 +639,15 @@ impl BrainSim {
                         self.syn_input[idx] += sensory_spike_amp;
                         olf_poisson_spikes += 1;
                     }
+                    found += 1;
                 }
+            }
+            if self.stim_log_every > 0 && self.step_counter % self.stim_log_every == 0 && !rids.is_empty() {
+                eprintln!(
+                    "[stim] rates_by_id: {} requested, {} found in connectome (stimulate L1/L2/L6 for 11PM)",
+                    rids.len(),
+                    found
+                );
             }
         }
         // Causal external stimulation is handled as explicit forced spikes

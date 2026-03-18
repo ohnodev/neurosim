@@ -342,6 +342,8 @@ export interface StepResult {
   feedingSugarTaken?: number;
   /** EPG bump heading in degrees (math convention), when available. */
   bumpAngleDeg?: number | null;
+  /** Normalized EPG bin activities 0..1 (16 bins), for compass display. */
+  epgBins?: number[] | null;
   computeMs?: number;
   kernelMs?: number;
   recurrentMs?: number;
@@ -469,6 +471,118 @@ export async function liveStatus(): Promise<{
   });
 }
 
+export interface RunStepsWithStateParams {
+  simId: number;
+  numSteps: number;
+  dt: number;
+  stimRatesById: Record<string, number>;
+  fly: {
+    x: number;
+    y: number;
+    z: number;
+    heading: number;
+    t: number;
+    hunger: number;
+    health: number;
+    restTimeLeft: number;
+    dead: boolean;
+  };
+  sources: Array<{ id: string; x: number; y: number; radius: number }>;
+}
+
+/** Run N steps in one round-trip; returns final state (same shape as step) when used for world loop. */
+export async function runStepsWithState(params: RunStepsWithStateParams): Promise<StepResult> {
+  const res = await request<{
+    steps_done: number;
+    fly?: {
+      x: number;
+      y: number;
+      z: number;
+      heading: number;
+      t: number;
+      hunger: number;
+      health: number;
+      dead: boolean;
+      fly_time_left: number;
+      rest_time_left: number;
+      rest_duration: number;
+      feeding: boolean;
+    };
+    activity_sparse?: Record<string, number>;
+    bump_angle_deg?: number | null;
+    epg_bins?: number[] | null;
+    motor_left?: number;
+    motor_right?: number;
+    motor_fwd?: number;
+    motor_left_count?: number;
+    motor_right_count?: number;
+    motor_fwd_count?: number;
+    motor_left_magnitude?: number;
+    motor_right_magnitude?: number;
+    motor_fwd_magnitude?: number;
+    eaten_food_id?: string;
+    feeding_sugar_taken?: number;
+  }>({
+    method: 'run_steps',
+    params: {
+      sim_id: params.simId,
+      num_steps: Math.min(1_000_000, Math.max(1, Math.floor(params.numSteps))),
+      dt: params.dt,
+      stim_rates_by_id: params.stimRatesById,
+      return_final_state: true,
+      fly: {
+        x: params.fly.x,
+        y: params.fly.y,
+        z: params.fly.z,
+        heading: params.fly.heading,
+        t: params.fly.t,
+        hunger: params.fly.hunger,
+        health: params.fly.health,
+        rest_time_left: params.fly.restTimeLeft,
+        dead: params.fly.dead,
+      },
+      sources: params.sources,
+    },
+  });
+  const fly = res.fly!;
+  return {
+    activity: [],
+    activitySparse: res.activity_sparse ?? {},
+    motorLeft: res.motor_left ?? 0,
+    motorRight: res.motor_right ?? 0,
+    motorFwd: res.motor_fwd ?? 0,
+    motorLeftCount: res.motor_left_count ?? 0,
+    motorRightCount: res.motor_right_count ?? 0,
+    motorFwdCount: res.motor_fwd_count ?? 0,
+    motorLeftMagnitude: res.motor_left_magnitude ?? 0,
+    motorRightMagnitude: res.motor_right_magnitude ?? 0,
+    motorFwdMagnitude: res.motor_fwd_magnitude ?? 0,
+    fly: {
+      x: fly.x,
+      y: fly.y,
+      z: fly.z,
+      heading: fly.heading,
+      t: fly.t,
+      hunger: fly.hunger,
+      health: fly.health,
+      dead: fly.dead,
+      flyTimeLeft: fly.fly_time_left,
+      restTimeLeft: fly.rest_time_left,
+      restDuration: fly.rest_duration,
+      feeding: fly.feeding,
+    },
+    eatenFoodId: res.eaten_food_id,
+    feedingSugarTaken: res.feeding_sugar_taken ?? 0,
+    bumpAngleDeg: res.bump_angle_deg ?? null,
+    epgBins: res.epg_bins ?? null,
+    computeMs: 0,
+    kernelMs: 0,
+    recurrentMs: 0,
+    lifMs: 0,
+    readoutMs: 0,
+  };
+}
+
 export async function runSteps(params: {
   simId: number;
   numSteps: number;
@@ -524,6 +638,7 @@ export async function stepSim(params: StepParams): Promise<StepResult> {
     eaten_food_id?: string;
     feeding_sugar_taken?: number;
     bump_angle_deg?: number | null;
+    epg_bins?: number[] | null;
     compute_ms?: number;
     kernel_ms?: number;
     recurrent_ms?: number;
@@ -581,6 +696,7 @@ export async function stepSim(params: StepParams): Promise<StepResult> {
     eatenFoodId: res.eaten_food_id,
     feedingSugarTaken: res.feeding_sugar_taken,
     bumpAngleDeg: res.bump_angle_deg ?? null,
+    epgBins: res.epg_bins ?? null,
     computeMs: res.compute_ms,
     kernelMs: res.kernel_ms,
     recurrentMs: res.recurrent_ms,

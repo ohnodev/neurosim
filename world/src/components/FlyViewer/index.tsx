@@ -51,32 +51,10 @@ export default function FlyViewer() {
   const [brainTab, setBrainTab] = useState<'activity' | 'compass'>('activity');
   const [brainPanelOpen, setBrainPanelOpen] = useState(() => !isMobileViewport());
   const [bumpAngleDeg, setBumpAngleDeg] = useState<number | null>(null);
-  const smoothedBumpRef = useRef<number | null>(null);
+  const [epgBins, setEpgBins] = useState<number[] | null>(null);
   const [devMode, setDevMode] = useState<boolean>(() => getInitialDevMode());
   const [deployingSlots, setDeployingSlots] = useState<Set<number>>(new Set());
   const deployingSlotsRef = useRef<Set<number>>(new Set());
-
-  /** Smooth bump angle (shortest-path lerp) so compass doesn't jitter from decode noise. */
-  const setBumpFromFrame = useCallback((deg: number | null) => {
-    if (deg == null) {
-      smoothedBumpRef.current = null;
-      setBumpAngleDeg(null);
-      return;
-    }
-    const prev = smoothedBumpRef.current;
-    const alpha = 0.35;
-    let next: number;
-    if (prev == null) {
-      next = deg;
-    } else {
-      let d = ((deg - prev + 540) % 360) - 180;
-      next = prev + d * alpha;
-      next = ((next % 360) + 360) % 360;
-      if (next > 180) next -= 360;
-    }
-    smoothedBumpRef.current = next;
-    setBumpAngleDeg(next);
-  }, []);
 
   const snapshotBufferRef = useRef<Snapshot[]>([]);
   const latestFliesRef = useRef<FlyState[]>([]);
@@ -300,7 +278,9 @@ export default function FlyViewer() {
           activitiesRef.current = [];
           const simIdx = followSimIndexRef.current ?? 0;
           const deg = lastFrame.bumpAngleDegs?.[simIdx] ?? null;
-          setBumpFromFrame(deg);
+          setBumpAngleDeg(deg);
+          const bins = lastFrame.epgBinsPerSim?.[simIdx] ?? null;
+          setEpgBins(Array.isArray(bins) && bins.length === 16 ? bins : null);
         } else if (last) {
           latestFliesRef.current = last.flies;
           activityRef.current = data.activity ?? data.activities?.[0] ?? {};
@@ -681,7 +661,7 @@ export default function FlyViewer() {
               )}
               {brainTab === 'compass' && brainPanelOpen && (
                 <div className="fly-viewer__brain-plot">
-                  <HeadingCompass bumpAngleDeg={bumpAngleDeg} />
+                  <HeadingCompass bumpAngleDeg={bumpAngleDeg} epgBins={epgBins ?? undefined} />
                 </div>
               )}
             </div>

@@ -1,6 +1,7 @@
 /**
  * World page: 3 stable compass positions (11PM, 3PM, 8PM) and PEN_a Hz presets.
- * All other L/R PEN_a neurons are 0; only the listed neurons get the given Hz.
+ * Matches visualization page live sim exactly: same PEN_a list (from API /pen-a-neurons),
+ * same L1/L2/L6 = left[0], left[1], left[5] at 50 Hz when 11PM.
  */
 
 export type WorldCompassPosition = '11PM' | '3PM' | '8PM';
@@ -20,9 +21,12 @@ export interface PenABySide {
   right: string[];
 }
 
+/** Same dt as visualization live sim (NEUROSIM_LIVE_DT_SEC). */
+export const WORLD_SIM_DT_SEC = 0.0001;
+
 /**
- * Build ratesById for each of the 3 positions. L1 = left[0], L2 = left[1], ... L10 = left[9];
- * R1 = right[0], ... R10 = right[9]. All neurons not listed are 0.
+ * Build ratesById for each of the 3 positions.
+ * 11PM: L1, L2, L6 (left[0], left[1], left[5]) at 50 Hz — same as viz when you set L1=50, L2=50, L6=50 and Apply.
  */
 export function getWorldPenPresets(penABySide: PenABySide): Record<WorldCompassPosition, Record<string, number>> {
   const { left, right } = penABySide;

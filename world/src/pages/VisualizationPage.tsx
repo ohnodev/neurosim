@@ -571,55 +571,44 @@ function buildScene(
         const p = aligned[idx]!;
         radiusSum += Math.hypot(p.x - cxCompass, p.y - cyCompass);
       }
-      let baseRadius = Math.max(1e-3, radiusSum / epgIndices.length);
-      // Seeded parity replays use synthetic neuron coordinates (x=y=z=0). In that case,
-      // force canonical compass-ring placement so all EPG neurons are visible.
-      if (baseRadius < 0.05) {
-        baseRadius = 0.35;
-        const tileGroups = new Map<number, number[]>();
-        const unassigned: number[] = [];
-        for (const idx of epgIndices) {
-          const tile = getEffectiveEpgTile(neurons[idx]!, epgLabelMap ?? null);
-          if (tile == null || tile < 0 || tile >= EPG_COMPASS_BINS) {
-            unassigned.push(idx);
-            continue;
-          }
-          const group = tileGroups.get(tile) ?? [];
-          group.push(idx);
-          tileGroups.set(tile, group);
+      const baseRadius = Math.max(0.35, radiusSum / epgIndices.length);
+      // Canonical compass layout: always place every EPG neuron on the ring.
+      // This prevents any off-ring/floating point even if source coordinates or labels are partial.
+      const tileGroups = new Map<number, number[]>();
+      const unassigned: number[] = [];
+      for (const idx of epgIndices) {
+        const tile = getEffectiveEpgTile(neurons[idx]!, epgLabelMap ?? null);
+        if (tile == null || tile < 0 || tile >= EPG_COMPASS_BINS) {
+          unassigned.push(idx);
+          continue;
         }
-        if (tileGroups.size >= 2) {
-          const sector = (Math.PI * 2) / EPG_COMPASS_BINS;
-          const spread = sector * 0.35;
-          for (const [tile, indices] of tileGroups.entries()) {
-            indices.sort((a, b) => (neurons[a]?.root_id ?? '').localeCompare(neurons[b]?.root_id ?? ''));
-            const angleCenter = sceneAngleForBin(tile, EPG_COMPASS_BINS);
-            for (let k = 0; k < indices.length; k += 1) {
-              const idx = indices[k]!;
-              const centered = indices.length > 1 ? (k / (indices.length - 1)) - 0.5 : 0;
-              const angle = angleCenter + centered * spread;
-              aligned[idx]!.x = cxCompass + Math.cos(angle) * baseRadius;
-              aligned[idx]!.y = cyCompass + Math.sin(angle) * baseRadius;
-              aligned[idx]!.z = czCompass;
-            }
-          }
-          // Ensure every EPG is on the compass ring, even if processed label/tile is missing.
-          for (let k = 0; k < unassigned.length; k += 1) {
-            const idx = unassigned[k]!;
-            const angle = sceneAngleForBin(k % EPG_COMPASS_BINS, EPG_COMPASS_BINS);
-            aligned[idx]!.x = cxCompass + Math.cos(angle) * baseRadius;
-            aligned[idx]!.y = cyCompass + Math.sin(angle) * baseRadius;
-            aligned[idx]!.z = czCompass;
-          }
-        } else {
-          for (let k = 0; k < epgIndices.length; k += 1) {
-            const idx = epgIndices[k]!;
-            const angle = sceneAngleForBin(k % EPG_COMPASS_BINS, EPG_COMPASS_BINS);
+        const group = tileGroups.get(tile) ?? [];
+        group.push(idx);
+        tileGroups.set(tile, group);
+      }
+      if (tileGroups.size >= 2) {
+        const sector = (Math.PI * 2) / EPG_COMPASS_BINS;
+        const spread = sector * 0.35;
+        for (const [tile, indices] of tileGroups.entries()) {
+          indices.sort((a, b) => (neurons[a]?.root_id ?? '').localeCompare(neurons[b]?.root_id ?? ''));
+          const angleCenter = sceneAngleForBin(tile, EPG_COMPASS_BINS);
+          for (let k = 0; k < indices.length; k += 1) {
+            const idx = indices[k]!;
+            const centered = indices.length > 1 ? (k / (indices.length - 1)) - 0.5 : 0;
+            const angle = angleCenter + centered * spread;
             aligned[idx]!.x = cxCompass + Math.cos(angle) * baseRadius;
             aligned[idx]!.y = cyCompass + Math.sin(angle) * baseRadius;
             aligned[idx]!.z = czCompass;
           }
         }
+      }
+      // Ensure every EPG is on the compass ring, even if processed label/tile is missing.
+      for (let k = 0; k < unassigned.length; k += 1) {
+        const idx = unassigned[k]!;
+        const angle = sceneAngleForBin(k % EPG_COMPASS_BINS, EPG_COMPASS_BINS);
+        aligned[idx]!.x = cxCompass + Math.cos(angle) * baseRadius;
+        aligned[idx]!.y = cyCompass + Math.sin(angle) * baseRadius;
+        aligned[idx]!.z = czCompass;
       }
       compassCenter = { x: cxCompass, y: cyCompass, z: czCompass };
       compassBaseRadius = baseRadius;

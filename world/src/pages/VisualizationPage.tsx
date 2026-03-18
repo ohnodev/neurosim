@@ -205,6 +205,7 @@ const EPG_GLOW_SIZE = 0.13;
 const EPG_GLOW_OPACITY = 0.52;
 const DELTA7_OPPOSITE_INHIBIT_WEIGHT = 0.55;
 const EPG_INACTIVE_BIN_PENALTY = 0.35;
+const SHOW_BIOLOGICAL_EPG_COPY = false;
 /** If a bin has this fraction of its EPG population active (in window), we point the arrow at that bin center (clear bump signal). */
 const EPG_DOMINANT_BIN_THRESHOLD = 0.8;
 const PREFERRED_REPLAY_ID = 'neurosim_python_pen35hz_seeded_1000ticks_before_opt';
@@ -477,7 +478,7 @@ function buildScene(
   let compassCenter: { x: number; y: number; z: number } | null = null;
   let compassBaseRadius: number | null = null;
   const aligned = computeAlignedPoints(neurons, viewMode !== 'raw');
-  if (viewMode === 'compass') {
+  if (viewMode === 'compass' && SHOW_BIOLOGICAL_EPG_COPY) {
     const ringIndices: number[] = [];
     for (let i = 0; i < neurons.length; i += 1) {
       if (neurons[i]?.is_epg) ringIndices.push(i);
@@ -1547,7 +1548,15 @@ export default function VisualizationPage() {
     }
     return fired.size;
   }, [replay, epgLabelMap, selectedReplayId, liveEpgUniqueFired]);
-  const displayNeurons = useMemo(() => neurons, [neurons]);
+  const displayNeurons = useMemo(() => {
+    const seen = new Set<string>();
+    return neurons.filter((neuron) => {
+      if (!neuron.is_epg) return false;
+      if (seen.has(neuron.root_id)) return false;
+      seen.add(neuron.root_id);
+      return true;
+    });
+  }, [neurons]);
   const selectedReplay = useMemo(
     () => replayDatasets.find((d) => d.id === selectedReplayId) ?? replayDatasets[0],
     [replayDatasets, selectedReplayId],

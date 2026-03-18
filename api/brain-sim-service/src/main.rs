@@ -320,7 +320,7 @@ fn handle(
             .and_then(|s| s.parse::<f32>().ok())
             .filter(|&v| v.is_finite() && v >= 0.0)
             .unwrap_or_else(|| brain_sim_service::model_constants::EPG_RECURRENCE_BOOST);
-        let sim = BrainSim::new_with_viewer(
+        let mut sim = BrainSim::new_with_viewer(
             template.neuron_ids.clone(),
             template.edges_pre.clone(),
             template.edges_post.clone(),
@@ -343,6 +343,13 @@ fn handle(
         let id = *g;
         *g = g.saturating_add(1);
         drop(g);
+        if let Some(base_seed) = std::env::var("NEUROSIM_POISSON_SEED")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+        {
+            // Python parity: first created sim uses seed+1.
+            sim.set_rng_seed(base_seed.wrapping_add(id as u64).wrapping_add(1));
+        }
         sims.lock().unwrap().insert(id, sim);
         eprintln!(
             "[brain-service] req={} conn={} method=create sim_id={} pid={}",

@@ -1,0 +1,25 @@
+{
+  "python_socket": "/tmp/neurosim-py-parity.sock",
+  "rust_socket": "/tmp/neurosim-rust-parity.sock",
+  "seed": 424242,
+  "steps": 1000,
+  "dt": 0.0001,
+  "python_ms_per_step": 2.16,
+  "rust_wall_sec": 0.580912333,
+  "ticks_python": 1000,
+  "ticks_rust": 1000,
+  "same_tick_spikes": false,
+  "same_spike_counts": false,
+  "mismatch_tick_count": 776,
+  "first_mismatch_index": 44,
+  "first_mismatch": {
+    "python_tick_field": 45,
+    "rust_tick_field": 44,
+    "python_spikes_len": 1,
+    "rust_spikes_len": 0,
+    "python_spikes_head": [
+      "720575940619476126"
+    ],
+    "rust_spikes_head": []
+  }
+}

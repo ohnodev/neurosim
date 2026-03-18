@@ -1,0 +1,234 @@
+#!/usr/bin/env python3
+"""
+Run 20k ticks at 0.1 ms dt on Rust brain-service:
+- Phase 1: 10,000 ticks, PEN left/right both at 30 Hz
+- Phase 2: 10,000 ticks, PEN left at +20% (36 Hz), right stays 30 Hz
+
+Exports replay to world/public for frontend comparison.
+"""
+from __future__ import annotations
+
+import csv
+import json
+import os
+import socket
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+SOCKET_PATH = Path(os.environ.get("NEUROSIM_BRAIN_SOCKET_RUST", "/tmp/neurosim-rust-bench.sock"))
+SOCKET_TIMEOUT = 600.0
+
+DT_MS = 0.1
+DT_SEC = DT_MS / 1000.0
+TICKS_BASELINE = 10_000
+TICKS_BUMP = 10_000
+PEN_HZ_BASELINE = 30.0
+LEFT_HZ_BUMP = 36.0
+RIGHT_HZ_BUMP = 30.0
+
+
+def load_pen_ids(class_map_path: Path) -> list[str]:
+    pen = []
+    with class_map_path.open("r", newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            rid = (row.get("root_id") or "").strip()
+            if rid and "PEN" in (row.get("hemibrain_type") or ""):
+                pen.append(rid)
+    return sorted(set(pen))
+
+
+def load_epg_and_class(epg_path: Path, class_map_path: Path) -> tuple[list[dict], dict[str, dict]]:
+    epg_data = json.loads(epg_path.read_text(encoding="utf-8"))
+    entries = epg_data.get("entries", epg_data if isinstance(epg_data, list) else [])
+    class_map: dict[str, dict[str, str]] = {}
+    with class_map_path.open("r", newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            rid = (row.get("root_id") or "").strip()
+            if rid:
+                class_map[rid] = row
+    return entries, class_map
+
+
+def main() -> int:
+    replay_filename = "neurosim_rust_pen30hz_20k_leftplus20_replay.json"
+    out_replay = ROOT / "world" / "public" / replay_filename
+    scenario = "neurosim_rust_pen30hz_20k_leftplus20"
+
+    epg_path = ROOT / "data" / "epg-tile-map.json"
+    class_path = ROOT / "data" / "raw" / "classification.csv"
+    if not epg_path.exists():
+        print(f"Missing {epg_path}", flush=True)
+        return 1
+    if not class_path.exists():
+        print(f"Missing {class_path}", flush=True)
+        return 1
+    if not SOCKET_PATH.exists():
+        print(f"Socket not found: {SOCKET_PATH}", flush=True)
+        print("Start Rust brain-service first.", flush=True)
+        return 1
+
+    pen_ids = load_pen_ids(class_path)
+    epg_entries, class_map = load_epg_and_class(epg_path, class_path)
+    epg_ids = [str(e["root_id"]) for e in epg_entries]
+    left_pen = [rid for rid in pen_ids if class_map.get(rid, {}).get("side", "").strip().lower() == "left"]
+    right_pen = [rid for rid in pen_ids if class_map.get(rid, {}).get("side", "").strip().lower() == "right"]
+
+    print(f"PEN total={len(pen_ids)} left={len(left_pen)} right={len(right_pen)}", flush=True)
+    print(f"EPG: {len(epg_ids)} neurons", flush=True)
+    print(
+        f"Run: {TICKS_BASELINE} ticks at {PEN_HZ_BASELINE} Hz both, then "
+        f"{TICKS_BUMP} ticks with left={LEFT_HZ_BUMP} Hz right={RIGHT_HZ_BUMP} Hz",
+        flush=True,
+    )
+    print(f"Socket: {SOCKET_PATH}", flush=True)
+    print(f"Out: {out_replay}", flush=True)
+
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(SOCKET_TIMEOUT)
+    sock.connect(str(SOCKET_PATH))
+    f = sock.makefile("rwb")
+    try:
+        def read_response() -> bytes:
+            line = f.readline()
+            if not line:
+                raise RuntimeError("socket closed")
+            return line
+
+        f.write(b'{"method":"create","params":{}}\n')
+        f.flush()
+        out = json.loads(read_response().decode("utf-8"))
+        if out.get("error"):
+            raise RuntimeError(out["error"])
+        sim_id = int(out["sim_id"])
+
+        # Phase 1
+        req1 = {
+            "method": "run_steps",
+            "params": {
+                "sim_id": sim_id,
+                "num_steps": TICKS_BASELINE,
+                "dt": DT_SEC,
+                "stim_rates_by_id": {rid: PEN_HZ_BASELINE for rid in pen_ids},
+                "count_neuron_ids": epg_ids,
+                "record_ticks": True,
+            },
+        }
+        f.write((json.dumps(req1) + "\n").encode("utf-8"))
+        f.flush()
+        resp1 = json.loads(read_response().decode("utf-8"))
+        if resp1.get("error"):
+            raise RuntimeError(resp1["error"])
+        ticks_1 = resp1.get("ticks") or []
+
+        # Phase 2
+        stim_2 = {rid: LEFT_HZ_BUMP for rid in left_pen}
+        for rid in right_pen:
+            stim_2[rid] = RIGHT_HZ_BUMP
+        req2 = {
+            "method": "run_steps",
+            "params": {
+                "sim_id": sim_id,
+                "num_steps": TICKS_BUMP,
+                "dt": DT_SEC,
+                "stim_rates_by_id": stim_2,
+                "count_neuron_ids": epg_ids,
+                "record_ticks": True,
+            },
+        }
+        f.write((json.dumps(req2) + "\n").encode("utf-8"))
+        f.flush()
+        resp2 = json.loads(read_response().decode("utf-8"))
+        if resp2.get("error"):
+            raise RuntimeError(resp2["error"])
+        ticks_2 = resp2.get("ticks") or []
+
+        f.write(b'{"method":"reset","params":{}}\n')
+        f.flush()
+        read_response()
+    finally:
+        f.close()
+        sock.close()
+
+    # Offset phase-2 ticks to continue timeline at 10,001..20,000
+    for t in ticks_2:
+        t["tick"] = TICKS_BASELINE + t["tick"]
+        t["time_sec"] = round(t["tick"] * DT_SEC, 6)
+    ticks_all = ticks_1 + ticks_2
+
+    spike_counts_1 = resp1.get("spike_counts") or {}
+    spike_counts_2 = resp2.get("spike_counts") or {}
+    epg_total_1 = sum(int(spike_counts_1.get(rid, 0)) for rid in epg_ids)
+    epg_total_2 = sum(int(spike_counts_2.get(rid, 0)) for rid in epg_ids)
+    epg_unique = sum(
+        1
+        for rid in epg_ids
+        if int(spike_counts_1.get(rid, 0)) + int(spike_counts_2.get(rid, 0)) > 0
+    )
+    wall_sec = (resp1.get("wall_sec") or 0.0) + (resp2.get("wall_sec") or 0.0)
+
+    print(f"Wall: {wall_sec:.2f} s", flush=True)
+    print(f"EPG events phase1={epg_total_1} phase2={epg_total_2}", flush=True)
+    print(f"EPG unique fired total={epg_unique}", flush=True)
+
+    replay_neurons = []
+    for e in epg_entries:
+        rid = str(e.get("root_id", ""))
+        c = class_map.get(rid, {})
+        replay_neurons.append(
+            {
+                "root_id": rid,
+                "x": 0,
+                "y": 0,
+                "z": 0,
+                "processed_label": c.get("cell_type", ""),
+                "is_ring": True,
+                "is_epg": True,
+                "epg_tile_index_0_7": e.get("tile_index_0_7"),
+                "side": c.get("side", e.get("side", "unknown")),
+                "hemibrain_type": c.get("hemibrain_type", e.get("hemibrain_type", "")),
+                "flow": c.get("flow", ""),
+                "super_class": c.get("super_class", ""),
+                "class": c.get("class", ""),
+                "sub_class": c.get("sub_class", ""),
+                "cell_type": c.get("cell_type", ""),
+                "hemilineage": c.get("hemilineage", ""),
+                "nerve": c.get("nerve", ""),
+            }
+        )
+
+    replay = {
+        "meta": {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "ticks": len(ticks_all),
+            "dt_sec": DT_SEC,
+            "scenario": scenario,
+            "epg_neuron_total": len(epg_ids),
+            "epg_neuron_unique_fired": epg_unique,
+            "stimulus": {
+                "backend": "rust",
+                "pen_hz_baseline": PEN_HZ_BASELINE,
+                "ticks_baseline": TICKS_BASELINE,
+                "left_hz_bump": LEFT_HZ_BUMP,
+                "right_hz_bump": RIGHT_HZ_BUMP,
+                "ticks_bump": TICKS_BUMP,
+                "pen_pool_size": len(pen_ids),
+                "dt_ms": DT_MS,
+            },
+            "observed": {
+                "epg_spike_events_phase1": epg_total_1,
+                "epg_spike_events_phase2": epg_total_2,
+                "wall_sec": wall_sec,
+            },
+        },
+        "neurons": replay_neurons,
+        "ticks": ticks_all,
+    }
+    out_replay.parent.mkdir(parents=True, exist_ok=True)
+    out_replay.write_text(json.dumps(replay) + "\n", encoding="utf-8")
+    print(f"Wrote {out_replay}", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

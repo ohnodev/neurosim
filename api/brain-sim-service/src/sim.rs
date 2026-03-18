@@ -129,6 +129,10 @@ struct SensoryDrive {
 }
 
 impl BrainSim {
+    pub fn set_rng_seed(&mut self, seed: u64) {
+        self.rng_state = seed;
+    }
+
     fn compute_synaptic_delay_steps(dt_sec: f64) -> usize {
         let dt_ms = dt_sec * 1000.0;
         if !dt_ms.is_finite() || dt_ms <= 0.0 {

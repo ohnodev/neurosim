@@ -53,9 +53,22 @@ def load_epg_and_class(epg_path: Path, class_map_path: Path) -> tuple[list[dict]
 
 
 def main() -> int:
-    replay_filename = "neurosim_rust_pen40hz_1s_replay.json"
+    recurrence_boost = os.environ.get("NEUROSIM_EPG_RECURRENCE_BOOST", "").strip()
+    rec_suffix = ""
+    rec_boost_meta: float | None = None
+    if recurrence_boost:
+        try:
+            rec_boost_meta = float(recurrence_boost)
+            if rec_boost_meta.is_integer():
+                rec_suffix = f"_epgrec{int(rec_boost_meta)}x"
+            else:
+                rec_suffix = f"_epgrec{str(rec_boost_meta).replace('.', 'p')}x"
+        except ValueError:
+            rec_suffix = f"_epgrec{recurrence_boost.replace('.', 'p')}x"
+
+    replay_filename = f"neurosim_rust_pen40hz_1s{rec_suffix}_replay.json"
     out_replay = ROOT / "world" / "public" / replay_filename
-    scenario = "neurosim_rust_pen40hz_1s"
+    scenario = f"neurosim_rust_pen40hz_1s{rec_suffix}"
 
     epg_path = ROOT / "data" / "epg-tile-map.json"
     class_path = ROOT / "data" / "raw" / "classification.csv"
@@ -77,6 +90,8 @@ def main() -> int:
     stim_rates = {rid: PEN_HZ for rid in pen_ids}
     print(f"PEN: {len(pen_ids)} neurons at {PEN_HZ} Hz", flush=True)
     print(f"EPG: {len(epg_ids)} neurons, counting spikes", flush=True)
+    if rec_boost_meta is not None:
+        print(f"EPG recurrence boost: {rec_boost_meta}x", flush=True)
     print(f"Run: {NUM_STEPS} steps, dt={DT_MS} ms, Rust socket {SOCKET_PATH}", flush=True)
     print(f"Out: {out_replay}", flush=True)
 
@@ -162,6 +177,7 @@ def main() -> int:
                 "duration_ms": DURATION_MS,
                 "dt_ms": DT_MS,
                 "backend": "rust",
+                "epg_recurrence_boost": rec_boost_meta,
             },
             "observed": {
                 "epg_spike_events_total": epg_total,

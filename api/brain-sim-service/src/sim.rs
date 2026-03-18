@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use crate::model_constants::{
-    REFRACT_MS, TAU_MEM_MS, TAU_SYN_MS, V_RESET, V_REST, V_THRESH, W_SYN,
+    EPG_RECURRENCE_BOOST, REFRACT_MS, TAU_MEM_MS, TAU_SYN_MS, V_RESET, V_REST, V_THRESH, W_SYN,
 };
 
 const STIM_RATE_HZ: f64 = 200.0;
@@ -47,6 +47,8 @@ pub struct BrainSim {
     out_post: Vec<u32>,
     out_weight: Vec<f32>,
     w_syn: f32,
+    epg_recurrence_boost: f32,
+    is_epg: Vec<u8>,
     sensory_indices: Vec<u32>,
     sensory_left_indices: Vec<u32>,
     sensory_right_indices: Vec<u32>,
@@ -186,6 +188,7 @@ impl BrainSim {
             out_post,
             out_weight,
             W_SYN,
+            EPG_RECURRENCE_BOOST,
             sensory_indices,
             sensory_left_indices,
             sensory_right_indices,
@@ -239,6 +242,7 @@ impl BrainSim {
         out_post: Vec<u32>,
         out_weight: Vec<f32>,
         w_syn: f32,
+        epg_recurrence_boost: f32,
         sensory_indices: Vec<u32>,
         sensory_left_indices: Vec<u32>,
         sensory_right_indices: Vec<u32>,
@@ -294,6 +298,13 @@ impl BrainSim {
             .enumerate()
             .map(|(i, id)| (id.clone(), i))
             .collect();
+        let mut is_epg = vec![0u8; n];
+        for &idx in &sanitized_viewer {
+            let i = idx as usize;
+            if i < n {
+                is_epg[i] = 1;
+            }
+        }
         Self {
             n,
             neuron_ids,
@@ -305,6 +316,8 @@ impl BrainSim {
             out_post,
             out_weight,
             w_syn,
+            epg_recurrence_boost,
+            is_epg,
             sensory_indices,
             sensory_left_indices,
             sensory_right_indices,
@@ -498,10 +511,18 @@ impl BrainSim {
             }
             let start = self.out_offsets[i] as usize;
             let end = self.out_offsets[i + 1] as usize;
+            let pre_is_epg = self.is_epg[i] > 0;
             for j in start..end {
                 let post = self.out_post[j] as usize;
                 if post < self.n {
-                    self.syn_input[post] += self.out_weight[j] * self.w_syn;
+                    let mut recurrent_w = self.out_weight[j];
+                    if self.epg_recurrence_boost != 1.0
+                        && pre_is_epg
+                        && self.is_epg[post] > 0
+                    {
+                        recurrent_w *= self.epg_recurrence_boost;
+                    }
+                    self.syn_input[post] += recurrent_w * self.w_syn;
                 }
             }
         }

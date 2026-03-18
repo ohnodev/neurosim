@@ -315,6 +315,11 @@ fn handle(
             .and_then(|s| s.parse::<f32>().ok())
             .filter(|&v| v.is_finite() && v > 0.0)
             .unwrap_or_else(|| brain_sim_service::model_constants::W_SYN);
+        let epg_recurrence_boost = std::env::var("NEUROSIM_EPG_RECURRENCE_BOOST")
+            .ok()
+            .and_then(|s| s.parse::<f32>().ok())
+            .filter(|&v| v.is_finite() && v >= 0.0)
+            .unwrap_or_else(|| brain_sim_service::model_constants::EPG_RECURRENCE_BOOST);
         let sim = BrainSim::new_with_viewer(
             template.neuron_ids.clone(),
             template.edges_pre.clone(),
@@ -324,6 +329,7 @@ fn handle(
             template.out_post.clone(),
             template.out_weight.clone(),
             w_syn,
+            epg_recurrence_boost,
             template.sensory_indices.clone(),
             template.sensory_left_indices.clone(),
             template.sensory_right_indices.clone(),

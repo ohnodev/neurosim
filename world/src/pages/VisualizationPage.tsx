@@ -198,8 +198,8 @@ const EPG_SLICE_COLORS = [
 ];
 /** Neuron stays lit for this many ticks after spike; brightness decays linearly to transparent. */
 const SPIKE_DISPLAY_TICKS = 300;
-/** Rotate compass so right=screen right, left=screen left. Applied to spatial projection. */
-const COMPASS_ROTATION_RAD = -Math.PI / 2;
+/** Compass phase rotation. +90deg keeps bin-0 (L5) at the top in scene + SVG overlays. */
+const COMPASS_ROTATION_RAD = Math.PI / 2;
 /** Shorter window so arrow tracks current bump (was 12; with 1ms step, 5 ticks ≈ 5ms). */
 const EPG_BUMP_WINDOW_TICKS = 5;
 const EPG_GLOW_SIZE = 0.13;
@@ -234,6 +234,11 @@ const DEFAULT_REPLAY_DATASETS: ReplayDataset[] = [
     id: 'neurosim_rust_pen40hz_1s_replay',
     label: 'Rust PEN 40 Hz, 1 s, 10k ticks (Rust brain run_steps)',
     url: '/neurosim_rust_pen40hz_1s_replay.json',
+  },
+  {
+    id: 'neurosim_rust_pen40hz_1s_epgrec2x_replay',
+    label: 'Rust PEN 40 Hz, 1 s, 10k ticks (Rust run_steps, 2x EPG recurrence)',
+    url: '/neurosim_rust_pen40hz_1s_epgrec2x_replay.json',
   },
 ];
 
@@ -313,6 +318,19 @@ function getWedgeParams(i: number, binCount: number): { wedge: number; a0: numbe
   const a1 = a0 + wedge;
   const midAngle = a0 + wedge / 2;
   return { wedge, a0, a1, midAngle };
+}
+
+/** 3D scene uses +Y up, so clockwise bin order requires a negative angular step. */
+function sceneAngleForBin(bin: number, binCount: number): number {
+  return COMPASS_ROTATION_RAD - (bin / binCount) * Math.PI * 2;
+}
+
+/** Convert a 2D scene-space angle back into clockwise bin index. */
+function sceneAngleToBin(angleRad: number, binCount: number): number {
+  let rel = COMPASS_ROTATION_RAD - angleRad;
+  while (rel < 0) rel += Math.PI * 2;
+  while (rel >= Math.PI * 2) rel -= Math.PI * 2;
+  return Math.max(0, Math.min(binCount - 1, Math.floor((rel / (Math.PI * 2)) * binCount)));
 }
 
 function powerIteration(
@@ -530,7 +548,7 @@ function buildScene(
         const spread = sector * 0.35;
         for (const [tile, indices] of tileGroups.entries()) {
           indices.sort((a, b) => (neurons[a]?.root_id ?? '').localeCompare(neurons[b]?.root_id ?? ''));
-          const baseAngle = (tile / EPG_COMPASS_BINS) * Math.PI * 2 + COMPASS_ROTATION_RAD;
+          const baseAngle = sceneAngleForBin(tile, EPG_COMPASS_BINS);
           for (let k = 0; k < indices.length; k += 1) {
             const idx = indices[k]!;
             const centered = indices.length > 1 ? (k / (indices.length - 1)) - 0.5 : 0;
@@ -600,7 +618,10 @@ function buildScene(
             count += 1;
           }
         }
-        binAngleByBin.set(b, count > 0 ? Math.atan2(sumSin / count, sumCos / count) : (b / EPG_COMPASS_BINS) * Math.PI * 2 + COMPASS_ROTATION_RAD);
+        binAngleByBin.set(
+          b,
+          count > 0 ? Math.atan2(sumSin / count, sumCos / count) : sceneAngleForBin(b, EPG_COMPASS_BINS),
+        );
         binWedgeSpanByBin.set(b, count > 1 ? Math.max(0.05, maxA - minA) : BIN_WEDGE);
       }
       const upstreamCountByBin = new Array<number>(EPG_COMPASS_BINS).fill(0);
@@ -612,7 +633,7 @@ function buildScene(
         const downBin = n.downstream_epg_bin_index_0_7;
         if (upBin == null && downBin == null) continue;
         const bin = upBin ?? downBin ?? 0;
-        const centerAngle = binAngleByBin.get(bin) ?? (bin / EPG_COMPASS_BINS) * Math.PI * 2 + COMPASS_ROTATION_RAD;
+        const centerAngle = binAngleByBin.get(bin) ?? sceneAngleForBin(bin, EPG_COMPASS_BINS);
         const wedgeSpan = binWedgeSpanByBin.get(bin) ?? BIN_WEDGE;
         let radius: number;
         let k: number;
@@ -709,7 +730,7 @@ function buildScene(
       const tile = getEffectiveEpgTile(neuron, epgLabelMap ?? null);
       if (tile != null) {
         const t = Math.max(0, Math.min(EPG_COMPASS_BINS - 1, tile));
-        const a = (t / EPG_COMPASS_BINS) * Math.PI * 2 + COMPASS_ROTATION_RAD;
+        const a = sceneAngleForBin(t, EPG_COMPASS_BINS);
         epgDirectionByIndex[i] = new THREE.Vector2(Math.cos(a), Math.sin(a));
         epgBinByIndex[i] = t;
         epgBinPopulation[t] += 1;
@@ -718,8 +739,7 @@ function buildScene(
         if (ev.lengthSq() > 1e-8) {
           epgDirectionByIndex[i] = ev.normalize();
           const angle = Math.atan2(ev.y, ev.x);
-          const normalized = (angle + Math.PI) / (2 * Math.PI);
-          const bin = Math.max(0, Math.min(EPG_COMPASS_BINS - 1, Math.floor(normalized * EPG_COMPASS_BINS)));
+          const bin = sceneAngleToBin(angle, EPG_COMPASS_BINS);
           epgBinByIndex[i] = bin;
           epgBinPopulation[bin] += 1;
         }
@@ -1381,7 +1401,7 @@ function applyTickSpikes(
   for (let i = 0; i < EPG_COMPASS_BINS; i += 1) {
     const w = epgBinsSigned[i] ?? 0;
     if (Math.abs(w) <= 1e-8) continue;
-    const a = (i / EPG_COMPASS_BINS) * Math.PI * 2 + COMPASS_ROTATION_RAD;
+    const a = sceneAngleForBin(i, EPG_COMPASS_BINS);
     const dx = Math.cos(a);
     bump.x += w * dx;
     bump.y += w * Math.sin(a);
@@ -1405,7 +1425,7 @@ function applyTickSpikes(
     }
   }
   if (dominantBin != null) {
-    bumpAngleDeg = (dominantBin / EPG_COMPASS_BINS) * 360 + (COMPASS_ROTATION_RAD * 180) / Math.PI;
+    bumpAngleDeg = (sceneAngleForBin(dominantBin, EPG_COMPASS_BINS) * 180) / Math.PI;
     bumpStrength = Math.max(bumpStrength, 0.85);
     epgTopBinIndex = dominantBin;
   }

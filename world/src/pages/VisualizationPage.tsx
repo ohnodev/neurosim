@@ -782,7 +782,7 @@ function buildScene(
   let biologicalEpgGeometry: THREE.BufferGeometry | null = null;
   let biologicalEpgMaterial: THREE.PointsMaterial | null = null;
   let biologicalEpgIndices: number[] = [];
-  if (viewMode === 'compass') {
+  if (viewMode === 'compass' && SHOW_BIOLOGICAL_EPG_COPY) {
     const epgIndices = neurons.map((n, i) => (n.is_epg ? i : -1)).filter((i) => i >= 0);
     biologicalEpgIndices = epgIndices;
     if (epgIndices.length > 0) {
@@ -950,16 +950,14 @@ function buildScene(
   hoverTooltip.style.zIndex = '4';
   container.appendChild(hoverTooltip);
   const raycaster = new THREE.Raycaster();
-  raycaster.params.Points.threshold = biologicalEpgPoints != null ? 0.035 : mostlyEpg ? 0.04 : 0.028;
+  raycaster.params.Points.threshold = mostlyEpg ? 0.04 : 0.028;
   const pointer = new THREE.Vector2(2, 2);
   const onPointerMove = (evt: PointerEvent) => {
     const rect = renderer.domElement.getBoundingClientRect();
     pointer.x = ((evt.clientX - rect.left) / rect.width) * 2 - 1;
     pointer.y = -(((evt.clientY - rect.top) / rect.height) * 2 - 1);
     raycaster.setFromCamera(pointer, camera);
-    const objectsToTest: THREE.Object3D[] = [points];
-    if (biologicalEpgPoints != null) objectsToTest.push(biologicalEpgPoints);
-    const hits = raycaster.intersectObjects(objectsToTest, false);
+    const hits = raycaster.intersectObject(points, false);
     if (hits.length === 0 || hits[0]?.index == null) {
       hoveredNeuronId.current = null;
       onHover?.(null);
@@ -967,10 +965,7 @@ function buildScene(
       return;
     }
     const hit = hits[0]!;
-    const idx =
-      hit.object === biologicalEpgPoints && biologicalEpgIndices.length > 0
-        ? biologicalEpgIndices[hit.index as number] ?? -1
-        : (hit.index as number);
+    const idx = hit.index as number;
     const neuron = neurons[idx];
     if (!neuron) {
       hoveredNeuronId.current = null;

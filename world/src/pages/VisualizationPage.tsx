@@ -478,7 +478,7 @@ function buildScene(
   let compassCenter: { x: number; y: number; z: number } | null = null;
   let compassBaseRadius: number | null = null;
   const aligned = computeAlignedPoints(neurons, viewMode !== 'raw');
-  if (viewMode === 'compass' && SHOW_BIOLOGICAL_EPG_COPY) {
+  if (viewMode === 'compass') {
     const ringIndices: number[] = [];
     for (let i = 0; i < neurons.length; i += 1) {
       if (neurons[i]?.is_epg) ringIndices.push(i);
@@ -549,7 +549,7 @@ function buildScene(
       }
     }
   }
-  if (viewMode === 'compass' && SHOW_BIOLOGICAL_EPG_COPY) {
+  if (viewMode === 'compass') {
     const epgIndices: number[] = [];
     for (let i = 0; i < neurons.length; i += 1) {
       if (neurons[i]?.is_epg) epgIndices.push(i);

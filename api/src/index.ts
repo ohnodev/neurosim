@@ -384,12 +384,12 @@ try {
 }
 let simRunning = false;
 let simIntervalId: ReturnType<typeof setInterval> | null = null;
-/** 8 batches/sec (125ms) for world; client keeps 1s buffer for smooth interpolation. */
+/** World loop: 4 batches/sec (250ms), 8 interpolated frames per batch → ~32 FPS. One round-trip per batch. */
 const SIM_FPS = 30;
-const BATCH_MS = 125;
-const FRAMES_PER_BATCH = Math.round(SIM_FPS * BATCH_MS / 1000);
-/** One run_steps call per batch: advance 0.125s sim time (1:1 real time at 8 batches/sec). */
-const WORLD_STEPS_PER_BATCH = Math.max(1, Math.round(0.125 / WORLD_SIM_DT_SEC));
+const BATCH_MS = 250;
+const FRAMES_PER_BATCH = 8;
+/** One run_steps call per batch: advance 0.25s sim time per batch. */
+const WORLD_STEPS_PER_BATCH = Math.max(1, Math.round(0.25 / WORLD_SIM_DT_SEC));
 const BRAIN_INIT_GRACE_MS = Number(process.env.NEUROSIM_BRAIN_INIT_GRACE_MS ?? 10_000);
 let connectionStep = 0;
 let nextBatchDueAt = 0;

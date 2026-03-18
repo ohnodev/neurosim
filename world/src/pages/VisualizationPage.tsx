@@ -208,37 +208,17 @@ const DELTA7_OPPOSITE_INHIBIT_WEIGHT = 0.55;
 const EPG_INACTIVE_BIN_PENALTY = 0.35;
 /** If a bin has this fraction of its EPG population active (in window), we point the arrow at that bin center (clear bump signal). */
 const EPG_DOMINANT_BIN_THRESHOLD = 0.8;
-const PREFERRED_REPLAY_ID = 'neurosim_pen5000hz_1s_replay';
+const PREFERRED_REPLAY_ID = 'neurosim_python_pen35hz_seeded_1000ticks_before_opt';
 const DEFAULT_REPLAY_DATASETS: ReplayDataset[] = [
   {
-    id: 'neurosim_pen5000hz_1s_replay',
-    label: 'PEN 5000 Hz, 1 s, 10k ticks (EPG export, 4x recurrence boost)',
-    url: '/neurosim_pen5000hz_1s_replay.json',
+    id: 'neurosim_python_pen35hz_seeded_1000ticks_before_opt',
+    label: 'Python PEN 35Hz seeded, 1000 ticks (before optimization)',
+    url: '/neurosim_python_pen35hz_seeded_1000ticks_before_opt.json',
   },
   {
-    id: 'neurosim_pen50hz_1s_replay',
-    label: 'PEN 50 Hz, 1 s, 10k ticks (EPG export, 4x recurrence boost)',
-    url: '/neurosim_pen50hz_1s_replay.json',
-  },
-  {
-    id: 'neurosim_pen40hz_1s_replay',
-    label: 'PEN 40 Hz, 1 s, 10k ticks (EPG export, 4x recurrence boost)',
-    url: '/neurosim_pen40hz_1s_replay.json',
-  },
-  {
-    id: 'neurosim_pen40hz_4k_leftbump_replay',
-    label: 'PEN 40 Hz 4k ticks, left +20% at 3k (60/40) → bump rotation',
-    url: '/neurosim_pen40hz_4k_leftbump_replay.json',
-  },
-  {
-    id: 'neurosim_rust_pen40hz_1s_replay',
-    label: 'Rust PEN 40 Hz, 1 s, 10k ticks (Rust brain run_steps)',
-    url: '/neurosim_rust_pen40hz_1s_replay.json',
-  },
-  {
-    id: 'neurosim_rust_pen40hz_1s_epgrec2x_replay',
-    label: 'Rust PEN 40 Hz, 1 s, 10k ticks (Rust run_steps, 2x EPG recurrence)',
-    url: '/neurosim_rust_pen40hz_1s_epgrec2x_replay.json',
+    id: 'neurosim_python_pen35hz_seeded_1000ticks_after_opt',
+    label: 'Python PEN 35Hz seeded, 1000 ticks (after optimization)',
+    url: '/neurosim_python_pen35hz_seeded_1000ticks_after_opt.json',
   },
 ];
 
@@ -1938,18 +1918,29 @@ export default function VisualizationPage() {
   return (
     <div style={{ height: '100%', display: 'grid', gridTemplateRows: 'auto 1fr', background: '#060a14' }}>
       <div style={{ padding: 12, display: 'grid', gap: 10, borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 12, color: '#d8e6ff', opacity: 0.9 }}>Replay files:</span>
-          {replayDatasets.map((dataset) => (
-            <button
-              key={dataset.id}
-              type="button"
-              onClick={() => setSelectedReplayId(dataset.id)}
-              style={controlButtonStyle(selectedReplayId === dataset.id)}
-            >
-              {dataset.label}
-            </button>
-          ))}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+          <details open style={{ minWidth: 420, color: '#d8e6ff' }}>
+            <summary style={{ cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
+              Replay files
+            </summary>
+            <div style={{ marginTop: 8, display: 'grid', gap: 6 }}>
+              {replayDatasets.map((dataset) => (
+                <button
+                  key={dataset.id}
+                  type="button"
+                  onClick={() => setSelectedReplayId(dataset.id)}
+                  style={{
+                    ...controlButtonStyle(selectedReplayId === dataset.id),
+                    display: 'block',
+                    textAlign: 'left',
+                    width: '100%',
+                  }}
+                >
+                  {dataset.label}
+                </button>
+              ))}
+            </div>
+          </details>
         </div>
         {isNeuroSimLive && templateReplay ? (
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>

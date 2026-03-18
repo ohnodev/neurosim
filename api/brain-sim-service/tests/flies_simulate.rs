@@ -24,6 +24,9 @@ fn test_flies_simulate() {
         template.edges_post.clone(),
         template.edges_weight.clone(),
         template.sensory_indices.clone(),
+        template.sensory_left_indices.clone(),
+        template.sensory_right_indices.clone(),
+        template.sensory_unknown_indices.clone(),
         template.motor_left.clone(),
         template.motor_right.clone(),
         template.motor_unknown.clone(),
@@ -52,13 +55,13 @@ fn test_flies_simulate() {
             y: 1.0,
             radius: 2.5,
         }];
-        let (activity, activity_sparse, motor_left, motor_right, motor_fwd, _timing, _fly_out) =
+        let (activity, activity_sparse, _spike_ids, motor_left, motor_right, motor_fwd, _cl, _cr, _cf, _mlm, _mrm, _mfm, _timing, _fly_out) =
             sim.step(dt, fly, food);
 
         assert_eq!(activity.len(), template.neuron_ids.len());
-        assert!(activity.iter().all(|v| v.is_finite() && *v >= 0.0 && *v <= 1.0));
+        assert!(activity.iter().all(|v: &f32| v.is_finite() && *v >= 0.0 && *v <= 1.0));
         assert!(motor_left.is_finite() && motor_right.is_finite() && motor_fwd.is_finite());
-        assert!(activity_sparse.values().all(|v| v.is_finite()));
+        assert!(activity_sparse.values().all(|v: &f64| v.is_finite()));
 
         t += dt;
         x += 0.01 * (motor_left + motor_right + motor_fwd);

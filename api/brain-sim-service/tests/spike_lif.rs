@@ -29,6 +29,9 @@ fn sensory_path_runs_with_recurrent_edges() {
         vec![],
         vec![],
         vec![],
+        vec![],
+        vec![],
+        vec![],
     );
     for i in 0..120 {
         let sources = vec![SourceInput {
@@ -37,7 +40,7 @@ fn sensory_path_runs_with_recurrent_edges() {
             y: 0.0,
             radius: 2.5,
         }];
-        let (_activity, activity_sparse, ml, mr, mf, timing, fly_out) =
+        let (_activity, activity_sparse, _spike_ids, ml, mr, mf, _cl, _cr, _cf, _mlm, _mrm, _mfm, timing, fly_out) =
             sim.step(0.001, default_fly(i as f64 * 0.001), sources);
         assert!(ml.is_finite() && mr.is_finite() && mf.is_finite());
         assert!(timing.compute_ms.is_finite());
@@ -48,7 +51,7 @@ fn sensory_path_runs_with_recurrent_edges() {
         assert!(fly_out.t.is_finite());
         assert!(fly_out.hunger.is_finite());
         assert!(fly_out.health.is_finite());
-        assert!(activity_sparse.values().all(|v| v.is_finite()));
+        assert!(activity_sparse.values().all(|v: &f64| v.is_finite()));
     }
 }
 
@@ -64,6 +67,9 @@ fn sensory_only_single_neuron_step_is_stable() {
         vec![],
         vec![],
         vec![],
+        vec![],
+        vec![],
+        vec![],
     );
     let mut last_t = 0.0;
     for i in 0..200 {
@@ -73,7 +79,7 @@ fn sensory_only_single_neuron_step_is_stable() {
             y: 0.0,
             radius: 2.5,
         }];
-        let (_activity, activity_sparse, ml, mr, mf, timing, fly_out) =
+        let (_activity, activity_sparse, _spike_ids, ml, mr, mf, _cl, _cr, _cf, _mlm, _mrm, _mfm, timing, fly_out) =
             sim.step(0.001, default_fly(i as f64 * 0.001), sources);
         assert!(ml.is_finite() && mr.is_finite() && mf.is_finite());
         assert!(timing.compute_ms.is_finite());
@@ -83,7 +89,7 @@ fn sensory_only_single_neuron_step_is_stable() {
         assert!(timing.readout_ms.is_finite());
         assert!(fly_out.t >= last_t);
         last_t = fly_out.t;
-        assert!(activity_sparse.values().all(|v| v.is_finite()));
+        assert!(activity_sparse.values().all(|v: &f64| v.is_finite()));
     }
 }
 

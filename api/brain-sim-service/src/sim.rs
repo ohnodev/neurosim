@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use crate::model_constants::{
-    RECURRENT_SCALE, REFRACT_MS, TAU_MEM_MS, TAU_SYN_MS, V_RESET, V_REST, V_THRESH,
+    REFRACT_MS, TAU_MEM_MS, TAU_SYN_MS, V_RESET, V_REST, V_THRESH, W_SYN,
 };
 
 const STIM_RATE_HZ: f64 = 200.0;
@@ -37,9 +37,16 @@ pub struct BrainSim {
     n: usize,
     neuron_ids: Vec<String>,
     neuron_index_by_id: HashMap<String, usize>,
+    #[allow(dead_code)] // kept for GPU path / step_many
     edges_pre: Vec<u32>,
+    #[allow(dead_code)]
     edges_post: Vec<u32>,
+    #[allow(dead_code)]
     edges_weight: Vec<f32>,
+    out_offsets: Vec<u32>,
+    out_post: Vec<u32>,
+    out_weight: Vec<f32>,
+    w_syn: f32,
     sensory_indices: Vec<u32>,
     sensory_left_indices: Vec<u32>,
     sensory_right_indices: Vec<u32>,
@@ -168,11 +175,17 @@ impl BrainSim {
         motor_right: Vec<u32>,
         motor_unknown: Vec<u32>,
     ) -> Self {
+        let (out_offsets, out_post, out_weight) =
+            Self::build_csr_by_pre(neuron_ids.len(), &edges_pre, &edges_post, &edges_weight);
         Self::new_with_viewer(
             neuron_ids,
             edges_pre,
             edges_post,
             edges_weight,
+            out_offsets,
+            out_post,
+            out_weight,
+            W_SYN,
             sensory_indices,
             sensory_left_indices,
             sensory_right_indices,
@@ -184,12 +197,48 @@ impl BrainSim {
         )
     }
 
+    fn build_csr_by_pre(
+        n: usize,
+        edges_pre: &[u32],
+        edges_post: &[u32],
+        edges_weight: &[f32],
+    ) -> (Vec<u32>, Vec<u32>, Vec<f32>) {
+        let num_edges = edges_pre.len();
+        let mut out_degree = vec![0u32; n];
+        for &pre in edges_pre {
+            if (pre as usize) < n {
+                out_degree[pre as usize] += 1;
+            }
+        }
+        let mut out_offsets = vec![0u32; n + 1];
+        for i in 0..n {
+            out_offsets[i + 1] = out_offsets[i] + out_degree[i];
+        }
+        let mut next_index = out_offsets.clone();
+        let mut out_post = vec![0u32; num_edges];
+        let mut out_weight = vec![0.0f32; num_edges];
+        for e in 0..num_edges {
+            let pre = edges_pre[e] as usize;
+            if pre < n {
+                let pos = next_index[pre] as usize;
+                next_index[pre] += 1;
+                out_post[pos] = edges_post[e];
+                out_weight[pos] = edges_weight[e];
+            }
+        }
+        (out_offsets, out_post, out_weight)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new_with_viewer(
         neuron_ids: Vec<String>,
         edges_pre: Vec<u32>,
         edges_post: Vec<u32>,
         edges_weight: Vec<f32>,
+        out_offsets: Vec<u32>,
+        out_post: Vec<u32>,
+        out_weight: Vec<f32>,
+        w_syn: f32,
         sensory_indices: Vec<u32>,
         sensory_left_indices: Vec<u32>,
         sensory_right_indices: Vec<u32>,
@@ -208,6 +257,16 @@ impl BrainSim {
             );
         }
         let n = neuron_ids.len();
+        if out_offsets.len() != n + 1 || out_post.len() != edges_pre.len() || out_weight.len() != edges_pre.len() {
+            panic!(
+                "CSR length mismatch: out_offsets.len()={} (expected {}), out_post.len()={}, out_weight.len()={}, edges={}",
+                out_offsets.len(),
+                n + 1,
+                out_post.len(),
+                out_weight.len(),
+                edges_pre.len()
+            );
+        }
         let v = vec![V_REST; n];
         let g = vec![0.0f32; n];
         let g_next = vec![0.0f32; n];
@@ -242,6 +301,10 @@ impl BrainSim {
             edges_pre,
             edges_post,
             edges_weight,
+            out_offsets,
+            out_post,
+            out_weight,
+            w_syn,
             sensory_indices,
             sensory_left_indices,
             sensory_right_indices,
@@ -418,6 +481,7 @@ impl BrainSim {
         sources: &[SourceInput],
         olfactory_baseline_rate_hz: Option<f64>,
         forced_spikes: &[String],
+        stim_rates_by_id: Option<&HashMap<String, f64>>,
     ) -> (f64, f64) {
         self.ensure_delay_queue_for_dt(dt);
         let dt_ms = (dt * 1000.0) as f32;
@@ -426,16 +490,23 @@ impl BrainSim {
         let refrac_steps = Self::refrac_steps(dt);
         let t_recurrent = Instant::now();
 
+        // Spike-driven: only add contributions from neurons that spiked (O(spikes × out_degree) vs O(edges)).
         self.syn_input.fill(0.0);
-        for e in 0..self.edges_pre.len() {
-            let pre = self.edges_pre[e] as usize;
-            let post = self.edges_post[e] as usize;
-            if pre < self.n && post < self.n && self.spikes[pre] > 0 {
-                self.syn_input[post] += self.edges_weight[e] * RECURRENT_SCALE;
+        for i in 0..self.n {
+            if self.spikes[i] == 0 {
+                continue;
+            }
+            let start = self.out_offsets[i] as usize;
+            let end = self.out_offsets[i + 1] as usize;
+            for j in start..end {
+                let post = self.out_post[j] as usize;
+                if post < self.n {
+                    self.syn_input[post] += self.out_weight[j] * self.w_syn;
+                }
             }
         }
         let mut rng_state = self.rng_state;
-        let sensory_spike_amp = SENSORY_POISSON_SCALE * RECURRENT_SCALE;
+        let sensory_spike_amp = SENSORY_POISSON_SCALE * self.w_syn;
         let mut olf_poisson_spikes = 0usize;
         let used_olfactory_rate_hz =
             olfactory_baseline_rate_hz.filter(|v| v.is_finite() && *v > 0.0).unwrap_or(0.0);
@@ -523,6 +594,25 @@ impl BrainSim {
                 );
             }
         }
+        // Python parity: per-neuron stim_rates_by_id are Poisson rate injections,
+        // not direct forced spikes.
+        if let Some(stim_map) = stim_rates_by_id {
+            for (rid, rate_hz) in stim_map {
+                if !rate_hz.is_finite() || *rate_hz <= 0.0 {
+                    continue;
+                }
+                let p = (*rate_hz * dt).clamp(0.0, 1.0);
+                if p <= 0.0 {
+                    continue;
+                }
+                if let Some(&idx) = self.neuron_index_by_id.get(rid) {
+                    if idx < self.n && Self::next_uniform(&mut rng_state) < p {
+                        self.syn_input[idx] += sensory_spike_amp;
+                        olf_poisson_spikes += 1;
+                    }
+                }
+            }
+        }
         // Causal external stimulation is handled as explicit forced spikes
         // below (after LIF integration setup), so recurrent input in subsequent
         // ticks sees real spike events from these neurons.
@@ -543,6 +633,7 @@ impl BrainSim {
         let recurrent_ms = t_recurrent.elapsed().as_secs_f64() * 1000.0;
         let t_lif = Instant::now();
 
+        // LIF update: same as Python (vRest=-52, vThreshold=-45, tauMem=20ms, alpha synapse).
         let mut spikes_next = vec![0u8; self.n];
         for i in 0..self.n {
             if self.refractory[i] > 0 {
@@ -631,7 +722,7 @@ impl BrainSim {
         StepTiming,
         FlyStepOutput,
     ) {
-        self.step_with_options(dt, fly, sources, true, None, Vec::new())
+        self.step_with_options(dt, fly, sources, true, None, Vec::new(), None)
     }
 
     pub fn step_with_options(
@@ -642,6 +733,7 @@ impl BrainSim {
         include_activity: bool,
         olfactory_baseline_rate_hz: Option<f64>,
         forced_spikes: Vec<String>,
+        stim_rates_by_id: Option<&HashMap<String, f64>>,
     ) -> (
         Vec<f32>,
         HashMap<String, f64>,
@@ -662,11 +754,25 @@ impl BrainSim {
         let (recurrent_ms, lif_ms) = {
             #[cfg(feature = "cuda")]
             {
-                self.run_step_cpu(dt, &fly, &sources, olfactory_baseline_rate_hz, &forced_spikes)
+                self.run_step_cpu(
+                    dt,
+                    &fly,
+                    &sources,
+                    olfactory_baseline_rate_hz,
+                    &forced_spikes,
+                    stim_rates_by_id,
+                )
             }
             #[cfg(not(feature = "cuda"))]
             {
-                self.run_step_cpu(dt, &fly, &sources, olfactory_baseline_rate_hz, &forced_spikes)
+                self.run_step_cpu(
+                    dt,
+                    &fly,
+                    &sources,
+                    olfactory_baseline_rate_hz,
+                    &forced_spikes,
+                    stim_rates_by_id,
+                )
             }
         };
         let kernel_ms = recurrent_ms + lif_ms;

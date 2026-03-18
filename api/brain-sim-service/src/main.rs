@@ -24,23 +24,14 @@ fn main() {
     let default_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|p| p.parent())
-        .and_then(|root| {
-            let parquet = root.join("data/raw/2025_Connectivity_783.parquet");
-            if parquet.exists() {
-                return Some(parquet);
-            }
-            let aligned = root.join("data/connectome-subset-aligned.json");
-            if aligned.exists() {
-                return Some(aligned);
-            }
-            None
-        })
+        .map(|root| root.join("data/raw/2025_Connectivity_783.parquet"))
+        .filter(|p| p.exists())
         .and_then(|p| p.canonicalize().ok())
         .map(|p| p.to_string_lossy().into_owned());
     let connectome_path = std::env::var("NEUROSIM_CONNECTOME_PATH")
         .ok()
         .or(default_path)
-        .expect("NEUROSIM_CONNECTOME_PATH unset and no default data/connectome-subset.json");
+        .expect("NEUROSIM_CONNECTOME_PATH unset and data/raw/2025_Connectivity_783.parquet not found");
     eprintln!("[brain-service] loading connectome from {}", connectome_path);
     let template = connectome::load_connectome(Path::new(&connectome_path))
         .expect("load connectome");
@@ -224,16 +215,6 @@ struct RunStepsResp {
     ticks: Option<Vec<ReplayTickResp>>,
 }
 
-/// xorshift64 for Poisson sampling in run_steps (no rand dep).
-fn xorshift64(state: &mut u64) -> f64 {
-    let mut x = *state;
-    x ^= x << 13;
-    x ^= x >> 7;
-    x ^= x << 17;
-    *state = x;
-    (x as f64) / (u64::MAX as f64)
-}
-
 fn apply_feeding_tick(
     food_state: &mut FoodState,
     source_lookup: &HashMap<String, (f64, f64)>,
@@ -329,11 +310,20 @@ fn handle(
         );
         r#"{"ok":true}"#.to_string()
     } else if line.contains("\"method\":\"create\"") {
+        let w_syn = std::env::var("NEUROSIM_W_SYN")
+            .ok()
+            .and_then(|s| s.parse::<f32>().ok())
+            .filter(|&v| v.is_finite() && v > 0.0)
+            .unwrap_or_else(|| brain_sim_service::model_constants::W_SYN);
         let sim = BrainSim::new_with_viewer(
             template.neuron_ids.clone(),
             template.edges_pre.clone(),
             template.edges_post.clone(),
             template.edges_weight.clone(),
+            template.out_offsets.clone(),
+            template.out_post.clone(),
+            template.out_weight.clone(),
+            w_syn,
             template.sensory_indices.clone(),
             template.sensory_left_indices.clone(),
             template.sensory_right_indices.clone(),
@@ -453,6 +443,7 @@ fn handle(
                     include_activity,
                     step.olfactory_baseline_rate_hz,
                     step.forced_spikes,
+                    None,
                 );
             compute_ms_sum += timing.compute_ms;
             kernel_ms_sum += timing.kernel_ms;
@@ -605,6 +596,7 @@ fn handle(
                 include_activity,
                 p.olfactory_baseline_rate_hz,
                 p.forced_spikes,
+                None,
             );
         let compute_ms = timing.compute_ms;
         let mut source_lookup: HashMap<String, (f64, f64)> = HashMap::new();
@@ -737,19 +729,10 @@ fn handle(
             rest_time_left: 0.0,
             dead: false,
         };
-        let mut rng: u64 = 0x853c49e6748fea9b;
         let duration_sec = num_steps as f64 * dt;
         for tick_idx in 0..num_steps {
-            let mut forced = Vec::new();
-            for (id, hz) in &p.stim_rates_by_id {
-                if *hz > 0.0 && hz * dt <= 1.0 && xorshift64(&mut rng) < hz * dt {
-                    forced.push(id.clone());
-                } else if *hz > 0.0 && hz * dt > 1.0 && xorshift64(&mut rng) < (hz * dt).min(1.0) {
-                    forced.push(id.clone());
-                }
-            }
             let (_a, _sparse, spike_ids, _ml, _mr, _mf, _cl, _cr, _cf, _mlm, _mrm, _mfm, _timing, fly_out) =
-                sim.step_with_options(dt, fly, Vec::new(), true, None, forced);
+                sim.step_with_options(dt, fly, Vec::new(), true, None, Vec::new(), Some(&p.stim_rates_by_id));
             fly = FlyInput {
                 x: fly_out.x,
                 y: fly_out.y,

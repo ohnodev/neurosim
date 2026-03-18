@@ -1460,13 +1460,19 @@ fn handle(
             })
             .unwrap_or_default();
         let duration_sec = num_steps as f64 * dt;
+        let mut source_lookup: HashMap<String, (f64, f64)> = HashMap::new();
+        if let Some(ref sources) = p.sources {
+            for s in sources {
+                source_lookup.insert(s.id.clone(), (s.x, s.y));
+            }
+        }
         let mut last_activity_sparse: HashMap<String, f64> = HashMap::new();
         let mut last_motor_left = 0.0f64;
         let mut last_motor_right = 0.0f64;
         let mut last_motor_fwd = 0.0f64;
         let mut last_eaten_food_id: Option<String> = None;
         let mut last_feeding_sugar_taken = 0.0f64;
-        let mut last_feeding_candidate_id: Option<String> = None;
+        let mut last_fly_resp: Option<FlyRespJson> = None;
         // Log once if any forced-spike IDs are not in the connectome (they will be silently dropped).
         if let Some(ref schedule) = p.forced_spike_schedule {
             let all_forced: Vec<String> = schedule
@@ -1510,30 +1516,72 @@ fn handle(
                         fly,
                         srcs.clone(),
                         true,
-                        false,
+                        !stim_map.is_empty(),
                         None,
                         forced_spikes,
-                        Some(stim_map),
+                        if stim_map.is_empty() { None } else { Some(stim_map) },
                     );
+                let mut one = vec![StepManyItemResp {
+                    sim_id: p.sim_id,
+                    activity_sparse: activity_sparse.clone(),
+                    motor_left: ml,
+                    motor_right: mr,
+                    motor_fwd: mf,
+                    motor_left_count: 0.0,
+                    motor_right_count: 0.0,
+                    motor_fwd_count: 0.0,
+                    motor_left_magnitude: 0.0,
+                    motor_right_magnitude: 0.0,
+                    motor_fwd_magnitude: 0.0,
+                    fly: FlyRespJson {
+                        x: fly_out.x,
+                        y: fly_out.y,
+                        z: fly_out.z,
+                        heading: fly_out.heading,
+                        t: fly_out.t,
+                        hunger: fly_out.hunger,
+                        health: fly_out.health,
+                        dead: fly_out.dead,
+                        fly_time_left: fly_out.fly_time_left,
+                        rest_time_left: fly_out.rest_time_left,
+                        rest_duration: fly_out.rest_duration,
+                        feeding: fly_out.feeding,
+                    },
+                    eaten_food_id: fly_out.eaten_food_id.clone(),
+                    feeding_sugar_taken: fly_out.feeding_sugar_taken,
+                    feeding_candidate_id: fly_out.feeding_candidate_id.clone(),
+                    dt,
+                    compute_ms: 0.0,
+                    kernel_ms: 0.0,
+                    recurrent_ms: 0.0,
+                    lif_ms: 0.0,
+                    readout_ms: 0.0,
+                }];
+                if !source_lookup.is_empty() {
+                    let mut fg = food_state.lock().unwrap();
+                    fg.sync(source_lookup.keys().cloned());
+                    apply_feeding_tick(&mut *fg, &source_lookup, &mut one);
+                }
+                let fed = &one[0];
                 if p.return_final_state {
-                    last_activity_sparse = activity_sparse;
-                    last_motor_left = ml;
-                    last_motor_right = mr;
-                    last_motor_fwd = mf;
-                    last_eaten_food_id = fly_out.eaten_food_id.clone();
-                    last_feeding_sugar_taken = fly_out.feeding_sugar_taken;
-                    last_feeding_candidate_id = fly_out.feeding_candidate_id.clone();
+                    last_activity_sparse = fed.activity_sparse.clone();
+                    last_motor_left = fed.motor_left;
+                    last_motor_right = fed.motor_right;
+                    last_motor_fwd = fed.motor_fwd;
+                    last_eaten_food_id = fed.eaten_food_id.clone();
+                    last_feeding_sugar_taken = fed.feeding_sugar_taken;
+                    last_fly_resp = Some(fed.fly.clone());
                 }
                 fly = FlyInput {
-                    x: fly_out.x,
-                    y: fly_out.y,
-                    z: fly_out.z,
-                    heading: fly_out.heading,
-                    t: fly_out.t,
-                    hunger: fly_out.hunger,
-                    health: fly_out.health,
-                    rest_time_left: fly_out.rest_time_left,
-                    dead: fly_out.dead,
+                    x: fed.fly.x,
+                    y: fed.fly.y,
+                    z: fed.fly.z,
+                    heading: fed.fly.heading,
+                    t: fed.fly.t,
+                    hunger: fed.fly.hunger,
+                    health: fed.fly.health,
+                    rest_time_left: fed.fly.rest_time_left,
+                    dead: fed.fly.dead,
                 };
                 if count_ids.is_some() {
                     for id in &spike_ids {
@@ -1563,64 +1611,33 @@ fn handle(
         let t_serial_start = Instant::now();
         let (resp_fly, resp_activity, resp_bump, resp_epg_bins, resp_motor_left, resp_motor_right, resp_motor_fwd, resp_eaten_food_id, resp_feeding_sugar_taken) =
             if p.return_final_state {
-                let mut one = vec![StepManyItemResp {
-                    sim_id: p.sim_id,
-                    activity_sparse: HashMap::new(),
-                    motor_left: 0.0,
-                    motor_right: 0.0,
-                    motor_fwd: 0.0,
-                    motor_left_count: 0.0,
-                    motor_right_count: 0.0,
-                    motor_fwd_count: 0.0,
-                    motor_left_magnitude: 0.0,
-                    motor_right_magnitude: 0.0,
-                    motor_fwd_magnitude: 0.0,
-                    fly: FlyRespJson {
-                        x: fly.x,
-                        y: fly.y,
-                        z: fly.z,
-                        heading: fly.heading,
-                        t: fly.t,
-                        hunger: fly.hunger,
-                        health: fly.health,
-                        dead: fly.dead,
-                        fly_time_left: 6.0,
-                        rest_time_left: 0.0,
-                        rest_duration: 4.0,
-                        feeding: false,
-                    },
-                    eaten_food_id: last_eaten_food_id.clone(),
-                    feeding_sugar_taken: last_feeding_sugar_taken,
-                    feeding_candidate_id: last_feeding_candidate_id.clone(),
-                    dt,
-                    compute_ms: 0.0,
-                    kernel_ms: 0.0,
-                    recurrent_ms: 0.0,
-                    lif_ms: 0.0,
-                    readout_ms: 0.0,
-                }];
-                let mut source_lookup: HashMap<String, (f64, f64)> = HashMap::new();
-                if let Some(ref sources) = p.sources {
-                    for s in sources {
-                        source_lookup.insert(s.id.clone(), (s.x, s.y));
-                    }
-                    let mut fg = food_state.lock().unwrap();
-                    fg.sync(sources.iter().map(|s| s.id.clone()));
-                    apply_feeding_tick(&mut *fg, &source_lookup, &mut one);
-                }
                 let (bump_angle_deg, epg_bins_arr) =
                     compute_bump_and_epg_bins(&last_activity_sparse, epg_id_to_bin);
-                let item = &one[0];
+                let fallback_fly = FlyRespJson {
+                    x: fly.x,
+                    y: fly.y,
+                    z: fly.z,
+                    heading: fly.heading,
+                    t: fly.t,
+                    hunger: fly.hunger,
+                    health: fly.health,
+                    dead: fly.dead,
+                    fly_time_left: 1.0,
+                    rest_time_left: fly.rest_time_left,
+                    rest_duration: 4.0,
+                    feeding: false,
+                };
+                let final_fly = last_fly_resp.unwrap_or(fallback_fly);
                 (
-                    Some(item.fly.clone()),
+                    Some(final_fly),
                     Some(last_activity_sparse),
                     bump_angle_deg,
                     Some(epg_bins_arr.to_vec()),
                     Some(last_motor_left),
                     Some(last_motor_right),
                     Some(last_motor_fwd),
-                    item.eaten_food_id.clone(),
-                    Some(item.feeding_sugar_taken),
+                    last_eaten_food_id.clone(),
+                    Some(last_feeding_sugar_taken),
                 )
             } else {
                 (None, None, None, None, None, None, None, None, None)
@@ -1747,12 +1764,14 @@ fn handle(
         if let Some(ref clive) = continuous_live {
             let left = f64::from_bits(clive.pen_left_hz_bits.load(Ordering::Relaxed));
             let right = f64::from_bits(clive.pen_right_hz_bits.load(Ordering::Relaxed));
+            let rates_by_id = clive.custom_rates.lock().unwrap().clone();
             serde_json::to_string(&serde_json::json!({
                 "ok": true,
                 "latest_tick": clive.latest_tick.load(Ordering::Acquire),
                 "left_hz": left,
                 "right_hz": right,
                 "dt_sec": clive.dt_sec,
+                "rates_by_id": rates_by_id,
             }))?
         } else {
             serde_json::to_string(&ErrResp {

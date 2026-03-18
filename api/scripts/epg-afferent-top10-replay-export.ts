@@ -1,9 +1,9 @@
 import * as fs from 'node:fs';
 import * as net from 'node:net';
 import * as path from 'node:path';
+import type { ReplayTick } from '../src/brain-socket-client.js';
 
 type BrainResponse = { error?: string };
-type ReplayTick = { tick: number; time_sec: number; spikes: string[] };
 type ReplayNeuron = {
   root_id: string;
   x: number;
@@ -127,6 +127,15 @@ class BrainSocket {
         throw new Error(`brain socket timeout after ${REQUEST_TIMEOUT_MS}ms`);
       }
       const chunk = await new Promise<string>((resolve, reject) => {
+        const remaining = timeoutAt - Date.now();
+        if (remaining <= 0) {
+          reject(new Error(`brain socket timeout after ${REQUEST_TIMEOUT_MS}ms`));
+          return;
+        }
+        const timer = setTimeout(() => {
+          cleanup();
+          reject(new Error(`brain socket timeout after ${REQUEST_TIMEOUT_MS}ms`));
+        }, remaining);
         const onData = (d: Buffer) => {
           cleanup();
           resolve(d.toString('utf8'));
@@ -140,6 +149,7 @@ class BrainSocket {
           reject(new Error('brain socket closed'));
         };
         const cleanup = () => {
+          clearTimeout(timer);
           this.socket.off('data', onData);
           this.socket.off('error', onErr);
           this.socket.off('end', onEnd);
@@ -153,28 +163,72 @@ class BrainSocket {
   }
 }
 
-function parseCsvLine(line: string): string[] {
-  const out: string[] = [];
+function parseCsvRecords(text: string): string[][] {
+  const records: string[][] = [];
+  let record: string[] = [];
   let cur = '';
   let inQuotes = false;
-  for (let i = 0; i < line.length; i += 1) {
-    const ch = line[i];
-    if (ch === '"') {
-      if (inQuotes && line[i + 1] === '"') {
-        cur += '"';
-        i += 1;
-      } else {
-        inQuotes = !inQuotes;
-      }
-    } else if (ch === ',' && !inQuotes) {
-      out.push(cur);
-      cur = '';
-    } else {
-      cur += ch;
+  let fieldWasQuoted = false;
+  let seenNonSpace = false;
+
+  const pushField = () => {
+    const v = fieldWasQuoted ? cur : cur.trim();
+    record.push(v);
+    cur = '';
+    fieldWasQuoted = false;
+    seenNonSpace = false;
+  };
+  const pushRecord = () => {
+    // Skip trailing empty line.
+    if (record.length > 1 || (record.length === 1 && record[0].length > 0)) {
+      records.push(record);
     }
+    record = [];
+  };
+
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          cur += '"';
+          i += 1;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        cur += ch;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      if (!seenNonSpace) {
+        inQuotes = true;
+        fieldWasQuoted = true;
+        continue;
+      }
+      cur += ch;
+      seenNonSpace = true;
+      continue;
+    }
+    if (ch === ',') {
+      pushField();
+      continue;
+    }
+    if (ch === '\n') {
+      pushField();
+      pushRecord();
+      continue;
+    }
+    if (ch === '\r') continue;
+
+    if (ch !== ' ' && ch !== '\t') seenNonSpace = true;
+    cur += ch;
   }
-  out.push(cur);
-  return out;
+  pushField();
+  pushRecord();
+  return records;
 }
 
 function createSeededRandom(seed: number): () => number {
@@ -196,9 +250,9 @@ function toCsvCell(value: string | number): string {
 function loadClassificationMap(): Map<string, ClassificationRow> {
   const out = new Map<string, ClassificationRow>();
   const text = fs.readFileSync(CLASSIFICATION_PATH, 'utf8');
-  const lines = text.split('\n').filter((l) => l.trim().length > 0);
-  if (lines.length < 2) return out;
-  const header = parseCsvLine(lines[0] ?? '');
+  const rows = parseCsvRecords(text);
+  if (rows.length < 2) return out;
+  const header = rows[0] ?? [];
   const idx = {
     root_id: header.indexOf('root_id'),
     flow: header.indexOf('flow'),
@@ -210,8 +264,8 @@ function loadClassificationMap(): Map<string, ClassificationRow> {
     side: header.indexOf('side'),
     nerve: header.indexOf('nerve'),
   };
-  for (let i = 1; i < lines.length; i += 1) {
-    const cols = parseCsvLine(lines[i] ?? '');
+  for (let i = 1; i < rows.length; i += 1) {
+    const cols = rows[i] ?? [];
     const rootId = idx.root_id >= 0 ? (cols[idx.root_id] ?? '') : '';
     if (!rootId) continue;
     out.set(rootId, {

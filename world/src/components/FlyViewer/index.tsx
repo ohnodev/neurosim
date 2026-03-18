@@ -285,14 +285,23 @@ export default function FlyViewer() {
           latestFliesRef.current = last.flies;
           activityRef.current = data.activity ?? data.activities?.[0] ?? {};
           activitiesRef.current = Array.isArray(data.activities) ? data.activities : [];
+          setBumpAngleDeg(null);
+          setEpgBins(null);
         } else if (Array.isArray(data.flies)) {
           latestFliesRef.current = data.flies;
           activityRef.current = data.activity ?? data.activities?.[0] ?? {};
           activitiesRef.current = Array.isArray(data.activities) ? data.activities : [];
+          setBumpAngleDeg(null);
+          setEpgBins(null);
         } else if (data.fly) {
           latestFliesRef.current = [data.fly];
           activityRef.current = data.activity ?? data.activities?.[0] ?? {};
           activitiesRef.current = Array.isArray(data.activities) ? data.activities : [];
+          setBumpAngleDeg(null);
+          setEpgBins(null);
+        } else {
+          setBumpAngleDeg(null);
+          setEpgBins(null);
         }
         if (data.activity != null) activityRef.current = data.activity;
         else if (Array.isArray(data.activities) && data.activities.length > 0 && data.activities[0] != null) {
@@ -308,6 +317,9 @@ export default function FlyViewer() {
           void refetchDeployed();
         }
         prevWsFlyCountRef.current = currentFlyCount;
+      } else {
+        setBumpAngleDeg(null);
+        setEpgBins(null);
       }
     });
     return unsub;

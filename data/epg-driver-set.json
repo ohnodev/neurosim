@@ -1,8 +1,8 @@
 {
   "title": "EPG driver set for reproducible control stimulation",
-  "source_connectivity": "/Users/maratarguinbaev/Dev/fly-brain-fresh/data/2025_Connectivity_783.parquet",
-  "source_classification": "/Users/maratarguinbaev/Dev/neurosim/data/raw/classification.csv",
-  "source_epg_map": "/Users/maratarguinbaev/Dev/neurosim/data/epg-tile-map.json",
+  "source_connectivity": "data/raw/2025_Connectivity_783.parquet",
+  "source_classification": "data/raw/classification.csv",
+  "source_epg_map": "data/epg-tile-map.json",
   "epg_count": 51,
   "top_n": 100,
   "selection_rule": "Top class==CX presynaptic neurons ranked by signed_sum into EPG (descending)",
@@ -11,7 +11,7 @@
     "direct_afferent_olfactory_or_visual_to_epg_signed_sum": 0.0,
     "top_classes_by_signed_sum_into_epg": [
       {
-        "class": NaN,
+        "class": null,
         "presyn_neurons": 31,
         "edges": 230,
         "conn_sum": 1314.0,

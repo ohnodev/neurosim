@@ -10,7 +10,7 @@ export type WorldCompassPosition = '11PM' | '3PM' | '8PM';
 export const WORLD_COMPASS_DEG: Record<WorldCompassPosition, number> = {
   '11PM': 330,
   '3PM': 90,
-  '8PM': 240,
+  '8PM': 210,
 };
 
 /** 120° between positions. */

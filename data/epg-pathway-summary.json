@@ -3,7 +3,7 @@
   "direct_afferent_olfactory_or_visual_to_epg_signed_sum": 0.0,
   "top_classes_by_signed_sum_into_epg": [
     {
-      "class": NaN,
+      "class": null,
       "presyn_neurons": 31,
       "edges": 230,
       "conn_sum": 1314.0,

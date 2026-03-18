@@ -464,8 +464,10 @@ fn build_template(
     sensory_target.sort_unstable();
     sensory_target.dedup();
 
-    let viewer_subset_indices = load_epg_viewer_indices(path, &id_to_idx)
-        .filter(|v| !v.is_empty())
+    let loaded_epg_indices = load_epg_viewer_indices(path, &id_to_idx)
+        .filter(|v| !v.is_empty());
+    let viewer_subset_indices = loaded_epg_indices
+        .clone()
         .unwrap_or_else(|| compute_viewer_subset_indices(&neuron_ids, viewer_subset_limit()));
     let mut edges_pre = Vec::with_capacity(data.connections.len());
     let mut edges_post = Vec::with_capacity(data.connections.len());
@@ -521,10 +523,12 @@ fn build_template(
         .map(|(i, id)| (id.clone(), i))
         .collect();
     let mut is_epg = vec![0u8; n];
-    for &idx in &viewer_subset_indices {
-        let i = idx as usize;
-        if i < n {
-            is_epg[i] = 1;
+    if let Some(epg_indices) = loaded_epg_indices {
+        for &idx in &epg_indices {
+            let i = idx as usize;
+            if i < n {
+                is_epg[i] = 1;
+            }
         }
     }
 

@@ -90,8 +90,17 @@ function parseCsvLine(line: string): string[] {
 }
 
 function loadPenABySide(): { left: string[]; right: string[] } {
-  const left = new Set<string>();
-  const right = new Set<string>();
+  type PenRow = { rootId: string; penIndex: number | null };
+  const leftRows: PenRow[] = [];
+  const rightRows: PenRow[] = [];
+  const seenLeft = new Set<string>();
+  const seenRight = new Set<string>();
+  const parsePenAIndex = (htype: string): number | null => {
+    const m = /^PEN_a(\d+)/i.exec(htype.trim());
+    if (!m) return null;
+    const n = Number(m[1]);
+    return Number.isFinite(n) ? n : null;
+  };
   try {
     if (!fs.existsSync(CLASSIFICATION_CSV_PATH)) {
       return { left: [], right: [] };
@@ -113,14 +122,32 @@ function loadPenABySide(): { left: string[]; right: string[] } {
       if (!rid) continue;
       const htype = (cols[iHb] ?? '').trim();
       if (!htype.startsWith('PEN_a')) continue;
+      const penIndex = parsePenAIndex(htype);
       const side = (iSide >= 0 ? (cols[iSide] ?? '') : '').trim().toLowerCase();
-      if (side === 'left') left.add(rid);
-      else if (side === 'right') right.add(rid);
+      if (side === 'left') {
+        if (!seenLeft.has(rid)) {
+          seenLeft.add(rid);
+          leftRows.push({ rootId: rid, penIndex });
+        }
+      } else if (side === 'right') {
+        if (!seenRight.has(rid)) {
+          seenRight.add(rid);
+          rightRows.push({ rootId: rid, penIndex });
+        }
+      }
     }
   } catch (e) {
     console.error('[neurosim-live] PEN_a load failed', e);
   }
-  return { left: [...left].sort(), right: [...right].sort() };
+  const cmp = (a: PenRow, b: PenRow): number => {
+    const ai = a.penIndex ?? Number.POSITIVE_INFINITY;
+    const bi = b.penIndex ?? Number.POSITIVE_INFINITY;
+    if (ai !== bi) return ai - bi;
+    return a.rootId.localeCompare(b.rootId);
+  };
+  leftRows.sort(cmp);
+  rightRows.sort(cmp);
+  return { left: leftRows.map((r) => r.rootId), right: rightRows.map((r) => r.rootId) };
 }
 
 const PEN_A_BY_SIDE = loadPenABySide();
@@ -355,8 +382,20 @@ async function addFlyToSim(spawnKey?: string): Promise<number> {
   });
   sims.push(sim);
   simActivityTrail.push(new Map());
-  penPresetBySimIndex.push('11PM');
-  smoothedBumpBySimIndex.push(null);
+  const sources = getSources();
+  let angleDeg = (heading * 180) / Math.PI;
+  let nearestDistSq = Number.POSITIVE_INFINITY;
+  for (const s of sources) {
+    const dx = s.x - x;
+    const dy = s.y - y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < nearestDistSq) {
+      nearestDistSq = d2;
+      angleDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
+    }
+  }
+  penPresetBySimIndex.push(chooseWorldPresetFromAngleDeg(angleDeg));
+  smoothedBumpBySimIndex.push(normalizeAngleDeg((heading * 180) / Math.PI));
   return sims.length - 1;
 }
 
@@ -1510,6 +1549,8 @@ export function resetDeployStateForTesting(): void {
   deployedFlies.clear();
   sims.splice(0, sims.length);
   simActivityTrail.splice(0, simActivityTrail.length);
+  penPresetBySimIndex.splice(0, penPresetBySimIndex.length);
+  smoothedBumpBySimIndex.splice(0, smoothedBumpBySimIndex.length);
   clearForTesting();
 }
 

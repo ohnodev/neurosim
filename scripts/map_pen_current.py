@@ -5,8 +5,8 @@ import csv
 import json
 import math
 import os
-import socket
 from pathlib import Path
+from rpc import Rpc
 
 ROOT = Path(__file__).resolve().parents[1]
 SOCKET_PATH = Path(os.environ.get("NEUROSIM_BRAIN_SOCKET", "/tmp/neurosim-brain.sock"))
@@ -22,31 +22,6 @@ PEN_BIAS_STEP = float(os.environ.get("NEUROSIM_MAP_PEN_BIAS_STEP", "1.0"))
 GLOBAL_BASE_CURRENT = float(os.environ.get("NEUROSIM_MAP_GLOBAL_BASE_CURRENT", "0.0"))
 INIT_BUMP_TICKS = int(os.environ.get("NEUROSIM_MAP_INIT_BUMP_TICKS", "12"))
 INIT_BUMP_CURRENT = float(os.environ.get("NEUROSIM_MAP_INIT_BUMP_CURRENT", "35.0"))
-
-
-class Rpc:
-    def __init__(self, path: Path):
-        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.sock.connect(str(path))
-        self.f = self.sock.makefile("rwb")
-
-    def request(self, method: str, params: dict | None = None) -> dict:
-        payload = {"method": method, "params": params or {}}
-        self.f.write((json.dumps(payload) + "\n").encode("utf-8"))
-        self.f.flush()
-        line = self.f.readline()
-        if not line:
-            raise RuntimeError("socket closed")
-        out = json.loads(line.decode("utf-8"))
-        if isinstance(out, dict) and out.get("error"):
-            raise RuntimeError(str(out["error"]))
-        return out
-
-    def close(self) -> None:
-        try:
-            self.f.close()
-        finally:
-            self.sock.close()
 
 
 EPG_SLICE_ORDER_CLOCKWISE = [

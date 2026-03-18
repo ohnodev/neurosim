@@ -286,7 +286,7 @@ impl BrainSim {
             .map(|(i, id)| (id.clone(), i))
             .collect();
         let mut sanitized_viewer: Vec<u32> = if viewer_indices.is_empty() {
-            (0..n as u32).collect()
+            Vec::new()
         } else {
             viewer_indices
                 .into_iter()
@@ -295,9 +295,6 @@ impl BrainSim {
         };
         sanitized_viewer.sort_unstable();
         sanitized_viewer.dedup();
-        if sanitized_viewer.is_empty() {
-            sanitized_viewer = (0..n as u32).collect();
-        }
         let mut is_epg = vec![0u8; n];
         for &idx in &sanitized_viewer {
             let i = idx as usize;

@@ -72,8 +72,9 @@ from pathlib import Path
 import pandas as pd
 import torch
 import sys
+import os
 
-root = Path('/Users/maratarguinbaev/Dev')
+root = Path(os.environ.get("DEV_HOME", Path.cwd().parent))
 fly = root / 'fly-brain-fresh'
 neuro = root / 'neurosim'
 

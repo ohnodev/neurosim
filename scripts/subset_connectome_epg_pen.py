@@ -22,6 +22,7 @@ from pathlib import Path
 try:
     import pyarrow.parquet as pq
     import pyarrow as pa
+    import pyarrow.compute as pc
 except ImportError:
     print("This script requires pyarrow. Install with: pip install pyarrow", file=sys.stderr)
     sys.exit(1)
@@ -77,14 +78,21 @@ def expand_n_degrees_from_epg(
 ) -> set[str]:
     """All neurons within n hops of EPG (both upstream and downstream)."""
     current: set[str] = set(epg)
+    frontier: set[str] = set(epg)
     for _ in range(n_degrees):
-        next_set: set[str] = set(current)
-        for n in current:
+        if not frontier:
+            break
+        next_frontier: set[str] = set()
+        for n in frontier:
             for post in pre_to_posts.get(n, []):
-                next_set.add(post)
+                if post not in current:
+                    current.add(post)
+                    next_frontier.add(post)
             for pre in post_to_pres.get(n, []):
-                next_set.add(pre)
-        current = next_set
+                if pre not in current:
+                    current.add(pre)
+                    next_frontier.add(pre)
+        frontier = next_frontier
     return current
 
 
@@ -167,22 +175,19 @@ def main() -> None:
         keep = s_epg | s_pen
     print(f"  Subgraph total: {len(keep):,} neurons")
 
-    # Filter rows: keep only edges where both endpoints are in keep
+    # Filter rows: keep only edges where both endpoints are in keep (vectorized Arrow ops)
     print("Filtering edges...")
-    pre_arr = table.column(pre_col)
-    post_arr = table.column(post_col)
-    mask = []
-    for i in range(table.num_rows):
-        pre = str(pre_arr[i]) if pre_arr[i] is not None else ""
-        post = str(post_arr[i]) if post_arr[i] is not None else ""
-        mask.append(pre in keep and post in keep)
-
-    n_keep = sum(mask)
+    keep_arr = pa.array(sorted(keep), type=pa.string())
+    pre_col_arr = pc.cast(table.column(pre_col), pa.string())
+    post_col_arr = pc.cast(table.column(post_col), pa.string())
+    pre_in_keep = pc.is_in(pre_col_arr, value_set=keep_arr)
+    post_in_keep = pc.is_in(post_col_arr, value_set=keep_arr)
+    mask = pc.and_(pre_in_keep, post_in_keep)
+    n_keep = int(pc.sum(pc.cast(mask, pa.int64())).as_py() or 0)
     print(f"  Edges kept: {n_keep:,} / {total_rows:,} ({100.0 * n_keep / total_rows:.2f}%)")
 
     # Build filtered table (same schema)
-    indices = [i for i, b in enumerate(mask) if b]
-    filtered = table.take(pa.array(indices))
+    filtered = table.filter(mask)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(filtered, args.out)
     print(f"Wrote {args.out}")

@@ -5,9 +5,9 @@ import csv
 import json
 import math
 import os
-import socket
 from datetime import datetime, timezone
 from pathlib import Path
+from rpc import Rpc
 
 ROOT = Path(__file__).resolve().parents[1]
 SOCKET_PATH = Path(os.environ.get("NEUROSIM_BRAIN_SOCKET", "/tmp/neurosim-brain.sock"))
@@ -53,31 +53,6 @@ SCENARIO_ID = (
     f"rfsig{_tag(RING_RF_SIGMA_DEG)}_vdeg{_tag(VISUAL_DEG_PER_TICK)}_"
     f"gbase{_tag(GLOBAL_BASE_CURRENT)}_probe{_tag(PEN_PROBE_SCALE)}"
 )
-
-
-class Rpc:
-    def __init__(self, path: Path):
-        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.sock.connect(str(path))
-        self.f = self.sock.makefile("rwb")
-
-    def request(self, method: str, params: dict | None = None) -> dict:
-        payload = {"method": method, "params": params or {}}
-        self.f.write((json.dumps(payload) + "\n").encode("utf-8"))
-        self.f.flush()
-        line = self.f.readline()
-        if not line:
-            raise RuntimeError("socket closed")
-        out = json.loads(line.decode("utf-8"))
-        if isinstance(out, dict) and out.get("error"):
-            raise RuntimeError(str(out["error"]))
-        return out
-
-    def close(self) -> None:
-        try:
-            self.f.close()
-        finally:
-            self.sock.close()
 
 
 EPG_SLICE_ORDER_CLOCKWISE = [
@@ -181,6 +156,9 @@ def main() -> int:
     out_replay = ROOT / "world" / "public" / f"{SCENARIO_ID}_replay.json"
     out_timeline = ROOT / "world" / "public" / f"{SCENARIO_ID}_timeline.csv"
     out_summary = ROOT / "logs" / f"{SCENARIO_ID}_summary.json"
+    out_replay.parent.mkdir(parents=True, exist_ok=True)
+    out_timeline.parent.mkdir(parents=True, exist_ok=True)
+    out_summary.parent.mkdir(parents=True, exist_ok=True)
 
     epg_entries = json.loads((ROOT / "data" / "epg-tile-map.json").read_text(encoding="utf-8"))["entries"]
     epg_set = {str(e["root_id"]) for e in epg_entries}
@@ -418,7 +396,9 @@ def main() -> int:
         "neurons": replay_neurons,
         "ticks": ticks,
     }
-    probe_headings = [h for i, h in enumerate(headings_rad, start=1) if i > LEARN_TICKS and h is not None]
+    probe_pairs = [(i, h) for i, h in enumerate(headings_rad, start=1) if i > LEARN_TICKS and h is not None]
+    probe_indices = [i for i, _ in probe_pairs]
+    probe_headings = [h for _, h in probe_pairs]
     if probe_headings:
         cx = sum(math.cos(h) for h in probe_headings) / len(probe_headings)
         cy = sum(math.sin(h) for h in probe_headings) / len(probe_headings)
@@ -430,7 +410,7 @@ def main() -> int:
             prev = unwrapped[-1]
             d = (h - (prev % (2.0 * math.pi)) + math.pi) % (2.0 * math.pi) - math.pi
             unwrapped.append(prev + d)
-        total_dt = max(1e-9, len(unwrapped) * DT_SEC)
+        total_dt = max(1e-9, (probe_indices[-1] - probe_indices[0]) * DT_SEC)
         drift_per_sec = (unwrapped[-1] - unwrapped[0]) / total_dt
     else:
         circular_variance = 1.0

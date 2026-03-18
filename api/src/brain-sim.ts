@@ -251,19 +251,6 @@ export async function createBrainSim(
       penARatesById?: Record<string, number>,
     ): Promise<SimState> {
       const ratesById = penARatesById && Object.keys(penARatesById).length > 0 ? penARatesById : undefined;
-      if (!ratesById) {
-        const single = await runRustStep(dt, sources, true, undefined);
-        const n = Math.max(1, Math.min(1_000_000, Math.floor(numSteps)));
-        for (let i = 1; i < n; i++) {
-          const r = await runRustStep(dt, getSources(), true, undefined);
-          Object.assign(fly, r.fly);
-          lastActivitySparse = r.activitySparse;
-          lastBumpAngleDeg = r.bumpAngleDeg ?? null;
-          lastEpgBins = r.epgBins ?? null;
-        }
-        return getState();
-      }
-      const current = getState();
       const result = await socketClient.runStepsWithState({
         simId,
         numSteps,

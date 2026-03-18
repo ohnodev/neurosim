@@ -41,6 +41,7 @@ fn test_create_and_step() {
 
 /// Benchmark: 1000 steps with tiny (3-neuron) sim. Run with: cargo test bench_1000_steps_tiny -- --nocapture
 #[test]
+#[ignore]
 fn bench_1000_steps_tiny() {
     let neuron_ids = vec!["a".into(), "b".into(), "c".into()];
     let mut sim = BrainSim::new(

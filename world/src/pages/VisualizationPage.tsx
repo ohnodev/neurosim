@@ -1907,7 +1907,7 @@ export default function VisualizationPage() {
           if (recordingRef.current) {
             setRecordedTicks((prev) => {
               const merged = [...prev, ...batch];
-              return merged.length > NEUROSIM_LIVE_MAX_STORED_TICKS * 2
+              return merged.length > NEUROSIM_LIVE_MAX_STORED_TICKS
                 ? merged.slice(-NEUROSIM_LIVE_MAX_STORED_TICKS)
                 : merged;
             });

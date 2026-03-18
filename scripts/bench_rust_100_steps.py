@@ -35,31 +35,38 @@ def main() -> int:
         return 1
     f = sock.makefile("rwb")
     try:
-        f.write(b'{"method":"create","params":{}}\n')
-        f.flush()
-        out = json.loads(f.readline().decode("utf-8"))
-        if out.get("error"):
-            raise RuntimeError(out["error"])
-        sim_id = int(out["sim_id"])
+        try:
+            f.write(b'{"method":"create","params":{}}\n')
+            f.flush()
+            line = f.readline()
+            if not line:
+                raise RuntimeError("socket closed")
+            out = json.loads(line.decode("utf-8"))
+            if out.get("error"):
+                raise RuntimeError(out["error"])
+            sim_id = int(out["sim_id"])
 
-        req = {
-            "method": "run_steps",
-            "params": {
-                "sim_id": sim_id,
-                "num_steps": NUM_STEPS,
-                "dt": DT_SEC,
-                "stim_rates_by_id": {},
-                "count_neuron_ids": [],
-            },
-        }
-        f.write((json.dumps(req) + "\n").encode("utf-8"))
-        f.flush()
-        line = f.readline()
-        if not line:
-            raise RuntimeError("socket closed")
-        step = json.loads(line.decode("utf-8"))
-        if step.get("error"):
-            raise RuntimeError(step["error"])
+            req = {
+                "method": "run_steps",
+                "params": {
+                    "sim_id": sim_id,
+                    "num_steps": NUM_STEPS,
+                    "dt": DT_SEC,
+                    "stim_rates_by_id": {},
+                    "count_neuron_ids": [],
+                },
+            }
+            f.write((json.dumps(req) + "\n").encode("utf-8"))
+            f.flush()
+            line = f.readline()
+            if not line:
+                raise RuntimeError("socket closed")
+            step = json.loads(line.decode("utf-8"))
+            if step.get("error"):
+                raise RuntimeError(step["error"])
+        except Exception as e:
+            print(f"RPC failed: {e}", file=sys.stderr)
+            return 1
     finally:
         f.close()
         sock.close()

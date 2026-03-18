@@ -21,7 +21,10 @@ struct EpgTileMap {
 /// 16-bin order matching frontend EPG_SLICE_ORDER_CLOCKWISE: L5,R4,L6,R3,L7,R2,L8,R1, L1,R8,L2,R7,L3,R6,L4,R5.
 /// (side, tile_index_0_7) -> bin index 0..15.
 fn epg_side_tile_to_bin_16(side: &str, tile: u8) -> Option<u8> {
-    let t = (tile as usize).min(7);
+    if tile > 7 {
+        return None;
+    }
+    let t = tile as usize;
     let is_left = side.eq_ignore_ascii_case("left");
     let is_right = side.eq_ignore_ascii_case("right");
     if !is_left && !is_right {
@@ -320,8 +323,35 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("  Ratio (EPG wt / inhibitory-ER wt): left {:.2}  right {:.2}", left_ratio, right_ratio);
     let right_heavy: Vec<_> = er_types.iter().filter(|(_, st)| st.right_n > st.left_n).map(|(t, st)| format!("{} (R{} L{})", t, st.right_n, st.left_n)).collect();
     println!("  ER types where RIGHT PEN_a has more synapses than left: {:?}", right_heavy);
-    println!("  => Right PEN_a feeds more into ER2 and ER3w (strong EPG inhibitors); left feeds more into ER1/ER4.");
-    println!("  => Right drive recruits more ring inhibition -> bump pins; left drive favors direct EPG -> bump moves.");
+    let right_heavy_total = right_heavy.len();
+    let right_heavy_inh = er_types
+        .iter()
+        .filter(|(typ, st)| st.right_n > st.left_n && inh_er_types.iter().any(|t| t == &typ.as_str()))
+        .count();
+    let right_heavy_inh_ratio = if right_heavy_total > 0 {
+        right_heavy_inh as f64 / right_heavy_total as f64
+    } else {
+        0.0
+    };
+    println!(
+        "  RIGHT-heavy ER types that are inhibitory-to-EPG: {}/{} ({:.1}%)",
+        right_heavy_inh,
+        right_heavy_total,
+        right_heavy_inh_ratio * 100.0
+    );
+    if right_heavy_total > 0 {
+        let label = if right_heavy_inh_ratio >= 0.6 {
+            "majority"
+        } else if right_heavy_inh_ratio <= 0.4 {
+            "minority"
+        } else {
+            "mixed"
+        };
+        println!(
+            "  Data-driven interpretation: inhibitory ER presence among RIGHT-heavy types is {}.",
+            label
+        );
+    }
 
     println!("\n--- Upstream of Delta7 (downstream of EPG/compass) ---");
     println!("  PEN_a left  -> Delta7: {} synapses (total weight {:.1})", left_to_delta7_n, left_to_delta7_w);

@@ -195,6 +195,9 @@ function flushStepBatch(): void {
       },
       sources: params.sources ?? [],
       include_activity: params.include_activity ?? true,
+      ...(params.rates_by_id && Object.keys(params.rates_by_id as JsonObj).length > 0
+        ? { rates_by_id: params.rates_by_id }
+        : {}),
     };
   });
 
@@ -414,12 +417,13 @@ export async function createSim(params?: CreateParams & {
   rngSeed?: number;
   epgRecurrenceBoost?: number;
 }): Promise<{ simId: number }> {
-  const p: JsonObj = {};
-  if (params?.rngSeed != null && Number.isFinite(params.rngSeed)) {
-    p.rng_seed = Math.floor(params.rngSeed as number);
+  const { rngSeed, epgRecurrenceBoost, ...rest } = (params ?? {});
+  const p: JsonObj = { ...rest as JsonObj };
+  if (rngSeed != null && Number.isFinite(rngSeed)) {
+    p.rng_seed = Math.floor(rngSeed as number);
   }
-  if (params?.epgRecurrenceBoost != null && Number.isFinite(params.epgRecurrenceBoost)) {
-    p.epg_recurrence_boost = params.epgRecurrenceBoost as number;
+  if (epgRecurrenceBoost != null && Number.isFinite(epgRecurrenceBoost)) {
+    p.epg_recurrence_boost = epgRecurrenceBoost as number;
   }
   const res = await request<{ sim_id: number }>({ method: 'create', params: p });
   return { simId: res.sim_id };
@@ -464,6 +468,7 @@ export async function liveStatus(): Promise<{
   left_hz: number;
   right_hz: number;
   dt_sec: number;
+  rates_by_id?: Record<string, number> | null;
 }> {
   return request({
     method: 'live_status',
@@ -475,7 +480,7 @@ export interface RunStepsWithStateParams {
   simId: number;
   numSteps: number;
   dt: number;
-  stimRatesById: Record<string, number>;
+  stimRatesById?: Record<string, number>;
   fly: {
     x: number;
     y: number;
@@ -528,7 +533,9 @@ export async function runStepsWithState(params: RunStepsWithStateParams): Promis
       sim_id: params.simId,
       num_steps: Math.min(1_000_000, Math.max(1, Math.floor(params.numSteps))),
       dt: params.dt,
-      stim_rates_by_id: params.stimRatesById,
+      ...(params.stimRatesById && Object.keys(params.stimRatesById).length > 0
+        ? { stim_rates_by_id: params.stimRatesById }
+        : {}),
       return_final_state: true,
       fly: {
         x: params.fly.x,

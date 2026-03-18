@@ -87,7 +87,7 @@ def main() -> int:
 
         # warmup
         t_warmup = time.perf_counter()
-        for i in range(N_WARMUP):
+        for _ in range(N_WARMUP):
             f.write(msg0)
             f.flush()
             f.readline()
@@ -129,6 +129,16 @@ def main() -> int:
         f.write((json.dumps(run_steps_payload) + "\n").encode("utf-8"))
         f.flush()
         line = f.readline().decode("utf-8")
+        if not line:
+            raise RuntimeError("socket closed during run_steps benchmark")
+        try:
+            run_steps_out = json.loads(line)
+        except Exception as e:
+            raise RuntimeError(f"invalid run_steps response JSON: {e}") from e
+        if isinstance(run_steps_out, dict) and run_steps_out.get("error"):
+            raise RuntimeError(f"run_steps error: {run_steps_out['error']}")
+        if not isinstance(run_steps_out, dict) or "steps_done" not in run_steps_out:
+            raise RuntimeError(f"unexpected run_steps response: {run_steps_out!r}")
         run_steps_sec = time.perf_counter() - t_run_steps
         print(f"[timing] run_steps({RUN_STEPS_COUNT} steps, record_ticks=True): {run_steps_sec:.3f} s (see server stderr for parse/steps_loop/serialize)")
 

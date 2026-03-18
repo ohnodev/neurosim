@@ -37,7 +37,14 @@ SUGAR_HZ_CALIB = float(os.environ.get("NEUROSIM_CALIBRATION_SUGAR_HZ", "100.0"))
 
 def load_benchmark_ids() -> tuple[list[str], list[str]]:
     path = ROOT / "data" / "sugar_grn_mn9_benchmark.json"
-    data = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as e:
+        raise RuntimeError(f"Benchmark ID file not found: {path} ({e})") from e
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"Benchmark ID file is invalid JSON: {path} ({e})") from e
+    except OSError as e:
+        raise RuntimeError(f"Failed reading benchmark ID file: {path} ({e})") from e
     sugar = [str(x) for x in data["sugar_grn_root_ids"]]
     mn9 = [str(x) for x in data["mn9_root_ids"]]
     return sugar, mn9

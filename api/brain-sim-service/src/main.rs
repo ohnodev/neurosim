@@ -226,9 +226,19 @@ fn main() {
         .filter(|&v| v.is_finite() && v >= 0.0)
         .unwrap_or_else(|| brain_sim_service::model_constants::EPG_RECURRENCE_BOOST);
 
-    let continuous_live: Option<Arc<ContinuousLiveState>> = classification_path
+    // Live visualization: extra sim thread that streams EPG ticks. Disabled by default to save resources.
+    let live_enabled = std::env::var("NEUROSIM_LIVE_ENABLED")
         .as_ref()
-        .and_then(|cp| spawn_continuous_live_thread(template.clone(), cp, w_syn, epg_boost_live));
+        .map(|s| s == "1" || s.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let continuous_live: Option<Arc<ContinuousLiveState>> = if live_enabled {
+        classification_path
+            .as_ref()
+            .and_then(|cp| spawn_continuous_live_thread(template.clone(), cp, w_syn, epg_boost_live))
+    } else {
+        eprintln!("[brain-service] continuous live disabled (set NEUROSIM_LIVE_ENABLED=1 to enable)");
+        None
+    };
 
     for stream in listener.incoming() {
         if let Ok(mut s) = stream {
@@ -646,6 +656,8 @@ struct RunStepsResp {
     steps_done: u32,
     duration_sec: f64,
     wall_sec: f64,
+    /// Server-side time for the step loop only (ms).
+    steps_loop_ms: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     spike_counts: Option<HashMap<String, u64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1617,6 +1629,7 @@ fn handle(
             steps_done: num_steps,
             duration_sec,
             wall_sec,
+            steps_loop_ms,
             spike_counts: if count_ids.is_some() {
                 Some(spike_counts)
             } else {

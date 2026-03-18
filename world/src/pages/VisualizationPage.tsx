@@ -67,7 +67,7 @@ type ApiNeuron = {
 /** Per-tick duration in seconds. Prefer meta.dt_sec; else 1ms so 1000 ticks = 1s (replay tick time_sec is often wrong). */
 function getReplayDtSec(replay: ReplayData | null): number {
   if (!replay?.ticks?.length) return 0.001;
-  const fromMeta = replay.meta.dt_sec;
+  const fromMeta = replay.meta?.dt_sec;
   if (typeof fromMeta === 'number' && Number.isFinite(fromMeta) && fromMeta > 0) return fromMeta;
   return 0.001;
 }
@@ -139,7 +139,6 @@ const INACTIVE_DOWNSTREAM_COLOR = new THREE.Color(0x5a3d2a);
 const INACTIVE_DELTA7_COLOR = new THREE.Color(0x5e2b6d);
 const ACTIVE_COLOR = new THREE.Color(0x6eff9e);
 const ACTIVE_RING_COLOR = new THREE.Color(0xff4fd8);
-const ACTIVE_EPG_COLOR = new THREE.Color(0xfff07a);
 const ACTIVE_UPSTREAM_COLOR = new THREE.Color(0x7ad7ff);
 const ACTIVE_DOWNSTREAM_COLOR = new THREE.Color(0xffb57a);
 const ACTIVE_DELTA7_COLOR = new THREE.Color(0xd08cff);
@@ -286,11 +285,6 @@ function compassHeatFill(v: number, alpha = 0.95): string {
 }
 
 const BIN_GAP_RAD = (Math.PI / 180) * 4;
-
-function getEpgSliceColor(bin: number | null | undefined): THREE.Color {
-  const idx = bin != null && bin >= 0 && bin < EPG_SLICE_COLORS.length ? bin : 0;
-  return new THREE.Color(EPG_SLICE_COLORS[idx] ?? '#6b4cc4');
-}
 
 function getWedgeParams(i: number, binCount: number): { wedge: number; a0: number; a1: number; midAngle: number } {
   const wedge = (Math.PI * 2) / binCount - BIN_GAP_RAD;
@@ -1534,8 +1528,9 @@ export default function VisualizationPage() {
   const epgUniqueFired = useMemo(() => {
     if (!replay) return null;
     if (selectedReplayId === 'neurosim_live') return liveEpgUniqueFired;
-    if (typeof replay.meta.epg_neuron_unique_fired === 'number' && Number.isFinite(replay.meta.epg_neuron_unique_fired)) {
-      return replay.meta.epg_neuron_unique_fired;
+    const epgUniqueFromMeta = replay.meta?.epg_neuron_unique_fired;
+    if (typeof epgUniqueFromMeta === 'number' && Number.isFinite(epgUniqueFromMeta)) {
+      return epgUniqueFromMeta;
     }
     let epgIds: Set<string>;
     if (epgLabelMap && epgLabelMap.size > 0) {
@@ -1876,7 +1871,7 @@ export default function VisualizationPage() {
       epgWindowWeights,
       epgWindowTicks,
       dtSec,
-      replay.meta.delta7_inhibition_profile_by_offset,
+      replay.meta?.delta7_inhibition_profile_by_offset,
     );
     let ringInputActive = 0;
     for (const id of spikes) {
@@ -2125,10 +2120,10 @@ export default function VisualizationPage() {
               fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
               flex: 1,
             }}
-            title={replay ? `replay=${selectedReplay?.id ?? 'n/a'} | scenario=${replay.meta.scenario ?? 'n/a'} | decode=vector | neurons=${Array.isArray(replay.neurons) ? replay.neurons.length : displayNeurons.length} | rendered=${displayNeurons.length} | ticks=${replay.ticks.length} | sim=${(replay.ticks.length * getReplayDtSec(replay)).toFixed(3)}s | dt=${(getReplayDtSec(replay) * 1000).toFixed(3)}ms | epg fired=${epgUniqueFired ?? 'n/a'} | bump angle=${compassStats.bumpAngleDeg == null ? 'n/a' : `${compassStats.bumpAngleDeg.toFixed(1)}deg`} | bump strength=${compassStats.bumpStrength.toFixed(3)} | top bin=${compassStats.epgTopBinIndex}` : undefined}
+            title={replay ? `replay=${selectedReplay?.id ?? 'n/a'} | scenario=${replay.meta?.scenario ?? 'n/a'} | decode=vector | neurons=${Array.isArray(replay.neurons) ? replay.neurons.length : displayNeurons.length} | rendered=${displayNeurons.length} | ticks=${replay.ticks.length} | sim=${(replay.ticks.length * getReplayDtSec(replay)).toFixed(3)}s | dt=${(getReplayDtSec(replay) * 1000).toFixed(3)}ms | epg fired=${epgUniqueFired ?? 'n/a'} | bump angle=${compassStats.bumpAngleDeg == null ? 'n/a' : `${compassStats.bumpAngleDeg.toFixed(1)}deg`} | bump strength=${compassStats.bumpStrength.toFixed(3)} | top bin=${compassStats.epgTopBinIndex}` : undefined}
           >
             {replay
-              ? `replay=${selectedReplay?.id ?? 'n/a'} | scenario=${replay.meta.scenario ?? 'n/a'} | decode=vector | ticks=${replay.ticks.length} | sim=${(replay.ticks.length * getReplayDtSec(replay)).toFixed(3)}s | dt=${(getReplayDtSec(replay) * 1000).toFixed(3)}ms | epg fired=${epgUniqueFired ?? 'n/a'} | bump=${compassStats.bumpAngleDeg == null ? 'n/a' : `${compassStats.bumpAngleDeg.toFixed(1)}deg`} (${compassStats.bumpStrength.toFixed(2)}) | top bin=${compassStats.epgTopBinIndex}`
+              ? `replay=${selectedReplay?.id ?? 'n/a'} | scenario=${replay.meta?.scenario ?? 'n/a'} | decode=vector | ticks=${replay.ticks.length} | sim=${(replay.ticks.length * getReplayDtSec(replay)).toFixed(3)}s | dt=${(getReplayDtSec(replay) * 1000).toFixed(3)}ms | epg fired=${epgUniqueFired ?? 'n/a'} | bump=${compassStats.bumpAngleDeg == null ? 'n/a' : `${compassStats.bumpAngleDeg.toFixed(1)}deg`} (${compassStats.bumpStrength.toFixed(2)}) | top bin=${compassStats.epgTopBinIndex}`
               : 'Loading replay...'}
           </div>
           {replay && compassStats.bumpStrength < 0.5 ? (

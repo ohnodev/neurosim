@@ -279,7 +279,6 @@ export default function FlyViewer() {
           activityRef.current = data.activity ?? {};
           activitiesRef.current = [];
           const simIdx = followSimIndexRef.current ?? 0;
-          const fly = lastFrame.flies?.[simIdx];
           const payload = data as SimPayload;
           const ticks = payload.ticks ?? [];
           const epgIndexToBin = payload.epgIndexToBin ?? [];

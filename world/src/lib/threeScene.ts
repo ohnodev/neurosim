@@ -47,8 +47,6 @@ export interface ThreeSceneRefs {
   devModeRef: { current: boolean };
   snapshotBufferRef: { current: Snapshot[] };
   targetRef: { current: { x: number; y: number; z: number; heading: number } | null };
-  /** Derived bump (deg) per sim from tick EPG data. Used for 3D fly orientation when available. */
-  derivedBumpBySimIndexRef: { current: (number | null)[] };
 }
 
 /** Ground plane size — large so flies can roam freely (no edges). */
@@ -762,23 +760,18 @@ export function initThreeScene(
       const isFlying = wasFlying ? z > FLY_THRESHOLD_DOWN : z > FLY_THRESHOLD_UP;
       const lowLodIsFlying = inst.lowLodWasFlying ? z > FLY_THRESHOLD_DOWN : z > FLY_THRESHOLD_UP;
 
-      // Face direction of movement when moving; otherwise use EPG bump or state.heading.
+      // Fly heading = direction of motion only. No EPG, no state.heading.
       const dx = x - inst.prevPos.x;
       const dy = y - inst.prevPos.y;
       const motionDistSq = dx * dx + dy * dy;
-      const MOTION_THRESHOLD_SQ = 1e-6; // ~0.001 units moved
-      const bumpDeg = refs.derivedBumpBySimIndexRef.current[i];
-      const headingRad =
-        inst.initialized && motionDistSq > MOTION_THRESHOLD_SQ
-          ? Math.atan2(dy, dx) // Moving: face where we're going
-          : typeof bumpDeg === 'number'
-            ? (bumpDeg * Math.PI) / 180 // Stationary: use EPG bump
-            : (state.heading ?? inst.heading);
+      const MOTION_THRESHOLD_SQ = 1e-8;
+      if (motionDistSq > MOTION_THRESHOLD_SQ) {
+        inst.heading = Math.atan2(dy, dx);
+      } else if (!inst.initialized) {
+        inst.heading = 0;
+        inst.initialized = true;
+      }
       inst.prevPos = { x, y };
-
-      inst.targetHeading = headingRad;
-      inst.heading = headingRad; // Snap instantly — no lerp
-      if (!inst.initialized) inst.initialized = true;
 
       const visualZ = Math.max(0, z - GROUND_Z);
       inst.group.position.set(x, visualZ, y);

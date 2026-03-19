@@ -95,7 +95,6 @@ export default function FlyViewer() {
   const devModeRef = useRef(devMode);
   const followSimIndexRef = useRef<number | undefined>(undefined);
   const sourcesRef = useRef<WorldSource[]>([]);
-  const derivedBumpBySimIndexRef = useRef<(number | null)[]>([]);
   const flyCardDataRef = useRef<Map<number, { fly: FlyState; points: number }>>(new Map());
   const prevWsFlyCountRef = useRef(0);
   const epgSpikesByFlyRef = useRef<Map<number, import('../../lib/simWsClient').EpgSpikesByNeuronFly>>(new Map());
@@ -348,15 +347,8 @@ export default function FlyViewer() {
                     })();
               derivedBySim[j] = bump ?? null;
             }
-            derivedBumpBySimIndexRef.current = derivedBySim;
             deg = derivedBySim[simIdx] ?? null;
-          } else if (deg != null && flyIdBySimIndex.length > 0) {
-            // Populate derivedBump for 3D fly when we have bins-based deg
-            const arr = new Array<number | null>(flyIdBySimIndex.length).fill(null);
-            arr[simIdx] = deg;
-            derivedBumpBySimIndexRef.current = arr;
           }
-          if (deg == null) derivedBumpBySimIndexRef.current = [];
           setBumpAngleDeg(deg);
           setEpgBins(Array.isArray(bins) && bins.length === 16 ? bins : null);
         } else if (last) {
@@ -488,7 +480,6 @@ export default function FlyViewer() {
         devModeRef,
         snapshotBufferRef,
         targetRef: cameraTargetRef,
-        derivedBumpBySimIndexRef,
       },
       cameraToggleSlotRef.current,
       simStatusSlotRef.current,

@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]
 _logger = logging.getLogger(__name__)
 _default_socket_dir = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "neurosim"
 SOCKET_PATH = Path(os.environ.get("NEUROSIM_BRAIN_SOCKET", str(_default_socket_dir / "neurosim-brain.sock")))
-BASE_SEED = 1598276117
+BASE_SEED = int(os.environ.get("NEUROSIM_POISSON_SEED", "1598276117"))
 DEVICE_PREF = os.environ.get("NEUROSIM_PYTHON_BRAIN_DEVICE", "cpu")
 _default_fly_brain = (ROOT.parent / "fly-brain-fresh").resolve()
 if not _default_fly_brain.exists():
@@ -31,7 +31,7 @@ DT_MS = 0.1
 DT_SEC = DT_MS / 1000.0
 W_SYN_MV = 0.339
 # Scale applied to EPG->EPG recurrent weights (1.0 = no change; 4.0 = 4x recurrence).
-EPG_RECURRENCE_BOOST = 4.0
+EPG_RECURRENCE_BOOST = float(os.environ.get("NEUROSIM_EPG_RECURRENCE_BOOST", "4.0"))
 # Max steps when record_ticks=True to avoid huge tick arrays; compute-only runs can be larger.
 MAX_TICK_STEPS = 15_000
 MAX_COMPUTE_STEPS = 1_000_000
@@ -91,6 +91,10 @@ class BrainService:
         self.weights = get_weights(str(path_con), str(path_comp), str(path_wt), csr=True).to(
             device=self.device
         )
+        self.weights_t = self.weights.transpose(0, 1).to_sparse_csr()
+        self._wt_crow = self.weights_t.crow_indices()
+        self._wt_col = self.weights_t.col_indices()
+        self._wt_val = self.weights_t.values()
         self.neuron_count = int(self.weights.shape[0])
         self.neuron_ids = [str(self.i2flyid[i]) for i in range(self.neuron_count)]
         self.id_to_index = {rid: i for i, rid in enumerate(self.neuron_ids)}
@@ -118,6 +122,32 @@ class BrainService:
             f"dt_ms={DT_MS} w_syn_mv={W_SYN_MV} epg_boost={EPG_RECURRENCE_BOOST}",
             flush=True,
         )
+
+    def _weighted_spikes_spike_driven(self, spikes: torch.Tensor) -> torch.Tensor:
+        """Spike-driven recurrent sum: equivalent to spikes @ W^T, but only traverses active rows."""
+        active_pre = torch.nonzero(spikes[0] > 0, as_tuple=False).flatten()
+        if active_pre.numel() == 0:
+            return torch.zeros_like(spikes)
+
+        starts = self._wt_crow[active_pre].to(torch.int64)
+        ends = self._wt_crow[active_pre + 1].to(torch.int64)
+        lengths = ends - starts
+        total_edges = int(lengths.sum().item())
+        if total_edges == 0:
+            return torch.zeros_like(spikes)
+
+        # Build flattened CSR edge index spans for active pre-neurons only.
+        seg_starts = torch.repeat_interleave(starts, lengths)
+        prefix = torch.cumsum(lengths, dim=0) - lengths
+        intra = torch.arange(total_edges, device=spikes.device, dtype=torch.int64)
+        intra -= torch.repeat_interleave(prefix, lengths)
+        edge_idx = seg_starts + intra
+
+        posts = self._wt_col[edge_idx].to(torch.int64)
+        vals = self._wt_val[edge_idx].to(spikes.dtype)
+        weighted = torch.zeros(self.neuron_count, device=spikes.device, dtype=spikes.dtype)
+        weighted.scatter_add_(0, posts, vals)
+        return weighted.unsqueeze(0)
 
     def _build_epg_epg_block(self) -> torch.Tensor:
         """Dense (len_epg, len_epg) block of weights[epg_idx, epg_idx] for recurrence boost."""
@@ -301,7 +331,7 @@ class BrainService:
         with torch.no_grad():
             for _ in range(substeps):
                 spikes_input = sim.model.poisson(sim.rates, generator=sim.generator)
-                weighted_spikes = torch.matmul(sim.spikes, sim.model.weights.transpose(0, 1))
+                weighted_spikes = self._weighted_spikes_spike_driven(sim.spikes)
                 total_input_current = sim.model.scale * (spikes_input + weighted_spikes) + sim.external_current
                 if self._w_epg_epg.numel() > 0 and EPG_RECURRENCE_BOOST != 1.0:
                     epg_spikes = sim.spikes[:, self.viewer_indices]
@@ -487,9 +517,7 @@ class BrainService:
         with torch.no_grad():
             for step in range(num_steps):
                 spikes_input = sim.model.poisson(sim.rates, generator=sim.generator)
-                weighted_spikes = torch.matmul(
-                    sim.spikes, sim.model.weights.transpose(0, 1)
-                )
+                weighted_spikes = self._weighted_spikes_spike_driven(sim.spikes)
                 total_input_current = (
                     sim.model.scale * (spikes_input + weighted_spikes)
                     + sim.external_current

@@ -7,6 +7,13 @@ import { loadConnectome } from './connectome.js';
 import { createBrainSim } from './brain-sim.js';
 import * as socketClient from './brain-socket-client.js';
 import { getWorld, spawnFood, removeFood, getSources, type WorldSource } from './world.js';
+import {
+  getWorldPenPresets,
+  WORLD_COMPASS_DEG,
+  WORLD_COMPASS_STEP_DEG,
+  WORLD_SIM_DT_SEC,
+  type WorldCompassPosition,
+} from './world-pen-presets.js';
 import claimsRouter from './routes/claims.js';
 import { getFlies, removeFlyAtSlot } from './services/flyStore.js';
 import { getDeployments, addDeployment, clearForTesting, deactivateDeployment } from './services/deployStore.js';
@@ -80,6 +87,131 @@ function parseCsvLine(line: string): string[] {
   }
   out.push(cur);
   return out;
+}
+
+function loadPenABySide(): { left: string[]; right: string[] } {
+  type PenRow = { rootId: string; penIndex: number | null };
+  const leftRows: PenRow[] = [];
+  const rightRows: PenRow[] = [];
+  const seenLeft = new Set<string>();
+  const seenRight = new Set<string>();
+  const parsePenAIndex = (htype: string): number | null => {
+    const m = /^PEN_a(\d+)/i.exec(htype.trim());
+    if (!m) return null;
+    const n = Number(m[1]);
+    return Number.isFinite(n) ? n : null;
+  };
+  try {
+    if (!fs.existsSync(CLASSIFICATION_CSV_PATH)) {
+      return { left: [], right: [] };
+    }
+    const raw = fs.readFileSync(CLASSIFICATION_CSV_PATH, 'utf-8');
+    const lines = raw.split(/\r?\n/);
+    if (lines.length < 2) return { left: [], right: [] };
+    const header = parseCsvLine(lines[0]!);
+    const col = (name: string) => header.indexOf(name);
+    const iRid = col('root_id');
+    const iHb = col('hemibrain_type');
+    const iSide = col('side');
+    if (iRid < 0 || iHb < 0) return { left: [], right: [] };
+    for (let li = 1; li < lines.length; li++) {
+      const row = lines[li];
+      if (!row) continue;
+      const cols = parseCsvLine(row);
+      const rid = (cols[iRid] ?? '').trim();
+      if (!rid) continue;
+      const htype = (cols[iHb] ?? '').trim();
+      if (!htype.startsWith('PEN_a')) continue;
+      const penIndex = parsePenAIndex(htype);
+      const side = (iSide >= 0 ? (cols[iSide] ?? '') : '').trim().toLowerCase();
+      if (side === 'left') {
+        if (!seenLeft.has(rid)) {
+          seenLeft.add(rid);
+          leftRows.push({ rootId: rid, penIndex });
+        }
+      } else if (side === 'right') {
+        if (!seenRight.has(rid)) {
+          seenRight.add(rid);
+          rightRows.push({ rootId: rid, penIndex });
+        }
+      }
+    }
+  } catch (e) {
+    console.error('[neurosim-live] PEN_a load failed', e);
+  }
+  const cmp = (a: PenRow, b: PenRow): number => {
+    const ai = a.penIndex ?? Number.POSITIVE_INFINITY;
+    const bi = b.penIndex ?? Number.POSITIVE_INFINITY;
+    if (ai !== bi) return ai - bi;
+    return a.rootId.localeCompare(b.rootId);
+  };
+  leftRows.sort(cmp);
+  rightRows.sort(cmp);
+  return { left: leftRows.map((r) => r.rootId), right: rightRows.map((r) => r.rootId) };
+}
+
+const PEN_A_BY_SIDE = loadPenABySide();
+const EPG_IDS_FOR_RUN_STEPS = [...epgRootIdSet].sort();
+
+/** World 3-position PEN_a presets (11PM, 3PM, 8PM). */
+const WORLD_PEN_PRESETS = getWorldPenPresets(PEN_A_BY_SIDE);
+
+/** Per-sim next PEN_a preset for world steering. Index = sim index. */
+const penPresetBySimIndex: WorldCompassPosition[] = [];
+
+/** Per-sim smoothed bump angle (deg) for stable heading and compass. */
+const smoothedBumpBySimIndex: (number | null)[] = [];
+
+const BUMP_SMOOTH_ALPHA = 0.12; // strong smoothing so L1/L2/L6-only input gives stable direction
+
+function smoothBumpDeg(prev: number | null, next: number, alpha: number): number {
+  if (prev == null) return next;
+  let d = ((next - prev + 540) % 360) - 180;
+  let out = prev + d * alpha;
+  out = ((out % 360) + 360) % 360;
+  if (out > 180) out -= 360;
+  return out;
+}
+
+const ODOR_DETECTION_RADIUS = 34;
+
+function normalizeAngleDeg(deg: number): number {
+  let a = deg;
+  while (a > 180) a -= 360;
+  while (a < -180) a += 360;
+  return a;
+}
+
+/** Pick the world compass position (11PM, 3PM, 8PM) closest to the given target angle in degrees. */
+function chooseWorldPresetFromAngleDeg(angleToTargetDeg: number): WorldCompassPosition {
+  let best: WorldCompassPosition = '11PM';
+  let bestDiff = Infinity;
+  for (const pos of ['11PM', '3PM', '8PM'] as const) {
+    const d = Math.abs(normalizeAngleDeg(angleToTargetDeg - WORLD_COMPASS_DEG[pos]));
+    if (d < bestDiff) {
+      bestDiff = d;
+      best = pos;
+    }
+  }
+  return best;
+}
+
+function chooseWorldPresetForFly(
+  fly: { x: number; y: number; heading: number },
+  sources: WorldSource[],
+): WorldCompassPosition {
+  let angleDeg = (fly.heading * 180) / Math.PI;
+  let nearestDistSq = Number.POSITIVE_INFINITY;
+  for (const s of sources) {
+    const dx = s.x - fly.x;
+    const dy = s.y - fly.y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < nearestDistSq) {
+      nearestDistSq = d2;
+      angleDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
+    }
+  }
+  return chooseWorldPresetFromAngleDeg(angleDeg);
 }
 
 function createSeededRandom(seed: number): () => number {
@@ -157,10 +289,10 @@ function computeViewerSubsetIndices(total: number): number[] {
 const viewerNeuronIndices = computeViewerSubsetIndices(connectome.neurons.length);
 const viewerNeuronIndexSet = new Set<number>(viewerNeuronIndices);
 
-/** Brain sim uses Unix socket only. Probe connects to brain-service; retry a few times for PM2 start-order. */
+/** Brain sim uses Unix socket only. Probe connects to brain-service; retry for PM2 start-order. */
 const CUDA_ONLY = process.env.NEUROSIM_MODE === 'cuda' || process.env.USE_CUDA === '1';
-const PROBE_RETRIES = 10;
-const PROBE_DELAY_MS = 2000;
+const PROBE_RETRIES = 40;
+const PROBE_DELAY_MS = 3000;
 
 let backendInfo = { engine: 'python-brain', gpu: process.env.USE_CUDA === '1' };
 let probeOk = false;
@@ -233,6 +365,8 @@ function removeSimAtIndex(simIndex: number): { address: string; slotIndex: numbe
   const deployment = findDeploymentBySimIndex(simIndex);
   sims.splice(simIndex, 1);
   simActivityTrail.splice(simIndex, 1);
+  penPresetBySimIndex.splice(simIndex, 1);
+  smoothedBumpBySimIndex.splice(simIndex, 1);
 
   for (const [address, slotMap] of deployedFlies) {
     for (const [slotIndex, mappedIndex] of slotMap) {
@@ -266,6 +400,20 @@ async function addFlyToSim(spawnKey?: string): Promise<number> {
   });
   sims.push(sim);
   simActivityTrail.push(new Map());
+  const sources = getSources();
+  let angleDeg = (heading * 180) / Math.PI;
+  let nearestDistSq = Number.POSITIVE_INFINITY;
+  for (const s of sources) {
+    const dx = s.x - x;
+    const dy = s.y - y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < nearestDistSq) {
+      nearestDistSq = d2;
+      angleDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
+    }
+  }
+  penPresetBySimIndex.push(chooseWorldPresetFromAngleDeg(angleDeg));
+  smoothedBumpBySimIndex.push(normalizeAngleDeg((heading * 180) / Math.PI));
   return sims.length - 1;
 }
 
@@ -293,10 +441,12 @@ try {
 }
 let simRunning = false;
 let simIntervalId: ReturnType<typeof setInterval> | null = null;
-/** 250ms interval; client keeps 1s buffer for smooth interpolation */
+/** World loop: 8 batches/sec (125ms), 4 interpolated frames per batch → ~32 FPS. Lighter round-trips avoid backend overload. */
 const SIM_FPS = 30;
-const BATCH_MS = 250;
-const FRAMES_PER_BATCH = Math.round(SIM_FPS * BATCH_MS / 1000);
+const BATCH_MS = 125;
+const FRAMES_PER_BATCH = 4;
+/** One run_steps call per batch: advance 0.125s sim time (1250 steps at dt=0.0001). */
+const WORLD_STEPS_PER_BATCH = Math.max(1, Math.round(0.125 / WORLD_SIM_DT_SEC));
 const BRAIN_INIT_GRACE_MS = Number(process.env.NEUROSIM_BRAIN_INIT_GRACE_MS ?? 10_000);
 let connectionStep = 0;
 let nextBatchDueAt = 0;
@@ -337,11 +487,18 @@ function buildClientPayload(
       rightMagnitude: number;
       fwdMagnitude: number;
     } | undefined)[];
+    bumpAngleDegs: (number | null)[];
+    epgBinsPerSim: (number[] | null)[];
   }[],
 ): void {
   const nowMs = Date.now();
   const sources = getSources();
-  const clientFrames = frames.map((f) => ({ t: f.t, flies: f.flies }));
+  const clientFrames = frames.map((f) => ({
+    t: f.t,
+    flies: f.flies,
+    bumpAngleDegs: f.bumpAngleDegs,
+    epgBinsPerSim: f.epgBinsPerSim,
+  }));
   const lastFrame = frames[frames.length - 1];
   for (const ws of wsClients) {
     if (ws.readyState !== 1) continue;
@@ -502,23 +659,24 @@ function startSim(): void {
       let batchCalls = 0;
       let batchSize = 0;
       const dtFrame = 1 / SIM_FPS;
-      const batchDt = dtFrame * FRAMES_PER_BATCH;
       const frames: {
         t: number;
         flies: ReturnType<typeof sims[0]['getState']>['fly'][];
         activities: (Record<string, number> | undefined)[];
         inputActivities: (Record<string, number> | undefined)[];
-    motorReadouts: ({
-      left: number;
-      right: number;
-      fwd: number;
-      leftCount: number;
-      rightCount: number;
-      fwdCount: number;
-      leftMagnitude: number;
-      rightMagnitude: number;
-      fwdMagnitude: number;
-    } | undefined)[];
+        motorReadouts: ({
+          left: number;
+          right: number;
+          fwd: number;
+          leftCount: number;
+          rightCount: number;
+          fwdCount: number;
+          leftMagnitude: number;
+          rightMagnitude: number;
+          fwdMagnitude: number;
+        } | undefined)[];
+        bumpAngleDegs: (number | null)[];
+        epgBinsPerSim: (number[] | null)[];
       }[] = [];
 
       const transitions: Array<{
@@ -537,6 +695,8 @@ function startSim(): void {
         motorLeftMagnitude?: number;
         motorRightMagnitude?: number;
         motorFwdMagnitude?: number;
+        bumpAngleDeg?: number | null;
+        epgBins?: number[] | null;
       }> = [];
 
       const beforeStates = sims.map((s) => s.getState());
@@ -547,8 +707,26 @@ function startSim(): void {
           viewedSimIndexes.add(idx);
         }
       }
+      const currentSources = getSources();
       const states = await Promise.all(
-        sims.map((s, idx) => s.step(batchDt, { includeActivity: viewedSimIndexes.has(idx) })),
+        sims.map(async (s, idx) => {
+          const beforeFly = beforeStates[idx]?.fly;
+          if (beforeFly) {
+            penPresetBySimIndex[idx] = chooseWorldPresetForFly(beforeFly, currentSources);
+            if (smoothedBumpBySimIndex[idx] == null) {
+              smoothedBumpBySimIndex[idx] = normalizeAngleDeg((beforeFly.heading * 180) / Math.PI);
+            }
+          }
+          const preset = penPresetBySimIndex[idx] ?? '11PM';
+          const ratesById = WORLD_PEN_PRESETS[preset];
+          const state = await (s as { stepBatch?: (dt: number, n: number, src: WorldSource[], rates?: Record<string, number>) => Promise<ReturnType<typeof sims[0]['getState']>> }).stepBatch?.(
+            WORLD_SIM_DT_SEC,
+            WORLD_STEPS_PER_BATCH,
+            currentSources,
+            ratesById,
+          );
+          return state ?? s.getState();
+        }),
       );
       const activityNowMs = Date.now();
       const deadSimIndexes: number[] = [];
@@ -584,13 +762,15 @@ function startSim(): void {
           if (gt.rustMs > maxStepMs) maxStepMs = gt.rustMs;
           if (gt.jsMs > maxJsMs) maxJsMs = gt.jsMs;
         }
-        if (state.eatenFoodId) {
-          removeFood(state.eatenFoodId);
-          const deployment = findDeploymentBySimIndex(j);
-          if (deployment) {
-            recordFoodDepleted(deployment.address, deployment.slotIndex);
+        if (state.eatenFoodIds && state.eatenFoodIds.length > 0) {
+          for (const foodId of state.eatenFoodIds) {
+            removeFood(foodId);
+            const deployment = findDeploymentBySimIndex(j);
+            if (deployment) {
+              recordFoodDepleted(deployment.address, deployment.slotIndex);
+            }
+            console.log('[world] fly', j, 'ate food', foodId);
           }
-          console.log('[world] fly', j, 'ate food', state.eatenFoodId);
         }
         if ((state.feedingSugarTaken ?? 0) > 0) {
           const deployment = findDeploymentBySimIndex(j);
@@ -598,23 +778,6 @@ function startSim(): void {
             recordFeedingPoints(deployment.address, deployment.slotIndex, state.feedingSugarTaken ?? 0);
           }
         }
-        transitions.push({
-          fromFly: before.fly,
-          toFly: state.fly,
-          fromT: before.t,
-          toT: state.t,
-          activity: state.activity,
-          inputActivity: state.inputActivity,
-          motorLeft: state.motorLeft,
-          motorRight: state.motorRight,
-          motorFwd: state.motorFwd,
-          motorLeftCount: state.motorLeftCount,
-          motorRightCount: state.motorRightCount,
-          motorFwdCount: state.motorFwdCount,
-          motorLeftMagnitude: state.motorLeftMagnitude,
-          motorRightMagnitude: state.motorRightMagnitude,
-          motorFwdMagnitude: state.motorFwdMagnitude,
-        });
         if (state.activity && simActivityTrail[j]) {
           const trail = simActivityTrail[j]!;
           for (const [id, value] of Object.entries(state.activity)) {
@@ -636,6 +799,39 @@ function startSim(): void {
         if (state.fly.dead || (state.fly.health ?? 100) <= 0) {
           deadSimIndexes.push(j);
         }
+
+        // Position 1 only: 11PM (L1:50, L2:50, L6:50). Smooth bump so heading and compass are stable.
+        let toFly = state.fly;
+        const rawBump = state.bumpAngleDeg ?? null;
+        const smoothed =
+          rawBump != null
+            ? smoothBumpDeg(smoothedBumpBySimIndex[j] ?? null, rawBump, BUMP_SMOOTH_ALPHA)
+            : null;
+        if (smoothed != null) smoothedBumpBySimIndex[j] = smoothed;
+
+        if (smoothed != null) {
+          toFly = { ...toFly, heading: (smoothed * Math.PI) / 180 };
+        }
+
+        transitions.push({
+          fromFly: before.fly,
+          toFly,
+          fromT: before.t,
+          toT: state.t,
+          activity: state.activity,
+          inputActivity: state.inputActivity,
+          motorLeft: state.motorLeft,
+          motorRight: state.motorRight,
+          motorFwd: state.motorFwd,
+          motorLeftCount: state.motorLeftCount,
+          motorRightCount: state.motorRightCount,
+          motorFwdCount: state.motorFwdCount,
+          motorLeftMagnitude: state.motorLeftMagnitude,
+          motorRightMagnitude: state.motorRightMagnitude,
+          motorFwdMagnitude: state.motorFwdMagnitude,
+          bumpAngleDeg: smoothed ?? rawBump ?? undefined,
+          epgBins: state.epgBins ?? undefined,
+        });
       }
 
       if (deadSimIndexes.length > 0) {
@@ -687,7 +883,9 @@ function startSim(): void {
             : undefined,
         );
         const t = transitions.length ? lerp(transitions[0].fromT, transitions[0].toT, alpha) : 0;
-        frames.push({ t, flies, activities, inputActivities, motorReadouts });
+        const bumpAngleDegs = transitions.map((tr) => tr.bumpAngleDeg ?? null);
+        const epgBinsPerSim = transitions.map((tr) => tr.epgBins ?? null);
+        frames.push({ t, flies, activities, inputActivities, motorReadouts, bumpAngleDegs, epgBinsPerSim });
       }
       const beforePayload = performance.now();
       buildClientPayload(frames);
@@ -825,6 +1023,100 @@ app.get('/api/neurons', (req, res) => {
     viewerNeuronCount: viewerNeuronIndices.length,
     totalNeuronCount: connectome.neurons.length,
   });
+});
+
+/** Return PEN_a neuron list for live per-neuron controls (id + label L1..L10, R1..R10). */
+app.get('/api/neurosim-live/pen-a-neurons', (_req, res) => {
+  const left = PEN_A_BY_SIDE.left.map((id, i) => ({ id, label: `L${i + 1}` }));
+  const right = PEN_A_BY_SIDE.right.map((id, i) => ({ id, label: `R${i + 1}` }));
+  res.json({ left, right });
+});
+
+/** Brain-service runs one continuous sim from startup; we only read ticks + apply Hz. */
+app.get('/api/neurosim-live/status', async (_req, res) => {
+  try {
+    const s = await socketClient.liveStatus();
+    res.json({
+      ok: true,
+      latestTick: s.latest_tick,
+      penALeftHz: s.left_hz,
+      penARightHz: s.right_hz,
+      dtSec: s.dt_sec,
+      ratesById: s.rates_by_id ?? null,
+    });
+  } catch (e) {
+    console.error('[neurosim-live/status]', e);
+    res.status(500).json({ error: (e as Error).message ?? String(e) });
+  }
+});
+
+app.get('/api/neurosim-live/ticks', async (req, res) => {
+  try {
+    const after = Math.max(0, Math.floor(Number(req.query.after ?? 0)));
+    const max = Math.max(1, Math.min(8000, Math.floor(Number(req.query.max ?? 2000))));
+    const out = await socketClient.liveReadTicks(after, max);
+    res.json({
+      ticks: out.ticks ?? [],
+      latestTick: out.latest_tick,
+      dtSec: out.dt_sec,
+    });
+  } catch (e) {
+    console.error('[neurosim-live/ticks]', e);
+    res.status(500).json({ error: (e as Error).message ?? String(e) });
+  }
+});
+
+app.post('/api/neurosim-live/apply', async (req, res) => {
+  try {
+    const rawLeft = Number(req.body?.penALeftHz);
+    const rawRight = Number(req.body?.penARightHz);
+    if (!Number.isFinite(rawLeft) || !Number.isFinite(rawRight)) {
+      return res.status(400).json({ error: 'penALeftHz and penARightHz must be finite numbers' });
+    }
+    const left = Math.max(0, Math.min(500, rawLeft));
+    const right = Math.max(0, Math.min(500, rawRight));
+    const rawRates = req.body?.ratesById;
+    if (rawRates != null && (typeof rawRates !== 'object' || Array.isArray(rawRates))) {
+      return res.status(400).json({ error: 'ratesById must be an object map of neuronId -> hz' });
+    }
+    const ratesById = rawRates as Record<string, unknown> | undefined;
+    const knownPenIds = new Set<string>([...PEN_A_BY_SIDE.left, ...PEN_A_BY_SIDE.right]);
+    const unknownNeuronIds: string[] = [];
+    const explicitRatesById: Record<string, number> = {};
+    if (ratesById) {
+      for (const [id, value] of Object.entries(ratesById)) {
+        if (!knownPenIds.has(id)) {
+          unknownNeuronIds.push(id);
+          continue;
+        }
+        const hz = Number(value);
+        if (!Number.isFinite(hz) || hz < 0 || hz > 500) {
+          return res.status(400).json({
+            error: `Invalid ratesById value for ${id}; expected finite number in [0, 500]`,
+          });
+        }
+        explicitRatesById[id] = hz;
+      }
+    }
+    if (unknownNeuronIds.length > 0) {
+      return res.status(400).json({
+        error: 'ratesById contains unknown PEN_a neuron IDs',
+        unknownNeuronIds,
+      });
+    }
+    const merged: Record<string, number> = {};
+    for (const id of PEN_A_BY_SIDE.left) {
+      merged[id] = explicitRatesById[id] ?? left;
+    }
+    for (const id of PEN_A_BY_SIDE.right) {
+      merged[id] = explicitRatesById[id] ?? right;
+    }
+    await socketClient.liveSetPenA(left, right, merged);
+    res.json({ ok: true, penALeftHz: left, penARightHz: right });
+  } catch (e) {
+    console.error('[neurosim-live/apply]', e);
+    res.status(500).json({ error: (e as Error).message ?? String(e) });
+  }
 });
 
 app.post('/api/neurosim-baseline/export', async (req, res) => {
@@ -1316,6 +1608,8 @@ export function resetDeployStateForTesting(): void {
   deployedFlies.clear();
   sims.splice(0, sims.length);
   simActivityTrail.splice(0, simActivityTrail.length);
+  penPresetBySimIndex.splice(0, penPresetBySimIndex.length);
+  smoothedBumpBySimIndex.splice(0, smoothedBumpBySimIndex.length);
   clearForTesting();
 }
 

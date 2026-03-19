@@ -109,7 +109,7 @@ describe('feeding and reward flow', () => {
         if (s.fly.feeding) {
           sawFeedingTrue = true;
         }
-        if (s.eatenFoodId === source.id) {
+        if (s.eatenFoodIds?.includes(source.id)) {
           sawEatenFood = true;
           break;
         }

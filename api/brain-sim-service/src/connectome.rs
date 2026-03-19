@@ -1,4 +1,8 @@
 //! Load connectome from file at startup; compute neuron_ids, connections, sensory/motor indices.
+//!
+//! **Full connectome:** We load ALL connections in the file. There is no filtering by neuron type,
+//! region, or edge count. The connectome file (parquet or JSON) must contain the complete
+//! fly-brain graph (e.g. FlyWire / full fly brain) so that every synapse is simulated.
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs::File;
@@ -61,10 +65,18 @@ struct ParsedConnectome {
 
 pub struct ConnectomeTemplate {
     pub neuron_ids: Vec<String>,
+    /// id -> index for fast lookup (forced spikes, activity).
+    pub neuron_index_by_id: HashMap<String, usize>,
     pub viewer_subset_indices: Vec<u32>,
+    /// is_epg[i] = 1 if neuron i is in viewer subset (used for recurrence boost).
+    pub is_epg: Vec<u8>,
     pub edges_pre: Vec<u32>,
     pub edges_post: Vec<u32>,
     pub edges_weight: Vec<f32>,
+    /// CSR by pre: out_offsets[pre]..out_offsets[pre+1] indexes into out_post/out_weight for spike-driven recurrent.
+    pub out_offsets: Vec<u32>,
+    pub out_post: Vec<u32>,
+    pub out_weight: Vec<f32>,
     pub sensory_indices: Vec<u32>,
     pub sensory_left_indices: Vec<u32>,
     pub sensory_right_indices: Vec<u32>,
@@ -241,11 +253,14 @@ fn field_to_weight(field: &Field) -> Option<f64> {
 }
 
 fn pick_column<'a>(names: &'a [String], candidates: &[&str]) -> Option<&'a String> {
-    let normalized_candidates: Vec<String> = candidates.iter().map(|c| normalize_name(c)).collect();
-    names.iter().find(|name| {
-        let n = normalize_name(name);
-        normalized_candidates.iter().any(|cand| cand == &n)
-    })
+    // Candidate priority matters (e.g. prefer "Excitatory x Connectivity" over "Connectivity").
+    for cand in candidates {
+        let cand_norm = normalize_name(cand);
+        if let Some(found) = names.iter().find(|name| normalize_name(name) == cand_norm) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 fn load_connectome_data(path: &Path) -> Result<ParsedConnectome, Box<dyn std::error::Error + Send + Sync>> {
@@ -322,6 +337,7 @@ fn load_connectome_parquet(path: &Path) -> Result<ParsedConnectome, Box<dyn std:
     let mut ids = Vec::<String>::new();
     let mut seen = HashMap::<String, ()>::new();
     let mut connections = Vec::<(String, String, Option<f64>)>::new();
+    // Load every row (full connectome; no edge filtering).
     let mut iter = reader.get_row_iter(None)?;
     while let Some(row) = iter.next() {
         let row = row?;
@@ -448,21 +464,52 @@ fn build_template(
     sensory_target.sort_unstable();
     sensory_target.dedup();
 
-    let viewer_subset_indices = load_epg_viewer_indices(path, &id_to_idx)
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| compute_viewer_subset_indices(&neuron_ids, viewer_subset_limit()));
+    let loaded_epg_indices = load_epg_viewer_indices(path, &id_to_idx).filter(|v| !v.is_empty());
+    let viewer_subset_indices = match loaded_epg_indices.as_ref() {
+        Some(v) => v.clone(),
+        None => compute_viewer_subset_indices(&neuron_ids, viewer_subset_limit()),
+    };
     let mut edges_pre = Vec::with_capacity(data.connections.len());
     let mut edges_post = Vec::with_capacity(data.connections.len());
     let mut edges_weight = Vec::with_capacity(data.connections.len());
+    // Include every connection (full connectome). Only skip invalid weight (non-finite or zero).
+    // Store raw synapse count from connectome (Excitatory x Connectivity); W_SYN applied in sim step.
     for (pre_id, post_id, w_opt) in &data.connections {
         if let (Some(&pre), Some(&post)) = (id_to_idx.get(pre_id), id_to_idx.get(post_id)) {
-            let w = w_opt.unwrap_or(0.0);
-            if !w.is_finite() {
+            let count = w_opt.unwrap_or(1.0);
+            // Keep signed weights (inhibitory edges are negative in Excitatory x Connectivity).
+            if !count.is_finite() || count == 0.0 {
                 continue;
             }
             edges_pre.push(pre);
             edges_post.push(post);
-            edges_weight.push(w as f32);
+            edges_weight.push(count as f32);
+        }
+    }
+
+    let n = neuron_ids.len();
+    let num_edges = edges_pre.len();
+    // Build CSR by pre for spike-driven recurrent: only iterate edges from spiking neurons.
+    let mut out_degree: Vec<u32> = vec![0; n];
+    for &pre in &edges_pre {
+        if (pre as usize) < n {
+            out_degree[pre as usize] += 1;
+        }
+    }
+    let mut out_offsets: Vec<u32> = vec![0; n + 1];
+    for i in 0..n {
+        out_offsets[i + 1] = out_offsets[i] + out_degree[i];
+    }
+    let mut next_index = out_offsets.clone();
+    let mut out_post: Vec<u32> = vec![0; num_edges];
+    let mut out_weight: Vec<f32> = vec![0.0; num_edges];
+    for e in 0..num_edges {
+        let pre = edges_pre[e] as usize;
+        if pre < n {
+            let pos = next_index[pre] as usize;
+            next_index[pre] += 1;
+            out_post[pos] = edges_post[e];
+            out_weight[pos] = edges_weight[e];
         }
     }
 
@@ -470,12 +517,30 @@ fn build_template(
     let pre_motor_right = motor_right;
     let pre_motor_unknown = motor_unknown;
 
+    let neuron_index_by_id: HashMap<String, usize> = neuron_ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| (id.clone(), i))
+        .collect();
+    let mut is_epg = vec![0u8; n];
+    for &idx in &viewer_subset_indices {
+        let i = idx as usize;
+        if i < n {
+            is_epg[i] = 1;
+        }
+    }
+
     Ok(ConnectomeTemplate {
         neuron_ids,
+        neuron_index_by_id,
         viewer_subset_indices,
+        is_epg,
         edges_pre,
         edges_post,
         edges_weight,
+        out_offsets,
+        out_post,
+        out_weight,
         sensory_indices: sensory_target,
         sensory_left_indices,
         sensory_right_indices,

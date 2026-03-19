@@ -7,12 +7,17 @@ use brain_sim_service::feeding::{
 };
 use brain_sim_service::sim::{BrainSim, FlyInput, SourceInput};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+
+/// Default scale for ER1/ER2/ER3 -> EPG inhibitory weights (0.5 = half). NEUROSIM_ER1_EPG_INHIBITION_SCALE, NEUROSIM_ER2_ER3w_EPG_INHIBITION_SCALE override per type; NEUROSIM_ER123_EPG_INHIBITION_SCALE = default for ER1 and other ER.
+const ER123_EPG_INHIBITION_SCALE_DEFAULT: f32 = 0.5;
+/// ER2/ER3w scale: default 0.5 (same as others); set NEUROSIM_ER2_ER3w_EPG_INHIBITION_SCALE=0.3 for 30%.
+const ER2_ER3W_EPG_INHIBITION_SCALE_DEFAULT: f32 = 0.5;
 
 static NEXT_CONN_ID: AtomicU64 = AtomicU64::new(1);
 static GLOBAL_REQ_ID: AtomicU64 = AtomicU64::new(1);
@@ -20,36 +25,188 @@ static STEP_COUNT: AtomicU64 = AtomicU64::new(0);
 const MAX_FORCED_SPIKES: usize = 4096;
 const MAX_FORCED_SPIKE_ID_LEN: usize = 128;
 
-fn main() {
-    let default_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+/// Full fly-brain connectome: path to parquet with ALL connections (no subset).
+/// Every row in the file is loaded and simulated; we do not filter by type or region.
+fn connectome_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|p| p.parent())
-        .and_then(|root| {
-            let parquet = root.join("data/raw/2025_Connectivity_783.parquet");
-            if parquet.exists() {
-                return Some(parquet);
+        .map(|root| root.join("data/raw/2025_Connectivity_783.parquet"))
+        .expect("repo layout: api/brain-sim-service under repo root")
+}
+
+/// 16-bin order: L5,R4,L6,R3,L7,R2,L8,R1, L1,R8,L2,R7,L3,R6,L4,R5 (matches frontend compass).
+fn epg_side_tile_to_bin_16(side: &str, tile: u8) -> Option<u8> {
+    if tile > 7 {
+        return None;
+    }
+    let t = tile as usize;
+    let is_left = side.eq_ignore_ascii_case("left");
+    let is_right = side.eq_ignore_ascii_case("right");
+    if is_left {
+        Some([8, 10, 12, 14, 0, 2, 4, 6][t])
+    } else if is_right {
+        Some([7, 5, 3, 1, 15, 13, 11, 9][t])
+    } else {
+        None
+    }
+}
+
+#[derive(Deserialize)]
+struct EpgTileMapEntry {
+    root_id: String,
+    side: Option<String>,
+    tile_index_0_7: Option<u8>,
+}
+
+#[derive(Deserialize)]
+struct EpgTileMap {
+    entries: Vec<EpgTileMapEntry>,
+}
+
+fn load_epg_id_to_bin() -> HashMap<String, u8> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(root) = Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(|p| p.parent()) {
+        candidates.push(root.join("data/epg-tile-map.json"));
+        candidates.push(root.join("api/data/epg-tile-map.json"));
+        candidates.push(root.join("world/public/epg-tile-map.json"));
+    }
+    let path = match candidates.into_iter().find(|p| p.exists()) {
+        Some(p) => p,
+        None => return HashMap::new(),
+    };
+    let txt = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(_) => return HashMap::new(),
+    };
+    let map: EpgTileMap = match serde_json::from_str(&txt) {
+        Ok(m) => m,
+        Err(_) => return HashMap::new(),
+    };
+    let mut out = HashMap::new();
+    for e in map.entries {
+        let (Some(side), Some(tile)) = (e.side.as_deref(), e.tile_index_0_7) else {
+            continue;
+        };
+        let Some(bin) = epg_side_tile_to_bin_16(side, tile) else {
+            continue;
+        };
+        out.insert(e.root_id, bin);
+    }
+    out
+}
+
+/// Fill 16 EPG bins from activity_sparse and return (bump_angle_deg, normalized bins 0..1 for frontend).
+fn compute_bump_and_epg_bins(
+    activity_sparse: &HashMap<String, f64>,
+    epg_id_to_bin: &HashMap<String, u8>,
+) -> (Option<f64>, [f64; 16]) {
+    let mut bins: [f64; 16] = [0.0; 16];
+    if epg_id_to_bin.is_empty() {
+        return (None, bins);
+    }
+    for (id, &w) in activity_sparse {
+        if let Some(&bin) = epg_id_to_bin.get(id) {
+            if (bin as usize) < 16 {
+                bins[bin as usize] += w;
             }
-            let aligned = root.join("data/connectome-subset-aligned.json");
-            if aligned.exists() {
-                return Some(aligned);
-            }
-            None
-        })
-        .and_then(|p| p.canonicalize().ok())
-        .map(|p| p.to_string_lossy().into_owned());
-    let connectome_path = std::env::var("NEUROSIM_CONNECTOME_PATH")
-        .ok()
-        .or(default_path)
-        .expect("NEUROSIM_CONNECTOME_PATH unset and no default data/connectome-subset.json");
-    eprintln!("[brain-service] loading connectome from {}", connectome_path);
-    let template = connectome::load_connectome(Path::new(&connectome_path))
+        }
+    }
+    let bin_angle_deg = |bin: usize| 90.0 - (bin as f64) * 22.5;
+    let mut sum_cos = 0.0f64;
+    let mut sum_sin = 0.0f64;
+    for (bin, &w) in bins.iter().enumerate() {
+        if w > 0.0 {
+            let rad = bin_angle_deg(bin).to_radians();
+            sum_cos += w * rad.cos();
+            sum_sin += w * rad.sin();
+        }
+    }
+    let bump_deg = if sum_cos.abs() < 1e-10 && sum_sin.abs() < 1e-10 {
+        None
+    } else {
+        Some(sum_sin.atan2(sum_cos).to_degrees())
+    };
+    let max_bin = bins.iter().cloned().fold(0.0f64, f64::max);
+    if max_bin > 0.0 {
+        for v in &mut bins {
+            *v /= max_bin;
+        }
+    }
+    (bump_deg, bins)
+}
+
+fn main() {
+    let connectome_path = connectome_path();
+    if !connectome_path.exists() {
+        eprintln!(
+            "[brain-service] connectome not found: {} (run from repo root or set data/raw/2025_Connectivity_783.parquet)",
+            connectome_path.display()
+        );
+        std::process::exit(1);
+    }
+    let connectome_path = match connectome_path.canonicalize() {
+        Ok(p) => p,
+        Err(_) => connectome_path,
+    };
+    eprintln!("[brain-service] loading connectome from {}", connectome_path.display());
+    let t_load_start = Instant::now();
+    let mut template = connectome::load_connectome(&connectome_path)
         .expect("load connectome");
+    let load_sec = t_load_start.elapsed().as_secs_f64();
     eprintln!(
-        "[brain-service] connectome loaded: {} neurons, {} connections, viewer_subset={}",
+        "[brain-service] connectome loaded in {:.2}s: {} neurons, {} connections, viewer_subset={}",
+        load_sec,
         template.neuron_ids.len(),
         template.edges_pre.len(),
         template.viewer_subset_indices.len()
     );
+
+    let classification_path = connectome_path
+        .parent()
+        .map(|p| p.join("classification.csv"))
+        .filter(|p| p.exists())
+        .or_else(|| {
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .and_then(|p| p.parent())
+                .map(|r| r.join("data/raw/classification.csv"))
+                .filter(|p| p.exists())
+        });
+    let er1_scale = std::env::var("NEUROSIM_ER1_EPG_INHIBITION_SCALE")
+        .ok()
+        .and_then(|s| s.parse::<f32>().ok())
+        .filter(|&v| v.is_finite() && v > 0.0 && v <= 1.0)
+        .unwrap_or(ER123_EPG_INHIBITION_SCALE_DEFAULT);
+    let er2_er3w_scale = std::env::var("NEUROSIM_ER2_ER3w_EPG_INHIBITION_SCALE")
+        .ok()
+        .and_then(|s| s.parse::<f32>().ok())
+        .filter(|&v| v.is_finite() && v > 0.0 && v <= 1.0)
+        .unwrap_or(ER2_ER3W_EPG_INHIBITION_SCALE_DEFAULT);
+    let other_er_scale = std::env::var("NEUROSIM_ER123_EPG_INHIBITION_SCALE")
+        .ok()
+        .and_then(|s| s.parse::<f32>().ok())
+        .filter(|&v| v.is_finite() && v > 0.0 && v <= 1.0)
+        .unwrap_or(ER123_EPG_INHIBITION_SCALE_DEFAULT);
+    if let Some(ref class_path) = classification_path {
+        if let Ok((er_type_map, epg)) = load_er_type_map_and_epg(class_path) {
+            let scaled = apply_er_epg_inhibition_scale_per_type(
+                &mut template,
+                &er_type_map,
+                &epg,
+                er1_scale,
+                er2_er3w_scale,
+                other_er_scale,
+            );
+            eprintln!(
+                "[brain-service] ER->EPG inhibition: ER1={}, ER2/ER3w={}, other={} (edges scaled: {})",
+                er1_scale, er2_er3w_scale, other_er_scale, scaled
+            );
+            if let Err(e) = apply_pen_a_right_pathway_balance(&mut template, class_path, &epg) {
+                eprintln!("[brain-service] PEN_a right pathway balance skipped: {}", e);
+            }
+        }
+    }
 
     let socket_path = std::env::var("NEUROSIM_BRAIN_SOCKET")
         .unwrap_or_else(|_| "/tmp/neurosim-brain.sock".to_string());
@@ -64,6 +221,32 @@ fn main() {
     let next_id: Mutex<u32> = Mutex::new(0);
     let template = Arc::new(template);
 
+    let w_syn = std::env::var("NEUROSIM_W_SYN")
+        .ok()
+        .and_then(|s| s.parse::<f32>().ok())
+        .filter(|&v| v.is_finite() && v > 0.0)
+        .unwrap_or_else(|| brain_sim_service::model_constants::W_SYN);
+    let epg_boost_live = std::env::var("NEUROSIM_EPG_RECURRENCE_BOOST")
+        .ok()
+        .and_then(|s| s.parse::<f32>().ok())
+        .filter(|&v| v.is_finite() && v >= 0.0)
+        .unwrap_or_else(|| brain_sim_service::model_constants::EPG_RECURRENCE_BOOST);
+
+    // Live visualization: extra sim thread that streams EPG ticks. Disabled by default to save resources.
+    let live_enabled = std::env::var("NEUROSIM_LIVE_ENABLED")
+        .as_ref()
+        .map(|s| s == "1" || s.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let continuous_live: Option<Arc<ContinuousLiveState>> = if live_enabled {
+        classification_path
+            .as_ref()
+            .and_then(|cp| spawn_continuous_live_thread(template.clone(), cp, w_syn, epg_boost_live))
+    } else {
+        eprintln!("[brain-service] continuous live disabled (set NEUROSIM_LIVE_ENABLED=1 to enable)");
+        None
+    };
+    let epg_id_to_bin = load_epg_id_to_bin();
+
     for stream in listener.incoming() {
         if let Ok(mut s) = stream {
             let conn_id = NEXT_CONN_ID.fetch_add(1, Ordering::Relaxed);
@@ -72,7 +255,16 @@ fn main() {
                 conn_id,
                 std::process::id()
             );
-            let _ = handle(&mut s, &sims, &food_state, &next_id, template.clone(), conn_id);
+            let _ = handle(
+                &mut s,
+                &sims,
+                &food_state,
+                &next_id,
+                template.clone(),
+                conn_id,
+                continuous_live.clone(),
+                &epg_id_to_bin,
+            );
             eprintln!(
                 "[brain-service] conn_close conn_id={} pid={}",
                 conn_id,
@@ -82,6 +274,213 @@ fn main() {
     }
 }
 
+/// Load classification CSV; return (root_id -> hemibrain_type for all ER neurons, EPG root_id set).
+fn load_er_type_map_and_epg(path: &Path) -> Result<(HashMap<String, String>, HashSet<String>), std::io::Error> {
+    let mut er_type_map = HashMap::new();
+    let mut epg = HashSet::new();
+    let mut rdr = csv::Reader::from_path(path)?;
+    let headers = rdr.headers().map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    let root_idx = headers.iter().position(|h| h.trim().eq_ignore_ascii_case("root_id")).unwrap_or(0);
+    let hemibrain_idx = headers.iter().position(|h| h.trim().eq_ignore_ascii_case("hemibrain_type")).unwrap_or(6);
+    for row in rdr.records() {
+        let row = row.map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let root_id = row.get(root_idx).map(|s| s.trim().to_string()).unwrap_or_default();
+        let hemibrain = row.get(hemibrain_idx).map(|s| s.trim().to_string()).unwrap_or_default();
+        if root_id.is_empty() {
+            continue;
+        }
+        if hemibrain.starts_with("ER") {
+            er_type_map.insert(root_id, hemibrain);
+        } else if hemibrain.contains("EPG") && hemibrain != "EPGt" {
+            epg.insert(root_id);
+        }
+    }
+    Ok((er_type_map, epg))
+}
+
+/// Scale ER->EPG inhibitory weights per ER type: ER1=er1_scale, ER2/ER3w=er2_er3w_scale, others=other_scale. Sync out_weight. Returns edges scaled.
+fn apply_er_epg_inhibition_scale_per_type(
+    template: &mut connectome::ConnectomeTemplate,
+    er_type_map: &HashMap<String, String>,
+    epg: &HashSet<String>,
+    er1_scale: f32,
+    er2_er3w_scale: f32,
+    other_scale: f32,
+) -> usize {
+    let mut scaled = 0usize;
+    for e in 0..template.edges_pre.len() {
+        let pre_idx = template.edges_pre[e] as usize;
+        let post_idx = template.edges_post[e] as usize;
+        let pre_id = template.neuron_ids.get(pre_idx).map(String::as_str).unwrap_or("");
+        let post_id = template.neuron_ids.get(post_idx).map(String::as_str).unwrap_or("");
+        if !epg.contains(post_id) || template.edges_weight[e] >= 0.0 {
+            continue;
+        }
+        let scale = match er_type_map.get(pre_id).map(String::as_str) {
+            Some("ER1") => er1_scale,
+            Some("ER2") | Some("ER3w") => er2_er3w_scale,
+            Some(_) => other_scale,
+            None => continue,
+        };
+        template.edges_weight[e] *= scale;
+        scaled += 1;
+    }
+    rebuild_csr_out(template);
+    scaled
+}
+
+/// Rebuild CSR `out_weight` / `out_post` from `edges_weight` after edge edits.
+fn rebuild_csr_out(template: &mut connectome::ConnectomeTemplate) {
+    let n = template.neuron_ids.len();
+    let num_edges = template.edges_pre.len();
+    let mut next = template.out_offsets.clone();
+    for e in 0..num_edges {
+        let pre = template.edges_pre[e] as usize;
+        if pre < n {
+            let pos = next[pre] as usize;
+            next[pre] += 1;
+            template.out_weight[pos] = template.edges_weight[e];
+        }
+    }
+}
+
+/// PEN_a left/right + all ER root_ids (hemibrain starts with ER).
+fn load_pen_a_sides_and_er_ids(
+    path: &Path,
+) -> Result<(HashSet<String>, HashSet<String>, HashSet<String>), std::io::Error> {
+    let mut pen_left = HashSet::new();
+    let mut pen_right = HashSet::new();
+    let mut er_ids = HashSet::new();
+    let mut rdr = csv::Reader::from_path(path)?;
+    let headers = rdr.headers().map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    let root_idx = headers.iter().position(|h| h.trim().eq_ignore_ascii_case("root_id")).unwrap_or(0);
+    let hemibrain_idx = headers.iter().position(|h| h.trim().eq_ignore_ascii_case("hemibrain_type")).unwrap_or(6);
+    let side_idx = headers.iter().position(|h| h.trim().eq_ignore_ascii_case("side")).unwrap_or(8);
+    for row in rdr.records() {
+        let row = row.map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let root_id = row.get(root_idx).map(|s| s.trim().to_string()).unwrap_or_default();
+        if root_id.is_empty() {
+            continue;
+        }
+        let hemibrain = row.get(hemibrain_idx).map(|s| s.trim().to_string()).unwrap_or_default();
+        if hemibrain.starts_with("ER") {
+            er_ids.insert(root_id.clone());
+        }
+        if hemibrain.starts_with("PEN_a") {
+            let side = row.get(side_idx).map(|s| s.trim().to_lowercase()).unwrap_or_default();
+            if side == "left" {
+                pen_left.insert(root_id);
+            } else if side == "right" {
+                pen_right.insert(root_id);
+            }
+        }
+    }
+    Ok((pen_left, pen_right, er_ids))
+}
+
+/// Boost right PEN_a -> EPG excitation (and optionally weaken right -> ER / direct inh to EPG).
+///
+/// - `NEUROSIM_PEN_A_RIGHT_EPG_MATCH_LEFT=1`: scale right PEN_a->EPG excitatory weights so total
+///   matches left PEN_a->EPG excitatory total (cap 5×).
+/// - Else `NEUROSIM_PEN_A_RIGHT_EPG_EXC_SCALE` (default 1.0): multiply positive right PEN_a->EPG.
+/// - `NEUROSIM_PEN_A_RIGHT_EPG_INH_SCALE` (default 1.0): multiply negative right PEN_a->EPG.
+/// - `NEUROSIM_PEN_A_RIGHT_TO_ER_SCALE` (default 1.0): multiply all right PEN_a->ER edges.
+fn apply_pen_a_right_pathway_balance(
+    template: &mut connectome::ConnectomeTemplate,
+    class_path: &Path,
+    epg: &HashSet<String>,
+) -> Result<(), std::io::Error> {
+    let match_left = std::env::var("NEUROSIM_PEN_A_RIGHT_EPG_MATCH_LEFT")
+        .map(|s| {
+            let t = s.trim();
+            t == "1" || t.eq_ignore_ascii_case("true") || t.eq_ignore_ascii_case("yes")
+        })
+        .unwrap_or(false);
+    let manual_exc = std::env::var("NEUROSIM_PEN_A_RIGHT_EPG_EXC_SCALE")
+        .ok()
+        .and_then(|s| s.parse::<f32>().ok())
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .unwrap_or(1.0);
+    let inh_scale = std::env::var("NEUROSIM_PEN_A_RIGHT_EPG_INH_SCALE")
+        .ok()
+        .and_then(|s| s.parse::<f32>().ok())
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .unwrap_or(1.0);
+    let er_scale = std::env::var("NEUROSIM_PEN_A_RIGHT_TO_ER_SCALE")
+        .ok()
+        .and_then(|s| s.parse::<f32>().ok())
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .unwrap_or(1.0);
+
+    let (pen_left, pen_right, er_ids) = load_pen_a_sides_and_er_ids(class_path)?;
+    if pen_right.is_empty() {
+        return Ok(());
+    }
+
+    let mut left_exc: f64 = 0.0;
+    let mut right_exc: f64 = 0.0;
+    if match_left {
+        for e in 0..template.edges_pre.len() {
+            let pre_idx = template.edges_pre[e] as usize;
+            let post_idx = template.edges_post[e] as usize;
+            let pre_id = template.neuron_ids.get(pre_idx).map(String::as_str).unwrap_or("");
+            let post_id = template.neuron_ids.get(post_idx).map(String::as_str).unwrap_or("");
+            let w = template.edges_weight[e];
+            if w <= 0.0 || !epg.contains(post_id) {
+                continue;
+            }
+            if pen_left.contains(pre_id) {
+                left_exc += w as f64;
+            }
+            if pen_right.contains(pre_id) {
+                right_exc += w as f64;
+            }
+        }
+    }
+
+    let exc_scale = if match_left {
+        if right_exc > 1e-5 {
+            ((left_exc / right_exc) as f32).clamp(1.0, 5.0)
+        } else {
+            5.0f32
+        }
+    } else {
+        manual_exc
+    };
+
+    let touch_epg_exc = (exc_scale - 1.0).abs() > 1e-6;
+    let touch_epg_inh = (inh_scale - 1.0).abs() > 1e-6;
+    let touch_er = (er_scale - 1.0).abs() > 1e-6;
+    if !touch_epg_exc && !touch_epg_inh && !touch_er {
+        return Ok(());
+    }
+
+    for e in 0..template.edges_pre.len() {
+        let pre_idx = template.edges_pre[e] as usize;
+        let post_idx = template.edges_post[e] as usize;
+        let pre_id = template.neuron_ids.get(pre_idx).map(String::as_str).unwrap_or("");
+        if !pen_right.contains(pre_id) {
+            continue;
+        }
+        let post_id = template.neuron_ids.get(post_idx).map(String::as_str).unwrap_or("");
+        let w = template.edges_weight[e];
+        if epg.contains(post_id) {
+            if w > 0.0 && touch_epg_exc {
+                template.edges_weight[e] *= exc_scale;
+            } else if w < 0.0 && touch_epg_inh {
+                template.edges_weight[e] *= inh_scale;
+            }
+        } else if er_ids.contains(post_id) && touch_er {
+            template.edges_weight[e] *= er_scale;
+        }
+    }
+    rebuild_csr_out(template);
+    eprintln!(
+        "[brain-service] PEN_a right: EPG exc ×{:.3} (match_left={}), EPG inh ×{:.3}, ->ER ×{:.3}",
+        exc_scale, match_left, inh_scale, er_scale
+    );
+    Ok(())
+}
 
 #[derive(Deserialize)]
 struct StepParams {
@@ -89,6 +488,9 @@ struct StepParams {
     dt: f64,
     include_activity: Option<bool>,
     olfactory_baseline_rate_hz: Option<f64>,
+    /// When present and non-empty: use these PEN_a rates for this step and skip olfactory/sensory drive.
+    #[serde(default)]
+    rates_by_id: Option<HashMap<String, f64>>,
     #[serde(default)]
     forced_spikes: Vec<String>,
     fly: FlyJson,
@@ -122,7 +524,7 @@ struct SourceJson {
     radius: f64,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct FlyRespJson {
     x: f64,
     y: f64,
@@ -136,6 +538,36 @@ struct FlyRespJson {
     rest_time_left: f64,
     rest_duration: f64,
     feeding: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+struct CreateConnection {
+    pre: String,
+    post: String,
+    #[serde(default)]
+    weight: Option<f64>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreateParams {
+    #[serde(default)]
+    rng_seed: Option<u64>,
+    /// If set, overrides NEUROSIM_EPG_RECURRENCE_BOOST for this sim only.
+    #[serde(default)]
+    epg_recurrence_boost: Option<f32>,
+    #[serde(default)]
+    neuron_ids: Option<Vec<String>>,
+    #[serde(default)]
+    connections: Option<Vec<CreateConnection>>,
+    #[serde(default)]
+    sensory_indices: Option<Vec<u32>>,
+    #[serde(default)]
+    motor_left: Option<Vec<u32>>,
+    #[serde(default)]
+    motor_right: Option<Vec<u32>>,
+    #[serde(default)]
+    motor_unknown: Option<Vec<u32>>,
 }
 
 #[derive(Serialize)]
@@ -160,6 +592,10 @@ struct StepResp {
     fly: FlyRespJson,
     eaten_food_id: Option<String>,
     feeding_sugar_taken: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bump_angle_deg: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    epg_bins: Option<Vec<f64>>,
     compute_ms: f64,
     kernel_ms: f64,
     recurrent_ms: f64,
@@ -195,15 +631,43 @@ struct StepManyItemResp {
 }
 
 #[derive(Deserialize)]
+struct ForcedSpikeScheduleEntry {
+    from_tick: u32,
+    to_tick: u32,
+    neuron_ids: Vec<String>,
+    rate_hz: f64,
+}
+
+#[derive(Deserialize)]
+struct StimPhase {
+    num_steps: u32,
+    #[serde(default)]
+    stim_rates_by_id: HashMap<String, f64>,
+}
+
+#[derive(Deserialize)]
 struct RunStepsParams {
     sim_id: u32,
     num_steps: u32,
     dt: f64,
     #[serde(default)]
     stim_rates_by_id: HashMap<String, f64>,
+    /// If non-empty, run these phases back-to-back in one continuous sim (same fly + RNG stream).
+    /// Omitted or empty uses legacy single `stim_rates_by_id` for all `num_steps`.
+    #[serde(default)]
+    stim_phases: Option<Vec<StimPhase>>,
     count_neuron_ids: Option<Vec<String>>,
     #[serde(default)]
     record_ticks: bool,
+    #[serde(default)]
+    forced_spike_schedule: Option<Vec<ForcedSpikeScheduleEntry>>,
+    /// When set with fly/sources, use as initial state and return final state (one round-trip for world loop).
+    #[serde(default)]
+    return_final_state: bool,
+    #[serde(default)]
+    fly: Option<FlyJson>,
+    #[serde(default)]
+    sources: Option<Vec<SourceJson>>,
 }
 
 #[derive(Serialize)]
@@ -218,20 +682,30 @@ struct RunStepsResp {
     steps_done: u32,
     duration_sec: f64,
     wall_sec: f64,
+    /// Server-side time for the step loop only (ms).
+    steps_loop_ms: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     spike_counts: Option<HashMap<String, u64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     ticks: Option<Vec<ReplayTickResp>>,
-}
-
-/// xorshift64 for Poisson sampling in run_steps (no rand dep).
-fn xorshift64(state: &mut u64) -> f64 {
-    let mut x = *state;
-    x ^= x << 13;
-    x ^= x >> 7;
-    x ^= x << 17;
-    *state = x;
-    (x as f64) / (u64::MAX as f64)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fly: Option<FlyRespJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    activity_sparse: Option<HashMap<String, f64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bump_angle_deg: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    epg_bins: Option<Vec<f64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    motor_left: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    motor_right: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    motor_fwd: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    eaten_food_ids: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    feeding_sugar_taken: Option<f64>,
 }
 
 fn apply_feeding_tick(
@@ -277,6 +751,207 @@ struct ErrResp {
     error: String,
 }
 
+/// Ring buffer of recent EPG-only ticks from the single continuous live sim.
+const LIVE_TICK_BUFFER_CAP: usize = 400_000;
+
+#[derive(Clone, Serialize)]
+struct LiveTickRecord {
+    tick: u32,
+    time_sec: f64,
+    spikes: Vec<String>,
+}
+
+struct ContinuousLiveState {
+    pen_left_hz_bits: AtomicU64,
+    pen_right_hz_bits: AtomicU64,
+    /// When set, overrides L/R: use this map for stim instead of building from left_hz/right_hz.
+    custom_rates: Mutex<Option<HashMap<String, f64>>>,
+    tick_buffer: Mutex<VecDeque<LiveTickRecord>>,
+    latest_tick: AtomicU32,
+    dt_sec: f64,
+}
+
+fn spawn_continuous_live_thread(
+    template: Arc<connectome::ConnectomeTemplate>,
+    class_path: &Path,
+    w_syn: f32,
+    epg_recurrence_boost: f32,
+) -> Option<Arc<ContinuousLiveState>> {
+    let (pen_left, pen_right, _) = load_pen_a_sides_and_er_ids(class_path).ok()?;
+    if pen_left.is_empty() && pen_right.is_empty() {
+        eprintln!("[brain-service] continuous live: no PEN_a in classification, skipping");
+        return None;
+    }
+    let mut pen_left: Vec<String> = pen_left.into_iter().collect();
+    let mut pen_right: Vec<String> = pen_right.into_iter().collect();
+    pen_left.sort();
+    pen_right.sort();
+    let epg_ids = load_er_type_map_and_epg(class_path)
+        .ok()
+        .map(|(_, e)| e)
+        .unwrap_or_default();
+    let dt = std::env::var("NEUROSIM_LIVE_DT_SEC")
+        .ok()
+        .and_then(|s| s.parse::<f64>().ok())
+        .filter(|&v| v.is_finite() && v > 0.0)
+        .unwrap_or(0.0001);
+    let state = Arc::new(ContinuousLiveState {
+        pen_left_hz_bits: AtomicU64::new(0.0f64.to_bits()),
+        pen_right_hz_bits: AtomicU64::new(0.0f64.to_bits()),
+        custom_rates: Mutex::new(None),
+        tick_buffer: Mutex::new(VecDeque::with_capacity(8192)),
+        latest_tick: AtomicU32::new(0),
+        dt_sec: dt,
+    });
+    let st = state.clone();
+    let tpl = template.clone();
+    let n_left = pen_left.len();
+    let n_right = pen_right.len();
+    std::thread::Builder::new()
+        .name("neurosim-continuous-live".into())
+        .spawn(move || {
+            run_continuous_live_loop(tpl, pen_left, pen_right, epg_ids, w_syn, epg_recurrence_boost, dt, st);
+        })
+        .ok()?;
+    eprintln!(
+        "[brain-service] continuous live sim started (PEN_a L={} R={}, dt={}s, cap≈{} ticks)",
+        n_left,
+        n_right,
+        dt,
+        LIVE_TICK_BUFFER_CAP
+    );
+    Some(state)
+}
+
+fn run_continuous_live_loop(
+    template: Arc<connectome::ConnectomeTemplate>,
+    pen_left: Vec<String>,
+    pen_right: Vec<String>,
+    epg_ids: HashSet<String>,
+    w_syn: f32,
+    epg_recurrence_boost: f32,
+    dt: f64,
+    state: Arc<ContinuousLiveState>,
+) {
+    let mut sim = BrainSim::from_template(template, w_syn, epg_recurrence_boost);
+    let seed: u64 = std::env::var("NEUROSIM_LIVE_RNG_SEED")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(17290319);
+    sim.set_rng_seed(seed);
+    let mut fly = FlyInput {
+        x: 0.0,
+        y: 0.0,
+        z: 1.0,
+        heading: 0.0,
+        t: 0.0,
+        hunger: 100.0,
+        health: 100.0,
+        rest_time_left: 0.0,
+        dead: false,
+    };
+    let mut tick: u32 = 0;
+    let mut stim: HashMap<String, f64> = HashMap::new();
+    let live_no_sleep = std::env::var("NEUROSIM_LIVE_NO_SLEEP")
+        .ok()
+        .map(|s| s == "1" || s.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let target_interval = std::time::Duration::from_secs_f64(dt.max(0.0));
+    eprintln!(
+        "[brain-service] continuous live stepping (seed={}, EPG filter {} ids)",
+        seed,
+        epg_ids.len()
+    );
+    loop {
+        let tick_start = Instant::now();
+        let use_custom = {
+            let guard = state.custom_rates.lock().unwrap();
+            if let Some(ref map) = *guard {
+                if !map.is_empty() {
+                    stim.clear();
+                    for (id, hz) in map.iter() {
+                        if hz.is_finite() && *hz > 0.0 {
+                            stim.insert(id.clone(), *hz);
+                        }
+                    }
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        };
+        if !use_custom {
+            let l = f64::from_bits(state.pen_left_hz_bits.load(Ordering::Relaxed));
+            let r = f64::from_bits(state.pen_right_hz_bits.load(Ordering::Relaxed));
+            stim.clear();
+            if l.is_finite() && l > 0.0 {
+                for id in &pen_left {
+                    stim.insert(id.clone(), l);
+                }
+            }
+            if r.is_finite() && r > 0.0 {
+                for id in &pen_right {
+                    stim.insert(id.clone(), r);
+                }
+            }
+        }
+        let skip_olfactory = !stim.is_empty();
+        let (_a, _sparse, spike_ids, _, _, _, _, _, _, _, _, _, _, fly_out) = sim.step_with_options(
+            dt,
+            fly,
+            Vec::new(),
+            true,
+            skip_olfactory,
+            None,
+            Vec::new(),
+            if stim.is_empty() {
+                None
+            } else {
+                Some(&stim)
+            },
+        );
+        fly = FlyInput {
+            x: fly_out.x,
+            y: fly_out.y,
+            z: fly_out.z,
+            heading: fly_out.heading,
+            t: fly_out.t,
+            hunger: fly_out.hunger,
+            health: fly_out.health,
+            rest_time_left: fly_out.rest_time_left,
+            dead: fly_out.dead,
+        };
+        tick = tick.wrapping_add(1);
+        if tick == 0 {
+            continue;
+        }
+        let mut epg_spikes: Vec<String> = spike_ids
+            .into_iter()
+            .filter(|id| epg_ids.contains(id))
+            .collect();
+        epg_spikes.sort();
+        let rec = LiveTickRecord {
+            tick,
+            time_sec: tick as f64 * dt,
+            spikes: epg_spikes,
+        };
+        state.latest_tick.store(tick, Ordering::Release);
+        let mut buf = state.tick_buffer.lock().unwrap();
+        buf.push_back(rec);
+        while buf.len() > LIVE_TICK_BUFFER_CAP {
+            buf.pop_front();
+        }
+        if !live_no_sleep && target_interval > std::time::Duration::ZERO {
+            let elapsed = tick_start.elapsed();
+            if elapsed < target_interval {
+                std::thread::sleep(target_interval - elapsed);
+            }
+        }
+    }
+}
+
 fn validate_forced_spikes(forced_spikes: &[String]) -> Result<(), String> {
     if forced_spikes.len() > MAX_FORCED_SPIKES {
         return Err(format!(
@@ -307,6 +982,8 @@ fn handle(
     next_id: &Mutex<u32>,
     template: Arc<connectome::ConnectomeTemplate>,
     conn_id: u64,
+    continuous_live: Option<Arc<ContinuousLiveState>>,
+    epg_id_to_bin: &HashMap<String, u8>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut reader = BufReader::new(s.try_clone()?);
     loop {
@@ -329,31 +1006,66 @@ fn handle(
         );
         r#"{"ok":true}"#.to_string()
     } else if line.contains("\"method\":\"create\"") {
-        let sim = BrainSim::new_with_viewer(
-            template.neuron_ids.clone(),
-            template.edges_pre.clone(),
-            template.edges_post.clone(),
-            template.edges_weight.clone(),
-            template.sensory_indices.clone(),
-            template.sensory_left_indices.clone(),
-            template.sensory_right_indices.clone(),
-            template.sensory_unknown_indices.clone(),
-            template.motor_left.clone(),
-            template.motor_right.clone(),
-            template.motor_unknown.clone(),
-            template.viewer_subset_indices.clone(),
-        );
+        let t_create_start = Instant::now();
+        let v: serde_json::Value = serde_json::from_str(line)?;
+        let params = v
+            .get("params")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({}));
+        let create_params: CreateParams = serde_json::from_value(params)?;
+        let w_syn = std::env::var("NEUROSIM_W_SYN")
+            .ok()
+            .and_then(|s| s.parse::<f32>().ok())
+            .filter(|&v| v.is_finite() && v > 0.0)
+            .unwrap_or_else(|| brain_sim_service::model_constants::W_SYN);
+        let mut epg_recurrence_boost = std::env::var("NEUROSIM_EPG_RECURRENCE_BOOST")
+            .ok()
+            .and_then(|s| s.parse::<f32>().ok())
+            .filter(|&v| v.is_finite() && v >= 0.0)
+            .unwrap_or_else(|| brain_sim_service::model_constants::EPG_RECURRENCE_BOOST);
+        if let Some(b) = create_params.epg_recurrence_boost {
+            if b.is_finite() && b >= 0.0 {
+                epg_recurrence_boost = b;
+            }
+        }
+        let t_before_sim = Instant::now();
+        let has_overrides = create_params.neuron_ids.is_some()
+            || create_params.connections.is_some()
+            || create_params.sensory_indices.is_some()
+            || create_params.motor_left.is_some()
+            || create_params.motor_right.is_some()
+            || create_params.motor_unknown.is_some();
+        if has_overrides {
+            let err_json = serde_json::to_string(&ErrResp {
+                error: "topology override fields (neuron_ids, connections, sensory_indices, motor_*) are not yet supported; omit them or pass null".into(),
+            })?;
+            s.write_all(err_json.as_bytes())?;
+            s.write_all(b"\n")?;
+            s.flush()?;
+            continue;
+        }
+        let mut sim = BrainSim::from_template(template.clone(), w_syn, epg_recurrence_boost);
+        let from_template_ms = t_before_sim.elapsed().as_secs_f64() * 1000.0;
         let mut g = next_id.lock().unwrap();
         let id = *g;
         *g = g.saturating_add(1);
         drop(g);
+        if let Some(seed) = create_params.rng_seed {
+            sim.set_rng_seed(seed);
+        } else if let Some(base_seed) = std::env::var("NEUROSIM_POISSON_SEED")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+        {
+            // Python parity: first created sim uses seed+1.
+            sim.set_rng_seed(base_seed.wrapping_add(id as u64).wrapping_add(1));
+        }
         sims.lock().unwrap().insert(id, sim);
+        let create_total_ms = t_create_start.elapsed().as_secs_f64() * 1000.0;
         eprintln!(
-            "[brain-service] req={} conn={} method=create sim_id={} pid={}",
-            req_id,
-            conn_id,
-            id,
-            std::process::id()
+            "[brain-service] create timing: from_template={:.1}ms total={:.1}ms sim_id={}",
+            from_template_ms,
+            create_total_ms,
+            id
         );
         serde_json::to_string(&CreateResp { sim_id: id })?
     } else if line.contains("\"method\":\"step_many\"") {
@@ -430,6 +1142,8 @@ fn handle(
                 })
                 .collect();
             let include_activity = step.include_activity.unwrap_or(true);
+            let skip_olfactory = step.rates_by_id.as_ref().map_or(false, |m| !m.is_empty());
+            let stim_rates = step.rates_by_id.as_ref().filter(|m| !m.is_empty());
         let (
             _activity,
             activity_sparse,
@@ -451,8 +1165,10 @@ fn handle(
                     fly,
                     srcs,
                     include_activity,
+                    skip_olfactory,
                     step.olfactory_baseline_rate_hz,
                     step.forced_spikes,
+                    stim_rates,
                 );
             compute_ms_sum += timing.compute_ms;
             kernel_ms_sum += timing.kernel_ms;
@@ -582,6 +1298,8 @@ fn handle(
             })
             .collect();
         let include_activity = p.include_activity.unwrap_or(true);
+        let skip_olfactory = p.rates_by_id.as_ref().map_or(false, |m| !m.is_empty());
+        let stim_rates_by_id = p.rates_by_id.as_ref().filter(|m| !m.is_empty());
         let (
             _activity,
             activity_sparse,
@@ -603,8 +1321,10 @@ fn handle(
                 fly,
                 srcs,
                 include_activity,
+                skip_olfactory,
                 p.olfactory_baseline_rate_hz,
                 p.forced_spikes,
+                stim_rates_by_id,
             );
         let compute_ms = timing.compute_ms;
         let mut source_lookup: HashMap<String, (f64, f64)> = HashMap::new();
@@ -653,6 +1373,8 @@ fn handle(
             apply_feeding_tick(&mut fg, &source_lookup, &mut one);
         }
         let one_out = one.pop().unwrap();
+        let (bump_angle_deg, epg_bins_arr) = compute_bump_and_epg_bins(&activity_sparse, epg_id_to_bin);
+        let epg_bins = Some(epg_bins_arr.to_vec());
         let t2 = Instant::now();
         let out_json = serde_json::to_string(&StepResp {
             activity_sparse,
@@ -669,6 +1391,8 @@ fn handle(
             fly: one_out.fly,
             eaten_food_id: one_out.eaten_food_id,
             feeding_sugar_taken: one_out.feeding_sugar_taken,
+            bump_angle_deg,
+            epg_bins,
             compute_ms: timing.compute_ms,
             kernel_ms: timing.kernel_ms,
             recurrent_ms: timing.recurrent_ms,
@@ -697,14 +1421,41 @@ fn handle(
         out_json
     } else if line.contains("\"method\":\"run_steps\"") || line.contains("\"method\": \"run_steps\"") {
         let t0 = Instant::now();
+        let t_parse_start = Instant::now();
         let v: serde_json::Value = serde_json::from_str(line)?;
         let p: RunStepsParams = serde_json::from_value(v["params"].clone())?;
-        let num_steps = p.num_steps.min(1_000_000);
+        let parse_ms = t_parse_start.elapsed().as_secs_f64() * 1000.0;
         let dt = if p.dt.is_finite() && p.dt > 0.0 {
             p.dt
         } else {
             0.0001
         };
+        let mut schedule_validation_error: Option<String> = None;
+        if let Some(ref schedule) = p.forced_spike_schedule {
+            let mut all_ids: HashSet<String> = HashSet::new();
+            for (i, entry) in schedule.iter().enumerate() {
+                if let Err(err) = validate_forced_spikes(&entry.neuron_ids) {
+                    schedule_validation_error = Some(format!(
+                        "invalid run_steps.forced_spike_schedule[{}].neuron_ids: {}",
+                        i, err
+                    ));
+                    break;
+                }
+                for id in &entry.neuron_ids {
+                    all_ids.insert(id.clone());
+                }
+            }
+            if schedule_validation_error.is_none() && all_ids.len() > MAX_FORCED_SPIKES {
+                schedule_validation_error = Some(format!(
+                    "run_steps.forced_spike_schedule aggregate unique IDs {} exceeds max {}",
+                    all_ids.len(),
+                    MAX_FORCED_SPIKES
+                ));
+            }
+        }
+        if let Some(error) = schedule_validation_error {
+            serde_json::to_string(&ErrResp { error })?
+        } else {
         let mut g = sims.lock().unwrap();
         if !g.contains_key(&p.sim_id) {
             drop(g);
@@ -713,6 +1464,27 @@ fn handle(
             })?
         } else {
         let sim = g.get_mut(&p.sim_id).unwrap();
+        let use_phases = p
+            .stim_phases
+            .as_ref()
+            .map(|v| !v.is_empty())
+            .unwrap_or(false);
+        let phase_slices: Vec<(u32, &std::collections::HashMap<String, f64>)> = if use_phases {
+            let mut out = Vec::new();
+            let mut budget = 1_000_000u32;
+            for ph in p.stim_phases.as_ref().unwrap() {
+                if budget == 0 {
+                    break;
+                }
+                let n = ph.num_steps.min(budget);
+                budget -= n;
+                out.push((n, &ph.stim_rates_by_id));
+            }
+            out
+        } else {
+            vec![(p.num_steps.min(1_000_000), &p.stim_rates_by_id)]
+        };
+        let num_steps: u32 = phase_slices.iter().map(|(n, _)| *n).sum();
         let count_ids = p.count_neuron_ids.as_ref().map(|v| {
             let set: std::collections::HashSet<_> = v.iter().cloned().collect();
             set
@@ -726,81 +1498,373 @@ fn handle(
         } else {
             Vec::new()
         };
-        let mut fly = FlyInput {
-            x: 0.0,
-            y: 0.0,
-            z: 1.0,
-            heading: 0.0,
-            t: 0.0,
-            hunger: 100.0,
-            health: 100.0,
-            rest_time_left: 0.0,
-            dead: false,
-        };
-        let mut rng: u64 = 0x853c49e6748fea9b;
+        let mut fly = p
+            .fly
+            .as_ref()
+            .map(|f| FlyInput {
+                x: f.x,
+                y: f.y,
+                z: f.z,
+                heading: f.heading,
+                t: f.t,
+                hunger: f.hunger,
+                health: f.health,
+                rest_time_left: f.rest_time_left,
+                dead: f.dead,
+            })
+            .unwrap_or_else(|| FlyInput {
+                x: 0.0,
+                y: 0.0,
+                z: 1.0,
+                heading: 0.0,
+                t: 0.0,
+                hunger: 100.0,
+                health: 100.0,
+                rest_time_left: 0.0,
+                dead: false,
+            });
+        let srcs: Vec<SourceInput> = p
+            .sources
+            .as_ref()
+            .map(|s| {
+                s.iter()
+                    .map(|x| SourceInput {
+                        id: x.id.clone(),
+                        x: x.x,
+                        y: x.y,
+                        radius: x.radius,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         let duration_sec = num_steps as f64 * dt;
-        for tick_idx in 0..num_steps {
-            let mut forced = Vec::new();
-            for (id, hz) in &p.stim_rates_by_id {
-                if *hz > 0.0 && hz * dt <= 1.0 && xorshift64(&mut rng) < hz * dt {
-                    forced.push(id.clone());
-                } else if *hz > 0.0 && hz * dt > 1.0 && xorshift64(&mut rng) < (hz * dt).min(1.0) {
-                    forced.push(id.clone());
-                }
-            }
-            let (_a, _sparse, spike_ids, _ml, _mr, _mf, _cl, _cr, _cf, _mlm, _mrm, _mfm, _timing, fly_out) =
-                sim.step_with_options(dt, fly, Vec::new(), true, None, forced);
-            fly = FlyInput {
-                x: fly_out.x,
-                y: fly_out.y,
-                z: fly_out.z,
-                heading: fly_out.heading,
-                t: fly_out.t,
-                hunger: fly_out.hunger,
-                health: fly_out.health,
-                rest_time_left: fly_out.rest_time_left,
-                dead: fly_out.dead,
-            };
-            if count_ids.is_some() {
-                for id in &spike_ids {
-                    if let Some(c) = spike_counts.get_mut(id) {
-                        *c += 1;
-                    }
-                }
-            }
-            if p.record_ticks {
-                let mut sorted: Vec<String> = spike_ids;
-                sorted.sort();
-                ticks.push(ReplayTickResp {
-                    tick: tick_idx,
-                    time_sec: (tick_idx as f64 + 1.0) * dt,
-                    spikes: sorted,
-                });
+        let mut source_lookup: HashMap<String, (f64, f64)> = HashMap::new();
+        if let Some(ref sources) = p.sources {
+            for s in sources {
+                source_lookup.insert(s.id.clone(), (s.x, s.y));
             }
         }
+        let mut last_activity_sparse: HashMap<String, f64> = HashMap::new();
+        let mut last_motor_left = 0.0f64;
+        let mut last_motor_right = 0.0f64;
+        let mut last_motor_fwd = 0.0f64;
+        let mut eaten_food_ids: Vec<String> = Vec::new();
+        let mut feeding_sugar_taken_total = 0.0f64;
+        let mut last_fly_resp: Option<FlyRespJson> = None;
+        // Log once if any forced-spike IDs are not in the connectome (they will be silently dropped).
+        if let Some(ref schedule) = p.forced_spike_schedule {
+            let all_forced: Vec<String> = schedule
+                .iter()
+                .flat_map(|e| e.neuron_ids.iter().cloned())
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .collect();
+            if !all_forced.is_empty() {
+                sim.log_missing_forced_ids(&all_forced);
+            }
+        }
+        let t_loop_start = Instant::now();
+        let mut forced_rng: u64 = (p.sim_id as u64).wrapping_mul(12345).wrapping_add(67890);
+        let mut global_tick: u32 = 0;
+        for (phase_steps, stim_map) in phase_slices {
+            for _ in 0..phase_steps {
+                let mut forced_spikes: Vec<String> = Vec::new();
+                if let Some(ref schedule) = p.forced_spike_schedule {
+                    for entry in schedule {
+                        if global_tick >= entry.from_tick
+                            && global_tick < entry.to_tick
+                            && entry.rate_hz > 0.0
+                        {
+                            let prob = (entry.rate_hz * dt).min(1.0).max(0.0);
+                            for id in &entry.neuron_ids {
+                                forced_rng = forced_rng
+                                    .wrapping_mul(6364136223846793005)
+                                    .wrapping_add(1442695040888963407);
+                                let u = (forced_rng >> 32) as f64 / (u32::MAX as f64 + 1.0);
+                                if u < prob {
+                                    forced_spikes.push(id.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+                let (_a, activity_sparse, spike_ids, ml, mr, mf, _cl, _cr, _cf, _mlm, _mrm, _mfm, _timing, fly_out) =
+                    sim.step_with_options(
+                        dt,
+                        fly,
+                        srcs.clone(),
+                        true,
+                        !stim_map.is_empty(),
+                        None,
+                        forced_spikes,
+                        if stim_map.is_empty() { None } else { Some(stim_map) },
+                    );
+                let mut one = vec![StepManyItemResp {
+                    sim_id: p.sim_id,
+                    activity_sparse: activity_sparse.clone(),
+                    motor_left: ml,
+                    motor_right: mr,
+                    motor_fwd: mf,
+                    motor_left_count: 0.0,
+                    motor_right_count: 0.0,
+                    motor_fwd_count: 0.0,
+                    motor_left_magnitude: 0.0,
+                    motor_right_magnitude: 0.0,
+                    motor_fwd_magnitude: 0.0,
+                    fly: FlyRespJson {
+                        x: fly_out.x,
+                        y: fly_out.y,
+                        z: fly_out.z,
+                        heading: fly_out.heading,
+                        t: fly_out.t,
+                        hunger: fly_out.hunger,
+                        health: fly_out.health,
+                        dead: fly_out.dead,
+                        fly_time_left: fly_out.fly_time_left,
+                        rest_time_left: fly_out.rest_time_left,
+                        rest_duration: fly_out.rest_duration,
+                        feeding: fly_out.feeding,
+                    },
+                    eaten_food_id: fly_out.eaten_food_id.clone(),
+                    feeding_sugar_taken: fly_out.feeding_sugar_taken,
+                    feeding_candidate_id: fly_out.feeding_candidate_id.clone(),
+                    dt,
+                    compute_ms: 0.0,
+                    kernel_ms: 0.0,
+                    recurrent_ms: 0.0,
+                    lif_ms: 0.0,
+                    readout_ms: 0.0,
+                }];
+                if !source_lookup.is_empty() && one[0].feeding_candidate_id.is_some() {
+                    let mut fg = food_state.lock().unwrap();
+                    fg.sync(source_lookup.keys().cloned());
+                    apply_feeding_tick(&mut *fg, &source_lookup, &mut one);
+                }
+                let fed = &one[0];
+                if p.return_final_state {
+                    last_activity_sparse = fed.activity_sparse.clone();
+                    last_motor_left = fed.motor_left;
+                    last_motor_right = fed.motor_right;
+                    last_motor_fwd = fed.motor_fwd;
+                    if let Some(ref id) = fed.eaten_food_id {
+                        if !id.is_empty() && !eaten_food_ids.contains(id) {
+                            eaten_food_ids.push(id.clone());
+                        }
+                    }
+                    feeding_sugar_taken_total += fed.feeding_sugar_taken;
+                    last_fly_resp = Some(fed.fly.clone());
+                }
+                fly = FlyInput {
+                    x: fed.fly.x,
+                    y: fed.fly.y,
+                    z: fed.fly.z,
+                    heading: fed.fly.heading,
+                    t: fed.fly.t,
+                    hunger: fed.fly.hunger,
+                    health: fed.fly.health,
+                    rest_time_left: fed.fly.rest_time_left,
+                    dead: fed.fly.dead,
+                };
+                if count_ids.is_some() {
+                    for id in &spike_ids {
+                        if let Some(c) = spike_counts.get_mut(id) {
+                            *c += 1;
+                        }
+                    }
+                }
+                if p.record_ticks {
+                    let mut sorted: Vec<String> = if let Some(ref set) = count_ids {
+                        spike_ids.iter().filter(|id| set.contains(*id)).cloned().collect()
+                    } else {
+                        spike_ids
+                    };
+                    sorted.sort();
+                    ticks.push(ReplayTickResp {
+                        tick: global_tick,
+                        time_sec: (global_tick as f64 + 1.0) * dt,
+                        spikes: sorted,
+                    });
+                }
+                global_tick = global_tick.wrapping_add(1);
+            }
+        }
+        let steps_loop_ms = t_loop_start.elapsed().as_secs_f64() * 1000.0;
         let wall_sec = t0.elapsed().as_secs_f64();
+        let t_serial_start = Instant::now();
+        let (resp_fly, resp_activity, resp_bump, resp_epg_bins, resp_motor_left, resp_motor_right, resp_motor_fwd, resp_eaten_food_ids, resp_feeding_sugar_taken) =
+            if p.return_final_state {
+                let (bump_angle_deg, epg_bins_arr) =
+                    compute_bump_and_epg_bins(&last_activity_sparse, epg_id_to_bin);
+                let final_fly = last_fly_resp.unwrap_or_else(|| {
+                    FlyRespJson {
+                        x: fly.x,
+                        y: fly.y,
+                        z: fly.z,
+                        heading: fly.heading,
+                        t: fly.t,
+                        hunger: fly.hunger,
+                        health: fly.health,
+                        dead: fly.dead,
+                        fly_time_left: if fly.rest_time_left > 0.0 { 0.0 } else { 1.0 },
+                        rest_time_left: fly.rest_time_left,
+                        rest_duration: if fly.rest_time_left > 0.0 { fly.rest_time_left } else { 0.0 },
+                        feeding: false,
+                    }
+                });
+                (
+                    Some(final_fly),
+                    Some(last_activity_sparse),
+                    bump_angle_deg,
+                    Some(epg_bins_arr.to_vec()),
+                    Some(last_motor_left),
+                    Some(last_motor_right),
+                    Some(last_motor_fwd),
+                    if eaten_food_ids.is_empty() { None } else { Some(eaten_food_ids) },
+                    Some(feeding_sugar_taken_total),
+                )
+            } else {
+                (None, None, None, None, None, None, None, None, None)
+            };
         let run_out = RunStepsResp {
             steps_done: num_steps,
             duration_sec,
             wall_sec,
+            steps_loop_ms,
             spike_counts: if count_ids.is_some() {
                 Some(spike_counts)
             } else {
                 None
             },
             ticks: if p.record_ticks { Some(ticks) } else { None },
+            fly: resp_fly,
+            activity_sparse: resp_activity,
+            bump_angle_deg: resp_bump,
+            epg_bins: resp_epg_bins,
+            motor_left: resp_motor_left,
+            motor_right: resp_motor_right,
+            motor_fwd: resp_motor_fwd,
+            eaten_food_ids: resp_eaten_food_ids,
+            feeding_sugar_taken: resp_feeding_sugar_taken,
         };
+        let json_str = serde_json::to_string(&run_out)?;
+        let serialize_ms = t_serial_start.elapsed().as_secs_f64() * 1000.0;
         eprintln!(
-            "[brain-service] req={} conn={} method=run_steps sim_id={} steps={} dt={:.6} wall_sec={:.3} pid={}",
-            req_id,
-            conn_id,
-            p.sim_id,
-            num_steps,
-            dt,
+            "[brain-service] run_steps timing: parse={:.1}ms steps_loop={:.1}ms serialize={:.1}ms wall_total={:.3}s steps={} record_ticks={}",
+            parse_ms,
+            steps_loop_ms,
+            serialize_ms,
             wall_sec,
-            std::process::id()
+            num_steps,
+            p.record_ticks
         );
-        serde_json::to_string(&run_out)?
+        json_str
+        }
+        }
+    } else if line.contains("\"method\":\"live_set_pen_a\"") || line.contains("\"method\": \"live_set_pen_a\"")
+    {
+        let v: serde_json::Value = serde_json::from_str(line)?;
+        let p = v.get("params").cloned().unwrap_or_default();
+        let left = p
+            .get("left_hz")
+            .and_then(|x| x.as_f64())
+            .unwrap_or(0.0)
+            .clamp(0.0, 500.0);
+        let right = p
+            .get("right_hz")
+            .and_then(|x| x.as_f64())
+            .unwrap_or(0.0)
+            .clamp(0.0, 500.0);
+        if let Some(ref clive) = continuous_live {
+            let mut custom: HashMap<String, f64> = HashMap::new();
+            if let Some(obj) = p.get("rates_by_id").and_then(|x| x.as_object()) {
+                for (k, v) in obj {
+                    if let Some(hz) = v.as_f64() {
+                        let hz = hz.clamp(0.0, 500.0);
+                        if hz > 0.0 {
+                            custom.insert(k.clone(), hz);
+                        }
+                    }
+                }
+            }
+            {
+                let mut guard = clive.custom_rates.lock().unwrap();
+                *guard = if custom.is_empty() {
+                    None
+                } else {
+                    Some(custom)
+                };
+            }
+            clive
+                .pen_left_hz_bits
+                .store(left.to_bits(), Ordering::Release);
+            clive
+                .pen_right_hz_bits
+                .store(right.to_bits(), Ordering::Release);
+            serde_json::to_string(&serde_json::json!({
+                "ok": true,
+                "left_hz": left,
+                "right_hz": right,
+            }))?
+        } else {
+            serde_json::to_string(&ErrResp {
+                error: "continuous live sim not available (classification.csv / PEN_a)".into(),
+            })?
+        }
+    } else if line.contains("\"method\":\"live_read_ticks\"")
+        || line.contains("\"method\": \"live_read_ticks\"")
+    {
+        let v: serde_json::Value = serde_json::from_str(line)?;
+        let p = v.get("params").cloned().unwrap_or_default();
+        let after = p
+            .get("after_tick")
+            .and_then(|x| x.as_u64())
+            .unwrap_or(0) as u32;
+        let max_ticks = p
+            .get("max_ticks")
+            .and_then(|x| x.as_u64())
+            .unwrap_or(800)
+            .clamp(1, 8000) as usize;
+        if let Some(ref clive) = continuous_live {
+            let mut ticks: Vec<LiveTickRecord> = {
+                let buf = clive.tick_buffer.lock().unwrap();
+                let mut out = Vec::new();
+                for rec in buf.iter().rev() {
+                    if rec.tick <= after { break; }
+                    out.push(rec.clone());
+                    if out.len() >= max_ticks { break; }
+                }
+                out
+            };
+            ticks.reverse();
+            let latest = clive.latest_tick.load(Ordering::Acquire);
+            serde_json::to_string(&serde_json::json!({
+                "ticks": ticks,
+                "latest_tick": latest,
+                "dt_sec": clive.dt_sec,
+            }))?
+        } else {
+            serde_json::to_string(&ErrResp {
+                error: "continuous live sim not available".into(),
+            })?
+        }
+    } else if line.contains("\"method\":\"live_status\"") || line.contains("\"method\": \"live_status\"")
+    {
+        if let Some(ref clive) = continuous_live {
+            let left = f64::from_bits(clive.pen_left_hz_bits.load(Ordering::Relaxed));
+            let right = f64::from_bits(clive.pen_right_hz_bits.load(Ordering::Relaxed));
+            let rates_by_id = clive.custom_rates.lock().unwrap().clone();
+            serde_json::to_string(&serde_json::json!({
+                "ok": true,
+                "latest_tick": clive.latest_tick.load(Ordering::Acquire),
+                "left_hz": left,
+                "right_hz": right,
+                "dt_sec": clive.dt_sec,
+                "rates_by_id": rates_by_id,
+            }))?
+        } else {
+            serde_json::to_string(&ErrResp {
+                error: "continuous live sim not available".into(),
+            })?
         }
     } else {
         serde_json::to_string(&ErrResp {

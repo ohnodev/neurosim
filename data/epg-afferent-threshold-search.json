@@ -1,0 +1,79 @@
+{
+  "config": {
+    "dt_ms": 1.0,
+    "steps": 1000,
+    "stim_rate_hz": 600.0,
+    "rank_rule": "afferents sorted by net signed_sum_to_drivers descending",
+    "driver_set_size": 10,
+    "epg_set_size": 51
+  },
+  "min_k_for_driver_spike": 10,
+  "min_k_for_epg_spike": 10,
+  "results": [
+    {
+      "k_afferents": 10,
+      "driver_spikes": 77,
+      "epg_spikes": 16,
+      "drivers_fired": true,
+      "epg_fired": true
+    },
+    {
+      "k_afferents": 20,
+      "driver_spikes": 333,
+      "epg_spikes": 262,
+      "drivers_fired": true,
+      "epg_fired": true
+    },
+    {
+      "k_afferents": 26,
+      "driver_spikes": 322,
+      "epg_spikes": 243,
+      "drivers_fired": true,
+      "epg_fired": true
+    }
+  ],
+  "top20_ranked_afferents": [
+    78211,
+    89401,
+    54295,
+    59950,
+    62443,
+    7889,
+    13843,
+    105787,
+    54970,
+    110418,
+    102286,
+    99760,
+    92637,
+    90688,
+    61,
+    50161,
+    45628,
+    19546,
+    115398,
+    62370
+  ],
+  "top20_ranked_afferent_root_ids": [
+    720575940626768442,
+    720575940628644239,
+    720575940622303446,
+    720575940623302988,
+    720575940623758377,
+    720575940609713710,
+    720575940612358642,
+    720575940631844300,
+    720575940622416628,
+    720575940632875746,
+    720575940631106767,
+    720575940630652876,
+    720575940629247682,
+    720575940628876111,
+    720575940602430944,
+    720575940621599741,
+    720575940620809599,
+    720575940614189310,
+    720575940634523232,
+    720575940623743892
+  ]
+}

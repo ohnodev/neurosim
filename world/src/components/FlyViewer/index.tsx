@@ -15,6 +15,7 @@ import {
   type NeuronRaw,
 } from '../../lib/api';
 import { BrainOverlay } from '../BrainOverlay';
+import { HeadingCompass } from '../HeadingCompass';
 import { SimRefsProvider } from '../../lib/simDisplayContext';
 import { ConnectButton } from '../ConnectButton';
 import { BuyFlyModal } from '../BuyFlyModal';
@@ -47,7 +48,10 @@ export default function FlyViewer() {
   const [graveyardPage, setGraveyardPage] = useState(1);
   const [statusPanelOpen, setStatusPanelOpen] = useState(() => !isMobileViewport());
   const [statusTab, setStatusTab] = useState<'status' | 'rewards'>('status');
+  const [brainTab, setBrainTab] = useState<'activity' | 'compass'>('activity');
   const [brainPanelOpen, setBrainPanelOpen] = useState(() => !isMobileViewport());
+  const [bumpAngleDeg, setBumpAngleDeg] = useState<number | null>(null);
+  const [epgBins, setEpgBins] = useState<number[] | null>(null);
   const [devMode, setDevMode] = useState<boolean>(() => getInitialDevMode());
   const [deployingSlots, setDeployingSlots] = useState<Set<number>>(new Set());
   const deployingSlotsRef = useRef<Set<number>>(new Set());
@@ -272,18 +276,32 @@ export default function FlyViewer() {
           latestFliesRef.current = lastFrame.flies;
           activityRef.current = data.activity ?? {};
           activitiesRef.current = [];
+          const simIdx = followSimIndexRef.current ?? 0;
+          const deg = lastFrame.bumpAngleDegs?.[simIdx] ?? null;
+          setBumpAngleDeg(deg);
+          const bins = lastFrame.epgBinsPerSim?.[simIdx] ?? null;
+          setEpgBins(Array.isArray(bins) && bins.length === 16 ? bins : null);
         } else if (last) {
           latestFliesRef.current = last.flies;
           activityRef.current = data.activity ?? data.activities?.[0] ?? {};
           activitiesRef.current = Array.isArray(data.activities) ? data.activities : [];
+          setBumpAngleDeg(null);
+          setEpgBins(null);
         } else if (Array.isArray(data.flies)) {
           latestFliesRef.current = data.flies;
           activityRef.current = data.activity ?? data.activities?.[0] ?? {};
           activitiesRef.current = Array.isArray(data.activities) ? data.activities : [];
+          setBumpAngleDeg(null);
+          setEpgBins(null);
         } else if (data.fly) {
           latestFliesRef.current = [data.fly];
           activityRef.current = data.activity ?? data.activities?.[0] ?? {};
           activitiesRef.current = Array.isArray(data.activities) ? data.activities : [];
+          setBumpAngleDeg(null);
+          setEpgBins(null);
+        } else {
+          setBumpAngleDeg(null);
+          setEpgBins(null);
         }
         if (data.activity != null) activityRef.current = data.activity;
         else if (Array.isArray(data.activities) && data.activities.length > 0 && data.activities[0] != null) {
@@ -299,6 +317,9 @@ export default function FlyViewer() {
           void refetchDeployed();
         }
         prevWsFlyCountRef.current = currentFlyCount;
+      } else {
+        setBumpAngleDeg(null);
+        setEpgBins(null);
       }
     });
     return unsub;
@@ -614,19 +635,46 @@ export default function FlyViewer() {
         <div className="fly-viewer__side-strip fly-viewer__side-strip--right">
           <div className={`fly-viewer__brain-panel ${brainPanelOpen ? 'fly-viewer__brain-panel--open' : ''}`}>
             <div className="fly-viewer__brain-content">
-              <div style={{ color: '#888', marginBottom: 6 }}>Brain activity — Fly {selectedFlyIndex + 1} (viewing)</div>
-              <div className="fly-viewer__brain-plot">
-                {brainPanelOpen && (
-                  <BrainOverlay
-                    followSimIndexRef={followSimIndexRef}
-                    visible={connected}
-                    neurons={neuronsData?.neurons}
-                    embedded
-                  />
-                )}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                <button
+                  type="button"
+                  className={`fly-viewer__status-tab ${brainTab === 'activity' ? 'fly-viewer__status-tab--active' : ''}`}
+                  onClick={() => setBrainTab('activity')}
+                  style={{ padding: '4px 8px', fontSize: 11 }}
+                >
+                  Brain activity
+                </button>
+                <button
+                  type="button"
+                  className={`fly-viewer__status-tab ${brainTab === 'compass' ? 'fly-viewer__status-tab--active' : ''}`}
+                  onClick={() => setBrainTab('compass')}
+                  style={{ padding: '4px 8px', fontSize: 11 }}
+                >
+                  Heading compass
+                </button>
               </div>
-              {brainPanelOpen && (
-                <BrainMotorReadout motorReadoutRef={motorReadoutRef} />
+              <div style={{ color: '#888', fontSize: 11, marginBottom: 4 }}>Fly {selectedFlyIndex + 1} (viewing)</div>
+              {brainTab === 'activity' && (
+                <>
+                  <div className="fly-viewer__brain-plot">
+                    {brainPanelOpen && (
+                      <BrainOverlay
+                        followSimIndexRef={followSimIndexRef}
+                        visible={connected}
+                        neurons={neuronsData?.neurons}
+                        embedded
+                      />
+                    )}
+                  </div>
+                  {brainPanelOpen && (
+                    <BrainMotorReadout motorReadoutRef={motorReadoutRef} />
+                  )}
+                </>
+              )}
+              {brainTab === 'compass' && brainPanelOpen && (
+                <div className="fly-viewer__brain-plot">
+                  <HeadingCompass bumpAngleDeg={bumpAngleDeg} epgBins={epgBins ?? undefined} />
+                </div>
               )}
             </div>
           </div>

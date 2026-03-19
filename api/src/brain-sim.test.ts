@@ -202,9 +202,9 @@ describe.skip('brain-sim (legacy movement/physiology expectations)', () => {
     // Run until fly eats
     for (let i = 0; i < 200; i++) {
       s = await step(dt);
-      if (s.eatenFoodId) break;
+      if (s.eatenFoodIds?.length) break;
     }
-    expect(s.eatenFoodId).toBe('f1');
+    expect(s.eatenFoodIds).toContain('f1');
     expect(s.fly.hunger).toBeGreaterThan(0);
     expect(s.fly.health).toBeGreaterThan(healthBefore);
   });
@@ -229,10 +229,10 @@ describe.skip('brain-sim (legacy movement/physiology expectations)', () => {
     const sim2 = await createBrainSim(testConnectome, getSources, { x: 0, y: 0, z: 0.35, heading: 0, t: 0, hunger: 50, health: 100 });
     const dt = 1 / 30;
     const s1 = await sim1.step(dt);
-    expect(s1.eatenFoodId).toBe('f1');
+    expect(s1.eatenFoodIds).toContain('f1');
     removeFood('f1');
     const s2 = await sim2.step(dt);
-    expect(s2.eatenFoodId).toBeUndefined();
+    expect(s2.eatenFoodIds ?? []).toHaveLength(0);
     expect(sources).toHaveLength(0);
   });
 

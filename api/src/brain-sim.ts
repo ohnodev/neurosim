@@ -29,8 +29,12 @@ export interface SimState {
   motorLeftMagnitude?: number;
   motorRightMagnitude?: number;
   motorFwdMagnitude?: number;
-  eatenFoodId?: string;
+  eatenFoodIds?: string[];
   feedingSugarTaken?: number;
+  /** EPG bump heading in degrees (from Rust step), when available. */
+  bumpAngleDeg?: number | null;
+  /** Normalized EPG bin activities 0..1 (16 bins), for compass. */
+  epgBins?: number[] | null;
 }
 
 /** Brain sim uses the Rust service via Unix socket only. Connectome loaded by brain-service at startup. */
@@ -164,8 +168,10 @@ export async function createBrainSim(
     } = {};
     let lastActivitySparse: Record<string, number> = {};
     let lastInputActivity: Record<string, number> | undefined;
-    let lastEatenFoodId: string | undefined;
+    let lastEatenFoodIds: string[] | undefined;
     let lastFeedingSugarTaken = 0;
+    let lastBumpAngleDeg: number | null | undefined;
+    let lastEpgBins: number[] | null = null;
     let lastMotorLeft = 0;
     let lastMotorRight = 0;
     let lastMotorFwd = 0;
@@ -180,6 +186,7 @@ export async function createBrainSim(
       dt: number,
       sources: WorldSource[],
       includeActivity = true,
+      penARatesById?: Record<string, number>,
     ): Promise<{
       activitySparse: Record<string, number>;
       motorLeft: number;
@@ -205,8 +212,10 @@ export async function createBrainSim(
         restDuration: number;
         feeding: boolean;
       };
-      eatenFoodId?: string;
+      eatenFoodIds?: string[];
       feedingSugarTaken?: number;
+      bumpAngleDeg?: number | null;
+      epgBins?: number[] | null;
       computeMs?: number;
       kernelMs?: number;
       recurrentMs?: number;
@@ -229,22 +238,88 @@ export async function createBrainSim(
         dt,
         includeActivity,
         fly: flyInput,
-        // Rust handles sensory drive from world source geometry.
         sources: sources.map((s) => ({ id: s.id, x: s.x, y: s.y, radius: s.radius })),
+        ...(penARatesById && Object.keys(penARatesById).length > 0 ? { ratesById: penARatesById } : {}),
       });
     }
 
-    async function step(dt: number, options?: { includeActivity?: boolean }): Promise<SimState> {
+    /** Run N steps in one round-trip (e.g. for world loop: 1250 steps at 0.0001 = 0.125s). Returns final state. */
+    async function stepBatch(
+      dt: number,
+      numSteps: number,
+      sources: WorldSource[],
+      penARatesById?: Record<string, number>,
+    ): Promise<SimState> {
+      const ratesById = penARatesById && Object.keys(penARatesById).length > 0 ? penARatesById : undefined;
+      const result = await socketClient.runStepsWithState({
+        simId,
+        numSteps,
+        dt,
+        stimRatesById: ratesById,
+        fly: {
+          x: fly.x,
+          y: fly.y,
+          z: fly.z,
+          heading: fly.heading,
+          t: fly.t,
+          hunger: fly.hunger,
+          health: fly.health ?? 100,
+          restTimeLeft,
+          dead: fly.dead ?? false,
+        },
+        sources: sources.map((s) => ({ id: s.id, x: s.x ?? 0, y: s.y ?? 0, radius: s.radius ?? 1 })),
+      });
+      lastActivitySparse = result.activitySparse;
+      lastMotorLeft = result.motorLeft ?? 0;
+      lastMotorRight = result.motorRight ?? 0;
+      lastMotorFwd = result.motorFwd ?? 0;
+      lastMotorLeftCount = result.motorLeftCount ?? 0;
+      lastMotorRightCount = result.motorRightCount ?? 0;
+      lastMotorFwdCount = result.motorFwdCount ?? 0;
+      lastMotorLeftMagnitude = result.motorLeftMagnitude ?? 0;
+      lastMotorRightMagnitude = result.motorRightMagnitude ?? 0;
+      lastMotorFwdMagnitude = result.motorFwdMagnitude ?? 0;
+      fly = {
+        ...fly,
+        x: result.fly.x,
+        y: result.fly.y,
+        z: result.fly.z,
+        heading: result.fly.heading,
+        t: result.fly.t,
+        hunger: result.fly.hunger,
+        health: result.fly.health,
+        dead: result.fly.dead,
+        flyTimeLeft: result.fly.flyTimeLeft,
+        restTimeLeft: result.fly.restTimeLeft,
+        restDuration: result.fly.restDuration,
+        feeding: result.fly.feeding,
+      };
+      flyTimeLeftSec = Math.max(0, Math.min(FLY_TIME_MAX, (result.fly.flyTimeLeft ?? 0) * FLY_TIME_MAX));
+      restTimeLeft = result.fly.restTimeLeft ?? 0;
+      lastEatenFoodIds = result.eatenFoodIds;
+      lastFeedingSugarTaken = result.feedingSugarTaken ?? 0;
+      lastBumpAngleDeg = result.bumpAngleDeg ?? null;
+      lastEpgBins = result.epgBins ?? null;
+      return getState();
+    }
+
+    async function step(
+      dt: number,
+      options?: { includeActivity?: boolean; penARatesById?: Record<string, number> },
+    ): Promise<SimState> {
       const includeActivity = options?.includeActivity ?? true;
+      const penARatesById = options?.penARatesById;
       const stepStart = performance.now();
       if (fly.dead) {
         const t = fly.t + dt;
         fly = { ...fly, t };
-        const act = await runRustStep(dt, getSources(), includeActivity);
+        const act = await runRustStep(dt, getSources(), includeActivity, penARatesById);
         lastActivitySparse = act.activitySparse;
         lastInputActivity = undefined;
-        lastEatenFoodId = undefined;
+        lastEatenFoodIds = undefined;
         lastFeedingSugarTaken = 0;
+        lastBumpAngleDeg = act.bumpAngleDeg ?? null;
+        lastEpgBins = act.epgBins ?? null;
         lastMotorLeft = act.motorLeft ?? 0;
         lastMotorRight = act.motorRight ?? 0;
         lastMotorFwd = act.motorFwd ?? 0;
@@ -277,12 +352,17 @@ export async function createBrainSim(
           motorLeftMagnitude: lastMotorLeftMagnitude,
           motorRightMagnitude: lastMotorRightMagnitude,
           motorFwdMagnitude: lastMotorFwdMagnitude,
-          eatenFoodId: lastEatenFoodId,
+          eatenFoodIds: lastEatenFoodIds,
+          bumpAngleDeg: lastBumpAngleDeg,
+          epgBins: lastEpgBins,
         };
       }
 
       const currentSources = getSources();
-      const directional = estimateDirectionalSensoryInput(dt, fly, currentSources);
+      const directional =
+        penARatesById && Object.keys(penARatesById).length > 0
+          ? { left: 0, right: 0, center: 0 }
+          : estimateDirectionalSensoryInput(dt, fly, currentSources);
       const leftStrength = directional.left > 0 ? Math.max(0.05, Math.min(0.95, directional.left)) : 0;
       const rightStrength = directional.right > 0 ? Math.max(0.05, Math.min(0.95, directional.right)) : 0;
       const centerStrength = directional.center > 0 ? Math.max(0.05, Math.min(0.95, directional.center)) : 0;
@@ -301,7 +381,7 @@ export async function createBrainSim(
       lastInputActivity = inputActivityRec;
 
       const rustStart = performance.now();
-      const result = await runRustStep(dt, currentSources, includeActivity);
+      const result = await runRustStep(dt, currentSources, includeActivity, penARatesById);
       lastRustMs = Math.round(performance.now() - rustStart);
       lastSocketTiming = socketClient.getLastRequestTiming();
       lastRustTiming = {
@@ -341,8 +421,10 @@ export async function createBrainSim(
       restTimeLeft = result.fly.restTimeLeft ?? 0;
 
       const activityRec = Object.keys(activitySparse).length ? activitySparse : undefined;
-      lastEatenFoodId = result.eatenFoodId;
+      lastEatenFoodIds = result.eatenFoodIds;
       lastFeedingSugarTaken = result.feedingSugarTaken ?? 0;
+      lastBumpAngleDeg = result.bumpAngleDeg ?? null;
+      lastEpgBins = result.epgBins ?? null;
       lastJsMs = Math.round(performance.now() - stepStart - lastRustMs);
 
       return {
@@ -360,7 +442,9 @@ export async function createBrainSim(
         motorRightMagnitude: lastMotorRightMagnitude,
         motorFwdMagnitude: lastMotorFwdMagnitude,
         feedingSugarTaken: lastFeedingSugarTaken,
-        ...(result.eatenFoodId && { eatenFoodId: result.eatenFoodId }),
+        eatenFoodIds: result.eatenFoodIds,
+        bumpAngleDeg: lastBumpAngleDeg,
+        epgBins: lastEpgBins,
       };
     }
 
@@ -405,12 +489,15 @@ export async function createBrainSim(
         motorRightMagnitude: lastMotorRightMagnitude,
         motorFwdMagnitude: lastMotorFwdMagnitude,
         feedingSugarTaken: lastFeedingSugarTaken,
-        ...(lastEatenFoodId && { eatenFoodId: lastEatenFoodId }),
+        eatenFoodIds: lastEatenFoodIds,
+        bumpAngleDeg: lastBumpAngleDeg,
+        epgBins: lastEpgBins,
       };
     }
 
     return {
       step,
+      stepBatch,
       getState,
       getTiming,
       neuronIds,

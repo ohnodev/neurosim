@@ -14,13 +14,8 @@ let connectPromise: Promise<void> | null = null;
 let requestSeq = 0;
 let requestChain: Promise<void> = Promise.resolve();
 type JsonObj = Record<string, unknown>;
-type QueuedStep = {
-  payload: JsonObj;
-  resolve: (value: unknown) => void;
-  reject: (reason?: unknown) => void;
-};
-let pendingStepBatch: QueuedStep[] = [];
-let flushStepBatchScheduled = false;
+// TODO: step batching disabled – restore when step_many has full field parity
+//   (bump_angle_deg, epg_bins) with single-step responses.
 let lastRequestTiming: {
   id: number;
   connectWaitMs: number;
@@ -162,121 +157,7 @@ function sendRequest<T>(payload: JsonObj): Promise<T> {
   });
 }
 
-function flushStepBatch(): void {
-  const batch = pendingStepBatch;
-  pendingStepBatch = [];
-  flushStepBatchScheduled = false;
-  if (batch.length === 0) return;
-
-  if (batch.length === 1) {
-    const one = batch[0];
-    void enqueueRequest(() => sendRequest(one.payload)).then(one.resolve, one.reject);
-    return;
-  }
-
-  const steps = batch.map((q) => {
-    const params = (q.payload as { params?: JsonObj }).params ?? {};
-    const fly = (params.fly as JsonObj | undefined) ?? {};
-    return {
-      sim_id: params.sim_id,
-      dt: params.dt,
-      olfactory_baseline_rate_hz: params.olfactory_baseline_rate_hz,
-      forced_spikes: params.forced_spikes ?? [],
-      fly: {
-        x: fly.x,
-        y: fly.y,
-        z: fly.z,
-        heading: fly.heading,
-        t: fly.t,
-        hunger: fly.hunger,
-        health: fly.health,
-        rest_time_left: fly.rest_time_left,
-        dead: fly.dead,
-      },
-      sources: params.sources ?? [],
-      include_activity: params.include_activity ?? true,
-    };
-  });
-
-  const manyPayload: JsonObj = {
-    method: 'step_many',
-    params: { steps },
-  };
-  void enqueueRequest(() => sendRequest<{ results: Array<{
-    sim_id: number;
-    activity_sparse: Record<string, number>;
-    motor_left: number;
-    motor_right: number;
-    motor_fwd: number;
-    fly: {
-      x: number;
-      y: number;
-      z: number;
-      heading: number;
-      t: number;
-      hunger: number;
-      health: number;
-      dead: boolean;
-      fly_time_left: number;
-      rest_time_left: number;
-      rest_duration: number;
-      feeding: boolean;
-    };
-    eaten_food_id?: string;
-    feeding_sugar_taken?: number;
-  }> }>(manyPayload)).then((res) => {
-    const byBatchIndex: Array<{
-      sim_id: number;
-      activity_sparse: Record<string, number>;
-      motor_left: number;
-      motor_right: number;
-      motor_fwd: number;
-      fly: {
-        x: number;
-        y: number;
-        z: number;
-        heading: number;
-        t: number;
-        hunger: number;
-        health: number;
-        dead: boolean;
-        fly_time_left: number;
-        rest_time_left: number;
-        rest_duration: number;
-        feeding: boolean;
-      };
-      eaten_food_id?: string;
-      feeding_sugar_taken?: number;
-    }> = res.results ?? [];
-    for (let i = 0; i < batch.length; i += 1) {
-      const q = batch[i]!;
-      const item = byBatchIndex[i];
-      if (!item) {
-        q.reject(new Error(`step_many missing result for batch index ${i}`));
-        continue;
-      }
-      q.resolve(item);
-    }
-  }, (err) => {
-    for (const q of batch) q.reject(err);
-  });
-}
-
 function request<T>(payload: object): Promise<T> {
-  const method = (payload as { method?: string })?.method ?? 'unknown';
-  if (method === 'step') {
-    return new Promise<T>((resolve, reject) => {
-      pendingStepBatch.push({
-        payload: payload as JsonObj,
-        resolve: resolve as (value: unknown) => void,
-        reject,
-      });
-      if (!flushStepBatchScheduled) {
-        flushStepBatchScheduled = true;
-        queueMicrotask(flushStepBatch);
-      }
-    });
-  }
   return enqueueRequest(() => sendRequest(payload as JsonObj));
 }
 
@@ -294,6 +175,8 @@ export interface StepParams {
   simId: number;
   dt: number;
   olfactory_baseline_rate_hz?: number;
+  /** When present and non-empty: PEN_a rates for this step; olfactory/sensory drive is skipped. */
+  ratesById?: Record<string, number>;
   forced_spikes?: string[];
   includeActivity?: boolean;
   fly: {
@@ -336,8 +219,12 @@ export interface StepResult {
     restDuration: number;
     feeding: boolean;
   };
-  eatenFoodId?: string;
+  eatenFoodIds?: string[];
   feedingSugarTaken?: number;
+  /** EPG bump heading in degrees (math convention), when available. */
+  bumpAngleDeg?: number | null;
+  /** Normalized EPG bin activities 0..1 (16 bins), for compass display. */
+  epgBins?: number[] | null;
   computeMs?: number;
   kernelMs?: number;
   recurrentMs?: number;
@@ -378,7 +265,7 @@ export interface StepManyResultItem {
   motorRightMagnitude: number;
   motorFwdMagnitude: number;
   fly: StepResult['fly'];
-  eatenFoodId?: string;
+  eatenFoodIds?: string[];
   feedingSugarTaken?: number;
   computeMs?: number;
   kernelMs?: number;
@@ -404,9 +291,215 @@ export async function ping(): Promise<void> {
   if (!res?.ok) throw new Error('brain-service ping failed');
 }
 
-export async function createSim(_params?: CreateParams): Promise<{ simId: number }> {
-  const res = await request<{ sim_id: number }>({ method: 'create', params: {} });
+export async function createSim(params?: CreateParams & {
+  rngSeed?: number;
+  epgRecurrenceBoost?: number;
+}): Promise<{ simId: number }> {
+  const { rngSeed, epgRecurrenceBoost, ...rest } = (params ?? {});
+  const toSnakeKey = (k: string): string => k.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+  const p: JsonObj = {};
+  for (const [k, v] of Object.entries(rest as JsonObj)) {
+    p[toSnakeKey(k)] = v;
+  }
+  if (rngSeed != null && Number.isFinite(rngSeed)) {
+    p.rng_seed = Math.floor(rngSeed as number);
+  }
+  if (epgRecurrenceBoost != null && Number.isFinite(epgRecurrenceBoost)) {
+    p.epg_recurrence_boost = epgRecurrenceBoost as number;
+  }
+  const res = await request<{ sim_id: number }>({ method: 'create', params: p });
   return { simId: res.sim_id };
+}
+
+/** Continuous live sim: set PEN_a L/R Hz (applies on next step). Optional ratesById overrides per neuron. */
+export async function liveSetPenA(
+  leftHz: number,
+  rightHz: number,
+  ratesById?: Record<string, number>,
+): Promise<void> {
+  const params: { left_hz: number; right_hz: number; rates_by_id?: Record<string, number> } = {
+    left_hz: leftHz,
+    right_hz: rightHz,
+  };
+  if (ratesById && Object.keys(ratesById).length > 0) {
+    params.rates_by_id = ratesById;
+  }
+  await request<{ ok?: boolean }>({ method: 'live_set_pen_a', params });
+}
+
+export async function liveReadTicks(
+  afterTick: number,
+  maxTicks = 2000,
+): Promise<{
+  ticks: Array<{ tick: number; time_sec: number; spikes: string[] }>;
+  latest_tick: number;
+  dt_sec: number;
+}> {
+  return request({
+    method: 'live_read_ticks',
+    params: {
+      after_tick: Math.max(0, Math.floor(afterTick)),
+      max_ticks: Math.min(8000, Math.max(1, Math.floor(maxTicks))),
+    },
+  });
+}
+
+export async function liveStatus(): Promise<{
+  ok?: boolean;
+  latest_tick: number;
+  left_hz: number;
+  right_hz: number;
+  dt_sec: number;
+  rates_by_id?: Record<string, number> | null;
+}> {
+  return request({
+    method: 'live_status',
+    params: {},
+  });
+}
+
+export interface RunStepsWithStateParams {
+  simId: number;
+  numSteps: number;
+  dt: number;
+  stimRatesById?: Record<string, number>;
+  fly: {
+    x: number;
+    y: number;
+    z: number;
+    heading: number;
+    t: number;
+    hunger: number;
+    health: number;
+    restTimeLeft: number;
+    dead: boolean;
+  };
+  sources: Array<{ id: string; x: number; y: number; radius: number }>;
+}
+
+/** Run N steps in one round-trip; returns final state (same shape as step) when used for world loop. */
+export async function runStepsWithState(params: RunStepsWithStateParams): Promise<StepResult> {
+  const res = await request<{
+    steps_done: number;
+    fly?: {
+      x: number;
+      y: number;
+      z: number;
+      heading: number;
+      t: number;
+      hunger: number;
+      health: number;
+      dead: boolean;
+      fly_time_left: number;
+      rest_time_left: number;
+      rest_duration: number;
+      feeding: boolean;
+    };
+    activity_sparse?: Record<string, number>;
+    bump_angle_deg?: number | null;
+    epg_bins?: number[] | null;
+    motor_left?: number;
+    motor_right?: number;
+    motor_fwd?: number;
+    motor_left_count?: number;
+    motor_right_count?: number;
+    motor_fwd_count?: number;
+    motor_left_magnitude?: number;
+    motor_right_magnitude?: number;
+    motor_fwd_magnitude?: number;
+    eaten_food_ids?: string[];
+    feeding_sugar_taken?: number;
+  }>({
+    method: 'run_steps',
+    params: {
+      sim_id: params.simId,
+      num_steps: Math.min(1_000_000, Math.max(1, Math.floor(params.numSteps))),
+      dt: params.dt,
+      ...(params.stimRatesById && Object.keys(params.stimRatesById).length > 0
+        ? { stim_rates_by_id: params.stimRatesById }
+        : {}),
+      return_final_state: true,
+      fly: {
+        x: params.fly.x,
+        y: params.fly.y,
+        z: params.fly.z,
+        heading: params.fly.heading,
+        t: params.fly.t,
+        hunger: params.fly.hunger,
+        health: params.fly.health,
+        rest_time_left: params.fly.restTimeLeft,
+        dead: params.fly.dead,
+      },
+      sources: params.sources,
+    },
+  });
+  if (!res.fly) {
+    throw new Error('run_steps return_final_state=true but response missing fly');
+  }
+  const fly = res.fly;
+  return {
+    activity: [],
+    activitySparse: res.activity_sparse ?? {},
+    motorLeft: res.motor_left ?? 0,
+    motorRight: res.motor_right ?? 0,
+    motorFwd: res.motor_fwd ?? 0,
+    motorLeftCount: res.motor_left_count ?? 0,
+    motorRightCount: res.motor_right_count ?? 0,
+    motorFwdCount: res.motor_fwd_count ?? 0,
+    motorLeftMagnitude: res.motor_left_magnitude ?? 0,
+    motorRightMagnitude: res.motor_right_magnitude ?? 0,
+    motorFwdMagnitude: res.motor_fwd_magnitude ?? 0,
+    fly: {
+      x: fly.x,
+      y: fly.y,
+      z: fly.z,
+      heading: fly.heading,
+      t: fly.t,
+      hunger: fly.hunger,
+      health: fly.health,
+      dead: fly.dead,
+      flyTimeLeft: fly.fly_time_left,
+      restTimeLeft: fly.rest_time_left,
+      restDuration: fly.rest_duration,
+      feeding: fly.feeding,
+    },
+    eatenFoodIds: res.eaten_food_ids,
+    feedingSugarTaken: res.feeding_sugar_taken ?? 0,
+    bumpAngleDeg: res.bump_angle_deg ?? null,
+    epgBins: res.epg_bins ?? null,
+    computeMs: 0,
+    kernelMs: 0,
+    recurrentMs: 0,
+    lifMs: 0,
+    readoutMs: 0,
+  };
+}
+
+export async function runSteps(params: {
+  simId: number;
+  numSteps: number;
+  dt: number;
+  stimRatesById: Record<string, number>;
+  countNeuronIds?: string[];
+  recordTicks: boolean;
+}): Promise<{
+  steps_done: number;
+  duration_sec: number;
+  wall_sec: number;
+  steps_loop_ms: number;
+  ticks?: Array<{ tick: number; time_sec: number; spikes: string[] }>;
+}> {
+  return request({
+    method: 'run_steps',
+    params: {
+      sim_id: params.simId,
+      num_steps: Math.min(1_000_000, Math.max(1, Math.floor(params.numSteps))),
+      dt: params.dt,
+      stim_rates_by_id: params.stimRatesById,
+      count_neuron_ids: params.countNeuronIds,
+      record_ticks: params.recordTicks,
+    },
+  });
 }
 
 export async function stepSim(params: StepParams): Promise<StepResult> {
@@ -437,6 +530,8 @@ export async function stepSim(params: StepParams): Promise<StepResult> {
     };
     eaten_food_id?: string;
     feeding_sugar_taken?: number;
+    bump_angle_deg?: number | null;
+    epg_bins?: number[] | null;
     compute_ms?: number;
     kernel_ms?: number;
     recurrent_ms?: number;
@@ -447,6 +542,8 @@ export async function stepSim(params: StepParams): Promise<StepResult> {
     params: {
       sim_id: params.simId,
       dt: params.dt,
+      olfactory_baseline_rate_hz: params.olfactory_baseline_rate_hz,
+      forced_spikes: params.forced_spikes ?? [],
       fly: {
         x: params.fly.x,
         y: params.fly.y,
@@ -460,6 +557,9 @@ export async function stepSim(params: StepParams): Promise<StepResult> {
       },
       sources: params.sources,
       include_activity: params.includeActivity ?? true,
+      ...(params.ratesById && Object.keys(params.ratesById).length > 0
+        ? { rates_by_id: params.ratesById }
+        : {}),
     },
   });
   return {
@@ -488,8 +588,10 @@ export async function stepSim(params: StepParams): Promise<StepResult> {
       restDuration: res.fly.rest_duration,
       feeding: res.fly.feeding,
     },
-    eatenFoodId: res.eaten_food_id,
+    eatenFoodIds: res.eaten_food_id ? [res.eaten_food_id] : undefined,
     feedingSugarTaken: res.feeding_sugar_taken,
+    bumpAngleDeg: res.bump_angle_deg ?? null,
+    epgBins: res.epg_bins ?? null,
     computeMs: res.compute_ms,
     kernelMs: res.kernel_ms,
     recurrentMs: res.recurrent_ms,
@@ -588,7 +690,7 @@ export async function stepMany(
         restDuration: item.fly.rest_duration,
         feeding: item.fly.feeding,
       },
-      eatenFoodId: item.eaten_food_id,
+      eatenFoodIds: item.eaten_food_id ? [item.eaten_food_id] : undefined,
       feedingSugarTaken: item.feeding_sugar_taken,
       computeMs: item.compute_ms,
       kernelMs: item.kernel_ms,

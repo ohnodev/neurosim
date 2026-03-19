@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Instant;
 
-use crate::model_constants::{RECURRENT_SCALE, REFRACT_MS, TAU_MEM_MS, TAU_SYN_MS, V_RESET, V_REST, V_THRESH};
+use crate::model_constants::{REFRACT_MS, TAU_MEM_MS, TAU_SYN_MS, V_RESET, V_REST, V_THRESH, W_SYN};
 
 static DEVICE: OnceLock<Option<Arc<CudaDevice>>> = OnceLock::new();
 
@@ -202,7 +202,7 @@ impl GpuSimState {
                     &self.edge_weight,
                     ne,
                     n,
-                    RECURRENT_SCALE,
+                    W_SYN,
                 ),
             )
             .ok()?;

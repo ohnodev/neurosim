@@ -982,6 +982,12 @@ struct WorldFlyRuntime {
     fly: FlyInput,
     rates_by_id: HashMap<String, f64>,
     snapshot: WorldSnapshotFly,
+    fly_time_left_sec: f64,
+    wander_heading_rad: f64,
+    wander_time_left_sec: f64,
+    feeding_source_id: Option<String>,
+    feeding_time_left_sec: f64,
+    rng_state: u64,
 }
 
 struct WorldRuntimeState {
@@ -1000,6 +1006,165 @@ struct WorldFlyStepResult {
     fly_id: u32,
     snapshot: WorldSnapshotFly,
     epg_spikes: Vec<String>,
+}
+
+const WORLD_ARENA_LIMIT: f64 = 25.0;
+const WORLD_BASE_SPEED_UNITS_PER_SEC: f64 = 3.2;
+const WORLD_REST_DURATION_SEC: f64 = 4.0;
+const WORLD_FLY_TIME_MAX_SEC: f64 = 6.0;
+const WORLD_FEED_DURATION_SEC: f64 = 1.2;
+const WORLD_FEED_START_RADIUS: f64 = 2.2;
+const WORLD_WANDER_INTERVAL_SEC: f64 = 10.0;
+const WORLD_HUNGER_DECAY_PER_SEC: f64 = 1.2;
+const WORLD_HEALTH_DECAY_STARVING_PER_SEC: f64 = 2.0;
+const WORLD_HEALTH_RECOVERY_FEEDING_PER_SEC: f64 = 1.0;
+const WORLD_HUNGER_RECOVERY_FEEDING_PER_SEC: f64 = 14.0;
+
+fn normalize_angle_rad(a: f64) -> f64 {
+    let mut out = a;
+    while out > std::f64::consts::PI {
+        out -= 2.0 * std::f64::consts::PI;
+    }
+    while out < -std::f64::consts::PI {
+        out += 2.0 * std::f64::consts::PI;
+    }
+    out
+}
+
+fn clamp_turn_toward(current: f64, target: f64, max_turn: f64) -> f64 {
+    let delta = normalize_angle_rad(target - current);
+    if delta > max_turn {
+        normalize_angle_rad(current + max_turn)
+    } else if delta < -max_turn {
+        normalize_angle_rad(current - max_turn)
+    } else {
+        normalize_angle_rad(current + delta)
+    }
+}
+
+fn next_uniform01(state: &mut u64) -> f64 {
+    // xorshift64*
+    let mut x = *state;
+    x ^= x >> 12;
+    x ^= x << 25;
+    x ^= x >> 27;
+    *state = x;
+    let y = x.wrapping_mul(0x2545F4914F6CDD1D);
+    (y as f64) / (u64::MAX as f64)
+}
+
+fn nearest_source<'a>(x: f64, y: f64, sources: &'a [SourceInput]) -> Option<(&'a SourceInput, f64)> {
+    let mut best: Option<(&SourceInput, f64)> = None;
+    for s in sources {
+        let dx = s.x - x;
+        let dy = s.y - y;
+        let d = (dx * dx + dy * dy).sqrt();
+        match best {
+            Some((_, bd)) if d >= bd => {}
+            _ => best = Some((s, d)),
+        }
+    }
+    best
+}
+
+fn update_world_fly_kinematics(
+    runtime: &mut WorldFlyRuntime,
+    dt_batch: f64,
+    sources_now: &[SourceInput],
+    bump_angle_deg: Option<f64>,
+) -> bool {
+    let fly = &mut runtime.fly;
+    let hunger = fly.hunger.clamp(0.0, 100.0);
+    let hunger_drive = ((100.0 - hunger) / 100.0).clamp(0.0, 1.0);
+    let mut feeding = false;
+
+    let nearest = nearest_source(fly.x, fly.y, sources_now);
+    let is_hungry = hunger <= 85.0;
+
+    // Rest/fatigue gate.
+    if fly.rest_time_left > 0.0 {
+        fly.rest_time_left = (fly.rest_time_left - dt_batch).max(0.0);
+        runtime.fly_time_left_sec = (runtime.fly_time_left_sec + dt_batch * 0.75).min(WORLD_FLY_TIME_MAX_SEC);
+    } else {
+        runtime.fly_time_left_sec = (runtime.fly_time_left_sec - dt_batch).max(0.0);
+        if runtime.fly_time_left_sec <= 0.0 {
+            fly.rest_time_left = WORLD_REST_DURATION_SEC;
+        }
+    }
+
+    // Feeding behavior: when hungry and near source, pin to source briefly.
+    if runtime.feeding_time_left_sec > 0.0 {
+        runtime.feeding_time_left_sec = (runtime.feeding_time_left_sec - dt_batch).max(0.0);
+        if let Some(ref sid) = runtime.feeding_source_id {
+            if let Some(src) = sources_now.iter().find(|s| &s.id == sid) {
+                fly.x = src.x;
+                fly.y = src.y;
+                fly.z = 0.9;
+                feeding = true;
+            }
+        }
+    } else {
+        runtime.feeding_source_id = None;
+        if let Some((src, dist)) = nearest {
+            if is_hungry && dist <= WORLD_FEED_START_RADIUS + src.radius.max(0.0) {
+                runtime.feeding_source_id = Some(src.id.clone());
+                runtime.feeding_time_left_sec = WORLD_FEED_DURATION_SEC;
+                fly.x = src.x;
+                fly.y = src.y;
+                fly.z = 0.9;
+                feeding = true;
+            }
+        }
+    }
+
+    if feeding {
+        fly.hunger = (fly.hunger + WORLD_HUNGER_RECOVERY_FEEDING_PER_SEC * dt_batch).clamp(0.0, 100.0);
+        fly.health = (fly.health + WORLD_HEALTH_RECOVERY_FEEDING_PER_SEC * dt_batch).clamp(0.0, 100.0);
+        runtime.fly_time_left_sec = (runtime.fly_time_left_sec + dt_batch * 0.5).min(WORLD_FLY_TIME_MAX_SEC);
+    } else {
+        fly.hunger = (fly.hunger - WORLD_HUNGER_DECAY_PER_SEC * dt_batch).clamp(0.0, 100.0);
+        if fly.hunger < 15.0 {
+            fly.health = (fly.health - WORLD_HEALTH_DECAY_STARVING_PER_SEC * dt_batch).clamp(0.0, 100.0);
+        }
+        if fly.rest_time_left <= 0.0 {
+            let desired_heading = if let Some(deg) = bump_angle_deg {
+                normalize_angle_rad(deg.to_radians())
+            } else if is_hungry {
+                if let Some((src, _)) = nearest {
+                    (src.y - fly.y).atan2(src.x - fly.x)
+                } else {
+                    runtime.wander_heading_rad
+                }
+            } else {
+                runtime.wander_time_left_sec -= dt_batch;
+                if runtime.wander_time_left_sec <= 0.0 {
+                    let u = next_uniform01(&mut runtime.rng_state);
+                    runtime.wander_heading_rad =
+                        normalize_angle_rad((u * 2.0 * std::f64::consts::PI) - std::f64::consts::PI);
+                    runtime.wander_time_left_sec = WORLD_WANDER_INTERVAL_SEC;
+                }
+                runtime.wander_heading_rad
+            };
+            let max_turn_rate = 1.4 + 2.6 * hunger_drive;
+            fly.heading = clamp_turn_toward(fly.heading, desired_heading, max_turn_rate * dt_batch);
+
+            let fatigue_scale = (runtime.fly_time_left_sec / WORLD_FLY_TIME_MAX_SEC).clamp(0.0, 1.0);
+            let speed = WORLD_BASE_SPEED_UNITS_PER_SEC * (0.35 + 0.65 * fatigue_scale);
+            let nx = fly.x + fly.heading.cos() * speed * dt_batch;
+            let ny = fly.y + fly.heading.sin() * speed * dt_batch;
+            fly.x = nx.clamp(-WORLD_ARENA_LIMIT, WORLD_ARENA_LIMIT);
+            fly.y = ny.clamp(-WORLD_ARENA_LIMIT, WORLD_ARENA_LIMIT);
+            fly.z = (fly.z + 0.2 * dt_batch).clamp(0.35, 1.1);
+        } else {
+            fly.z = (fly.z - 0.4 * dt_batch).clamp(0.35, 1.1);
+        }
+    }
+
+    if fly.health <= 0.0 {
+        fly.dead = true;
+    }
+
+    feeding
 }
 
 fn step_world_fly_runtime(
@@ -1084,32 +1249,24 @@ fn step_world_fly_runtime(
         }
     }
     let (bump_angle_deg, epg_bins_arr) = compute_bump_and_epg_bins(&last_activity_sparse, epg_id_to_bin);
-    runtime.fly = FlyInput {
-        x: fly.x,
-        y: fly.y,
-        z: fly.z,
-        heading: fly.heading,
-        t: fly.t,
-        hunger: fly.hunger,
-        health: fly.health,
-        rest_time_left: fly.rest_time_left,
-        dead: fly.dead,
-    };
+    let dt_batch = dt_sec * steps_per_batch as f64;
+    let feeding = update_world_fly_kinematics(runtime, dt_batch, sources_now, bump_angle_deg);
+    runtime.fly.t = fly.t;
     let snap = WorldSnapshotFly {
         fly_id,
         fly: FlyRespJson {
-            x: fly.x,
-            y: fly.y,
-            z: fly.z,
-            heading: fly.heading,
+            x: runtime.fly.x,
+            y: runtime.fly.y,
+            z: runtime.fly.z,
+            heading: runtime.fly.heading,
             t: fly.t,
-            hunger: fly.hunger,
-            health: fly.health,
-            dead: fly.dead,
-            fly_time_left: 1.0,
-            rest_time_left: fly.rest_time_left.max(0.0),
-            rest_duration: 0.0,
-            feeding: false,
+            hunger: runtime.fly.hunger,
+            health: runtime.fly.health,
+            dead: runtime.fly.dead,
+            fly_time_left: (runtime.fly_time_left_sec / WORLD_FLY_TIME_MAX_SEC).clamp(0.0, 1.0),
+            rest_time_left: runtime.fly.rest_time_left.max(0.0),
+            rest_duration: WORLD_REST_DURATION_SEC,
+            feeding,
         },
         activity_sparse: last_activity_sparse,
         bump_angle_deg,
@@ -2250,6 +2407,12 @@ fn handle(
                     fly,
                     rates_by_id: HashMap::new(),
                     snapshot: snapshot.clone(),
+                    fly_time_left_sec: WORLD_FLY_TIME_MAX_SEC,
+                    wander_heading_rad: p.fly.heading,
+                    wander_time_left_sec: WORLD_WANDER_INTERVAL_SEC,
+                    feeding_source_id: None,
+                    feeding_time_left_sec: 0.0,
+                    rng_state: (fly_id as u64).wrapping_mul(0x9E3779B97F4A7C15u64).wrapping_add(1),
                 })),
             );
             world

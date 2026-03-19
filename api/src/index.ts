@@ -4,7 +4,6 @@ import cors from 'cors';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { loadConnectome } from './connectome.js';
-import { createBrainSim } from './brain-sim.js';
 import * as socketClient from './brain-socket-client.js';
 import { getWorld, spawnFood, removeFood, getSources, type WorldSource } from './world.js';
 import {
@@ -286,7 +285,41 @@ let foodIntervalId: ReturnType<typeof setInterval> | null = null;
 let rewardFlushIntervalId: ReturnType<typeof setInterval> | null = null;
 
 /** Simulation flies; starts empty, users deploy flies. */
-const sims: Awaited<ReturnType<typeof createBrainSim>>[] = [];
+type RuntimeFly = {
+  x: number;
+  y: number;
+  z: number;
+  heading: number;
+  t: number;
+  hunger: number;
+  health: number;
+  dead?: boolean;
+  flyTimeLeft?: number;
+  restTimeLeft?: number;
+  restDuration?: number;
+  feeding?: boolean;
+};
+type RuntimeSimState = {
+  t: number;
+  fly: RuntimeFly;
+  activity?: Record<string, number>;
+  inputActivity?: Record<string, number>;
+  eatenFoodIds?: string[];
+  feedingSugarTaken?: number;
+  bumpAngleDeg?: number | null;
+  epgBins?: number[] | null;
+};
+type RuntimeSim = {
+  flyId: number;
+  state: RuntimeSimState;
+  timing: {
+    rustMs: number;
+    jsMs: number;
+    socketTotalMs: number;
+    socketResponseWaitMs: number;
+  };
+};
+const sims: RuntimeSim[] = [];
 /** address -> slotIndex -> simIndex */
 const deployedFlies = new Map<string, Map<number, number>>();
 /** Per-sim rolling activity memory so clients can receive rotating recent spikes/inputs. */
@@ -321,6 +354,12 @@ function findDeploymentBySimIndex(simIndex: number): { address: string; slotInde
 function removeSimAtIndex(simIndex: number): { address: string; slotIndex: number } | null {
   if (simIndex < 0 || simIndex >= sims.length) return null;
   const deployment = findDeploymentBySimIndex(simIndex);
+  const removedFlyId = sims[simIndex]?.flyId;
+  if (typeof removedFlyId === 'number') {
+    void socketClient.worldRemoveFly(removedFlyId).catch((err) => {
+      console.error('[world] world_remove_fly failed', { flyId: removedFlyId, err });
+    });
+  }
   sims.splice(simIndex, 1);
   simActivityTrail.splice(simIndex, 1);
   smoothedBumpBySimIndex.splice(simIndex, 1);
@@ -346,7 +385,7 @@ async function addFlyToSim(spawnKey?: string): Promise<number> {
   const x = INITIAL_SPREAD * Math.cos(baseAngle) + jitterRadius * Math.cos(jitterAngle);
   const y = INITIAL_SPREAD * Math.sin(baseAngle) + jitterRadius * Math.sin(jitterAngle);
   const heading = (((h >>> 20) & 1023) / 1023) * 2 * Math.PI - Math.PI;
-  const sim = await createBrainSim(connectome, () => getSources(), {
+  const created = await socketClient.worldAddFly({
     x,
     y,
     z: GROUND_Z,
@@ -354,10 +393,39 @@ async function addFlyToSim(spawnKey?: string): Promise<number> {
     t: 0,
     hunger: 100,
     health: 100,
+    restTimeLeft: 0,
+    dead: false,
   });
-  sims.push(sim);
+  sims.push({
+    flyId: created.fly_id,
+    state: {
+      t: 0,
+      fly: {
+        x,
+        y,
+        z: GROUND_Z,
+        heading,
+        t: 0,
+        hunger: 100,
+        health: 100,
+        dead: false,
+        flyTimeLeft: 1,
+        restTimeLeft: 0,
+        restDuration: 0,
+        feeding: false,
+      },
+      activity: {},
+      bumpAngleDeg: null,
+      epgBins: null,
+    },
+    timing: {
+      rustMs: 0,
+      jsMs: 0,
+      socketTotalMs: 0,
+      socketResponseWaitMs: 0,
+    },
+  });
   simActivityTrail.push(new Map());
-  const sources = getSources();
   smoothedBumpBySimIndex.push(normalizeAngleDeg((heading * 180) / Math.PI));
   return sims.length - 1;
 }
@@ -418,7 +486,7 @@ function broadcast(data: unknown): void {
 function buildClientPayload(
   frames: {
     t: number;
-    flies: ReturnType<typeof sims[0]['getState']>['fly'][];
+    flies: RuntimeFly[];
     activities: (Record<string, number> | undefined)[];
     inputActivities: (Record<string, number> | undefined)[];
     bumpAngleDegs: (number | null)[];
@@ -594,7 +662,7 @@ function startSim(): void {
       const dtFrame = 1 / SIM_FPS;
       const frames: {
         t: number;
-        flies: ReturnType<typeof sims[0]['getState']>['fly'][];
+        flies: RuntimeFly[];
         activities: (Record<string, number> | undefined)[];
         inputActivities: (Record<string, number> | undefined)[];
         bumpAngleDegs: (number | null)[];
@@ -602,8 +670,8 @@ function startSim(): void {
       }[] = [];
 
       const transitions: Array<{
-        fromFly: ReturnType<typeof sims[0]['getState']>['fly'];
-        toFly: ReturnType<typeof sims[0]['getState']>['fly'];
+        fromFly: RuntimeFly;
+        toFly: RuntimeFly;
         fromT: number;
         toT: number;
         activity?: Record<string, number>;
@@ -612,7 +680,7 @@ function startSim(): void {
         epgBins?: number[] | null;
       }> = [];
 
-      const beforeStates = sims.map((s) => s.getState());
+      const beforeStates = sims.map((s) => s.state);
       const viewedSimIndexes = new Set<number>();
       if (wsClients.size > 0) {
         for (const ws of wsClients) {
@@ -621,51 +689,63 @@ function startSim(): void {
         }
       }
       const currentSources = getSources();
-      const states = await Promise.all(
-        sims.map(async (s, idx) => {
-          const beforeFly = beforeStates[idx]?.fly;
-          if (beforeFly && smoothedBumpBySimIndex[idx] == null) {
-            smoothedBumpBySimIndex[idx] = normalizeAngleDeg((beforeFly.heading * 180) / Math.PI);
-          }
-          const state = await (s as { stepBatch?: (dt: number, n: number, src: WorldSource[], rates?: Record<string, number>) => Promise<ReturnType<typeof sims[0]['getState']>> }).stepBatch?.(
-            WORLD_SIM_DT_SEC,
-            WORLD_STEPS_PER_BATCH,
-            currentSources,
-            undefined,
-          );
-          return state ?? s.getState();
-        }),
+      const pullStart = performance.now();
+      await socketClient.worldSetSources(
+        currentSources.map((s) => ({ id: s.id, x: s.x ?? 0, y: s.y ?? 0, radius: s.radius ?? 1 })),
       );
+      const worldSnap = await socketClient.worldGetSnapshot();
+      const pullMs = performance.now() - pullStart;
+      const byFlyId = new Map<number, socketClient.WorldFlySnapshot>();
+      for (const item of worldSnap.flies ?? []) byFlyId.set(item.fly_id, item);
+      const states: RuntimeSimState[] = sims.map((sim, idx) => {
+        const snap = byFlyId.get(sim.flyId);
+        if (!snap) return sim.state;
+        const next: RuntimeSimState = {
+          t: snap.fly.t,
+          fly: {
+            x: snap.fly.x,
+            y: snap.fly.y,
+            z: snap.fly.z,
+            heading: snap.fly.heading,
+            t: snap.fly.t,
+            hunger: snap.fly.hunger,
+            health: snap.fly.health,
+            dead: snap.fly.dead,
+            flyTimeLeft: snap.fly.fly_time_left,
+            restTimeLeft: snap.fly.rest_time_left,
+            restDuration: snap.fly.rest_duration,
+            feeding: snap.fly.feeding,
+          },
+          activity: snap.activity_sparse ?? {},
+          inputActivity: undefined,
+          eatenFoodIds: undefined,
+          feedingSugarTaken: 0,
+          bumpAngleDeg: snap.bump_angle_deg ?? null,
+          epgBins: snap.epg_bins ?? null,
+        };
+        sim.state = next;
+        sim.timing = {
+          rustMs: snap.compute_ms ?? 0,
+          jsMs: 0,
+          socketTotalMs: Math.round(pullMs),
+          socketResponseWaitMs: Math.round(pullMs),
+        };
+        return next;
+      });
       const activityNowMs = Date.now();
       const deadSimIndexes: number[] = [];
       for (let j = 0; j < nSims; j++) {
         const before = beforeStates[j];
         const state = states[j];
-        const gt = (sims[j] as {
-          getTiming?: () => {
-            rustMs: number;
-            jsMs: number;
-            socketTotalMs?: number;
-            socketResponseWaitMs?: number;
-            socketBatchSize?: number;
-          };
-        }).getTiming?.();
+        const gt = sims[j]?.timing;
         if (gt) {
           stepMs += gt.rustMs;
           jsMs += gt.jsMs;
-          const thisBatchSize = gt.socketBatchSize ?? 1;
-          if (thisBatchSize > 1) {
-            if (j === 0) {
-              socketRoundtripMs += gt.socketTotalMs ?? 0;
-              socketWaitMs += gt.socketResponseWaitMs ?? 0;
-              batchCalls += 1;
-              batchSize = thisBatchSize;
-            }
-          } else {
+          if (j === 0) {
             socketRoundtripMs += gt.socketTotalMs ?? 0;
             socketWaitMs += gt.socketResponseWaitMs ?? 0;
-            batchCalls += 1;
-            if (batchSize < 1) batchSize = 1;
+            batchCalls = 1;
+            batchSize = Math.max(1, nSims);
           }
           if (gt.rustMs > maxStepMs) maxStepMs = gt.rustMs;
           if (gt.jsMs > maxJsMs) maxJsMs = gt.jsMs;
@@ -754,7 +834,7 @@ function startSim(): void {
 
       for (let i = 1; i <= FRAMES_PER_BATCH; i++) {
         const alpha = i / FRAMES_PER_BATCH;
-        const flies: ReturnType<typeof sims[0]['getState']>['fly'][] = transitions.map((tr) => ({
+        const flies: RuntimeFly[] = transitions.map((tr) => ({
           ...tr.toFly,
           x: lerp(tr.fromFly.x, tr.toFly.x, alpha),
           y: lerp(tr.fromFly.y, tr.toFly.y, alpha),
@@ -1412,11 +1492,11 @@ wss.on('connection', (ws) => {
   clientActivityCursor.set(ws, 0);
   console.log('[ws] client connected, total=', wsClients.size);
 
-  const flies = sims.map((s) => s.getState().fly);
+  const flies = sims.map((s) => s.state.fly);
   const viewIndex = Math.max(0, Math.min(sims.length - 1, 0));
-  const states = sims.map((s) => s.getState());
+  const states = sims.map((s) => s.state);
   const activities = states.map((s) => s.activity);
-  const firstState = sims[0]?.getState();
+  const firstState = sims[0]?.state;
   ws.send(JSON.stringify({
     frames: [{ t: firstState?.t ?? 0, flies }],
     activity: activities[viewIndex] ?? {},

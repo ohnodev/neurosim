@@ -26,7 +26,7 @@ let lastRequestTiming: {
   batchSize?: number;
 } | null = null;
 const TRACE_SOCKET_TIMING = process.env.NEUROSIM_SOCKET_TRACE === '1';
-const REQUEST_TIMEOUT_MS = Number(process.env.NEUROSIM_BRAIN_REQUEST_TIMEOUT_MS ?? 10_000);
+const REQUEST_TIMEOUT_MS = Number(process.env.NEUROSIM_BRAIN_REQUEST_TIMEOUT_MS ?? 60_000);
 
 function getConnection(): Promise<{ sock: net.Socket; rl: ReturnType<typeof createInterface> }> {
   if (sharedSocket && sharedRl && !sharedSocket.destroyed) {
@@ -381,6 +381,112 @@ export interface RunStepsWithStateResult {
   activitySparse: Record<string, number>;
   bumpAngleDeg?: number | null;
   epgBins?: number[] | null;
+}
+
+export interface WorldFlySnapshot {
+  fly_id: number;
+  fly: {
+    x: number;
+    y: number;
+    z: number;
+    heading: number;
+    t: number;
+    hunger: number;
+    health: number;
+    dead: boolean;
+    fly_time_left: number;
+    rest_time_left: number;
+    rest_duration: number;
+    feeding: boolean;
+  };
+  activity_sparse: Record<string, number>;
+  bump_angle_deg?: number | null;
+  epg_bins?: number[];
+  compute_ms: number;
+  kernel_ms: number;
+  recurrent_ms: number;
+  lif_ms: number;
+  readout_ms: number;
+}
+
+export interface WorldSnapshot {
+  ok: boolean;
+  tick: number;
+  dt_sec: number;
+  flies: WorldFlySnapshot[];
+}
+
+export async function worldAddFly(fly: {
+  x: number;
+  y: number;
+  z: number;
+  heading: number;
+  t: number;
+  hunger: number;
+  health: number;
+  restTimeLeft: number;
+  dead: boolean;
+}): Promise<{ ok: boolean; fly_id: number }> {
+  return request({
+    method: 'world_add_fly',
+    params: {
+      fly: {
+        x: fly.x,
+        y: fly.y,
+        z: fly.z,
+        heading: fly.heading,
+        t: fly.t,
+        hunger: fly.hunger,
+        health: fly.health,
+        rest_time_left: fly.restTimeLeft,
+        dead: fly.dead,
+      },
+    },
+  });
+}
+
+export async function worldRemoveFly(flyId: number): Promise<{ ok: boolean; fly_id: number }> {
+  return request({
+    method: 'world_remove_fly',
+    params: { fly_id: flyId },
+  });
+}
+
+export async function worldSetRates(flyId: number, ratesById: Record<string, number>): Promise<{ ok: boolean }> {
+  return request({
+    method: 'world_set_rates',
+    params: { fly_id: flyId, rates_by_id: ratesById },
+  });
+}
+
+export async function worldSetSources(
+  sources: Array<{ id: string; x: number; y: number; radius: number }>,
+): Promise<{ ok: boolean }> {
+  return request({
+    method: 'world_set_sources',
+    params: { sources },
+  });
+}
+
+export async function worldGetSnapshot(): Promise<WorldSnapshot> {
+  return request({
+    method: 'world_get_snapshot',
+    params: {},
+  });
+}
+
+export async function worldReadTicks(afterTick: number, maxTicks = 2000): Promise<{
+  ticks: Array<{ tick: number; fly_id: number; time_sec: number; spikes: string[] }>;
+  latest_tick: number;
+  dt_sec: number;
+}> {
+  return request({
+    method: 'world_read_ticks',
+    params: {
+      after_tick: Math.max(0, Math.floor(afterTick)),
+      max_ticks: Math.min(8000, Math.max(1, Math.floor(maxTicks))),
+    },
+  });
 }
 
 /** Run N steps in one round-trip; world path returns EPG-only readout. */

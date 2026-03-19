@@ -98,9 +98,7 @@ const FLY_SMELL_RADIUS_DEBUG = 24; // Keep aligned with Rust ODOR_DETECTION_RADI
 const FLY_SMELL_RADIUS_DEBUG_COLOR = 0xffd75e;
 const FLY_SMELL_RADIUS_DEBUG_OPACITY = 0.1;
 /** Debug helper: render per-fly motion heading arrow (purple). */
-const SHOW_FLY_HEADING_ARROW_DEBUG =
-  typeof window !== 'undefined'
-  && ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
+const ENABLE_FLY_HEADING_ARROW_DEBUG = true;
 const FLY_HEADING_ARROW_COLOR = 0xb84dff;
 const FLY_HEADING_ARROW_LENGTH = 0.9;
 const FLY_HEADING_ARROW_HEAD_LENGTH = 0.22;
@@ -647,6 +645,7 @@ export function initThreeScene(
   }
 
   function ensureFlyCount(count: number) {
+    const headingArrowDebugEnabled = ENABLE_FLY_HEADING_ARROW_DEBUG && refs.devModeRef.current;
     while (flyInstances.length > count) {
       const inst = flyInstances.pop()!;
       fliesGroup.remove(inst.group);
@@ -658,7 +657,7 @@ export function initThreeScene(
         if (Array.isArray(smell.material)) smell.material.forEach((m) => m.dispose());
         else smell.material.dispose();
       }
-      if (SHOW_FLY_HEADING_ARROW_DEBUG && flyHeadingArrowDebugPool.length > flyInstances.length) {
+      if (flyHeadingArrowDebugPool.length > flyInstances.length) {
         const arrow = flyHeadingArrowDebugPool.pop()!;
         fliesGroup.remove(arrow);
         disposeObject3D(arrow);
@@ -699,7 +698,7 @@ export function initThreeScene(
         smell.scale.setScalar(FLY_SMELL_RADIUS_DEBUG);
         smell.visible = true;
       }
-      if (SHOW_FLY_HEADING_ARROW_DEBUG) {
+      if (headingArrowDebugEnabled) {
         const arrow = getOrCreateFlyHeadingArrowDebug();
         arrow.visible = true;
       }
@@ -782,11 +781,14 @@ export function initThreeScene(
         for (const smell of flySmellDebugPool) smell.visible = false;
       }
     }
-    if (SHOW_FLY_HEADING_ARROW_DEBUG) {
+    const headingArrowDebugEnabled = ENABLE_FLY_HEADING_ARROW_DEBUG && debugEnabled;
+    if (headingArrowDebugEnabled) {
       while (flyHeadingArrowDebugPool.length < flyInstances.length) {
         const arrow = getOrCreateFlyHeadingArrowDebug();
         arrow.visible = false;
       }
+    } else {
+      for (const arrow of flyHeadingArrowDebugPool) arrow.visible = false;
     }
 
     const headingArrowDir = new THREE.Vector3();
@@ -825,7 +827,7 @@ export function initThreeScene(
         smell.scale.setScalar(FLY_SMELL_RADIUS_DEBUG);
         smell.visible = true;
       }
-      if (SHOW_FLY_HEADING_ARROW_DEBUG && flyHeadingArrowDebugPool[i]) {
+      if (headingArrowDebugEnabled && flyHeadingArrowDebugPool[i]) {
         const arrow = flyHeadingArrowDebugPool[i]!;
         if (motionDistSq > MOTION_HEADING_THRESHOLD_SQ) {
           headingArrowDir.set(dx, 0, dy).normalize();
@@ -880,7 +882,7 @@ export function initThreeScene(
         inst.lowLodWasFlying = lowLodIsFlying;
       }
     }
-    if (SHOW_FLY_HEADING_ARROW_DEBUG) {
+    if (headingArrowDebugEnabled) {
       for (let i = flyInstances.length; i < flyHeadingArrowDebugPool.length; i++) {
         flyHeadingArrowDebugPool[i]!.visible = false;
       }

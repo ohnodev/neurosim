@@ -72,6 +72,8 @@ const FLY_LOD_DISTANCE_IN = FLY_LOD_DISTANCE;
 const FLY_LOD_DISTANCE_OUT = FLY_LOD_DISTANCE + FLY_LOD_HYSTERESIS;
 const FLY_LOD_DISTANCE_IN_SQ = FLY_LOD_DISTANCE_IN * FLY_LOD_DISTANCE_IN;
 const FLY_LOD_DISTANCE_OUT_SQ = FLY_LOD_DISTANCE_OUT * FLY_LOD_DISTANCE_OUT;
+/** Calibrated model yaw offset: heading->model forward alignment. */
+const FLY_MODEL_YAW_OFFSET = Math.PI / 2 + Math.PI;
 const LOW_LOD_WING_BASE_ANGLE = 0.52;
 const LOW_LOD_WING_FLAP_AMPLITUDE = 0.43;
 const LOW_LOD_WING_FLAP_SPEED = 0.03;
@@ -760,24 +762,17 @@ export function initThreeScene(
       const isFlying = wasFlying ? z > FLY_THRESHOLD_DOWN : z > FLY_THRESHOLD_UP;
       const lowLodIsFlying = inst.lowLodWasFlying ? z > FLY_THRESHOLD_DOWN : z > FLY_THRESHOLD_UP;
 
-      // Use Rust fly.heading (authoritative). Same as bc46064 when it worked.
-      // Rust: 0 rad = +X, π/2 = +Y. Three.js default forward -Z, so rotation.y = heading + π/2 faces +X.
+      // Use Rust fly.heading directly (snap) to match calibration behavior.
+      // Rust: 0 rad = +X, π/2 = +Y.
       inst.prevPos = { x, y };
       const rustHeading = state.heading ?? inst.heading;
-      let d = rustHeading - inst.heading;
-      if (d > Math.PI) d -= 2 * Math.PI;
-      if (d < -Math.PI) d += 2 * Math.PI;
-      const headingAlpha = Math.min(1, 1 - Math.exp(-HEADING_LERP_RATE * Math.min(cappedDelta, 0.05)));
-      inst.heading += d * headingAlpha;
-      if (!inst.initialized) {
-        inst.heading = rustHeading;
-        inst.initialized = true;
-      }
+      inst.heading = rustHeading;
+      if (!inst.initialized) inst.initialized = true;
 
       const visualZ = Math.max(0, z - GROUND_Z);
       inst.group.position.set(x, visualZ, y);
       // Fly model faces opposite: add PI so head points in movement direction
-      inst.group.rotation.y = inst.heading + Math.PI / 2 + Math.PI;
+      inst.group.rotation.y = inst.heading + FLY_MODEL_YAW_OFFSET;
       if (SHOW_FLY_SMELL_RADIUS_DEBUG && debugEnabled && flySmellDebugPool[i]) {
         const smell = flySmellDebugPool[i]!;
         smell.position.set(x, visualZ, y);

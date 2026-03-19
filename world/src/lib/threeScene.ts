@@ -51,7 +51,8 @@ export interface ThreeSceneRefs {
   derivedBumpBySimIndexRef: { current: (number | null)[] };
 }
 
-const ARENA_SIZE = 48;
+/** Ground plane size — large so flies can roam freely (no edges). */
+const ARENA_SIZE = 500;
 const LERP_RATE = 0.45;
 const MAX_DELTA = 0.05;
 const LANDING_Z_THRESHOLD = 1.2;

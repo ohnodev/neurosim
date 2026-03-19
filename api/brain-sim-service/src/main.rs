@@ -1141,7 +1141,7 @@ struct WorldFlyStepResult {
     step_ticks: Vec<(u64, f64, Vec<u8>)>,
 }
 
-const WORLD_ARENA_LIMIT: f64 = 25.0;
+/// No arena boundaries — flies move freely.
 const WORLD_BASE_SPEED_UNITS_PER_SEC: f64 = 18.0;
 const WORLD_REST_DURATION_SEC: f64 = 4.0;
 const WORLD_FLY_TIME_MAX_SEC: f64 = 6.0;
@@ -1286,8 +1286,8 @@ fn update_world_fly_kinematics(
             let speed = WORLD_BASE_SPEED_UNITS_PER_SEC * (0.35 + 0.65 * fatigue_scale);
             let nx = fly.x + fly.heading.cos() * speed * dt_batch;
             let ny = fly.y + fly.heading.sin() * speed * dt_batch;
-            fly.x = nx.clamp(-WORLD_ARENA_LIMIT, WORLD_ARENA_LIMIT);
-            fly.y = ny.clamp(-WORLD_ARENA_LIMIT, WORLD_ARENA_LIMIT);
+            fly.x = nx;
+            fly.y = ny;
             fly.z = (fly.z + 0.2 * dt_batch).clamp(0.35, 1.1);
         } else {
             fly.z = (fly.z - 0.4 * dt_batch).clamp(0.35, 1.1);

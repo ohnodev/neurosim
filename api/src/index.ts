@@ -61,7 +61,10 @@ const epgTileMapEntries: EpgTileMapEntry[] = (() => {
     return [];
   }
 })();
-const epgRootIdSet = new Set(epgTileMapEntries.map((e) => e.root_id));
+/** EPG only (exclude EPGt); 51 canonical compass neurons for bump. */
+const epgRootIdSet = new Set(
+  epgTileMapEntries.filter((e) => e.hemibrain_type === 'EPG').map((e) => e.root_id),
+);
 const ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
 const MAX_SLOT_INDEX = 2;
 const VIEWER_NEURON_LIMIT = Math.max(1, Number(process.env.NEUROSIM_VIEWER_NEURON_LIMIT ?? 10_000));
@@ -550,6 +553,9 @@ let droppedSimTicks = 0;
 let simReadyAtMs = 0;
 let graceSkippedTicks = 0;
 let graceSkipLogged = false;
+let lastTicksAfter = 0;
+let epgIndexToBin: number[] = [];
+let worldStepsPerBatch = 1250;
 
 const wsClients = new Set<import('ws').WebSocket>();
 /** Per-client: which fly's activity to send (sim index). Default 0. */
@@ -574,6 +580,7 @@ function buildClientPayload(
     bumpAngleDegs: (number | null)[];
     epgBinsPerSim: (number[] | null)[];
   }[],
+  ticks: Array<{ tick: number; fly_id: number; time_sec: number; epg: number[] }>,
 ): void {
   const nowMs = Date.now();
   const sources = getSources();
@@ -595,7 +602,19 @@ function buildClientPayload(
       nowMs,
     );
     try {
-      ws.send(JSON.stringify({ frames: clientFrames, activity, sources, simRunning: true }));
+      ws.send(
+        JSON.stringify({
+          frames: clientFrames,
+          activity,
+          sources,
+          simRunning: true,
+          ticks,
+          epgIndexToBin,
+          worldDtSec: WORLD_SIM_DT_SEC,
+          worldStepsPerBatch,
+          flyIdBySimIndex: sims.map((s) => s.flyId),
+        }),
+      );
     } catch (err) {
       console.error('[ws] send error', err);
     }
@@ -775,7 +794,14 @@ function startSim(): void {
       await socketClient.worldSetSources(
         currentSources.map((s) => ({ id: s.id, x: s.x ?? 0, y: s.y ?? 0, radius: s.radius ?? 1 })),
       );
-      const worldSnap = await socketClient.worldGetSnapshot();
+      const [worldSnap, ticksResp] = await Promise.all([
+        socketClient.worldGetSnapshot(),
+        socketClient.worldReadTicks(lastTicksAfter, 50_000),
+      ]);
+      if (ticksResp.epg_index_to_bin?.length) epgIndexToBin = ticksResp.epg_index_to_bin;
+      if (ticksResp.steps_per_batch) worldStepsPerBatch = ticksResp.steps_per_batch;
+      const ticks = ticksResp.ticks ?? [];
+      if (ticks.length > 0) lastTicksAfter = Math.max(...ticks.map((r) => r.tick));
       const pullMs = performance.now() - pullStart;
       const byFlyId = new Map<number, socketClient.WorldFlySnapshot>();
       for (const item of worldSnap.flies ?? []) byFlyId.set(item.fly_id, item);
@@ -930,7 +956,7 @@ function startSim(): void {
         frames.push({ t, flies, activities, inputActivities, bumpAngleDegs, epgBinsPerSim });
       }
       const beforePayload = performance.now();
-      buildClientPayload(frames);
+      buildClientPayload(frames, ticks);
       const buildPayloadMs = Math.round(performance.now() - beforePayload);
       connectionStep += 1;
       if (connectionStep % 15 === 0) {
@@ -1068,10 +1094,12 @@ app.get('/api/neurons', (req, res) => {
 });
 
 app.get('/api/epg-tile-map', (_req, res) => {
+  const epgOnly = epgTileMapEntries.filter((e) => e.hemibrain_type === 'EPG');
   res.json({
-    entries: epgTileMapEntries,
-    count: epgTileMapEntries.length,
+    entries: epgOnly,
+    count: epgOnly.length,
     source: 'api:data/epg-tile-map.json',
+    note: 'EPG only (excludes EPGt)',
   });
 });
 
@@ -1423,6 +1451,101 @@ app.post('/api/neurosim-baseline/export', async (req, res) => {
 });
 
 app.get('/api/world', (_, res) => res.json(getWorld()));
+
+/** Record world sim ticks for ~durationSec, convert to visualization replay format, log and return. */
+app.post('/api/world-record-ticks', async (req, res) => {
+  try {
+    const durationSec = Math.max(1, Math.min(30, Number(req.body?.durationSec ?? 10)));
+    const pollIntervalMs = 800;
+    const pollCount = Math.ceil((durationSec * 1000) / pollIntervalMs);
+    let lastAfterTick = 0;
+    const allTicks: Array<{ tick: number; fly_id: number; time_sec: number; epg: number[] }> = [];
+    let epgIndexToRootId: string[] = [];
+    let dtSec = 0.0008;
+    for (let i = 0; i < pollCount; i++) {
+      const resp = await socketClient.worldReadTicks(lastAfterTick, 100_000);
+      epgIndexToRootId = resp.epg_index_to_root_id ?? [];
+      if (resp.dt_sec != null) dtSec = resp.dt_sec;
+      const batch = resp.ticks ?? [];
+      for (const t of batch) {
+        allTicks.push({
+          tick: t.tick,
+          fly_id: t.fly_id,
+          time_sec: t.time_sec,
+          epg: t.epg ?? [],
+        });
+      }
+      if (batch.length > 0) lastAfterTick = Math.max(...batch.map((r) => r.tick));
+      if (i < pollCount - 1) await new Promise((r) => setTimeout(r, pollIntervalMs));
+    }
+    const flyIds = [...new Set(allTicks.map((t) => t.fly_id))].sort((a, b) => a - b);
+    const primaryFlyId = flyIds[0] ?? 0;
+    const primaryTicks = allTicks
+      .filter((t) => t.fly_id === primaryFlyId)
+      .sort((a, b) => a.tick - b.tick);
+    const replayTicks = primaryTicks.map((t) => {
+      const spikes = (t.epg ?? [])
+        .map((idx) => epgIndexToRootId[idx])
+        .filter((id): id is string => typeof id === 'string' && id.length > 0);
+      return { tick: t.tick, time_sec: t.time_sec, spikes };
+    });
+    const neurons = connectome.neurons
+      .filter((n) => epgRootIdSet.has(n.root_id))
+      .map((n) => ({
+        root_id: n.root_id,
+        x: typeof n.x === 'number' ? n.x : 0,
+        y: typeof n.y === 'number' ? n.y : 0,
+        z: typeof n.z === 'number' ? n.z : 0,
+        processed_label: n.cell_type,
+        is_ring: true,
+        is_epg: true,
+        side: n.side ?? 'unknown',
+        hemibrain_type: n.cell_type ?? '',
+        flow: n.role,
+        cell_type: n.cell_type,
+      }));
+    const epgIds = new Set(neurons.map((n) => n.root_id));
+    const epgUnique = new Set<string>();
+    for (const t of replayTicks) {
+      for (const id of t.spikes) {
+        if (epgIds.has(id)) epgUnique.add(id);
+      }
+    }
+    const replay = {
+      meta: {
+        generated_at: new Date().toISOString(),
+        source_csv: 'api:/api/world-record-ticks',
+        ticks: replayTicks.length,
+        unique_fired_neurons: epgUnique.size,
+        ring_neuron_total: neurons.length,
+        ring_neuron_unique_fired: epgUnique.size,
+        dt_sec: dtSec,
+        epg_neuron_total: neurons.length,
+        epg_neuron_unique_fired: epgUnique.size,
+        scenario: `world_record_${durationSec}s`,
+        note: `World sim EPG ticks, fly_id=${primaryFlyId}, ${replayTicks.length} ticks`,
+      },
+      neurons,
+      ticks: replayTicks,
+    };
+    const logPath = path.resolve(process.cwd(), '..', 'logs', `neurosim-world-ticks-${Date.now()}.json`);
+    try {
+      fs.writeFileSync(logPath, JSON.stringify(replay, null, 2), 'utf8');
+      console.log(`[world-record-ticks] wrote ${replayTicks.length} ticks to ${logPath}`);
+    } catch (e) {
+      console.warn('[world-record-ticks] could not write log:', (e as Error).message);
+    }
+    res.json({
+      ok: true,
+      ticks: replayTicks.length,
+      logPath,
+      replay,
+    });
+  } catch (err) {
+    console.error('[world-record-ticks] error:', err);
+    res.status(500).json({ error: (err as Error).message ?? String(err) });
+  }
+});
 
 app.use('/api/claim', claimsRouter);
 

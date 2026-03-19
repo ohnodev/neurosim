@@ -1,7 +1,7 @@
 import { useRef, useState, useEffect, useMemo, useCallback } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { WorldSource } from '../../../../api/src/world';
-import { subscribeSim, sendViewFlyIndex, type FlyState } from '../../lib/simWsClient';
+import { subscribeSim, sendViewFlyIndex, type FlyState, type SimPayload, type WorldTick } from '../../lib/simWsClient';
 import { type Snapshot, MAX_SNAPSHOT_BUFFER, trimSnapshotBuffer } from '../../lib/flyInterpolation';
 import { getApiBase } from '../../lib/constants';
 import {
@@ -16,6 +16,7 @@ import {
 } from '../../lib/api';
 import { BrainOverlay } from '../BrainOverlay';
 import { HeadingCompass } from '../HeadingCompass';
+import { computeBumpFromEpgIndices } from '../../lib/compassEpgData';
 import { SimRefsProvider } from '../../lib/simDisplayContext';
 import { ConnectButton } from '../ConnectButton';
 import { BuyFlyModal } from '../BuyFlyModal';
@@ -94,6 +95,7 @@ export default function FlyViewer() {
   const devModeRef = useRef(devMode);
   const followSimIndexRef = useRef<number | undefined>(undefined);
   const sourcesRef = useRef<WorldSource[]>([]);
+  const derivedBumpBySimIndexRef = useRef<(number | null)[]>([]);
   const flyCardDataRef = useRef<Map<number, { fly: FlyState; points: number }>>(new Map());
   const prevWsFlyCountRef = useRef(0);
 
@@ -278,9 +280,28 @@ export default function FlyViewer() {
           activitiesRef.current = [];
           const simIdx = followSimIndexRef.current ?? 0;
           const fly = lastFrame.flies?.[simIdx];
-          const rawBump = lastFrame.bumpAngleDegs?.[simIdx] ?? null;
-          // Use EPG bump when available; fall back to fly heading (same convention: 0°=right, 90°=up)
-          const deg = rawBump ?? (fly != null && typeof fly.heading === 'number' ? (fly.heading * 180) / Math.PI : null);
+          const payload = data as SimPayload;
+          const ticks = payload.ticks ?? [];
+          const epgIndexToBin = payload.epgIndexToBin ?? [];
+          const flyIdBySimIndex = payload.flyIdBySimIndex ?? [];
+          let deg: number | null = null;
+          const derivedBySim: (number | null)[] = [];
+          if (ticks.length > 0 && epgIndexToBin.length > 0 && flyIdBySimIndex.length > 0) {
+            for (let j = 0; j < flyIdBySimIndex.length; j++) {
+              const flyId = flyIdBySimIndex[j];
+              const flyTicks = ticks
+                .filter((t: WorldTick) => t.fly_id === flyId)
+                .sort((a: WorldTick, b: WorldTick) => b.tick - a.tick);
+              const latest = flyTicks[0];
+              const bump = latest ? computeBumpFromEpgIndices(latest.epg, epgIndexToBin) : null;
+              derivedBySim[j] = bump ?? null;
+            }
+            derivedBumpBySimIndexRef.current = derivedBySim;
+            deg = derivedBySim[simIdx] ?? null;
+          } else {
+            derivedBumpBySimIndexRef.current = [];
+            deg = lastFrame.bumpAngleDegs?.[simIdx] ?? (fly != null && typeof fly.heading === 'number' ? (fly.heading * 180) / Math.PI : null);
+          }
           setBumpAngleDeg(deg);
           const bins = lastFrame.epgBinsPerSim?.[simIdx] ?? null;
           setEpgBins(Array.isArray(bins) && bins.length === 16 ? bins : null);
@@ -413,6 +434,7 @@ export default function FlyViewer() {
         devModeRef,
         snapshotBufferRef,
         targetRef: cameraTargetRef,
+        derivedBumpBySimIndexRef,
       },
       cameraToggleSlotRef.current,
       simStatusSlotRef.current,

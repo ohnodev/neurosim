@@ -16,6 +16,31 @@ export function sceneAngleForBin(bin: number, binCount: number): number {
   return COMPASS_ROTATION_RAD - (bin / binCount) * Math.PI * 2;
 }
 
+/** Derive bump angle (deg) from compact epg spike indices. Same formula as Rust compute_bump_and_epg_bins. */
+export function computeBumpFromEpgIndices(
+  epgSpikeIndices: number[],
+  epgIndexToBin: number[],
+): number | null {
+  if (epgIndexToBin.length === 0) return null;
+  const bins = new Array(16).fill(0);
+  for (const idx of epgSpikeIndices) {
+    const bin = epgIndexToBin[idx];
+    if (typeof bin === 'number' && bin >= 0 && bin < 16) bins[bin] += 1;
+  }
+  const binAngleDeg = (bin: number) => 90 - bin * 22.5;
+  let sumCos = 0;
+  let sumSin = 0;
+  for (let b = 0; b < 16; b++) {
+    if (bins[b] > 0) {
+      const rad = (binAngleDeg(b) * Math.PI) / 180;
+      sumCos += bins[b] * Math.cos(rad);
+      sumSin += bins[b] * Math.sin(rad);
+    }
+  }
+  if (Math.abs(sumCos) < 1e-10 && Math.abs(sumSin) < 1e-10) return null;
+  return (Math.atan2(sumSin, sumCos) * 180) / Math.PI;
+}
+
 export { EPG_COMPASS_BINS, EPG_SLICE_ORDER_CLOCKWISE };
 
 type ReplayNeuronMinimal = {

@@ -26,7 +26,12 @@ let lastRequestTiming: {
   batchSize?: number;
 } | null = null;
 const TRACE_SOCKET_TIMING = process.env.NEUROSIM_SOCKET_TRACE === '1';
+const TRACE_SOCKET_TIMING_EVERY = Math.max(
+  1,
+  Number(process.env.NEUROSIM_SOCKET_TRACE_EVERY ?? 20),
+);
 const REQUEST_TIMEOUT_MS = Number(process.env.NEUROSIM_BRAIN_REQUEST_TIMEOUT_MS ?? 60_000);
+let traceTimingCounter = 0;
 
 function getConnection(): Promise<{ sock: net.Socket; rl: ReturnType<typeof createInterface> }> {
   if (sharedSocket && sharedRl && !sharedSocket.destroyed) {
@@ -123,9 +128,12 @@ function sendRequest<T>(payload: JsonObj): Promise<T> {
           };
           lastRequestTiming = timing;
           if (TRACE_SOCKET_TIMING) {
-            console.log(
-              `[brain-socket] req=${timing.id} method=${timing.method}${timing.batchSize != null ? ` batchSize=${timing.batchSize}` : ''} connectWaitMs=${timing.connectWaitMs} writeMs=${timing.writeMs} responseWaitMs=${timing.responseWaitMs} totalMs=${timing.totalMs}`,
-            );
+            traceTimingCounter += 1;
+            if (traceTimingCounter % TRACE_SOCKET_TIMING_EVERY === 0) {
+              console.log(
+                `[brain-socket] req=${timing.id} method=${timing.method}${timing.batchSize != null ? ` batchSize=${timing.batchSize}` : ''} connectWaitMs=${timing.connectWaitMs} writeMs=${timing.writeMs} responseWaitMs=${timing.responseWaitMs} totalMs=${timing.totalMs} sampleEvery=${TRACE_SOCKET_TIMING_EVERY}`,
+              );
+            }
           }
           const out = JSON.parse(line) as T;
           if ('error' in (out as { error?: string }) && (out as { error?: string }).error) {
@@ -475,16 +483,27 @@ export async function worldGetSnapshot(): Promise<WorldSnapshot> {
   });
 }
 
-export async function worldReadTicks(afterTick: number, maxTicks = 2000): Promise<{
-  ticks: Array<{ tick: number; fly_id: number; time_sec: number; spikes: string[] }>;
+export interface WorldTick {
+  tick: number;
+  fly_id: number;
+  time_sec: number;
+  /** Compact: EPG neuron indices 0..n_epg that spiked. Derive bump from these. */
+  epg: number[];
+}
+
+export async function worldReadTicks(afterTick: number, maxTicks = 50000): Promise<{
+  ticks: WorldTick[];
   latest_tick: number;
   dt_sec: number;
+  steps_per_batch: number;
+  epg_index_to_bin: number[];
+  epg_index_to_root_id: string[];
 }> {
   return request({
     method: 'world_read_ticks',
     params: {
       after_tick: Math.max(0, Math.floor(afterTick)),
-      max_ticks: Math.min(8000, Math.max(1, Math.floor(maxTicks))),
+      max_ticks: Math.min(100_000, Math.max(1, Math.floor(maxTicks))),
     },
   });
 }

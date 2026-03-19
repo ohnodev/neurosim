@@ -127,6 +127,22 @@ impl BrainSim {
         self.rng_state = seed;
     }
 
+    /// Return compact EPG spike indices (0..n_epg) for neurons that spiked this step.
+    /// Frontend can derive bump angle from these using same formula as compute_bump_and_epg_bins.
+    pub fn epg_spike_indices(&self) -> Vec<u8> {
+        self.epg_indices
+            .iter()
+            .enumerate()
+            .filter_map(|(j, &idx)| {
+                if (idx as usize) < self.spikes.len() && self.spikes[idx as usize] >= ACTIVITY_THRESHOLD {
+                    Some(j as u8)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     fn compute_synaptic_delay_steps(dt_sec: f64) -> usize {
         let dt_ms = dt_sec * 1000.0;
         if !dt_ms.is_finite() || dt_ms <= 0.0 {

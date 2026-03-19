@@ -47,6 +47,8 @@ export interface ThreeSceneRefs {
   devModeRef: { current: boolean };
   snapshotBufferRef: { current: Snapshot[] };
   targetRef: { current: { x: number; y: number; z: number; heading: number } | null };
+  /** Derived bump (deg) per sim from tick EPG data. Used for 3D fly orientation when available. */
+  derivedBumpBySimIndexRef: { current: (number | null)[] };
 }
 
 const ARENA_SIZE = 48;
@@ -760,17 +762,18 @@ export function initThreeScene(
       const lowLodIsFlying = inst.lowLodWasFlying ? z > FLY_THRESHOLD_DOWN : z > FLY_THRESHOLD_UP;
 
       inst.prevPos = { x, y };
-      // Use Rust fly.heading (authoritative) for 3D orientation so status, compass, and scene stay aligned.
-      // Rust convention: 0 rad = +X (right), π/2 = +Y (up). Three.js rotation.y: π/2 = +X when default forward is -Z.
-      const rustHeading = state.heading ?? 0;
-      inst.targetHeading = rustHeading;
-      let d = rustHeading - inst.heading;
+      // Use derived bump from tick EPG data when available; else Rust fly.heading.
+      const derivedBump = refs.derivedBumpBySimIndexRef.current[i];
+      const headingRad =
+        derivedBump != null ? (derivedBump * Math.PI) / 180 : (state.heading ?? 0);
+      inst.targetHeading = headingRad;
+      let d = headingRad - inst.heading;
       if (d > Math.PI) d -= 2 * Math.PI;
       if (d < -Math.PI) d += 2 * Math.PI;
       const headingAlpha = Math.min(1, 1 - Math.exp(-HEADING_LERP_RATE * Math.min(cappedDelta, 0.05)));
       inst.heading += d * headingAlpha;
       if (!inst.initialized) {
-        inst.heading = rustHeading;
+        inst.heading = headingRad;
         inst.initialized = true;
       }
 

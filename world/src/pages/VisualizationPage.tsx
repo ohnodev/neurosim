@@ -222,6 +222,11 @@ const DEFAULT_REPLAY_DATASETS: ReplayDataset[] = [
     label: 'Live — tweak PEN_a L/R Hz (3.5× EPG rec, seed 17290319, record)',
     url: 'neurosim_live',
   },
+  {
+    id: 'world_record',
+    label: 'World record — record ~10s from live world sim (EPG ticks)',
+    url: 'world_record',
+  },
 ];
 
 function controlButtonStyle(active: boolean): Record<string, string | number> {
@@ -1508,6 +1513,7 @@ export default function VisualizationPage() {
   const [appliedPenLeft, setAppliedPenLeft] = useState(0);
   const [appliedPenRight, setAppliedPenRight] = useState(0);
   const [applyBusy, setApplyBusy] = useState(false);
+  const [worldRecordBusy, setWorldRecordBusy] = useState(false);
   const [liveAutoplay, setLiveAutoplay] = useState(true);
   const [latestLiveTickNumber, setLatestLiveTickNumber] = useState(0);
   const [penANeurons, setPenANeurons] = useState<{ left: Array<{ id: string; label: string }>; right: Array<{ id: string; label: string }> }>({ left: [], right: [] });
@@ -1531,8 +1537,13 @@ export default function VisualizationPage() {
       ?? '',
   );
   const replay = useMemo(
-    () => (selectedReplayId === 'neurosim_live' ? liveReplay : fetchedReplay),
-    [selectedReplayId, liveReplay, fetchedReplay],
+    () =>
+      selectedReplayId === 'neurosim_live'
+        ? liveReplay
+        : selectedReplayId === 'world_record'
+          ? fetchedReplay ?? templateReplay
+          : fetchedReplay,
+    [selectedReplayId, liveReplay, fetchedReplay, templateReplay],
   );
   const [arrowSmoothing, setArrowSmoothing] = useState(true);
   const [epgLabelMap, setEpgLabelMap] = useState<Map<string, string> | null>(null);
@@ -1632,6 +1643,7 @@ export default function VisualizationPage() {
         const datasetUrl = selectedReplay?.url;
         if (!datasetUrl) throw new Error('No replay dataset selected');
         const isNeuroSimLive = selectedReplay?.id === 'neurosim_live' || datasetUrl.startsWith('/api/neurosim-replay');
+        const isWorldRecord = selectedReplay?.id === 'world_record' || datasetUrl === 'world_record';
         if (isNeuroSimLive) {
           const apiRoot = getApiBase();
           const neuronRes = await fetch(`${apiRoot}/api/neurons?full=1&epgOnly=1`, { cache: 'no-store' });
@@ -1676,6 +1688,40 @@ export default function VisualizationPage() {
           liveReplaySourceRef.current = 'live';
           liveEpgSeenRef.current = new Set();
           setLiveEpgUniqueFired(0);
+        } else if (isWorldRecord) {
+          const apiRoot = getApiBase();
+          const neuronRes = await fetch(`${apiRoot}/api/neurons?full=1&epgOnly=1`, { cache: 'no-store' });
+          if (!neuronRes.ok) throw new Error(`Failed to load neuron template (${neuronRes.status})`);
+          const neuronPayload = (await neuronRes.json()) as { neurons?: ApiNeuron[] };
+          const templateNeurons: ReplayNeuron[] = (neuronPayload.neurons ?? []).map((n) => ({
+            root_id: n.root_id,
+            x: typeof n.x === 'number' ? n.x : 0,
+            y: typeof n.y === 'number' ? n.y : 0,
+            z: typeof n.z === 'number' ? n.z : 0,
+            processed_label: n.cell_type,
+            is_ring: true,
+            is_epg: true,
+            side: n.side ?? 'unknown',
+            hemibrain_type: n.cell_type ?? '',
+            flow: n.role,
+            cell_type: n.cell_type,
+          }));
+          if (!active) return;
+          setTemplateReplay({
+            meta: {
+              generated_at: new Date().toISOString(),
+              source_csv: 'api:/api/neurons?full=1&epgOnly=1',
+              ticks: 0,
+              unique_fired_neurons: 0,
+              ring_neuron_total: 0,
+              ring_neuron_unique_fired: 0,
+              dt_sec: 0.0008,
+              scenario: 'world_record',
+            },
+            neurons: templateNeurons,
+            ticks: [],
+          });
+          setFetchedReplay(null);
         } else {
           const res = await fetch(`${datasetUrl}?v=${Date.now()}`, { cache: 'no-store' });
           if (!res.ok) throw new Error(`Replay not found (${res.status})`);
@@ -2297,6 +2343,56 @@ export default function VisualizationPage() {
                 </button>
               </>
             ) : null}
+          </div>
+        ) : selectedReplayId === 'world_record' && templateReplay ? (
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12, color: '#9ec5ff', maxWidth: 420 }}>
+              Record ~10 seconds of EPG ticks from the live world sim. Requires world sim running with at least one fly.
+            </span>
+            <button
+              type="button"
+              onClick={async () => {
+                setError(null);
+                setWorldRecordBusy(true);
+                try {
+                  const apiRoot = getApiBase();
+                  const res = await fetch(`${apiRoot}/api/world-record-ticks`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ durationSec: 10 }),
+                  });
+                  const data = (await res.json().catch(() => ({}))) as {
+                    ok?: boolean;
+                    replay?: ReplayData;
+                    ticks?: number;
+                    logPath?: string;
+                    error?: string;
+                  };
+                  if (!res.ok) throw new Error(data?.error ?? `Record failed: ${res.status}`);
+                  if (data.replay) {
+                    setFetchedReplay(data.replay);
+                    setCurrentTick(1);
+                    setPlaying(false);
+                    notification.show(
+                      `Recorded ${data.ticks ?? 0} ticks (saved to ${data.logPath ?? 'logs'})`,
+                      'success',
+                    );
+                    setTimeout(() => notification.hide(), 3000);
+                  }
+                } catch (e) {
+                  const msg = (e as Error).message;
+                  setError(msg);
+                  notification.show(msg, 'error');
+                  setTimeout(() => notification.hide(), 4000);
+                } finally {
+                  setWorldRecordBusy(false);
+                }
+              }}
+              style={controlButtonStyle(false)}
+              disabled={worldRecordBusy}
+            >
+              {worldRecordBusy ? 'Recording…' : 'Record 10s'}
+            </button>
           </div>
         ) : null}
         <div style={{ display: 'flex', gap: 8 }}>

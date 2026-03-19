@@ -775,8 +775,8 @@ export function initThreeScene(
 
       const visualZ = Math.max(0, z - GROUND_Z);
       inst.group.position.set(x, visualZ, y);
-      // Three.js: default forward -Z, so rotation.y = heading + π/2 to face (dx,dy) in XZ
-      inst.group.rotation.y = inst.heading + Math.PI / 2;
+      // glTF models face +Z by default. To face (dx,dy) in XZ: rotation.y = heading - π/2
+      inst.group.rotation.y = inst.heading - Math.PI / 2;
       if (SHOW_FLY_SMELL_RADIUS_DEBUG && debugEnabled && flySmellDebugPool[i]) {
         const smell = flySmellDebugPool[i]!;
         smell.position.set(x, visualZ, y);

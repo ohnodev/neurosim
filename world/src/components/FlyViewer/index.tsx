@@ -324,7 +324,7 @@ export default function FlyViewer() {
             const max = Math.max(...binCounts, 1);
             bins = binCounts.map((c) => c / max);
           }
-          // Arrow: use epgBins-based bump (same as Visualization page). Never fall back to fly.heading or Rust bump.
+          // Arrow + 3D fly: use epgBins-based bump (same as Visualization page). Never fall back to fly.heading or Rust bump.
           if (bins && bins.length === 16) {
             const counts = binCounts ?? bins; // use raw counts when available, else bins as proxy
             deg = computeBumpFromEpgBins(bins, counts);
@@ -350,6 +350,11 @@ export default function FlyViewer() {
             }
             derivedBumpBySimIndexRef.current = derivedBySim;
             deg = derivedBySim[simIdx] ?? null;
+          } else if (deg != null && flyIdBySimIndex.length > 0) {
+            // Populate derivedBump for 3D fly when we have bins-based deg
+            const arr = new Array<number | null>(flyIdBySimIndex.length).fill(null);
+            arr[simIdx] = deg;
+            derivedBumpBySimIndexRef.current = arr;
           }
           if (deg == null) derivedBumpBySimIndexRef.current = [];
           setBumpAngleDeg(deg);

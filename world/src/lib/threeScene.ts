@@ -761,27 +761,24 @@ export function initThreeScene(
       const isFlying = wasFlying ? z > FLY_THRESHOLD_DOWN : z > FLY_THRESHOLD_UP;
       const lowLodIsFlying = inst.lowLodWasFlying ? z > FLY_THRESHOLD_DOWN : z > FLY_THRESHOLD_UP;
 
-      // Direction of motion: rotate fly to face where it's actually traveling.
+      // Prefer EPG bump for heading (compass direction); fall back to motion or state.heading.
+      // Snap instantly (up to 360°) so fly/arrow align with neural activity.
+      const bumpDeg = refs.derivedBumpBySimIndexRef.current[i];
       const dx = x - inst.prevPos.x;
       const dy = y - inst.prevPos.y;
       const motionDistSq = dx * dx + dy * dy;
       const MOTION_THRESHOLD_SQ = 1e-6; // ~0.001 units moved
       const headingRad =
-        inst.initialized && motionDistSq > MOTION_THRESHOLD_SQ
-          ? Math.atan2(dy, dx)
-          : (state.heading ?? inst.heading);
+        typeof bumpDeg === 'number'
+          ? (bumpDeg * Math.PI) / 180
+          : inst.initialized && motionDistSq > MOTION_THRESHOLD_SQ
+            ? Math.atan2(dy, dx)
+            : (state.heading ?? inst.heading);
       inst.prevPos = { x, y };
 
       inst.targetHeading = headingRad;
-      let d = headingRad - inst.heading;
-      if (d > Math.PI) d -= 2 * Math.PI;
-      if (d < -Math.PI) d += 2 * Math.PI;
-      const headingAlpha = Math.min(1, 1 - Math.exp(-HEADING_LERP_RATE * Math.min(cappedDelta, 0.05)));
-      inst.heading += d * headingAlpha;
-      if (!inst.initialized) {
-        inst.heading = headingRad;
-        inst.initialized = true;
-      }
+      inst.heading = headingRad; // Snap instantly — no lerp
+      if (!inst.initialized) inst.initialized = true;
 
       const visualZ = Math.max(0, z - GROUND_Z);
       inst.group.position.set(x, visualZ, y);

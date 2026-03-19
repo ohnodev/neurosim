@@ -7,7 +7,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { fetchCompassEpgData, type CompassEpgNeuron } from '../lib/compassEpgData';
 
-const SMOOTH_ALPHA = 0.18;
+/** Snap instantly to EPG bump — no smoothing (was 0.18). */
+const SMOOTH_ALPHA = 1;
 /** Arrow length — fits inside EPG ring (radius ~0.33). */
 const ARROW_LEN = 0.28;
 const ACTIVE_RING_COLOR = new THREE.Color(0xff4fd8);

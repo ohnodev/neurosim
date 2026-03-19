@@ -98,7 +98,9 @@ const FLY_SMELL_RADIUS_DEBUG = 24; // Keep aligned with Rust ODOR_DETECTION_RADI
 const FLY_SMELL_RADIUS_DEBUG_COLOR = 0xffd75e;
 const FLY_SMELL_RADIUS_DEBUG_OPACITY = 0.1;
 /** Debug helper: render per-fly motion heading arrow (purple). */
-const SHOW_FLY_HEADING_ARROW_DEBUG = true;
+const SHOW_FLY_HEADING_ARROW_DEBUG =
+  typeof window !== 'undefined'
+  && ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
 const FLY_HEADING_ARROW_COLOR = 0xb84dff;
 const FLY_HEADING_ARROW_LENGTH = 0.9;
 const FLY_HEADING_ARROW_HEAD_LENGTH = 0.22;

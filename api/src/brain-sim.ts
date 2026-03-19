@@ -29,7 +29,7 @@ export interface SimState {
   motorLeftMagnitude?: number;
   motorRightMagnitude?: number;
   motorFwdMagnitude?: number;
-  eatenFoodId?: string;
+  eatenFoodIds?: string[];
   feedingSugarTaken?: number;
   /** EPG bump heading in degrees (from Rust step), when available. */
   bumpAngleDeg?: number | null;
@@ -168,7 +168,7 @@ export async function createBrainSim(
     } = {};
     let lastActivitySparse: Record<string, number> = {};
     let lastInputActivity: Record<string, number> | undefined;
-    let lastEatenFoodId: string | undefined;
+    let lastEatenFoodIds: string[] | undefined;
     let lastFeedingSugarTaken = 0;
     let lastBumpAngleDeg: number | null | undefined;
     let lastEpgBins: number[] | null = null;
@@ -212,7 +212,7 @@ export async function createBrainSim(
         restDuration: number;
         feeding: boolean;
       };
-      eatenFoodId?: string;
+      eatenFoodIds?: string[];
       feedingSugarTaken?: number;
       bumpAngleDeg?: number | null;
       epgBins?: number[] | null;
@@ -296,7 +296,7 @@ export async function createBrainSim(
       };
       flyTimeLeftSec = Math.max(0, Math.min(FLY_TIME_MAX, (result.fly.flyTimeLeft ?? 0) * FLY_TIME_MAX));
       restTimeLeft = result.fly.restTimeLeft ?? 0;
-      lastEatenFoodId = result.eatenFoodId;
+      lastEatenFoodIds = result.eatenFoodIds;
       lastFeedingSugarTaken = result.feedingSugarTaken ?? 0;
       lastBumpAngleDeg = result.bumpAngleDeg ?? null;
       lastEpgBins = result.epgBins ?? null;
@@ -316,7 +316,7 @@ export async function createBrainSim(
         const act = await runRustStep(dt, getSources(), includeActivity, penARatesById);
         lastActivitySparse = act.activitySparse;
         lastInputActivity = undefined;
-        lastEatenFoodId = undefined;
+        lastEatenFoodIds = undefined;
         lastFeedingSugarTaken = 0;
         lastBumpAngleDeg = act.bumpAngleDeg ?? null;
         lastEpgBins = act.epgBins ?? null;
@@ -352,7 +352,7 @@ export async function createBrainSim(
           motorLeftMagnitude: lastMotorLeftMagnitude,
           motorRightMagnitude: lastMotorRightMagnitude,
           motorFwdMagnitude: lastMotorFwdMagnitude,
-          eatenFoodId: lastEatenFoodId,
+          eatenFoodIds: lastEatenFoodIds,
           bumpAngleDeg: lastBumpAngleDeg,
           epgBins: lastEpgBins,
         };
@@ -421,7 +421,7 @@ export async function createBrainSim(
       restTimeLeft = result.fly.restTimeLeft ?? 0;
 
       const activityRec = Object.keys(activitySparse).length ? activitySparse : undefined;
-      lastEatenFoodId = result.eatenFoodId;
+      lastEatenFoodIds = result.eatenFoodIds;
       lastFeedingSugarTaken = result.feedingSugarTaken ?? 0;
       lastBumpAngleDeg = result.bumpAngleDeg ?? null;
       lastEpgBins = result.epgBins ?? null;
@@ -442,7 +442,7 @@ export async function createBrainSim(
         motorRightMagnitude: lastMotorRightMagnitude,
         motorFwdMagnitude: lastMotorFwdMagnitude,
         feedingSugarTaken: lastFeedingSugarTaken,
-        ...(result.eatenFoodId && { eatenFoodId: result.eatenFoodId }),
+        eatenFoodIds: result.eatenFoodIds,
         bumpAngleDeg: lastBumpAngleDeg,
         epgBins: lastEpgBins,
       };
@@ -489,7 +489,7 @@ export async function createBrainSim(
         motorRightMagnitude: lastMotorRightMagnitude,
         motorFwdMagnitude: lastMotorFwdMagnitude,
         feedingSugarTaken: lastFeedingSugarTaken,
-        ...(lastEatenFoodId && { eatenFoodId: lastEatenFoodId }),
+        eatenFoodIds: lastEatenFoodIds,
         bumpAngleDeg: lastBumpAngleDeg,
         epgBins: lastEpgBins,
       };

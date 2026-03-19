@@ -1514,6 +1514,7 @@ export default function VisualizationPage() {
   const [penARatesById, setPenARatesById] = useState<Record<string, number>>({});
   const notification = useNotification();
   const liveAfterTickRef = useRef(0);
+  const liveTickOffsetRef = useRef(0);
   const livePollFailRef = useRef(0);
   const recordingRef = useRef(false);
   useEffect(() => {
@@ -1669,6 +1670,7 @@ export default function VisualizationPage() {
           setLiveReplay(null);
           setLiveTicks([]);
           setRecordedTicks([]);
+          liveTickOffsetRef.current = 0;
           setLiveReplaySource('live');
           liveReplayTickCountRef.current = 0;
           liveReplaySourceRef.current = 'live';
@@ -1694,6 +1696,7 @@ export default function VisualizationPage() {
         setLiveReplay(null);
         setLiveTicks([]);
         setRecordedTicks([]);
+        liveTickOffsetRef.current = 0;
         setLiveReplaySource('live');
         liveReplayTickCountRef.current = 0;
         liveReplaySourceRef.current = 'live';
@@ -1868,10 +1871,13 @@ export default function VisualizationPage() {
         setPenARightHz(j.penARightHz ?? 0);
         if (j.ratesById && typeof j.ratesById === 'object') {
           setPenARatesById(j.ratesById);
+        } else {
+          setPenARatesById({});
         }
         if (typeof j.dtSec === 'number' && j.dtSec > 0) setLiveSettings({ dtSec: j.dtSec });
         setLiveTicks([]);
         setRecordedTicks([]);
+        liveTickOffsetRef.current = 0;
         livePollFailRef.current = 0;
       } catch (e) {
         if (!cancelled) setError((e as Error).message);
@@ -1902,16 +1908,20 @@ export default function VisualizationPage() {
           liveAfterTickRef.current = last;
           setLiveTicks((prev) => {
             const merged = [...prev, ...batch];
-            return merged.length > NEUROSIM_LIVE_MAX_STORED_TICKS
-              ? merged.slice(-NEUROSIM_LIVE_MAX_STORED_TICKS)
-              : merged;
+            if (merged.length > NEUROSIM_LIVE_MAX_STORED_TICKS) {
+              const trimCount = merged.length - NEUROSIM_LIVE_MAX_STORED_TICKS;
+              liveTickOffsetRef.current += trimCount;
+              return merged.slice(-NEUROSIM_LIVE_MAX_STORED_TICKS);
+            }
+            return merged;
           });
           if (recordingRef.current) {
             setRecordedTicks((prev) => {
               const merged = [...prev, ...batch];
-              return merged.length > NEUROSIM_LIVE_MAX_STORED_TICKS
-                ? merged.slice(-NEUROSIM_LIVE_MAX_STORED_TICKS)
-                : merged;
+              if (merged.length > NEUROSIM_LIVE_MAX_STORED_TICKS) {
+                return merged.slice(-NEUROSIM_LIVE_MAX_STORED_TICKS);
+              }
+              return merged;
             });
           }
         }
@@ -2305,7 +2315,7 @@ export default function VisualizationPage() {
             tick={
               isNeuroSimLive && liveReplaySource === 'live' && liveAutoplay && currentTick === replay.ticks.length && latestLiveTickNumber > 0
                 ? latestLiveTickNumber
-                : currentTick
+                : currentTick + (isNeuroSimLive ? liveTickOffsetRef.current : 0)
             }
             totalTicks={totalTicks}
             speed={speed}
@@ -2313,8 +2323,13 @@ export default function VisualizationPage() {
             onPrevTick={() => setCurrentTick((t) => Math.max(1, t - 1))}
             onNextTick={() => setCurrentTick((t) => Math.min(replay?.ticks.length ?? totalTicks, t + 1))}
             onSeekTick={(tick) => {
-              const max = isNeuroSimLive && replay ? replay.ticks.length : totalTicks;
-              setCurrentTick(Math.max(1, Math.min(max, tick)));
+              if (isNeuroSimLive) {
+                const bufferTick = tick - liveTickOffsetRef.current;
+                const max = replay?.ticks.length ?? 0;
+                setCurrentTick(Math.max(1, Math.min(max, bufferTick)));
+              } else {
+                setCurrentTick(Math.max(1, Math.min(totalTicks, tick)));
+              }
             }}
             onSpeedChange={setSpeed}
           />

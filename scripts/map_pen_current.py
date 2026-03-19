@@ -145,6 +145,10 @@ def main() -> int:
             heading_ticks: list[int] = []
             epg_events = 0
             try:
+                current_fly: dict = {
+                    "x": 0, "y": 0, "z": 1, "heading": 0, "t": 0,
+                    "hunger": 100, "health": 100, "rest_time_left": 0, "dead": False,
+                }
                 for tick in range(1, TICKS + 1):
                     ext: dict[str, float] = {}
                     for rid in pen_left_ids:
@@ -159,13 +163,14 @@ def main() -> int:
                         "dt": DT_MS / 1000.0,
                         "rates_by_id": ext,
                         "forced_spikes": seed_epg_ids if tick <= INIT_BUMP_TICKS else [],
-                        "fly": {"x": 0, "y": 0, "z": 1, "heading": 0, "t": 0,
-                                "hunger": 100, "health": 100, "rest_time_left": 0, "dead": False},
+                        "fly": current_fly,
                         "sources": [],
                     }
                     if GLOBAL_BASE_CURRENT > 0:
                         payload["olfactory_baseline_rate_hz"] = GLOBAL_BASE_CURRENT
                     step = rpc.request("step", payload)
+                    if "fly" in step and isinstance(step["fly"], dict):
+                        current_fly = step["fly"]
                     ids = [str(x) for x in step.get("spike_ids_step", [])]
                     epg_ids = [rid for rid in ids if rid in epg_set]
                     epg_events += len(epg_ids)

@@ -13,16 +13,7 @@ def _resolve_socket_path() -> Path:
     env_path = os.environ.get("NEUROSIM_BRAIN_SOCKET")
     if env_path:
         return Path(env_path)
-    runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
-    if runtime_dir:
-        base = Path(runtime_dir)
-    else:
-        base = Path.home() / ".local" / "run"
-    try:
-        base.mkdir(mode=0o700, parents=True, exist_ok=True)
-    except OSError as e:
-        raise ValueError(f"cannot create runtime directory {base}: {e}") from e
-    return base / "neurosim-brain.sock"
+    return Path("/tmp/neurosim-brain.sock")
 
 
 def parse_env_int(name: str, default: int, min_value: int | None = None) -> int:
@@ -174,7 +165,14 @@ def main() -> int:
                     }
                 )
             res = rpc.request("step_many", {"steps": steps})
-            for k, item in enumerate(res.get("results", []), start=1):
+            if not isinstance(res, dict) or "results" not in res:
+                raise RuntimeError(f"step_many returned unexpected response: {type(res)}")
+            results = res["results"]
+            if len(results) != len(steps):
+                raise RuntimeError(
+                    f"step_many results length mismatch: expected {len(steps)}, got {len(results)}"
+                )
+            for k, item in enumerate(results, start=1):
                 t = start + k
                 epg_ids = sorted([str(rid) for rid in (item.get("activity_sparse") or {}).keys() if str(rid) in epg_set])
                 ticks.append({"tick": t, "time_sec": t * DT_SEC, "spikes": epg_ids})
@@ -217,7 +215,7 @@ def main() -> int:
     replay = {
         "meta": {
             "generated_at": datetime.now(timezone.utc).isoformat(),
-            "source_csv": str(out_timeline),
+            "source_csv": out_timeline.name,
             "ticks": TICKS,
             "unique_fired_neurons": len(all_unique),
             "ring_neuron_total": len(replay_neurons),
@@ -278,9 +276,9 @@ def main() -> int:
     summary = {
         "scenario": SCENARIO_ID,
         "outputs": {
-            "replay_json": str(out_replay),
-            "timeline_csv": str(out_timeline),
-            "stimulated_afferents_csv": str(out_aff),
+            "replay_json": out_replay.name,
+            "timeline_csv": out_timeline.name,
+            "stimulated_afferents_csv": out_aff.name,
         },
         "observed": {
             "epg_spike_events": epg_events,

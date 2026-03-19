@@ -14,13 +14,8 @@ let connectPromise: Promise<void> | null = null;
 let requestSeq = 0;
 let requestChain: Promise<void> = Promise.resolve();
 type JsonObj = Record<string, unknown>;
-type QueuedStep = {
-  payload: JsonObj;
-  resolve: (value: unknown) => void;
-  reject: (reason?: unknown) => void;
-};
-let pendingStepBatch: QueuedStep[] = [];
-let flushStepBatchScheduled = false;
+// TODO: step batching disabled – restore when step_many has full field parity
+//   (bump_angle_deg, epg_bins) with single-step responses.
 let lastRequestTiming: {
   id: number;
   connectWaitMs: number;
@@ -162,114 +157,7 @@ function sendRequest<T>(payload: JsonObj): Promise<T> {
   });
 }
 
-function flushStepBatch(): void {
-  const batch = pendingStepBatch;
-  pendingStepBatch = [];
-  flushStepBatchScheduled = false;
-  if (batch.length === 0) return;
-
-  if (batch.length === 1) {
-    const one = batch[0];
-    void enqueueRequest(() => sendRequest(one.payload)).then(one.resolve, one.reject);
-    return;
-  }
-
-  const steps = batch.map((q) => {
-    const params = (q.payload as { params?: JsonObj }).params ?? {};
-    const fly = (params.fly as JsonObj | undefined) ?? {};
-    return {
-      sim_id: params.sim_id,
-      dt: params.dt,
-      olfactory_baseline_rate_hz: params.olfactory_baseline_rate_hz,
-      forced_spikes: params.forced_spikes ?? [],
-      fly: {
-        x: fly.x,
-        y: fly.y,
-        z: fly.z,
-        heading: fly.heading,
-        t: fly.t,
-        hunger: fly.hunger,
-        health: fly.health,
-        rest_time_left: fly.rest_time_left,
-        dead: fly.dead,
-      },
-      sources: params.sources ?? [],
-      include_activity: params.include_activity ?? true,
-      ...(params.rates_by_id && Object.keys(params.rates_by_id as JsonObj).length > 0
-        ? { rates_by_id: params.rates_by_id }
-        : {}),
-    };
-  });
-
-  const manyPayload: JsonObj = {
-    method: 'step_many',
-    params: { steps },
-  };
-  void enqueueRequest(() => sendRequest<{ results: Array<{
-    sim_id: number;
-    activity_sparse: Record<string, number>;
-    motor_left: number;
-    motor_right: number;
-    motor_fwd: number;
-    fly: {
-      x: number;
-      y: number;
-      z: number;
-      heading: number;
-      t: number;
-      hunger: number;
-      health: number;
-      dead: boolean;
-      fly_time_left: number;
-      rest_time_left: number;
-      rest_duration: number;
-      feeding: boolean;
-    };
-    eaten_food_id?: string;
-    feeding_sugar_taken?: number;
-  }> }>(manyPayload)).then((res) => {
-    const byBatchIndex: Array<{
-      sim_id: number;
-      activity_sparse: Record<string, number>;
-      motor_left: number;
-      motor_right: number;
-      motor_fwd: number;
-      fly: {
-        x: number;
-        y: number;
-        z: number;
-        heading: number;
-        t: number;
-        hunger: number;
-        health: number;
-        dead: boolean;
-        fly_time_left: number;
-        rest_time_left: number;
-        rest_duration: number;
-        feeding: boolean;
-      };
-      eaten_food_id?: string;
-      feeding_sugar_taken?: number;
-    }> = res.results ?? [];
-    for (let i = 0; i < batch.length; i += 1) {
-      const q = batch[i]!;
-      const item = byBatchIndex[i];
-      if (!item) {
-        q.reject(new Error(`step_many missing result for batch index ${i}`));
-        continue;
-      }
-      q.resolve(item);
-    }
-  }, (err) => {
-    for (const q of batch) q.reject(err);
-  });
-}
-
 function request<T>(payload: object): Promise<T> {
-  const method = (payload as { method?: string })?.method ?? 'unknown';
-  // Step batching intentionally disabled until step_many includes full parity fields
-  // (notably bump_angle_deg/epg_bins) with single-step responses.
-  if (method === 'step') return enqueueRequest(() => sendRequest(payload as JsonObj));
   return enqueueRequest(() => sendRequest(payload as JsonObj));
 }
 
@@ -331,7 +219,7 @@ export interface StepResult {
     restDuration: number;
     feeding: boolean;
   };
-  eatenFoodId?: string;
+  eatenFoodIds?: string[];
   feedingSugarTaken?: number;
   /** EPG bump heading in degrees (math convention), when available. */
   bumpAngleDeg?: number | null;
@@ -377,7 +265,7 @@ export interface StepManyResultItem {
   motorRightMagnitude: number;
   motorFwdMagnitude: number;
   fly: StepResult['fly'];
-  eatenFoodId?: string;
+  eatenFoodIds?: string[];
   feedingSugarTaken?: number;
   computeMs?: number;
   kernelMs?: number;
@@ -519,7 +407,7 @@ export async function runStepsWithState(params: RunStepsWithStateParams): Promis
     motor_left_magnitude?: number;
     motor_right_magnitude?: number;
     motor_fwd_magnitude?: number;
-    eaten_food_id?: string;
+    eaten_food_ids?: string[];
     feeding_sugar_taken?: number;
   }>({
     method: 'run_steps',
@@ -545,7 +433,10 @@ export async function runStepsWithState(params: RunStepsWithStateParams): Promis
       sources: params.sources,
     },
   });
-  const fly = res.fly!;
+  if (!res.fly) {
+    throw new Error('run_steps return_final_state=true but response missing fly');
+  }
+  const fly = res.fly;
   return {
     activity: [],
     activitySparse: res.activity_sparse ?? {},
@@ -572,7 +463,7 @@ export async function runStepsWithState(params: RunStepsWithStateParams): Promis
       restDuration: fly.rest_duration,
       feeding: fly.feeding,
     },
-    eatenFoodId: res.eaten_food_id,
+    eatenFoodIds: res.eaten_food_ids,
     feedingSugarTaken: res.feeding_sugar_taken ?? 0,
     bumpAngleDeg: res.bump_angle_deg ?? null,
     epgBins: res.epg_bins ?? null,
@@ -697,7 +588,7 @@ export async function stepSim(params: StepParams): Promise<StepResult> {
       restDuration: res.fly.rest_duration,
       feeding: res.fly.feeding,
     },
-    eatenFoodId: res.eaten_food_id,
+    eatenFoodIds: res.eaten_food_id ? [res.eaten_food_id] : undefined,
     feedingSugarTaken: res.feeding_sugar_taken,
     bumpAngleDeg: res.bump_angle_deg ?? null,
     epgBins: res.epg_bins ?? null,
@@ -799,7 +690,7 @@ export async function stepMany(
         restDuration: item.fly.rest_duration,
         feeding: item.fly.feeding,
       },
-      eatenFoodId: item.eaten_food_id,
+      eatenFoodIds: item.eaten_food_id ? [item.eaten_food_id] : undefined,
       feedingSugarTaken: item.feeding_sugar_taken,
       computeMs: item.compute_ms,
       kernelMs: item.kernel_ms,

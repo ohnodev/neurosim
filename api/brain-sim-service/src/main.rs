@@ -703,7 +703,7 @@ struct RunStepsResp {
     #[serde(skip_serializing_if = "Option::is_none")]
     motor_fwd: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    eaten_food_id: Option<String>,
+    eaten_food_ids: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     feeding_sugar_taken: Option<f64>,
 }
@@ -897,12 +897,13 @@ fn run_continuous_live_loop(
                 }
             }
         }
+        let skip_olfactory = !stim.is_empty();
         let (_a, _sparse, spike_ids, _, _, _, _, _, _, _, _, _, _, fly_out) = sim.step_with_options(
             dt,
             fly,
             Vec::new(),
             true,
-            false,
+            skip_olfactory,
             None,
             Vec::new(),
             if stim.is_empty() {
@@ -1547,8 +1548,8 @@ fn handle(
         let mut last_motor_left = 0.0f64;
         let mut last_motor_right = 0.0f64;
         let mut last_motor_fwd = 0.0f64;
-        let mut last_eaten_food_id: Option<String> = None;
-        let mut last_feeding_sugar_taken = 0.0f64;
+        let mut eaten_food_ids: Vec<String> = Vec::new();
+        let mut feeding_sugar_taken_total = 0.0f64;
         let mut last_fly_resp: Option<FlyRespJson> = None;
         // Log once if any forced-spike IDs are not in the connectome (they will be silently dropped).
         if let Some(ref schedule) = p.forced_spike_schedule {
@@ -1645,8 +1646,12 @@ fn handle(
                     last_motor_left = fed.motor_left;
                     last_motor_right = fed.motor_right;
                     last_motor_fwd = fed.motor_fwd;
-                    last_eaten_food_id = fed.eaten_food_id.clone();
-                    last_feeding_sugar_taken = fed.feeding_sugar_taken;
+                    if let Some(ref id) = fed.eaten_food_id {
+                        if !id.is_empty() && !eaten_food_ids.contains(id) {
+                            eaten_food_ids.push(id.clone());
+                        }
+                    }
+                    feeding_sugar_taken_total += fed.feeding_sugar_taken;
                     last_fly_resp = Some(fed.fly.clone());
                 }
                 fly = FlyInput {
@@ -1686,15 +1691,11 @@ fn handle(
         let steps_loop_ms = t_loop_start.elapsed().as_secs_f64() * 1000.0;
         let wall_sec = t0.elapsed().as_secs_f64();
         let t_serial_start = Instant::now();
-        let (resp_fly, resp_activity, resp_bump, resp_epg_bins, resp_motor_left, resp_motor_right, resp_motor_fwd, resp_eaten_food_id, resp_feeding_sugar_taken) =
+        let (resp_fly, resp_activity, resp_bump, resp_epg_bins, resp_motor_left, resp_motor_right, resp_motor_fwd, resp_eaten_food_ids, resp_feeding_sugar_taken) =
             if p.return_final_state {
                 let (bump_angle_deg, epg_bins_arr) =
                     compute_bump_and_epg_bins(&last_activity_sparse, epg_id_to_bin);
                 let final_fly = last_fly_resp.unwrap_or_else(|| {
-                    // Zero-step run: no sim step was executed, so return the
-                    // initial fly state.  Timer fields (fly_time_left,
-                    // rest_duration) are not part of the input; derive from the
-                    // initial rest state so callers see consistent values.
                     FlyRespJson {
                         x: fly.x,
                         y: fly.y,
@@ -1718,8 +1719,8 @@ fn handle(
                     Some(last_motor_left),
                     Some(last_motor_right),
                     Some(last_motor_fwd),
-                    last_eaten_food_id.clone(),
-                    Some(last_feeding_sugar_taken),
+                    if eaten_food_ids.is_empty() { None } else { Some(eaten_food_ids) },
+                    Some(feeding_sugar_taken_total),
                 )
             } else {
                 (None, None, None, None, None, None, None, None, None)
@@ -1742,7 +1743,7 @@ fn handle(
             motor_left: resp_motor_left,
             motor_right: resp_motor_right,
             motor_fwd: resp_motor_fwd,
-            eaten_food_id: resp_eaten_food_id,
+            eaten_food_ids: resp_eaten_food_ids,
             feeding_sugar_taken: resp_feeding_sugar_taken,
         };
         let json_str = serde_json::to_string(&run_out)?;
@@ -1824,13 +1825,17 @@ fn handle(
             .unwrap_or(800)
             .clamp(1, 8000) as usize;
         if let Some(ref clive) = continuous_live {
-            let buf = clive.tick_buffer.lock().unwrap();
-            let mut ticks: Vec<LiveTickRecord> = Vec::new();
-            for rec in buf.iter() {
-                if rec.tick > after && ticks.len() < max_ticks {
-                    ticks.push(rec.clone());
+            let mut ticks: Vec<LiveTickRecord> = {
+                let buf = clive.tick_buffer.lock().unwrap();
+                let mut out = Vec::new();
+                for rec in buf.iter().rev() {
+                    if rec.tick <= after { break; }
+                    out.push(rec.clone());
+                    if out.len() >= max_ticks { break; }
                 }
-            }
+                out
+            };
+            ticks.reverse();
             let latest = clive.latest_tick.load(Ordering::Acquire);
             serde_json::to_string(&serde_json::json!({
                 "ticks": ticks,

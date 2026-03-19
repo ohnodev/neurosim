@@ -713,7 +713,9 @@ function startSim(): void {
           const beforeFly = beforeStates[idx]?.fly;
           if (beforeFly) {
             penPresetBySimIndex[idx] = chooseWorldPresetForFly(beforeFly, currentSources);
-            smoothedBumpBySimIndex[idx] = normalizeAngleDeg((beforeFly.heading * 180) / Math.PI);
+            if (smoothedBumpBySimIndex[idx] == null) {
+              smoothedBumpBySimIndex[idx] = normalizeAngleDeg((beforeFly.heading * 180) / Math.PI);
+            }
           }
           const preset = penPresetBySimIndex[idx] ?? '11PM';
           const ratesById = WORLD_PEN_PRESETS[preset];
@@ -760,13 +762,15 @@ function startSim(): void {
           if (gt.rustMs > maxStepMs) maxStepMs = gt.rustMs;
           if (gt.jsMs > maxJsMs) maxJsMs = gt.jsMs;
         }
-        if (state.eatenFoodId) {
-          removeFood(state.eatenFoodId);
-          const deployment = findDeploymentBySimIndex(j);
-          if (deployment) {
-            recordFoodDepleted(deployment.address, deployment.slotIndex);
+        if (state.eatenFoodIds && state.eatenFoodIds.length > 0) {
+          for (const foodId of state.eatenFoodIds) {
+            removeFood(foodId);
+            const deployment = findDeploymentBySimIndex(j);
+            if (deployment) {
+              recordFoodDepleted(deployment.address, deployment.slotIndex);
+            }
+            console.log('[world] fly', j, 'ate food', foodId);
           }
-          console.log('[world] fly', j, 'ate food', state.eatenFoodId);
         }
         if ((state.feedingSugarTaken ?? 0) > 0) {
           const deployment = findDeploymentBySimIndex(j);

@@ -28,19 +28,39 @@ import { flushRewards } from './services/rewardDistributor.js';
 const PORT = Number(process.env.PORT) || 3001;
 const connectome = loadConnectome();
 const EPG_TILE_MAP_PATH = path.resolve(process.cwd(), '..', 'data', 'epg-tile-map.json');
-const epgRootIdSet = (() => {
+type EpgTileMapEntry = {
+  root_id: string;
+  hemibrain_type?: string;
+  side?: string;
+  hemilineage?: string;
+  tile_index_0_7?: number;
+  tile_label?: string;
+  parsed_from?: string;
+};
+const epgTileMapEntries: EpgTileMapEntry[] = (() => {
   try {
     const raw = fs.readFileSync(EPG_TILE_MAP_PATH, 'utf-8');
-    const parsed = JSON.parse(raw) as { entries?: Array<{ root_id?: string }> };
-    return new Set(
-      (parsed.entries ?? [])
-        .map((e) => String(e?.root_id ?? ''))
-        .filter((id) => id.length > 0),
-    );
+    const parsed = JSON.parse(raw) as { entries?: Array<Record<string, unknown>> };
+    return (parsed.entries ?? [])
+      .map((e) => {
+        const rootId = String(e?.root_id ?? '').trim();
+        if (!rootId) return null;
+        return {
+          root_id: rootId,
+          hemibrain_type: typeof e?.hemibrain_type === 'string' ? e.hemibrain_type : undefined,
+          side: typeof e?.side === 'string' ? e.side : undefined,
+          hemilineage: typeof e?.hemilineage === 'string' ? e.hemilineage : undefined,
+          tile_index_0_7: Number.isFinite(Number(e?.tile_index_0_7)) ? Number(e?.tile_index_0_7) : undefined,
+          tile_label: typeof e?.tile_label === 'string' ? e.tile_label : undefined,
+          parsed_from: typeof e?.parsed_from === 'string' ? e.parsed_from : undefined,
+        } as EpgTileMapEntry;
+      })
+      .filter((e): e is EpgTileMapEntry => e != null);
   } catch {
-    return new Set<string>();
+    return [];
   }
 })();
+const epgRootIdSet = new Set(epgTileMapEntries.map((e) => e.root_id));
 const ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
 const MAX_SLOT_INDEX = 2;
 const VIEWER_NEURON_LIMIT = Math.max(1, Number(process.env.NEUROSIM_VIEWER_NEURON_LIMIT ?? 10_000));
@@ -795,18 +815,14 @@ function startSim(): void {
           deadSimIndexes.push(j);
         }
 
-        // Position 1 only: 11PM (L1:50, L2:50, L6:50). Smooth bump so heading and compass are stable.
-        let toFly = state.fly;
+        // Keep heading from Rust world kinematics; smooth bump is for compass rendering only.
+        const toFly = state.fly;
         const rawBump = state.bumpAngleDeg ?? null;
         const smoothed =
           rawBump != null
             ? smoothBumpDeg(smoothedBumpBySimIndex[j] ?? null, rawBump, BUMP_SMOOTH_ALPHA)
             : null;
         if (smoothed != null) smoothedBumpBySimIndex[j] = smoothed;
-
-        if (smoothed != null) {
-          toFly = { ...toFly, heading: (smoothed * Math.PI) / 180 };
-        }
 
         transitions.push({
           fromFly: before.fly,
@@ -993,6 +1009,14 @@ app.get('/api/neurons', (req, res) => {
     viewerNeuronLimit: VIEWER_NEURON_LIMIT,
     viewerNeuronCount: viewerNeuronIndices.length,
     totalNeuronCount: connectome.neurons.length,
+  });
+});
+
+app.get('/api/epg-tile-map', (_req, res) => {
+  res.json({
+    entries: epgTileMapEntries,
+    count: epgTileMapEntries.length,
+    source: 'api:data/epg-tile-map.json',
   });
 });
 

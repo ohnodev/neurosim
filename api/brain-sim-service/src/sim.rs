@@ -90,7 +90,8 @@ pub struct FlyStepOutput {
 
 impl BrainSim {
     fn choose_world_preset_for_fly(fly: &FlyInput, sources: &[SourceInput]) -> &'static str {
-        let mut angle_deg = fly.heading.to_degrees();
+        let heading_deg = fly.heading.to_degrees();
+        let mut target_deg = heading_deg;
         let mut nearest_d2 = f64::INFINITY;
         for s in sources {
             let dx = s.x - fly.x;
@@ -98,27 +99,28 @@ impl BrainSim {
             let d2 = dx * dx + dy * dy;
             if d2 < nearest_d2 {
                 nearest_d2 = d2;
-                angle_deg = dy.atan2(dx).to_degrees();
+                target_deg = dy.atan2(dx).to_degrees();
             }
         }
-        let targets = [("11PM", 330.0f64), ("3PM", 90.0f64), ("8PM", 210.0f64)];
-        let mut best = "11PM";
-        let mut best_diff = f64::INFINITY;
-        for (name, target) in targets {
-            let mut d = angle_deg - target;
-            while d > 180.0 {
-                d -= 360.0;
-            }
-            while d < -180.0 {
-                d += 360.0;
-            }
-            let ad = d.abs();
-            if ad < best_diff {
-                best_diff = ad;
-                best = name;
-            }
+        let mut delta = target_deg - heading_deg;
+        while delta > 180.0 {
+            delta -= 360.0;
         }
-        best
+        while delta < -180.0 {
+            delta += 360.0;
+        }
+        // Three-way coarse turn controller:
+        // - 11PM: keep current heading (small error)
+        // - 3PM: step toward positive/CCW target error
+        // - 8PM: step toward negative/CW target error
+        const TURN_DEADBAND_DEG: f64 = 20.0;
+        if delta > TURN_DEADBAND_DEG {
+            "3PM"
+        } else if delta < -TURN_DEADBAND_DEG {
+            "8PM"
+        } else {
+            "11PM"
+        }
     }
 
     pub fn set_rng_seed(&mut self, seed: u64) {

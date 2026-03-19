@@ -1593,8 +1593,9 @@ fn handle(
         let t_loop_start = Instant::now();
         let mut forced_rng: u64 = (p.sim_id as u64).wrapping_mul(12345).wrapping_add(67890);
         let mut global_tick: u32 = 0;
+        let needs_per_step_ids = p.record_ticks || count_ids.is_some();
         for (phase_steps, stim_map) in phase_slices {
-            for _ in 0..phase_steps {
+            for _step_in_phase in 0..phase_steps {
                 let mut forced_spikes: Vec<String> = Vec::new();
                 if let Some(ref schedule) = p.forced_spike_schedule {
                     for entry in schedule {
@@ -1615,17 +1616,31 @@ fn handle(
                         }
                     }
                 }
+                let is_last = global_tick + 1 == num_steps;
+                let use_full_readout = is_last || needs_per_step_ids;
                 let (_a, activity_sparse, spike_ids, ml, mr, mf, _cl, _cr, _cf, _mlm, _mrm, _mfm, _timing, fly_out) =
-                    sim.step_with_options(
-                        dt,
-                        fly,
-                        srcs.clone(),
-                        true,
-                        !stim_map.is_empty(),
-                        None,
-                        forced_spikes,
-                        if stim_map.is_empty() { None } else { Some(stim_map) },
-                    );
+                    if use_full_readout {
+                        sim.step_with_options(
+                            dt,
+                            fly,
+                            srcs.clone(),
+                            is_last,
+                            !stim_map.is_empty(),
+                            None,
+                            forced_spikes,
+                            if stim_map.is_empty() { None } else { Some(stim_map) },
+                        )
+                    } else {
+                        sim.step_fast(
+                            dt,
+                            fly,
+                            srcs.clone(),
+                            !stim_map.is_empty(),
+                            None,
+                            forced_spikes,
+                            if stim_map.is_empty() { None } else { Some(stim_map) },
+                        )
+                    };
                 let mut one = vec![StepManyItemResp {
                     sim_id: p.sim_id,
                     activity_sparse: activity_sparse.clone(),
@@ -1669,7 +1684,9 @@ fn handle(
                 }
                 let fed = &one[0];
                 if p.return_final_state {
-                    last_activity_sparse = fed.activity_sparse.clone();
+                    if is_last {
+                        last_activity_sparse = fed.activity_sparse.clone();
+                    }
                     last_motor_left = fed.motor_left;
                     last_motor_right = fed.motor_right;
                     last_motor_fwd = fed.motor_fwd;

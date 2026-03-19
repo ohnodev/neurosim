@@ -164,6 +164,8 @@ pub struct GpuSimState {
     spikes_next: CudaSlice<u8>,
     delay_head: usize,
     delay_len: usize,
+    syn_input_host_dev: CudaSlice<f32>,
+    spikes_host: Vec<u8>,
 }
 
 pub fn try_init_device() -> Option<Arc<CudaDevice>> {
@@ -242,6 +244,8 @@ impl GpuSimState {
         let refrac = dev.htod_sync_copy(refrac_init).ok()?;
         let spikes_prev = dev.htod_sync_copy(spikes_init).ok()?;
         let spikes_next: CudaSlice<u8> = dev.alloc_zeros(n).ok()?;
+        let syn_input_host_dev: CudaSlice<f32> = dev.alloc_zeros(n).ok()?;
+        let spikes_host = vec![0u8; n];
         Some(Self {
             connectome,
             n,
@@ -255,6 +259,8 @@ impl GpuSimState {
             spikes_next,
             delay_head: 0,
             delay_len,
+            syn_input_host_dev,
+            spikes_host,
         })
     }
 
@@ -264,7 +270,7 @@ impl GpuSimState {
     /// recurrent input computed by the GPU).
     /// `forced_indices` — neuron indices to force-spike (already resolved from IDs).
     ///
-    /// Returns `(spikes_vec, recurrent_ms, lif_ms)`.
+    /// Returns `(recurrent_ms, lif_ms)`. Spikes are in `last_spikes()`.
     pub fn step(
         &mut self,
         dt_sec: f64,
@@ -272,7 +278,7 @@ impl GpuSimState {
         w_syn: f32,
         epg_recurrence_boost: f32,
         forced_indices: &[u32],
-    ) -> Option<(Vec<u8>, f64, f64)> {
+    ) -> Option<(f64, f64)> {
         let dt_ms = (dt_sec * 1000.0) as f32;
         let syn_decay = 1.0f32 - dt_ms / TAU_SYN_MS;
         let mem_alpha = dt_ms / TAU_MEM_MS;
@@ -323,13 +329,13 @@ impl GpuSimState {
         }
 
         // 3. Add CPU-computed Poisson / stim_rates_by_id additions
-        let syn_host_dev = dev.htod_sync_copy(syn_input_host).ok()?;
+        dev.htod_sync_copy_into(syn_input_host, &mut self.syn_input_host_dev).ok()?;
         let add_fn = dev.get_func("bs", "add_syn_input_kernel")?;
         unsafe {
             add_fn
                 .launch(
                     LaunchConfig::for_num_elems(self.n as u32),
-                    (&mut self.syn_input, &syn_host_dev, n),
+                    (&mut self.syn_input, &self.syn_input_host_dev, n),
                 )
                 .ok()?;
         }
@@ -414,15 +420,19 @@ impl GpuSimState {
             }
         }
 
-        // 8. Download spikes to host
-        let spikes = dev.dtoh_sync_copy(&self.spikes_next).ok()?;
+        // 8. Download spikes into pre-allocated host buffer (no allocation)
+        dev.dtoh_sync_copy_into(&self.spikes_next, &mut self.spikes_host).ok()?;
         let lif_ms = t_lif.elapsed().as_secs_f64() * 1000.0;
 
         // 9. Swap device handles: spikes_prev ← spikes_next, g ← g_next
         std::mem::swap(&mut self.spikes_prev, &mut self.spikes_next);
         std::mem::swap(&mut self.g, &mut self.g_next);
 
-        Some((spikes, recurrent_ms, lif_ms))
+        Some((recurrent_ms, lif_ms))
+    }
+
+    pub fn last_spikes(&self) -> &[u8] {
+        &self.spikes_host
     }
 
     pub fn ensure_delay_len(&mut self, new_delay_len: usize) {

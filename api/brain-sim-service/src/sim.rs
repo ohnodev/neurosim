@@ -886,15 +886,14 @@ impl BrainSim {
         }
 
         // --- GPU step ---
-        let (spikes, recurrent_ms, lif_ms) = gpu.step(
+        let (recurrent_ms, lif_ms) = gpu.step(
             dt, &self.syn_input, self.w_syn, self.epg_recurrence_boost, &forced_indices,
         ).unwrap_or_else(|| {
             eprintln!("[brain-service][gpu] GPU step failed — this is fatal with USE_CUDA=1");
             std::process::exit(1);
         });
-
+        self.spikes.copy_from_slice(gpu.last_spikes());
         self.gpu = Some(gpu);
-        self.spikes = spikes;
 
         let forced_spikes_applied = forced_indices.len();
         let network_spikes_step = self.spikes.iter().filter(|&&v| v > 0).count() as u64;
@@ -973,6 +972,72 @@ impl BrainSim {
         StepTiming,
         FlyStepOutput,
     ) {
+        self.step_with_options_inner(
+            dt, fly, sources, include_activity, true,
+            skip_olfactory, olfactory_baseline_rate_hz, forced_spikes, stim_rates_by_id,
+        )
+    }
+
+    /// Fast path for intermediate run_steps iterations: skips spike-ID string
+    /// cloning and activity HashMap construction.
+    pub fn step_fast(
+        &mut self,
+        dt: f64,
+        fly: FlyInput,
+        sources: Vec<SourceInput>,
+        skip_olfactory: bool,
+        olfactory_baseline_rate_hz: Option<f64>,
+        forced_spikes: Vec<String>,
+        stim_rates_by_id: Option<&HashMap<String, f64>>,
+    ) -> (
+        Vec<f32>,
+        HashMap<String, f64>,
+        Vec<String>,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        StepTiming,
+        FlyStepOutput,
+    ) {
+        self.step_with_options_inner(
+            dt, fly, sources, false, false,
+            skip_olfactory, olfactory_baseline_rate_hz, forced_spikes, stim_rates_by_id,
+        )
+    }
+
+    fn step_with_options_inner(
+        &mut self,
+        dt: f64,
+        fly: FlyInput,
+        sources: Vec<SourceInput>,
+        include_activity: bool,
+        build_spike_ids: bool,
+        skip_olfactory: bool,
+        olfactory_baseline_rate_hz: Option<f64>,
+        forced_spikes: Vec<String>,
+        stim_rates_by_id: Option<&HashMap<String, f64>>,
+    ) -> (
+        Vec<f32>,
+        HashMap<String, f64>,
+        Vec<String>,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        StepTiming,
+        FlyStepOutput,
+    ) {
         let t_compute = Instant::now();
         let (recurrent_ms, lif_ms) = {
             #[cfg(feature = "cuda")]
@@ -1017,14 +1082,17 @@ impl BrainSim {
 
         let mut activity_sparse = HashMap::new();
         let mut activity: Vec<f32> = Vec::new();
-        let all_spike_ids: Vec<String> = self
-            .template
-            .neuron_ids
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| self.spikes[*i] >= ACTIVITY_THRESHOLD)
-            .map(|(_, id): (usize, &String)| id.clone())
-            .collect();
+        let all_spike_ids: Vec<String> = if build_spike_ids {
+            self.template
+                .neuron_ids
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| self.spikes[*i] >= ACTIVITY_THRESHOLD)
+                .map(|(_, id): (usize, &String)| id.clone())
+                .collect()
+        } else {
+            Vec::new()
+        };
         if include_activity {
             activity = vec![0.0f32; self.n];
             let cap = self.max_activity_entries;

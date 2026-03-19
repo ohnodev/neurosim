@@ -58,8 +58,6 @@ const LANDING_Z_BOOST = 4;
 const FLY_THRESHOLD_UP = 0.5;
 const FLY_THRESHOLD_DOWN = 0.5;
 const HEADING_LERP_RATE = 25;
-const HEADING_SNAP_RAD = Math.PI * 0.5; // Snap to velocity when turn > 90°
-const MIN_MOVEMENT_SQ = 1e-8; // Update heading on any movement so reversals respond instantly
 const WING_ANIM_NAMES = ['wing-leftAction', 'wing-rightAction'];
 const PULL_CLOSER_RATE = 1.1;
 const FLY_VIEW_DISTANCE = 3;
@@ -761,31 +759,25 @@ export function initThreeScene(
       const isFlying = wasFlying ? z > FLY_THRESHOLD_DOWN : z > FLY_THRESHOLD_UP;
       const lowLodIsFlying = inst.lowLodWasFlying ? z > FLY_THRESHOLD_DOWN : z > FLY_THRESHOLD_UP;
 
-      const dx = x - inst.prevPos.x;
-      const dy = y - inst.prevPos.y;
       inst.prevPos = { x, y };
-      const moveSq = dx * dx + dy * dy;
-      if (moveSq > MIN_MOVEMENT_SQ) {
-        const velocityHeading = Math.atan2(dx, dy) + Math.PI;
-        inst.targetHeading = velocityHeading;
-        let d = velocityHeading - inst.heading;
-        if (d > Math.PI) d -= 2 * Math.PI;
-        if (d < -Math.PI) d += 2 * Math.PI;
-        if (Math.abs(d) > HEADING_SNAP_RAD) {
-          inst.heading = velocityHeading;
-        } else {
-          const headingAlpha = Math.min(1, 1 - Math.exp(-HEADING_LERP_RATE * Math.min(cappedDelta, 0.05)));
-          inst.heading += d * headingAlpha;
-        }
-      }
+      // Use Rust fly.heading (authoritative) for 3D orientation so status, compass, and scene stay aligned.
+      // Rust convention: 0 rad = +X (right), π/2 = +Y (up). Three.js rotation.y: π/2 = +X when default forward is -Z.
+      const rustHeading = state.heading ?? 0;
+      inst.targetHeading = rustHeading;
+      let d = rustHeading - inst.heading;
+      if (d > Math.PI) d -= 2 * Math.PI;
+      if (d < -Math.PI) d += 2 * Math.PI;
+      const headingAlpha = Math.min(1, 1 - Math.exp(-HEADING_LERP_RATE * Math.min(cappedDelta, 0.05)));
+      inst.heading += d * headingAlpha;
       if (!inst.initialized) {
-        inst.heading = inst.targetHeading;
+        inst.heading = rustHeading;
         inst.initialized = true;
       }
 
       const visualZ = Math.max(0, z - GROUND_Z);
       inst.group.position.set(x, visualZ, y);
-      inst.group.rotation.y = inst.heading;
+      // Convert Rust heading (0=+X, π/2=+Y) to Three.js rotation.y (default forward -Z, so +π/2 = +X)
+      inst.group.rotation.y = inst.heading + Math.PI / 2;
       if (SHOW_FLY_SMELL_RADIUS_DEBUG && debugEnabled && flySmellDebugPool[i]) {
         const smell = flySmellDebugPool[i]!;
         smell.position.set(x, visualZ, y);

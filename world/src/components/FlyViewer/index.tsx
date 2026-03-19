@@ -277,7 +277,10 @@ export default function FlyViewer() {
           activityRef.current = data.activity ?? {};
           activitiesRef.current = [];
           const simIdx = followSimIndexRef.current ?? 0;
-          const deg = lastFrame.bumpAngleDegs?.[simIdx] ?? null;
+          const fly = lastFrame.flies?.[simIdx];
+          const rawBump = lastFrame.bumpAngleDegs?.[simIdx] ?? null;
+          // Use EPG bump when available; fall back to fly heading (same convention: 0°=right, 90°=up)
+          const deg = rawBump ?? (fly != null && typeof fly.heading === 'number' ? (fly.heading * 180) / Math.PI : null);
           setBumpAngleDeg(deg);
           const bins = lastFrame.epgBinsPerSim?.[simIdx] ?? null;
           setEpgBins(Array.isArray(bins) && bins.length === 16 ? bins : null);

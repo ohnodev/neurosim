@@ -12,24 +12,8 @@ use crate::model_constants::{
 const STIM_RATE_HZ: f64 = 200.0;
 const SENSORY_POISSON_SCALE: f32 = 250.0;
 const ACTIVITY_THRESHOLD: u8 = 1;
-const MOTOR_SCALE: f64 = 0.002;
-const MOTOR_TURN_GAIN: f64 = 220.0;
-const MOTOR_TURN_RATE_MAX: f64 = 2.8;
-const MOTOR_TURN_EMA_TAU_SEC: f64 = 0.35;
-const ARENA: f64 = 24.0;
-const WALL_MARGIN: f64 = 6.0;
-const FLY_TIME_MAX: f64 = 6.0;
-const REST_TIME: f64 = 4.0;
-const GROUND_Z: f64 = 0.35;
-const FLIGHT_Z: f64 = 1.5;
-const ON_GROUND_THRESH: f64 = 0.6;
 const EAT_RADIUS: f64 = 2.5;
-const NEAR_FOOD_RADIUS: f64 = 3.2;
 const ODOR_DETECTION_RADIUS: f64 = 34.0;
-const HUNGER_DECAY: f64 = 0.8;
-const HEALTH_DECAY: f64 = 2.5;
-const MOVE_SPEED: f64 = 10.0;
-const BASELINE_EXPLORE: f64 = 0.03;
 const FEEDING_STIM_BONUS: f64 = 0.25;
 const SYNAPTIC_DELAY_MS: f32 = 1.8;
 // Ignore near-zero food distance to avoid singular-like gain when the fly is
@@ -51,16 +35,15 @@ pub struct BrainSim {
     delay_len: usize,
     refractory: Vec<u16>,
     spikes: Vec<u8>,
-    viewer_indices: Vec<u32>,
     max_activity_entries: usize,
-    fly_time_left_sec: f64,
-    motor_turn_ema: f64,
     rng_state: u64,
     stim_log_every: u64,
     step_counter: u64,
     olf_poisson_total: u64,
     forced_spikes_total: u64,
     network_spikes_total: u64,
+    /// Pre-resolved world stim presets: preset name -> (neuron_idx, rate_hz).
+    world_stim_presets: HashMap<String, Vec<(u32, f32)>>,
     #[cfg(feature = "cuda")]
     gpu: Option<crate::gpu::GpuSimState>,
 }
@@ -118,6 +101,38 @@ struct SensoryDrive {
 }
 
 impl BrainSim {
+    fn choose_world_preset_for_fly(fly: &FlyInput, sources: &[SourceInput]) -> &'static str {
+        let mut angle_deg = fly.heading.to_degrees();
+        let mut nearest_d2 = f64::INFINITY;
+        for s in sources {
+            let dx = s.x - fly.x;
+            let dy = s.y - fly.y;
+            let d2 = dx * dx + dy * dy;
+            if d2 < nearest_d2 {
+                nearest_d2 = d2;
+                angle_deg = dy.atan2(dx).to_degrees();
+            }
+        }
+        let targets = [("11PM", 330.0f64), ("3PM", 90.0f64), ("8PM", 210.0f64)];
+        let mut best = "11PM";
+        let mut best_diff = f64::INFINITY;
+        for (name, target) in targets {
+            let mut d = angle_deg - target;
+            while d > 180.0 {
+                d -= 360.0;
+            }
+            while d < -180.0 {
+                d += 360.0;
+            }
+            let ad = d.abs();
+            if ad < best_diff {
+                best_diff = ad;
+                best = name;
+            }
+        }
+        best
+    }
+
     pub fn set_rng_seed(&mut self, seed: u64) {
         self.rng_state = seed;
     }
@@ -240,7 +255,6 @@ impl BrainSim {
         epg_recurrence_boost: f32,
     ) -> Self {
         let n = template.neuron_ids.len();
-        let viewer_indices = template.viewer_subset_indices.clone();
         let delay_len = Self::compute_synaptic_delay_steps(0.001).saturating_add(1);
         #[cfg(feature = "cuda")]
         let gpu = crate::gpu::get_gpu_connectome().and_then(|conn| {
@@ -270,16 +284,14 @@ impl BrainSim {
             delay_len,
             refractory: vec![0u16; n],
             spikes: vec![0u8; n],
-            viewer_indices,
             max_activity_entries: Self::readout_activity_cap(),
-            fly_time_left_sec: FLY_TIME_MAX,
-            motor_turn_ema: 0.0,
             rng_state: 0x9E3779B97F4A7C15u64,
             stim_log_every: Self::stim_log_interval(),
             step_counter: 0,
             olf_poisson_total: 0,
             forced_spikes_total: 0,
             network_spikes_total: 0,
+            world_stim_presets: HashMap::new(),
             #[cfg(feature = "cuda")]
             gpu,
         }
@@ -365,6 +377,28 @@ impl BrainSim {
         }
     }
 
+    /// Register world stim presets once (11PM/3PM/8PM) by resolving root IDs to neuron indices.
+    pub fn set_world_stim_presets(&mut self, presets: &HashMap<String, HashMap<String, f64>>) {
+        let mut resolved: HashMap<String, Vec<(u32, f32)>> = HashMap::new();
+        for (name, rates) in presets {
+            let mut items: Vec<(u32, f32)> = Vec::new();
+            for (rid, hz) in rates {
+                if !hz.is_finite() || *hz <= 0.0 {
+                    continue;
+                }
+                if let Some(&idx) = self.template.neuron_index_by_id.get(rid.as_str()) {
+                    if idx < self.n {
+                        items.push((idx as u32, *hz as f32));
+                    }
+                }
+            }
+            if !items.is_empty() {
+                resolved.insert(name.clone(), items);
+            }
+        }
+        self.world_stim_presets = resolved;
+    }
+
     fn refrac_steps(dt: f64) -> u16 {
         let steps = ((REFRACT_MS as f64) / (dt * 1000.0)).ceil();
         if !steps.is_finite() || steps <= 1.0 {
@@ -374,18 +408,6 @@ impl BrainSim {
         } else {
             steps as u16
         }
-    }
-
-    fn angle_toward(heading: f64, dx: f64, dy: f64) -> f64 {
-        let target = dy.atan2(dx);
-        let mut d = target - heading;
-        while d > std::f64::consts::PI {
-            d -= 2.0 * std::f64::consts::PI;
-        }
-        while d < -std::f64::consts::PI {
-            d += 2.0 * std::f64::consts::PI;
-        }
-        d
     }
 
     fn normalize_angle(mut a: f64) -> f64 {
@@ -514,6 +536,7 @@ impl BrainSim {
         olfactory_baseline_rate_hz: Option<f64>,
         forced_spikes: &[String],
         stim_rates_by_id: Option<&HashMap<String, f64>>,
+        stim_preset: Option<&str>,
     ) -> (f64, f64) {
         self.ensure_delay_queue_for_dt(dt);
         let dt_ms = (dt * 1000.0) as f32;
@@ -644,6 +667,11 @@ impl BrainSim {
         // Python parity: per-neuron stim_rates_by_id are Poisson rate injections,
         // not direct forced spikes. Iterate root_ids in sorted order so RNG matches
         // across runs (HashMap iteration order is randomized per process).
+        let chosen_preset = if skip_olfactory && stim_rates_by_id.is_none() {
+            Some(stim_preset.unwrap_or_else(|| Self::choose_world_preset_for_fly(fly, sources)))
+        } else {
+            stim_preset
+        };
         if let Some(stim_map) = stim_rates_by_id {
             let mut rids: Vec<&String> = stim_map.keys().collect();
             rids.sort();
@@ -671,6 +699,20 @@ impl BrainSim {
                     rids.len(),
                     found
                 );
+            }
+        } else if let Some(preset) = chosen_preset {
+            if let Some(items) = self.world_stim_presets.get(preset) {
+                for &(idx_u32, rate_hz) in items {
+                    let idx = idx_u32 as usize;
+                    if idx >= self.n {
+                        continue;
+                    }
+                    let p = ((rate_hz as f64) * dt).clamp(0.0, 1.0);
+                    if p > 0.0 && Self::next_uniform(&mut rng_state) < p {
+                        self.syn_input[idx] += sensory_spike_amp;
+                        olf_poisson_spikes += 1;
+                    }
+                }
             }
         }
         // Causal external stimulation is handled as explicit forced spikes
@@ -771,6 +813,7 @@ impl BrainSim {
         olfactory_baseline_rate_hz: Option<f64>,
         forced_spikes: &[String],
         stim_rates_by_id: Option<&HashMap<String, f64>>,
+        stim_preset: Option<&str>,
     ) -> (f64, f64) {
         let gpu = self.gpu.take().expect("[brain-service] run_step_gpu called without GPU state");
 
@@ -779,10 +822,10 @@ impl BrainSim {
         let mut gpu = gpu;
         gpu.ensure_delay_len(desired_len);
 
-        // --- Poisson / stim input computed on CPU (same logic as run_step_cpu) ---
-        self.syn_input.fill(0.0);
-        let mut rng_state = self.rng_state;
         let sensory_spike_amp = SENSORY_POISSON_SCALE * self.w_syn;
+        let mut syn_input_host: Option<&[f32]> = None;
+        let mut gpu_stim_indices: Vec<u32> = Vec::new();
+        let mut gpu_stim_rates_hz: Vec<f32> = Vec::new();
         let mut olf_poisson_spikes = 0usize;
         let used_olfactory_rate_hz = if skip_olfactory {
             0.0
@@ -791,89 +834,182 @@ impl BrainSim {
                 .filter(|v| v.is_finite() && *v > 0.0)
                 .unwrap_or(0.0)
         };
-        if !skip_olfactory {
-        if let Some(rate_hz) = olfactory_baseline_rate_hz.filter(|v| v.is_finite() && *v > 0.0) {
-            olf_poisson_spikes += Self::apply_poisson_stimulus(
-                &self.template.sensory_left_indices, rate_hz, dt, sensory_spike_amp,
-                &mut rng_state, &mut self.syn_input,
-            );
-            olf_poisson_spikes += Self::apply_poisson_stimulus(
-                &self.template.sensory_right_indices, rate_hz, dt, sensory_spike_amp,
-                &mut rng_state, &mut self.syn_input,
-            );
-            olf_poisson_spikes += Self::apply_poisson_stimulus(
-                &self.template.sensory_unknown_indices, rate_hz, dt, sensory_spike_amp,
-                &mut rng_state, &mut self.syn_input,
-            );
-            if self.template.sensory_left_indices.is_empty()
-                && self.template.sensory_right_indices.is_empty()
-                && self.template.sensory_unknown_indices.is_empty()
-            {
-                olf_poisson_spikes += Self::apply_poisson_stimulus(
-                    &self.template.sensory_indices, rate_hz, dt, sensory_spike_amp,
-                    &mut rng_state, &mut self.syn_input,
-                );
+        // Fast path for world simulation: skip CPU Poisson array build and run sparse
+        // stim_rates_by_id Poisson directly on GPU.
+        let chosen_preset = if skip_olfactory && stim_rates_by_id.is_none() {
+            Some(stim_preset.unwrap_or_else(|| Self::choose_world_preset_for_fly(fly, sources)))
+        } else {
+            stim_preset
+        };
+        let use_gpu_sparse_stim = skip_olfactory && olfactory_baseline_rate_hz.is_none();
+        if use_gpu_sparse_stim {
+            if let Some(stim_map) = stim_rates_by_id {
+                let mut rids: Vec<&String> = stim_map.keys().collect();
+                rids.sort();
+                let mut found = 0usize;
+                for rid in &rids {
+                    let rate_hz = stim_map[*rid];
+                    if !rate_hz.is_finite() || rate_hz <= 0.0 {
+                        continue;
+                    }
+                    if let Some(&idx) = self.template.neuron_index_by_id.get(rid.as_str()) {
+                        if idx < self.n {
+                            gpu_stim_indices.push(idx as u32);
+                            gpu_stim_rates_hz.push(rate_hz as f32);
+                        }
+                        found += 1;
+                    }
+                }
+                if self.stim_log_every > 0
+                    && self.step_counter % self.stim_log_every == 0
+                    && !rids.is_empty()
+                {
+                    eprintln!(
+                        "[stim][gpu] rates_by_id: {} requested, {} found in connectome",
+                        rids.len(), found
+                    );
+                }
+            }
+            if gpu_stim_indices.is_empty() {
+                if let Some(preset) = chosen_preset {
+                    if let Some(items) = self.world_stim_presets.get(preset) {
+                        gpu_stim_indices.reserve(items.len());
+                        gpu_stim_rates_hz.reserve(items.len());
+                        for &(idx, hz) in items {
+                            gpu_stim_indices.push(idx);
+                            gpu_stim_rates_hz.push(hz);
+                        }
+                    }
+                }
             }
         } else {
-            let sensory = self.sensory_drive(fly, sources);
-            olf_poisson_spikes += Self::apply_poisson_stimulus(
-                &self.template.sensory_left_indices, sensory.left_rate_hz, dt, sensory_spike_amp,
-                &mut rng_state, &mut self.syn_input,
-            );
-            olf_poisson_spikes += Self::apply_poisson_stimulus(
-                &self.template.sensory_right_indices, sensory.right_rate_hz, dt, sensory_spike_amp,
-                &mut rng_state, &mut self.syn_input,
-            );
-            let unknown_rate_hz =
-                ((sensory.left_rate_hz + sensory.right_rate_hz + sensory.center_rate_hz) / 3.0)
-                    .max(0.0);
-            olf_poisson_spikes += Self::apply_poisson_stimulus(
-                &self.template.sensory_unknown_indices, unknown_rate_hz, dt, sensory_spike_amp,
-                &mut rng_state, &mut self.syn_input,
-            );
-            if self.template.sensory_left_indices.is_empty()
-                && self.template.sensory_right_indices.is_empty()
-                && self.template.sensory_unknown_indices.is_empty()
-            {
-                let fallback_hz = sensory
-                    .center_rate_hz
-                    .max(sensory.left_rate_hz.max(sensory.right_rate_hz));
-                olf_poisson_spikes += Self::apply_poisson_stimulus(
-                    &self.template.sensory_indices, fallback_hz, dt, sensory_spike_amp,
-                    &mut rng_state, &mut self.syn_input,
-                );
-            }
-        }
-        }
-        if let Some(stim_map) = stim_rates_by_id {
-            let mut rids: Vec<&String> = stim_map.keys().collect();
-            rids.sort();
-            let mut found = 0usize;
-            for rid in &rids {
-                let rate_hz = stim_map[*rid];
-                if !rate_hz.is_finite() || rate_hz <= 0.0 {
-                    continue;
-                }
-                let p = (rate_hz * dt).clamp(0.0, 1.0);
-                if p <= 0.0 {
-                    continue;
-                }
-                if let Some(&idx) = self.template.neuron_index_by_id.get(rid.as_str()) {
-                    if idx < self.n && Self::next_uniform(&mut rng_state) < p {
-                        self.syn_input[idx] += sensory_spike_amp;
-                        olf_poisson_spikes += 1;
+            // --- Poisson / stim input computed on CPU (same logic as run_step_cpu) ---
+            self.syn_input.fill(0.0);
+            let mut rng_state = self.rng_state;
+            if !skip_olfactory {
+                if let Some(rate_hz) =
+                    olfactory_baseline_rate_hz.filter(|v| v.is_finite() && *v > 0.0)
+                {
+                    olf_poisson_spikes += Self::apply_poisson_stimulus(
+                        &self.template.sensory_left_indices,
+                        rate_hz,
+                        dt,
+                        sensory_spike_amp,
+                        &mut rng_state,
+                        &mut self.syn_input,
+                    );
+                    olf_poisson_spikes += Self::apply_poisson_stimulus(
+                        &self.template.sensory_right_indices,
+                        rate_hz,
+                        dt,
+                        sensory_spike_amp,
+                        &mut rng_state,
+                        &mut self.syn_input,
+                    );
+                    olf_poisson_spikes += Self::apply_poisson_stimulus(
+                        &self.template.sensory_unknown_indices,
+                        rate_hz,
+                        dt,
+                        sensory_spike_amp,
+                        &mut rng_state,
+                        &mut self.syn_input,
+                    );
+                    if self.template.sensory_left_indices.is_empty()
+                        && self.template.sensory_right_indices.is_empty()
+                        && self.template.sensory_unknown_indices.is_empty()
+                    {
+                        olf_poisson_spikes += Self::apply_poisson_stimulus(
+                            &self.template.sensory_indices,
+                            rate_hz,
+                            dt,
+                            sensory_spike_amp,
+                            &mut rng_state,
+                            &mut self.syn_input,
+                        );
                     }
-                    found += 1;
+                } else {
+                    let sensory = self.sensory_drive(fly, sources);
+                    olf_poisson_spikes += Self::apply_poisson_stimulus(
+                        &self.template.sensory_left_indices,
+                        sensory.left_rate_hz,
+                        dt,
+                        sensory_spike_amp,
+                        &mut rng_state,
+                        &mut self.syn_input,
+                    );
+                    olf_poisson_spikes += Self::apply_poisson_stimulus(
+                        &self.template.sensory_right_indices,
+                        sensory.right_rate_hz,
+                        dt,
+                        sensory_spike_amp,
+                        &mut rng_state,
+                        &mut self.syn_input,
+                    );
+                    let unknown_rate_hz =
+                        ((sensory.left_rate_hz + sensory.right_rate_hz + sensory.center_rate_hz)
+                            / 3.0)
+                            .max(0.0);
+                    olf_poisson_spikes += Self::apply_poisson_stimulus(
+                        &self.template.sensory_unknown_indices,
+                        unknown_rate_hz,
+                        dt,
+                        sensory_spike_amp,
+                        &mut rng_state,
+                        &mut self.syn_input,
+                    );
+                    if self.template.sensory_left_indices.is_empty()
+                        && self.template.sensory_right_indices.is_empty()
+                        && self.template.sensory_unknown_indices.is_empty()
+                    {
+                        let fallback_hz = sensory
+                            .center_rate_hz
+                            .max(sensory.left_rate_hz.max(sensory.right_rate_hz));
+                        olf_poisson_spikes += Self::apply_poisson_stimulus(
+                            &self.template.sensory_indices,
+                            fallback_hz,
+                            dt,
+                            sensory_spike_amp,
+                            &mut rng_state,
+                            &mut self.syn_input,
+                        );
+                    }
                 }
             }
-            if self.stim_log_every > 0 && self.step_counter % self.stim_log_every == 0 && !rids.is_empty() {
-                eprintln!(
-                    "[stim][gpu] rates_by_id: {} requested, {} found in connectome",
-                    rids.len(), found
-                );
+            if let Some(stim_map) = stim_rates_by_id {
+                let mut rids: Vec<&String> = stim_map.keys().collect();
+                rids.sort();
+                let mut found = 0usize;
+                for rid in &rids {
+                    let rate_hz = stim_map[*rid];
+                    if !rate_hz.is_finite() || rate_hz <= 0.0 {
+                        continue;
+                    }
+                    let p = (rate_hz * dt).clamp(0.0, 1.0);
+                    if p <= 0.0 {
+                        continue;
+                    }
+                    if let Some(&idx) = self.template.neuron_index_by_id.get(rid.as_str()) {
+                        if idx < self.n && Self::next_uniform(&mut rng_state) < p {
+                            self.syn_input[idx] += sensory_spike_amp;
+                            olf_poisson_spikes += 1;
+                        }
+                        found += 1;
+                    }
+                }
+                if self.stim_log_every > 0
+                    && self.step_counter % self.stim_log_every == 0
+                    && !rids.is_empty()
+                {
+                    eprintln!(
+                        "[stim][gpu] rates_by_id: {} requested, {} found in connectome",
+                        rids.len(),
+                        found
+                    );
+                }
             }
+            self.rng_state = rng_state;
+            syn_input_host = Some(&self.syn_input);
         }
-        self.rng_state = rng_state;
 
         // Resolve forced spike IDs to neuron indices
         let mut forced_indices: Vec<u32> = Vec::new();
@@ -887,8 +1023,18 @@ impl BrainSim {
 
         // --- GPU step ---
         let (recurrent_ms, lif_ms) = gpu.step(
-            dt, &self.syn_input, self.w_syn, self.epg_recurrence_boost, &forced_indices,
-        ).unwrap_or_else(|| {
+            dt,
+            syn_input_host,
+            if gpu_stim_indices.is_empty() {
+                None
+            } else {
+                Some((&gpu_stim_indices, &gpu_stim_rates_hz, sensory_spike_amp))
+            },
+            self.w_syn,
+            self.epg_recurrence_boost,
+            &forced_indices,
+        )
+        .unwrap_or_else(|| {
             eprintln!("[brain-service][gpu] GPU step failed — this is fatal with USE_CUDA=1");
             std::process::exit(1);
         });
@@ -943,7 +1089,7 @@ impl BrainSim {
         StepTiming,
         FlyStepOutput,
     ) {
-        self.step_with_options(dt, fly, sources, true, false, None, Vec::new(), None)
+        self.step_with_options(dt, fly, sources, true, false, None, Vec::new(), None, None)
     }
 
     pub fn step_with_options(
@@ -956,6 +1102,7 @@ impl BrainSim {
         olfactory_baseline_rate_hz: Option<f64>,
         forced_spikes: Vec<String>,
         stim_rates_by_id: Option<&HashMap<String, f64>>,
+        stim_preset: Option<&str>,
     ) -> (
         Vec<f32>,
         HashMap<String, f64>,
@@ -974,7 +1121,7 @@ impl BrainSim {
     ) {
         self.step_with_options_inner(
             dt, fly, sources, include_activity, true,
-            skip_olfactory, olfactory_baseline_rate_hz, forced_spikes, stim_rates_by_id,
+            skip_olfactory, olfactory_baseline_rate_hz, forced_spikes, stim_rates_by_id, stim_preset,
         )
     }
 
@@ -989,6 +1136,7 @@ impl BrainSim {
         olfactory_baseline_rate_hz: Option<f64>,
         forced_spikes: Vec<String>,
         stim_rates_by_id: Option<&HashMap<String, f64>>,
+        stim_preset: Option<&str>,
     ) -> (
         Vec<f32>,
         HashMap<String, f64>,
@@ -1007,7 +1155,7 @@ impl BrainSim {
     ) {
         self.step_with_options_inner(
             dt, fly, sources, false, false,
-            skip_olfactory, olfactory_baseline_rate_hz, forced_spikes, stim_rates_by_id,
+            skip_olfactory, olfactory_baseline_rate_hz, forced_spikes, stim_rates_by_id, stim_preset,
         )
     }
 
@@ -1022,6 +1170,7 @@ impl BrainSim {
         olfactory_baseline_rate_hz: Option<f64>,
         forced_spikes: Vec<String>,
         stim_rates_by_id: Option<&HashMap<String, f64>>,
+        stim_preset: Option<&str>,
     ) -> (
         Vec<f32>,
         HashMap<String, f64>,
@@ -1051,6 +1200,7 @@ impl BrainSim {
                         olfactory_baseline_rate_hz,
                         &forced_spikes,
                         stim_rates_by_id,
+                        stim_preset,
                     )
                 } else {
                     self.run_step_cpu(
@@ -1061,6 +1211,7 @@ impl BrainSim {
                         olfactory_baseline_rate_hz,
                         &forced_spikes,
                         stim_rates_by_id,
+                        stim_preset,
                     )
                 }
             }
@@ -1074,6 +1225,7 @@ impl BrainSim {
                     olfactory_baseline_rate_hz,
                     &forced_spikes,
                     stim_rates_by_id,
+                    stim_preset,
                 )
             }
         };
@@ -1087,7 +1239,9 @@ impl BrainSim {
                 .neuron_ids
                 .iter()
                 .enumerate()
-                .filter(|(i, _)| self.spikes[*i] >= ACTIVITY_THRESHOLD)
+                .filter(|(i, _)| {
+                    self.spikes[*i] >= ACTIVITY_THRESHOLD && self.template.is_epg[*i] > 0
+                })
                 .map(|(_, id): (usize, &String)| id.clone())
                 .collect()
         } else {
@@ -1096,8 +1250,10 @@ impl BrainSim {
         if include_activity {
             activity = vec![0.0f32; self.n];
             let cap = self.max_activity_entries;
-            for &idx in &self.viewer_indices {
-                let i = idx as usize;
+            for i in 0..self.n {
+                if self.template.is_epg[i] == 0 {
+                    continue;
+                }
                 if self.spikes[i] >= ACTIVITY_THRESHOLD {
                     activity[i] = 1.0;
                     if activity_sparse.len() < cap {
@@ -1120,208 +1276,25 @@ impl BrainSim {
             }
             activity_sparse.clear();
         }
-
-        let mut ml = 0.0f64;
-        let mut mr = 0.0f64;
-        let mut mf = 0.0f64;
-        let mut ml_count = 0.0f64;
-        let mut mr_count = 0.0f64;
-        let mut mf_count = 0.0f64;
-        for &i in &self.template.motor_left {
-            let idx = i as usize;
-            if idx < self.n {
-                let spike = self.spikes[idx] as f64;
-                ml += spike;
-                if spike > 0.0 {
-                    ml_count += 1.0;
-                }
-            }
-        }
-        for &i in &self.template.motor_right {
-            let idx = i as usize;
-            if idx < self.n {
-                let spike = self.spikes[idx] as f64;
-                mr += spike;
-                if spike > 0.0 {
-                    mr_count += 1.0;
-                }
-            }
-        }
-        for &i in &self.template.motor_unknown {
-            let idx = i as usize;
-            if idx < self.n {
-                let spike = self.spikes[idx] as f64;
-                mf += spike;
-                if spike > 0.0 {
-                    mf_count += 1.0;
-                }
-            }
-        }
         let readout_ms = t_readout.elapsed().as_secs_f64() * 1000.0;
         let compute_ms = t_compute.elapsed().as_secs_f64() * 1000.0;
-
         let t = fly.t + dt;
-        let mut hunger = fly.hunger;
-        let mut health = fly.health;
-        let mut rest_time_left = fly.rest_time_left;
-        let mut dead = fly.dead;
-        let eaten_food_id: Option<String> = None;
-        let feeding = false;
-        let mut feeding_candidate_id: Option<String> = None;
-        let mut x = fly.x;
-        let mut y = fly.y;
-        let mut z = fly.z;
-        let mut heading = fly.heading;
-
-        if !dead {
-            let on_ground = fly.z < ON_GROUND_THRESH;
-            let can_fly_eat = (rest_time_left > 0.0 || on_ground || fly.z < 1.1) && fly.z < 1.2;
-            if can_fly_eat {
-                for s in &sources {
-                    if ((s.x - fly.x).powi(2) + (s.y - fly.y).powi(2)).sqrt() < EAT_RADIUS {
-                        feeding_candidate_id = Some(s.id.clone());
-                        break;
-                    }
-                }
-            }
-
-            let prev_hunger = hunger;
-            if feeding_candidate_id.is_none() {
-                hunger = (hunger - HUNGER_DECAY * dt).max(0.0);
-            }
-
-            if hunger <= 0.0 {
-                let time_at_zero = if prev_hunger <= 0.0 {
-                    dt
-                } else {
-                    (HUNGER_DECAY * dt - prev_hunger).max(0.0) / HUNGER_DECAY
-                };
-                health = (health - HEALTH_DECAY * time_at_zero).max(0.0);
-                if health <= 0.0 {
-                    dead = true;
-                }
-            }
-
-            // Use per-side firing rates (not raw counts) to avoid fixed turn bias
-            // when motor bank sizes differ (e.g. 52 left vs 54 right neurons).
-            let ml_rate = if self.template.motor_left.is_empty() {
-                0.0
-            } else {
-                ml / self.template.motor_left.len() as f64
-            };
-            let mr_rate = if self.template.motor_right.is_empty() {
-                0.0
-            } else {
-                mr / self.template.motor_right.len() as f64
-            };
-            // Steering needs stronger influence than forward drive so small L/R
-            // imbalances (e.g. +/-3..5 spikes) still produce visible turns.
-            let turn_from_motor = ((ml_rate - mr_rate) * MOTOR_TURN_GAIN)
-                .clamp(-MOTOR_TURN_RATE_MAX, MOTOR_TURN_RATE_MAX);
-            let forward_from_motor = ml * MOTOR_SCALE + mr * MOTOR_SCALE + mf * MOTOR_SCALE;
-            let motor = forward_from_motor.tanh() * 0.5;
-
-            // Smooth motor steering to prevent frame-to-frame sign flip cancellation
-            // (e.g. -3/+5 oscillations) from collapsing heading updates.
-            let ema_alpha = if dt > 0.0 {
-                1.0 - (-dt / MOTOR_TURN_EMA_TAU_SEC).exp()
-            } else {
-                0.0
-            };
-            self.motor_turn_ema += (turn_from_motor - self.motor_turn_ema) * ema_alpha.clamp(0.0, 1.0);
-            let mut heading_bias = self.motor_turn_ema * dt;
-            let near_right = fly.x > ARENA - WALL_MARGIN;
-            let near_left = fly.x < -ARENA + WALL_MARGIN;
-            let near_top = fly.y > ARENA - WALL_MARGIN;
-            let near_bottom = fly.y < -ARENA + WALL_MARGIN;
-            let near_corner = (near_right as u8 + near_left as u8 + near_top as u8 + near_bottom as u8) >= 2;
-            if near_corner {
-                heading_bias += Self::angle_toward(fly.heading, -fly.x, -fly.y) * 0.6 * dt;
-            } else {
-                if near_right {
-                    heading_bias -= 0.2 * dt;
-                }
-                if near_left {
-                    heading_bias += 0.2 * dt;
-                }
-                if near_top {
-                    heading_bias -= 0.2 * dt;
-                }
-                if near_bottom {
-                    heading_bias += 0.2 * dt;
-                }
-            }
-
-            let mut effective_motor = if rest_time_left <= 0.0 {
-                motor.max(BASELINE_EXPLORE)
-            } else {
-                0.0
-            };
-            if rest_time_left > 0.0 {
-                rest_time_left -= dt;
-                effective_motor = 0.0;
-                if rest_time_left <= 0.0 {
-                    self.fly_time_left_sec = FLY_TIME_MAX;
-                }
-            } else if effective_motor.abs() > 0.005 {
-                self.fly_time_left_sec = (self.fly_time_left_sec - dt * effective_motor.abs()).max(0.0);
-                if self.fly_time_left_sec <= 0.0 {
-                    rest_time_left = REST_TIME;
-                }
-            } else {
-                self.fly_time_left_sec = (self.fly_time_left_sec + dt * 0.5).min(FLY_TIME_MAX);
-            }
-            self.fly_time_left_sec = self.fly_time_left_sec.clamp(0.0, FLY_TIME_MAX);
-
-            let dx = fly.heading.cos() * effective_motor * dt * MOVE_SPEED;
-            let dy = fly.heading.sin() * effective_motor * dt * MOVE_SPEED;
-            x = (fly.x + if dx.is_finite() { dx } else { 0.0 }).clamp(-ARENA, ARENA);
-            y = (fly.y + if dy.is_finite() { dy } else { 0.0 }).clamp(-ARENA, ARENA);
-
-            let mut z_drift = 0.0;
-            if rest_time_left > 0.0 {
-                z_drift = -0.5 * dt;
-            } else {
-                let mut near_food = false;
-                for s in &sources {
-                    if ((s.x - fly.x).powi(2) + (s.y - fly.y).powi(2)).sqrt() < NEAR_FOOD_RADIUS {
-                        near_food = true;
-                        break;
-                    }
-                }
-                if hunger <= 90.0 && near_food {
-                    z_drift = -0.6 * dt;
-                } else if effective_motor.abs() > 0.005 {
-                    z_drift = 0.4 * dt;
-                }
-            }
-            let z_osc = 0.08 * (t * 20.0).sin() * dt;
-            z = (fly.z + if z_drift.is_finite() { z_drift } else { 0.0 } + if z_osc.is_finite() { z_osc } else { 0.0 })
-                .clamp(GROUND_Z, FLIGHT_Z);
-
-            let two_pi = 2.0 * std::f64::consts::PI;
-            let n_heading = fly.heading + if heading_bias.is_finite() { heading_bias } else { 0.0 };
-            heading = n_heading - two_pi * ((n_heading + std::f64::consts::PI) / two_pi).floor();
-            if !heading.is_finite() {
-                heading = fly.heading;
-            }
-        }
 
         let fly_out = FlyStepOutput {
-            x,
-            y,
-            z,
-            heading,
+            x: fly.x,
+            y: fly.y,
+            z: fly.z,
+            heading: fly.heading,
             t,
-            hunger: if hunger.is_finite() { hunger } else { fly.hunger },
-            health: if health.is_finite() { health } else { fly.health },
-            dead,
-            fly_time_left: (self.fly_time_left_sec / FLY_TIME_MAX).clamp(0.0, 1.0),
-            rest_time_left: if rest_time_left > 0.0 { rest_time_left } else { 0.0 },
-            rest_duration: REST_TIME,
-            feeding,
-            eaten_food_id,
-            feeding_candidate_id,
+            hunger: fly.hunger,
+            health: fly.health,
+            dead: fly.dead,
+            fly_time_left: 1.0,
+            rest_time_left: fly.rest_time_left.max(0.0),
+            rest_duration: 0.0,
+            feeding: false,
+            eaten_food_id: None,
+            feeding_candidate_id: None,
             feeding_sugar_taken: 0.0,
         };
 
@@ -1329,15 +1302,15 @@ impl BrainSim {
             activity,
             activity_sparse,
             all_spike_ids,
-            ml * MOTOR_SCALE,
-            mr * MOTOR_SCALE,
-            mf * MOTOR_SCALE,
-            ml_count,
-            mr_count,
-            mf_count,
-            ml,
-            mr,
-            mf,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
             StepTiming {
                 compute_ms,
                 kernel_ms,

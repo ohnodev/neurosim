@@ -377,38 +377,19 @@ export interface RunStepsWithStateParams {
   sources: Array<{ id: string; x: number; y: number; radius: number }>;
 }
 
-/** Run N steps in one round-trip; returns final state (same shape as step) when used for world loop. */
-export async function runStepsWithState(params: RunStepsWithStateParams): Promise<StepResult> {
+export interface RunStepsWithStateResult {
+  activitySparse: Record<string, number>;
+  bumpAngleDeg?: number | null;
+  epgBins?: number[] | null;
+}
+
+/** Run N steps in one round-trip; world path returns EPG-only readout. */
+export async function runStepsWithState(params: RunStepsWithStateParams): Promise<RunStepsWithStateResult> {
   const res = await request<{
     steps_done: number;
-    fly?: {
-      x: number;
-      y: number;
-      z: number;
-      heading: number;
-      t: number;
-      hunger: number;
-      health: number;
-      dead: boolean;
-      fly_time_left: number;
-      rest_time_left: number;
-      rest_duration: number;
-      feeding: boolean;
-    };
     activity_sparse?: Record<string, number>;
     bump_angle_deg?: number | null;
     epg_bins?: number[] | null;
-    motor_left?: number;
-    motor_right?: number;
-    motor_fwd?: number;
-    motor_left_count?: number;
-    motor_right_count?: number;
-    motor_fwd_count?: number;
-    motor_left_magnitude?: number;
-    motor_right_magnitude?: number;
-    motor_fwd_magnitude?: number;
-    eaten_food_ids?: string[];
-    feeding_sugar_taken?: number;
   }>({
     method: 'run_steps',
     params: {
@@ -433,45 +414,10 @@ export async function runStepsWithState(params: RunStepsWithStateParams): Promis
       sources: params.sources,
     },
   });
-  if (!res.fly) {
-    throw new Error('run_steps return_final_state=true but response missing fly');
-  }
-  const fly = res.fly;
   return {
-    activity: [],
     activitySparse: res.activity_sparse ?? {},
-    motorLeft: res.motor_left ?? 0,
-    motorRight: res.motor_right ?? 0,
-    motorFwd: res.motor_fwd ?? 0,
-    motorLeftCount: res.motor_left_count ?? 0,
-    motorRightCount: res.motor_right_count ?? 0,
-    motorFwdCount: res.motor_fwd_count ?? 0,
-    motorLeftMagnitude: res.motor_left_magnitude ?? 0,
-    motorRightMagnitude: res.motor_right_magnitude ?? 0,
-    motorFwdMagnitude: res.motor_fwd_magnitude ?? 0,
-    fly: {
-      x: fly.x,
-      y: fly.y,
-      z: fly.z,
-      heading: fly.heading,
-      t: fly.t,
-      hunger: fly.hunger,
-      health: fly.health,
-      dead: fly.dead,
-      flyTimeLeft: fly.fly_time_left,
-      restTimeLeft: fly.rest_time_left,
-      restDuration: fly.rest_duration,
-      feeding: fly.feeding,
-    },
-    eatenFoodIds: res.eaten_food_ids,
-    feedingSugarTaken: res.feeding_sugar_taken ?? 0,
     bumpAngleDeg: res.bump_angle_deg ?? null,
     epgBins: res.epg_bins ?? null,
-    computeMs: 0,
-    kernelMs: 0,
-    recurrentMs: 0,
-    lifMs: 0,
-    readoutMs: 0,
   };
 }
 

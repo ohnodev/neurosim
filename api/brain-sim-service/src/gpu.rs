@@ -72,6 +72,37 @@ extern "C" __global__ void add_syn_input_kernel(
     if (i < N) syn_input_dev[i] += syn_input_host[i];
 }
 
+extern "C" __global__ void poisson_stim_sparse_kernel(
+    float* syn_input,
+    const unsigned int* stim_indices,
+    const float* stim_rates_hz,
+    unsigned long long* rng_state,
+    int num_stim,
+    float dt_sec,
+    float spike_amp,
+    int N
+) {
+    int j = blockIdx.x * blockDim.x + threadIdx.x;
+    if (j >= num_stim) return;
+    unsigned int idx = stim_indices[j];
+    if (idx >= (unsigned int)N) return;
+    float rate_hz = stim_rates_hz[j];
+    if (!(rate_hz > 0.0f)) return;
+    float p = rate_hz * dt_sec;
+    if (p <= 0.0f) return;
+    if (p > 1.0f) p = 1.0f;
+    unsigned long long s = rng_state[idx];
+    s ^= s >> 12;
+    s ^= s << 25;
+    s ^= s >> 27;
+    rng_state[idx] = s;
+    unsigned int u = (unsigned int)(s >> 32);
+    float u01 = (float)u * 2.3283064365386963e-10f; // 1 / 2^32
+    if (u01 < p) {
+        syn_input[idx] += spike_amp;
+    }
+}
+
 extern "C" __global__ void delay_conductance_kernel(
     const float* g,
     float* g_next,
@@ -185,6 +216,7 @@ pub struct GpuSimState {
     spikes_host: Vec<u8>,
     active_indices: CudaSlice<u32>,
     num_active: CudaSlice<i32>,
+    rng_state: CudaSlice<u64>,
 }
 
 pub fn try_init_device() -> Option<Arc<CudaDevice>> {
@@ -200,6 +232,7 @@ pub fn try_init_device() -> Option<Arc<CudaDevice>> {
                     "compact_spikes_kernel",
                     "csr_scatter_kernel",
                     "add_syn_input_kernel",
+                    "poisson_stim_sparse_kernel",
                     "delay_conductance_kernel",
                     "lif_kernel",
                     "reset_g_on_spike_kernel",
@@ -270,6 +303,11 @@ impl GpuSimState {
         let spikes_host = vec![0u8; n];
         let active_indices: CudaSlice<u32> = dev.alloc_zeros(n).ok()?;
         let num_active: CudaSlice<i32> = dev.alloc_zeros(1).ok()?;
+        let mut rng_init = vec![0u64; n];
+        for (i, s) in rng_init.iter_mut().enumerate() {
+            *s = 0x9E3779B97F4A7C15u64 ^ ((i as u64).wrapping_mul(0xD1B54A32D192ED03u64));
+        }
+        let rng_state = dev.htod_sync_copy(&rng_init).ok()?;
         Some(Self {
             connectome,
             n,
@@ -287,6 +325,7 @@ impl GpuSimState {
             spikes_host,
             active_indices,
             num_active,
+            rng_state,
         })
     }
 
@@ -300,7 +339,8 @@ impl GpuSimState {
     pub fn step(
         &mut self,
         dt_sec: f64,
-        syn_input_host: &[f32],
+        syn_input_host: Option<&[f32]>,
+        gpu_stim_sparse: Option<(&[u32], &[f32], f32)>,
         w_syn: f32,
         epg_recurrence_boost: f32,
         forced_indices: &[u32],
@@ -340,10 +380,7 @@ impl GpuSimState {
                 .ok()?;
         }
 
-        // 3. Upload CPU Poisson input (syncs GPU, so compact_spikes is done after this)
-        dev.htod_sync_copy_into(syn_input_host, &mut self.syn_input_host_dev).ok()?;
-
-        // Download spike count (compact already finished from the sync above)
+        // Download spike count (sync point for compaction kernel)
         let mut count_host = [0i32];
         dev.dtoh_sync_copy_into(&self.num_active, &mut count_host).ok()?;
         let num_active = count_host[0].max(0) as u32;
@@ -377,21 +414,57 @@ impl GpuSimState {
             }
         }
 
-        // 5. Add CPU-computed Poisson / stim_rates_by_id additions
-        let add_fn = dev.get_func("bs", "add_syn_input_kernel")?;
-        unsafe {
-            add_fn
-                .launch(
-                    LaunchConfig::for_num_elems(self.n as u32),
-                    (&mut self.syn_input, &self.syn_input_host_dev, n),
-                )
-                .ok()?;
+        // 5. GPU sparse Poisson stimulation (world path: small PEN set)
+        if let Some((stim_indices, stim_rates_hz, spike_amp)) = gpu_stim_sparse {
+            if stim_indices.len() != stim_rates_hz.len() {
+                return None;
+            }
+            if !stim_indices.is_empty() {
+                // Copy exact-length sparse vectors to avoid size-mismatch assertions.
+                let stim_indices_dev = dev.htod_sync_copy(stim_indices).ok()?;
+                let stim_rates_dev = dev.htod_sync_copy(stim_rates_hz).ok()?;
+                let stim_fn = dev.get_func("bs", "poisson_stim_sparse_kernel")?;
+                unsafe {
+                    stim_fn
+                        .launch(
+                            LaunchConfig::for_num_elems(stim_indices.len() as u32),
+                            (
+                                &mut self.syn_input,
+                                &stim_indices_dev,
+                                &stim_rates_dev,
+                                &mut self.rng_state,
+                                stim_indices.len() as i32,
+                                dt_sec as f32,
+                                spike_amp,
+                                n,
+                            ),
+                        )
+                        .ok()?;
+                }
+            }
+        }
+
+        // 6. Add CPU-computed Poisson / stim_rates_by_id additions when needed
+        if let Some(syn_input_host) = syn_input_host {
+            if syn_input_host.len() != self.n {
+                return None;
+            }
+            dev.htod_sync_copy_into(syn_input_host, &mut self.syn_input_host_dev).ok()?;
+            let add_fn = dev.get_func("bs", "add_syn_input_kernel")?;
+            unsafe {
+                add_fn
+                    .launch(
+                        LaunchConfig::for_num_elems(self.n as u32),
+                        (&mut self.syn_input, &self.syn_input_host_dev, n),
+                    )
+                    .ok()?;
+            }
         }
 
         let recurrent_ms = t_recurrent.elapsed().as_secs_f64() * 1000.0;
         let t_lif = Instant::now();
 
-        // 6. Delay buffer + conductance update (matches CPU alpha-synapse with 1.8ms delay)
+        // 7. Delay buffer + conductance update (matches CPU alpha-synapse with 1.8ms delay)
         let delay_fn = dev.get_func("bs", "delay_conductance_kernel")?;
         unsafe {
             delay_fn
@@ -412,7 +485,7 @@ impl GpuSimState {
         }
         self.delay_head = (self.delay_head + 1) % self.delay_len;
 
-        // 7. LIF integration — uses OLD g (not g_next), matching CPU Euler scheme
+        // 8. LIF integration — uses OLD g (not g_next), matching CPU Euler scheme
         let lif_fn = dev.get_func("bs", "lif_kernel")?;
         unsafe {
             lif_fn
@@ -434,7 +507,7 @@ impl GpuSimState {
                 .ok()?;
         }
 
-        // 8. Reset g_next for neurons that just spiked
+        // 9. Reset g_next for neurons that just spiked
         let reset_fn = dev.get_func("bs", "reset_g_on_spike_kernel")?;
         unsafe {
             reset_fn
@@ -445,7 +518,7 @@ impl GpuSimState {
                 .ok()?;
         }
 
-        // 9. Apply forced spikes on device
+        // 10. Apply forced spikes on device
         if !forced_indices.is_empty() {
             let forced_dev = dev.htod_sync_copy(forced_indices).ok()?;
             let forced_fn = dev.get_func("bs", "apply_forced_spikes_kernel")?;
@@ -468,11 +541,11 @@ impl GpuSimState {
             }
         }
 
-        // 10. Download spikes into pre-allocated host buffer (no allocation)
+        // 11. Download spikes into pre-allocated host buffer (no allocation)
         dev.dtoh_sync_copy_into(&self.spikes_next, &mut self.spikes_host).ok()?;
         let lif_ms = t_lif.elapsed().as_secs_f64() * 1000.0;
 
-        // 11. Swap device handles: spikes_prev ← spikes_next, g ← g_next
+        // 12. Swap device handles: spikes_prev ← spikes_next, g ← g_next
         std::mem::swap(&mut self.spikes_prev, &mut self.spikes_next);
         std::mem::swap(&mut self.g, &mut self.g_next);
 

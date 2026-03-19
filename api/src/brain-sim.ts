@@ -36,6 +36,7 @@ export interface SimState {
   /** Normalized EPG bin activities 0..1 (16 bins), for compass. */
   epgBins?: number[] | null;
 }
+export type WorldStimPreset = '11PM' | '3PM' | '8PM';
 
 /** Brain sim uses the Rust service via Unix socket only. Connectome loaded by brain-service at startup. */
 const FLY_TIME_MAX = 6;
@@ -270,34 +271,20 @@ export async function createBrainSim(
         sources: sources.map((s) => ({ id: s.id, x: s.x ?? 0, y: s.y ?? 0, radius: s.radius ?? 1 })),
       });
       lastActivitySparse = result.activitySparse;
-      lastMotorLeft = result.motorLeft ?? 0;
-      lastMotorRight = result.motorRight ?? 0;
-      lastMotorFwd = result.motorFwd ?? 0;
-      lastMotorLeftCount = result.motorLeftCount ?? 0;
-      lastMotorRightCount = result.motorRightCount ?? 0;
-      lastMotorFwdCount = result.motorFwdCount ?? 0;
-      lastMotorLeftMagnitude = result.motorLeftMagnitude ?? 0;
-      lastMotorRightMagnitude = result.motorRightMagnitude ?? 0;
-      lastMotorFwdMagnitude = result.motorFwdMagnitude ?? 0;
-      fly = {
-        ...fly,
-        x: result.fly.x,
-        y: result.fly.y,
-        z: result.fly.z,
-        heading: result.fly.heading,
-        t: result.fly.t,
-        hunger: result.fly.hunger,
-        health: result.fly.health,
-        dead: result.fly.dead,
-        flyTimeLeft: result.fly.flyTimeLeft,
-        restTimeLeft: result.fly.restTimeLeft,
-        restDuration: result.fly.restDuration,
-        feeding: result.fly.feeding,
-      };
-      flyTimeLeftSec = Math.max(0, Math.min(FLY_TIME_MAX, (result.fly.flyTimeLeft ?? 0) * FLY_TIME_MAX));
-      restTimeLeft = result.fly.restTimeLeft ?? 0;
-      lastEatenFoodIds = result.eatenFoodIds;
-      lastFeedingSugarTaken = result.feedingSugarTaken ?? 0;
+      fly = { ...fly, t: fly.t + dt * numSteps };
+      lastMotorLeft = 0;
+      lastMotorRight = 0;
+      lastMotorFwd = 0;
+      lastMotorLeftCount = 0;
+      lastMotorRightCount = 0;
+      lastMotorFwdCount = 0;
+      lastMotorLeftMagnitude = 0;
+      lastMotorRightMagnitude = 0;
+      lastMotorFwdMagnitude = 0;
+      flyTimeLeftSec = FLY_TIME_MAX;
+      restTimeLeft = 0;
+      lastEatenFoodIds = undefined;
+      lastFeedingSugarTaken = 0;
       lastBumpAngleDeg = result.bumpAngleDeg ?? null;
       lastEpgBins = result.epgBins ?? null;
       return getState();

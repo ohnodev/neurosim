@@ -8,11 +8,7 @@ import { createBrainSim } from './brain-sim.js';
 import * as socketClient from './brain-socket-client.js';
 import { getWorld, spawnFood, removeFood, getSources, type WorldSource } from './world.js';
 import {
-  getWorldPenPresets,
-  WORLD_COMPASS_DEG,
-  WORLD_COMPASS_STEP_DEG,
   WORLD_SIM_DT_SEC,
-  type WorldCompassPosition,
 } from './world-pen-presets.js';
 import claimsRouter from './routes/claims.js';
 import { getFlies, removeFlyAtSlot } from './services/flyStore.js';
@@ -153,12 +149,6 @@ function loadPenABySide(): { left: string[]; right: string[] } {
 const PEN_A_BY_SIDE = loadPenABySide();
 const EPG_IDS_FOR_RUN_STEPS = [...epgRootIdSet].sort();
 
-/** World 3-position PEN_a presets (11PM, 3PM, 8PM). */
-const WORLD_PEN_PRESETS = getWorldPenPresets(PEN_A_BY_SIDE);
-
-/** Per-sim next PEN_a preset for world steering. Index = sim index. */
-const penPresetBySimIndex: WorldCompassPosition[] = [];
-
 /** Per-sim smoothed bump angle (deg) for stable heading and compass. */
 const smoothedBumpBySimIndex: (number | null)[] = [];
 
@@ -180,38 +170,6 @@ function normalizeAngleDeg(deg: number): number {
   while (a > 180) a -= 360;
   while (a < -180) a += 360;
   return a;
-}
-
-/** Pick the world compass position (11PM, 3PM, 8PM) closest to the given target angle in degrees. */
-function chooseWorldPresetFromAngleDeg(angleToTargetDeg: number): WorldCompassPosition {
-  let best: WorldCompassPosition = '11PM';
-  let bestDiff = Infinity;
-  for (const pos of ['11PM', '3PM', '8PM'] as const) {
-    const d = Math.abs(normalizeAngleDeg(angleToTargetDeg - WORLD_COMPASS_DEG[pos]));
-    if (d < bestDiff) {
-      bestDiff = d;
-      best = pos;
-    }
-  }
-  return best;
-}
-
-function chooseWorldPresetForFly(
-  fly: { x: number; y: number; heading: number },
-  sources: WorldSource[],
-): WorldCompassPosition {
-  let angleDeg = (fly.heading * 180) / Math.PI;
-  let nearestDistSq = Number.POSITIVE_INFINITY;
-  for (const s of sources) {
-    const dx = s.x - fly.x;
-    const dy = s.y - fly.y;
-    const d2 = dx * dx + dy * dy;
-    if (d2 < nearestDistSq) {
-      nearestDistSq = d2;
-      angleDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
-    }
-  }
-  return chooseWorldPresetFromAngleDeg(angleDeg);
 }
 
 function createSeededRandom(seed: number): () => number {
@@ -365,7 +323,6 @@ function removeSimAtIndex(simIndex: number): { address: string; slotIndex: numbe
   const deployment = findDeploymentBySimIndex(simIndex);
   sims.splice(simIndex, 1);
   simActivityTrail.splice(simIndex, 1);
-  penPresetBySimIndex.splice(simIndex, 1);
   smoothedBumpBySimIndex.splice(simIndex, 1);
 
   for (const [address, slotMap] of deployedFlies) {
@@ -401,18 +358,6 @@ async function addFlyToSim(spawnKey?: string): Promise<number> {
   sims.push(sim);
   simActivityTrail.push(new Map());
   const sources = getSources();
-  let angleDeg = (heading * 180) / Math.PI;
-  let nearestDistSq = Number.POSITIVE_INFINITY;
-  for (const s of sources) {
-    const dx = s.x - x;
-    const dy = s.y - y;
-    const d2 = dx * dx + dy * dy;
-    if (d2 < nearestDistSq) {
-      nearestDistSq = d2;
-      angleDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
-    }
-  }
-  penPresetBySimIndex.push(chooseWorldPresetFromAngleDeg(angleDeg));
   smoothedBumpBySimIndex.push(normalizeAngleDeg((heading * 180) / Math.PI));
   return sims.length - 1;
 }
@@ -476,17 +421,6 @@ function buildClientPayload(
     flies: ReturnType<typeof sims[0]['getState']>['fly'][];
     activities: (Record<string, number> | undefined)[];
     inputActivities: (Record<string, number> | undefined)[];
-    motorReadouts: ({
-      left: number;
-      right: number;
-      fwd: number;
-      leftCount: number;
-      rightCount: number;
-      fwdCount: number;
-      leftMagnitude: number;
-      rightMagnitude: number;
-      fwdMagnitude: number;
-    } | undefined)[];
     bumpAngleDegs: (number | null)[];
     epgBinsPerSim: (number[] | null)[];
   }[],
@@ -510,9 +444,8 @@ function buildClientPayload(
       lastFrame ? (lastFrame.inputActivities[viewIndex] ?? {}) : {},
       nowMs,
     );
-    const motor = lastFrame ? (lastFrame.motorReadouts[viewIndex] ?? undefined) : undefined;
     try {
-      ws.send(JSON.stringify({ frames: clientFrames, activity, motor, sources, simRunning: true }));
+      ws.send(JSON.stringify({ frames: clientFrames, activity, sources, simRunning: true }));
     } catch (err) {
       console.error('[ws] send error', err);
     }
@@ -664,17 +597,6 @@ function startSim(): void {
         flies: ReturnType<typeof sims[0]['getState']>['fly'][];
         activities: (Record<string, number> | undefined)[];
         inputActivities: (Record<string, number> | undefined)[];
-        motorReadouts: ({
-          left: number;
-          right: number;
-          fwd: number;
-          leftCount: number;
-          rightCount: number;
-          fwdCount: number;
-          leftMagnitude: number;
-          rightMagnitude: number;
-          fwdMagnitude: number;
-        } | undefined)[];
         bumpAngleDegs: (number | null)[];
         epgBinsPerSim: (number[] | null)[];
       }[] = [];
@@ -686,15 +608,6 @@ function startSim(): void {
         toT: number;
         activity?: Record<string, number>;
         inputActivity?: Record<string, number>;
-        motorLeft?: number;
-        motorRight?: number;
-        motorFwd?: number;
-        motorLeftCount?: number;
-        motorRightCount?: number;
-        motorFwdCount?: number;
-        motorLeftMagnitude?: number;
-        motorRightMagnitude?: number;
-        motorFwdMagnitude?: number;
         bumpAngleDeg?: number | null;
         epgBins?: number[] | null;
       }> = [];
@@ -711,19 +624,14 @@ function startSim(): void {
       const states = await Promise.all(
         sims.map(async (s, idx) => {
           const beforeFly = beforeStates[idx]?.fly;
-          if (beforeFly) {
-            penPresetBySimIndex[idx] = chooseWorldPresetForFly(beforeFly, currentSources);
-            if (smoothedBumpBySimIndex[idx] == null) {
-              smoothedBumpBySimIndex[idx] = normalizeAngleDeg((beforeFly.heading * 180) / Math.PI);
-            }
+          if (beforeFly && smoothedBumpBySimIndex[idx] == null) {
+            smoothedBumpBySimIndex[idx] = normalizeAngleDeg((beforeFly.heading * 180) / Math.PI);
           }
-          const preset = penPresetBySimIndex[idx] ?? '11PM';
-          const ratesById = WORLD_PEN_PRESETS[preset];
           const state = await (s as { stepBatch?: (dt: number, n: number, src: WorldSource[], rates?: Record<string, number>) => Promise<ReturnType<typeof sims[0]['getState']>> }).stepBatch?.(
             WORLD_SIM_DT_SEC,
             WORLD_STEPS_PER_BATCH,
             currentSources,
-            ratesById,
+            undefined,
           );
           return state ?? s.getState();
         }),
@@ -820,15 +728,6 @@ function startSim(): void {
           toT: state.t,
           activity: state.activity,
           inputActivity: state.inputActivity,
-          motorLeft: state.motorLeft,
-          motorRight: state.motorRight,
-          motorFwd: state.motorFwd,
-          motorLeftCount: state.motorLeftCount,
-          motorRightCount: state.motorRightCount,
-          motorFwdCount: state.motorFwdCount,
-          motorLeftMagnitude: state.motorLeftMagnitude,
-          motorRightMagnitude: state.motorRightMagnitude,
-          motorFwdMagnitude: state.motorFwdMagnitude,
           bumpAngleDeg: smoothed ?? rawBump ?? undefined,
           epgBins: state.epgBins ?? undefined,
         });
@@ -867,25 +766,10 @@ function startSim(): void {
         }));
         const activities = transitions.map((tr) => (i === FRAMES_PER_BATCH ? tr.activity : undefined));
         const inputActivities = transitions.map((tr) => (i === FRAMES_PER_BATCH ? tr.inputActivity : undefined));
-        const motorReadouts = transitions.map((tr) =>
-          i === FRAMES_PER_BATCH
-            ? {
-                left: tr.motorLeft ?? 0,
-                right: tr.motorRight ?? 0,
-                fwd: tr.motorFwd ?? 0,
-                leftCount: tr.motorLeftCount ?? 0,
-                rightCount: tr.motorRightCount ?? 0,
-                fwdCount: tr.motorFwdCount ?? 0,
-                leftMagnitude: tr.motorLeftMagnitude ?? 0,
-                rightMagnitude: tr.motorRightMagnitude ?? 0,
-                fwdMagnitude: tr.motorFwdMagnitude ?? 0,
-              }
-            : undefined,
-        );
         const t = transitions.length ? lerp(transitions[0].fromT, transitions[0].toT, alpha) : 0;
         const bumpAngleDegs = transitions.map((tr) => tr.bumpAngleDeg ?? null);
         const epgBinsPerSim = transitions.map((tr) => tr.epgBins ?? null);
-        frames.push({ t, flies, activities, inputActivities, motorReadouts, bumpAngleDegs, epgBinsPerSim });
+        frames.push({ t, flies, activities, inputActivities, bumpAngleDegs, epgBinsPerSim });
       }
       const beforePayload = performance.now();
       buildClientPayload(frames);
@@ -1533,24 +1417,9 @@ wss.on('connection', (ws) => {
   const states = sims.map((s) => s.getState());
   const activities = states.map((s) => s.activity);
   const firstState = sims[0]?.getState();
-  const viewedState = states[viewIndex];
-  const motor = viewedState
-    ? {
-        left: viewedState.motorLeft ?? 0,
-        right: viewedState.motorRight ?? 0,
-        fwd: viewedState.motorFwd ?? 0,
-        leftCount: viewedState.motorLeftCount ?? 0,
-        rightCount: viewedState.motorRightCount ?? 0,
-        fwdCount: viewedState.motorFwdCount ?? 0,
-        leftMagnitude: viewedState.motorLeftMagnitude ?? 0,
-        rightMagnitude: viewedState.motorRightMagnitude ?? 0,
-        fwdMagnitude: viewedState.motorFwdMagnitude ?? 0,
-      }
-    : undefined;
   ws.send(JSON.stringify({
     frames: [{ t: firstState?.t ?? 0, flies }],
     activity: activities[viewIndex] ?? {},
-    motor,
     sources: getSources(),
     simRunning,
   }));
@@ -1608,7 +1477,6 @@ export function resetDeployStateForTesting(): void {
   deployedFlies.clear();
   sims.splice(0, sims.length);
   simActivityTrail.splice(0, simActivityTrail.length);
-  penPresetBySimIndex.splice(0, penPresetBySimIndex.length);
   smoothedBumpBySimIndex.splice(0, smoothedBumpBySimIndex.length);
   clearForTesting();
 }

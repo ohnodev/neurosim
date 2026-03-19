@@ -246,6 +246,16 @@ fn main() {
         eprintln!("[brain-service] compiled without CUDA feature — CPU-only mode.");
     }
 
+    let world_stim_presets = Arc::new(build_default_world_stim_presets(classification_path.as_deref()));
+    let preset_sizes = (
+        world_stim_presets.get("11PM").map(|m| m.len()).unwrap_or(0),
+        world_stim_presets.get("3PM").map(|m| m.len()).unwrap_or(0),
+        world_stim_presets.get("8PM").map(|m| m.len()).unwrap_or(0),
+    );
+    eprintln!(
+        "[brain-service] world PEN presets resolved at startup: 11PM={} 3PM={} 8PM={}",
+        preset_sizes.0, preset_sizes.1, preset_sizes.2
+    );
     let template = Arc::new(template);
 
     let w_syn = std::env::var("NEUROSIM_W_SYN")
@@ -288,6 +298,7 @@ fn main() {
                 &food_state,
                 &next_id,
                 template.clone(),
+                world_stim_presets.clone(),
                 conn_id,
                 continuous_live.clone(),
                 &epg_id_to_bin,
@@ -403,6 +414,103 @@ fn load_pen_a_sides_and_er_ids(
         }
     }
     Ok((pen_left, pen_right, er_ids))
+}
+
+fn parse_pen_a_index(hemibrain_type: &str) -> Option<usize> {
+    if !hemibrain_type.starts_with("PEN_a") {
+        return None;
+    }
+    let digits: String = hemibrain_type.chars().filter(|c| c.is_ascii_digit()).collect();
+    let idx = digits.parse::<usize>().ok()?;
+    if idx == 0 {
+        None
+    } else {
+        Some(idx - 1)
+    }
+}
+
+fn load_pen_a_by_side_index(path: &Path) -> Result<(Vec<String>, Vec<String>), std::io::Error> {
+    let mut left_rows: Vec<(usize, String)> = Vec::new();
+    let mut right_rows: Vec<(usize, String)> = Vec::new();
+    let mut left_seen = HashSet::new();
+    let mut right_seen = HashSet::new();
+    let mut rdr = csv::Reader::from_path(path)?;
+    let headers = rdr
+        .headers()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    let root_idx = headers
+        .iter()
+        .position(|h| h.trim().eq_ignore_ascii_case("root_id"))
+        .unwrap_or(0);
+    let hemibrain_idx = headers
+        .iter()
+        .position(|h| h.trim().eq_ignore_ascii_case("hemibrain_type"))
+        .unwrap_or(6);
+    let side_idx = headers
+        .iter()
+        .position(|h| h.trim().eq_ignore_ascii_case("side"))
+        .unwrap_or(8);
+    for row in rdr.records() {
+        let row = row.map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let rid = row
+            .get(root_idx)
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+        if rid.is_empty() {
+            continue;
+        }
+        let hb = row
+            .get(hemibrain_idx)
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+        let Some(idx) = parse_pen_a_index(&hb) else {
+            continue;
+        };
+        let side = row
+            .get(side_idx)
+            .map(|s| s.trim().to_ascii_lowercase())
+            .unwrap_or_default();
+        if side == "left" {
+            if left_seen.insert(rid.clone()) {
+                left_rows.push((idx, rid));
+            }
+        } else if side == "right" {
+            if right_seen.insert(rid.clone()) {
+                right_rows.push((idx, rid));
+            }
+        }
+    }
+    left_rows.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    right_rows.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    Ok((
+        left_rows.into_iter().map(|(_, id)| id).collect(),
+        right_rows.into_iter().map(|(_, id)| id).collect(),
+    ))
+}
+
+fn build_default_world_stim_presets(class_path: Option<&Path>) -> HashMap<String, HashMap<String, f64>> {
+    let mut out: HashMap<String, HashMap<String, f64>> = HashMap::new();
+    let Some(cp) = class_path else {
+        return out;
+    };
+    let Ok((left, right)) = load_pen_a_by_side_index(cp) else {
+        return out;
+    };
+    let mut p11 = HashMap::new();
+    if let Some(id) = left.get(0) { p11.insert(id.clone(), 50.0); }
+    if let Some(id) = left.get(1) { p11.insert(id.clone(), 50.0); }
+    if let Some(id) = left.get(5) { p11.insert(id.clone(), 50.0); }
+    let mut p3 = HashMap::new();
+    if let Some(id) = left.get(2) { p3.insert(id.clone(), 50.0); }
+    if let Some(id) = right.get(5) { p3.insert(id.clone(), 70.0); }
+    let mut p8 = HashMap::new();
+    if let Some(id) = left.get(3) { p8.insert(id.clone(), 50.0); }
+    if let Some(id) = left.get(8) { p8.insert(id.clone(), 50.0); }
+    if let Some(id) = right.get(0) { p8.insert(id.clone(), 60.0); }
+    out.insert("11PM".to_string(), p11);
+    out.insert("3PM".to_string(), p3);
+    out.insert("8PM".to_string(), p8);
+    out
 }
 
 /// Boost right PEN_a -> EPG excitation (and optionally weaken right -> ER / direct inh to EPG).
@@ -938,6 +1046,7 @@ fn run_continuous_live_loop(
             } else {
                 Some(&stim)
             },
+            None,
         );
         fly = FlyInput {
             x: fly_out.x,
@@ -1008,6 +1117,7 @@ fn handle(
     food_state: &Mutex<FoodState>,
     next_id: &Mutex<u32>,
     template: Arc<connectome::ConnectomeTemplate>,
+    world_stim_presets: Arc<HashMap<String, HashMap<String, f64>>>,
     conn_id: u64,
     continuous_live: Option<Arc<ContinuousLiveState>>,
     epg_id_to_bin: &HashMap<String, u8>,
@@ -1072,6 +1182,7 @@ fn handle(
             continue;
         }
         let mut sim = BrainSim::from_template(template.clone(), w_syn, epg_recurrence_boost);
+        sim.set_world_stim_presets(&world_stim_presets);
         let from_template_ms = t_before_sim.elapsed().as_secs_f64() * 1000.0;
         let mut g = next_id.lock().unwrap();
         let id = *g;
@@ -1196,6 +1307,7 @@ fn handle(
                     step.olfactory_baseline_rate_hz,
                     step.forced_spikes,
                     stim_rates,
+                    None,
                 );
             compute_ms_sum += timing.compute_ms;
             kernel_ms_sum += timing.kernel_ms;
@@ -1352,6 +1464,7 @@ fn handle(
                 p.olfactory_baseline_rate_hz,
                 p.forced_spikes,
                 stim_rates_by_id,
+                None,
             );
         let compute_ms = timing.compute_ms;
         let mut source_lookup: HashMap<String, (f64, f64)> = HashMap::new();
@@ -1565,19 +1678,7 @@ fn handle(
             })
             .unwrap_or_default();
         let duration_sec = num_steps as f64 * dt;
-        let mut source_lookup: HashMap<String, (f64, f64)> = HashMap::new();
-        if let Some(ref sources) = p.sources {
-            for s in sources {
-                source_lookup.insert(s.id.clone(), (s.x, s.y));
-            }
-        }
         let mut last_activity_sparse: HashMap<String, f64> = HashMap::new();
-        let mut last_motor_left = 0.0f64;
-        let mut last_motor_right = 0.0f64;
-        let mut last_motor_fwd = 0.0f64;
-        let mut eaten_food_ids: Vec<String> = Vec::new();
-        let mut feeding_sugar_taken_total = 0.0f64;
-        let mut last_fly_resp: Option<FlyRespJson> = None;
         // Log once if any forced-spike IDs are not in the connectome (they will be silently dropped).
         if let Some(ref schedule) = p.forced_spike_schedule {
             let all_forced: Vec<String> = schedule
@@ -1618,96 +1719,47 @@ fn handle(
                 }
                 let is_last = global_tick + 1 == num_steps;
                 let use_full_readout = is_last || needs_per_step_ids;
-                let (_a, activity_sparse, spike_ids, ml, mr, mf, _cl, _cr, _cf, _mlm, _mrm, _mfm, _timing, fly_out) =
+                let use_stim = !stim_map.is_empty() || (p.return_final_state && !srcs.is_empty());
+                let (_a, activity_sparse, spike_ids, _ml, _mr, _mf, _cl, _cr, _cf, _mlm, _mrm, _mfm, _timing, fly_out) =
                     if use_full_readout {
                         sim.step_with_options(
                             dt,
                             fly,
                             srcs.clone(),
                             is_last,
-                            !stim_map.is_empty(),
+                            use_stim,
                             None,
                             forced_spikes,
                             if stim_map.is_empty() { None } else { Some(stim_map) },
+                            None,
                         )
                     } else {
                         sim.step_fast(
                             dt,
                             fly,
                             srcs.clone(),
-                            !stim_map.is_empty(),
+                            use_stim,
                             None,
                             forced_spikes,
                             if stim_map.is_empty() { None } else { Some(stim_map) },
+                            None,
                         )
                     };
-                let mut one = vec![StepManyItemResp {
-                    sim_id: p.sim_id,
-                    activity_sparse: activity_sparse.clone(),
-                    motor_left: ml,
-                    motor_right: mr,
-                    motor_fwd: mf,
-                    motor_left_count: 0.0,
-                    motor_right_count: 0.0,
-                    motor_fwd_count: 0.0,
-                    motor_left_magnitude: 0.0,
-                    motor_right_magnitude: 0.0,
-                    motor_fwd_magnitude: 0.0,
-                    fly: FlyRespJson {
-                        x: fly_out.x,
-                        y: fly_out.y,
-                        z: fly_out.z,
-                        heading: fly_out.heading,
-                        t: fly_out.t,
-                        hunger: fly_out.hunger,
-                        health: fly_out.health,
-                        dead: fly_out.dead,
-                        fly_time_left: fly_out.fly_time_left,
-                        rest_time_left: fly_out.rest_time_left,
-                        rest_duration: fly_out.rest_duration,
-                        feeding: fly_out.feeding,
-                    },
-                    eaten_food_id: fly_out.eaten_food_id.clone(),
-                    feeding_sugar_taken: fly_out.feeding_sugar_taken,
-                    feeding_candidate_id: fly_out.feeding_candidate_id.clone(),
-                    dt,
-                    compute_ms: 0.0,
-                    kernel_ms: 0.0,
-                    recurrent_ms: 0.0,
-                    lif_ms: 0.0,
-                    readout_ms: 0.0,
-                }];
-                if !source_lookup.is_empty() && one[0].feeding_candidate_id.is_some() {
-                    let mut fg = food_state.lock().unwrap();
-                    fg.sync(source_lookup.keys().cloned());
-                    apply_feeding_tick(&mut *fg, &source_lookup, &mut one);
-                }
-                let fed = &one[0];
                 if p.return_final_state {
                     if is_last {
-                        last_activity_sparse = fed.activity_sparse.clone();
+                        last_activity_sparse = activity_sparse.clone();
                     }
-                    last_motor_left = fed.motor_left;
-                    last_motor_right = fed.motor_right;
-                    last_motor_fwd = fed.motor_fwd;
-                    if let Some(ref id) = fed.eaten_food_id {
-                        if !id.is_empty() && !eaten_food_ids.contains(id) {
-                            eaten_food_ids.push(id.clone());
-                        }
-                    }
-                    feeding_sugar_taken_total += fed.feeding_sugar_taken;
-                    last_fly_resp = Some(fed.fly.clone());
                 }
                 fly = FlyInput {
-                    x: fed.fly.x,
-                    y: fed.fly.y,
-                    z: fed.fly.z,
-                    heading: fed.fly.heading,
-                    t: fed.fly.t,
-                    hunger: fed.fly.hunger,
-                    health: fed.fly.health,
-                    rest_time_left: fed.fly.rest_time_left,
-                    dead: fed.fly.dead,
+                    x: fly_out.x,
+                    y: fly_out.y,
+                    z: fly_out.z,
+                    heading: fly_out.heading,
+                    t: fly_out.t,
+                    hunger: fly_out.hunger,
+                    health: fly_out.health,
+                    rest_time_left: fly_out.rest_time_left,
+                    dead: fly_out.dead,
                 };
                 if count_ids.is_some() {
                     for id in &spike_ids {
@@ -1739,32 +1791,16 @@ fn handle(
             if p.return_final_state {
                 let (bump_angle_deg, epg_bins_arr) =
                     compute_bump_and_epg_bins(&last_activity_sparse, epg_id_to_bin);
-                let final_fly = last_fly_resp.unwrap_or_else(|| {
-                    FlyRespJson {
-                        x: fly.x,
-                        y: fly.y,
-                        z: fly.z,
-                        heading: fly.heading,
-                        t: fly.t,
-                        hunger: fly.hunger,
-                        health: fly.health,
-                        dead: fly.dead,
-                        fly_time_left: if fly.rest_time_left > 0.0 { 0.0 } else { 1.0 },
-                        rest_time_left: fly.rest_time_left,
-                        rest_duration: if fly.rest_time_left > 0.0 { fly.rest_time_left } else { 0.0 },
-                        feeding: false,
-                    }
-                });
                 (
-                    Some(final_fly),
+                    None,
                     Some(last_activity_sparse),
                     bump_angle_deg,
                     Some(epg_bins_arr.to_vec()),
-                    Some(last_motor_left),
-                    Some(last_motor_right),
-                    Some(last_motor_fwd),
-                    if eaten_food_ids.is_empty() { None } else { Some(eaten_food_ids) },
-                    Some(feeding_sugar_taken_total),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
                 )
             } else {
                 (None, None, None, None, None, None, None, None, None)

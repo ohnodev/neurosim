@@ -760,23 +760,16 @@ export function initThreeScene(
       const isFlying = wasFlying ? z > FLY_THRESHOLD_DOWN : z > FLY_THRESHOLD_UP;
       const lowLodIsFlying = inst.lowLodWasFlying ? z > FLY_THRESHOLD_DOWN : z > FLY_THRESHOLD_UP;
 
-      // Fly heading = direction of motion only. Snap instantly to correct direction.
-      const dx = x - inst.prevPos.x;
-      const dy = y - inst.prevPos.y;
-      const motionDistSq = dx * dx + dy * dy;
-      const MOTION_THRESHOLD_SQ = 1e-8;
-      if (motionDistSq > MOTION_THRESHOLD_SQ) {
-        inst.heading = Math.atan2(dy, dx);
-      } else if (!inst.initialized) {
-        inst.heading = 0;
-        inst.initialized = true;
-      }
+      // Fly heading = sim's heading (direction of motion). State is interpolated, so we get smooth updates.
+      const headingRad = state.heading ?? inst.heading;
+      inst.heading = headingRad;
+      if (!inst.initialized) inst.initialized = true;
       inst.prevPos = { x, y };
 
       const visualZ = Math.max(0, z - GROUND_Z);
       inst.group.position.set(x, visualZ, y);
-      // glTF models face +Z by default. To face (dx,dy) in XZ: rotation.y = heading - π/2
-      inst.group.rotation.y = inst.heading - Math.PI / 2;
+      // glTF faces +Z. Sim heading: 0=+x, π/2=+y. rotation.y = heading - π/2
+      inst.group.rotation.y = headingRad - Math.PI / 2;
       if (SHOW_FLY_SMELL_RADIUS_DEBUG && debugEnabled && flySmellDebugPool[i]) {
         const smell = flySmellDebugPool[i]!;
         smell.position.set(x, visualZ, y);

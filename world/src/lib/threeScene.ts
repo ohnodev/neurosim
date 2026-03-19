@@ -760,16 +760,23 @@ export function initThreeScene(
       const isFlying = wasFlying ? z > FLY_THRESHOLD_DOWN : z > FLY_THRESHOLD_UP;
       const lowLodIsFlying = inst.lowLodWasFlying ? z > FLY_THRESHOLD_DOWN : z > FLY_THRESHOLD_UP;
 
-      // Fly heading = sim's heading (direction of motion). State is interpolated, so we get smooth updates.
-      const headingRad = state.heading ?? inst.heading;
-      inst.heading = headingRad;
-      if (!inst.initialized) inst.initialized = true;
+      // Use Rust fly.heading (authoritative). Same as bc46064 when it worked.
+      // Rust: 0 rad = +X, π/2 = +Y. Three.js default forward -Z, so rotation.y = heading + π/2 faces +X.
       inst.prevPos = { x, y };
+      const rustHeading = state.heading ?? inst.heading;
+      let d = rustHeading - inst.heading;
+      if (d > Math.PI) d -= 2 * Math.PI;
+      if (d < -Math.PI) d += 2 * Math.PI;
+      const headingAlpha = Math.min(1, 1 - Math.exp(-HEADING_LERP_RATE * Math.min(cappedDelta, 0.05)));
+      inst.heading += d * headingAlpha;
+      if (!inst.initialized) {
+        inst.heading = rustHeading;
+        inst.initialized = true;
+      }
 
       const visualZ = Math.max(0, z - GROUND_Z);
       inst.group.position.set(x, visualZ, y);
-      // glTF faces +Z. Sim heading: 0=+x, π/2=+y. rotation.y = heading - π/2
-      inst.group.rotation.y = headingRad - Math.PI / 2;
+      inst.group.rotation.y = inst.heading + Math.PI / 2;
       if (SHOW_FLY_SMELL_RADIUS_DEBUG && debugEnabled && flySmellDebugPool[i]) {
         const smell = flySmellDebugPool[i]!;
         smell.position.set(x, visualZ, y);

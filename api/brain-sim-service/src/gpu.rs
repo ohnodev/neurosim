@@ -181,6 +181,23 @@ extern "C" __global__ void apply_forced_spikes_kernel(
     refrac[idx] = refrac_steps;
     g_next[idx] = 0.0f;
 }
+
+extern "C" __global__ void gather_epg_spikes_kernel(
+    const unsigned char* spikes_next,
+    const unsigned int* epg_indices,
+    unsigned char* epg_spikes,
+    int num_epg,
+    int N
+) {
+    int j = blockIdx.x * blockDim.x + threadIdx.x;
+    if (j >= num_epg) return;
+    unsigned int idx = epg_indices[j];
+    if (idx >= (unsigned int)N) {
+        epg_spikes[j] = 0;
+        return;
+    }
+    epg_spikes[j] = spikes_next[idx];
+}
 "#;
 
 /// Shared read-only connectome data on GPU (uploaded once at startup, reused by all sims).
@@ -192,6 +209,8 @@ pub struct GpuConnectome {
     out_offsets: CudaSlice<u32>,
     out_post: CudaSlice<u32>,
     out_weight: CudaSlice<f32>,
+    epg_indices_dev: CudaSlice<u32>,
+    epg_indices_host: Vec<u32>,
 }
 
 // CudaSlice wraps a device pointer — no host-side aliasing issues across threads.
@@ -213,10 +232,11 @@ pub struct GpuSimState {
     delay_head: usize,
     delay_len: usize,
     syn_input_host_dev: CudaSlice<f32>,
-    spikes_host: Vec<u8>,
     active_indices: CudaSlice<u32>,
     num_active: CudaSlice<i32>,
     rng_state: CudaSlice<u64>,
+    epg_spikes_dev: CudaSlice<u8>,
+    epg_spikes_host: Vec<u8>,
 }
 
 pub fn try_init_device() -> Option<Arc<CudaDevice>> {
@@ -237,6 +257,7 @@ pub fn try_init_device() -> Option<Arc<CudaDevice>> {
                     "lif_kernel",
                     "reset_g_on_spike_kernel",
                     "apply_forced_spikes_kernel",
+                    "gather_epg_spikes_kernel",
                 ],
             )
             .ok()?;
@@ -255,6 +276,13 @@ pub fn init_gpu_connectome(template: &ConnectomeTemplate) -> Option<Arc<GpuConne
             let out_offsets = dev.htod_sync_copy(&template.out_offsets).ok()?;
             let out_post = dev.htod_sync_copy(&template.out_post).ok()?;
             let out_weight = dev.htod_sync_copy(&template.out_weight).ok()?;
+            let epg_indices_host: Vec<u32> = template
+                .is_epg
+                .iter()
+                .enumerate()
+                .filter_map(|(i, &v)| if v > 0 { Some(i as u32) } else { None })
+                .collect();
+            let epg_indices_dev = dev.htod_sync_copy(&epg_indices_host).ok()?;
             let upload_ms = t0.elapsed().as_secs_f64() * 1000.0;
             let ne = template.edges_pre.len();
             let n = template.neuron_ids.len();
@@ -271,6 +299,8 @@ pub fn init_gpu_connectome(template: &ConnectomeTemplate) -> Option<Arc<GpuConne
                 out_offsets,
                 out_post,
                 out_weight,
+                epg_indices_dev,
+                epg_indices_host,
             }))
         })
         .clone()
@@ -300,9 +330,11 @@ impl GpuSimState {
         let spikes_prev = dev.htod_sync_copy(spikes_init).ok()?;
         let spikes_next: CudaSlice<u8> = dev.alloc_zeros(n).ok()?;
         let syn_input_host_dev: CudaSlice<f32> = dev.alloc_zeros(n).ok()?;
-        let spikes_host = vec![0u8; n];
         let active_indices: CudaSlice<u32> = dev.alloc_zeros(n).ok()?;
         let num_active: CudaSlice<i32> = dev.alloc_zeros(1).ok()?;
+        let num_epg = connectome.epg_indices_host.len().max(1);
+        let epg_spikes_dev: CudaSlice<u8> = dev.alloc_zeros(num_epg).ok()?;
+        let epg_spikes_host = vec![0u8; num_epg];
         let mut rng_init = vec![0u64; n];
         for (i, s) in rng_init.iter_mut().enumerate() {
             *s = 0x9E3779B97F4A7C15u64 ^ ((i as u64).wrapping_mul(0xD1B54A32D192ED03u64));
@@ -322,10 +354,11 @@ impl GpuSimState {
             delay_head: 0,
             delay_len,
             syn_input_host_dev,
-            spikes_host,
             active_indices,
             num_active,
             rng_state,
+            epg_spikes_dev,
+            epg_spikes_host,
         })
     }
 
@@ -344,7 +377,7 @@ impl GpuSimState {
         w_syn: f32,
         epg_recurrence_boost: f32,
         forced_indices: &[u32],
-    ) -> Option<(f64, f64)> {
+    ) -> Option<(f64, f64, u32)> {
         let dt_ms = (dt_sec * 1000.0) as f32;
         let syn_decay = 1.0f32 - dt_ms / TAU_SYN_MS;
         let mem_alpha = dt_ms / TAU_MEM_MS;
@@ -541,19 +574,60 @@ impl GpuSimState {
             }
         }
 
-        // 11. Download spikes into pre-allocated host buffer (no allocation)
-        dev.dtoh_sync_copy_into(&self.spikes_next, &mut self.spikes_host).ok()?;
+        // 11. Count total spikes in spikes_next without full D2H copy
+        dev.htod_sync_copy_into(&[0i32], &mut self.num_active).ok()?;
+        let compact_next_fn = dev.get_func("bs", "compact_spikes_kernel")?;
+        unsafe {
+            compact_next_fn
+                .launch(
+                    LaunchConfig::for_num_elems(self.n as u32),
+                    (&self.spikes_next, &mut self.active_indices, &mut self.num_active, n),
+                )
+                .ok()?;
+        }
+        let mut total_spikes_host = [0i32];
+        dev.dtoh_sync_copy_into(&self.num_active, &mut total_spikes_host).ok()?;
+        let total_spikes = total_spikes_host[0].max(0) as u32;
+
+        // 12. Gather and download only EPG spikes
+        let num_epg = conn.epg_indices_host.len() as i32;
+        if num_epg > 0 {
+            let gather_fn = dev.get_func("bs", "gather_epg_spikes_kernel")?;
+            unsafe {
+                gather_fn
+                    .launch(
+                        LaunchConfig::for_num_elems(num_epg as u32),
+                        (
+                            &self.spikes_next,
+                            &conn.epg_indices_dev,
+                            &mut self.epg_spikes_dev,
+                            num_epg,
+                            n,
+                        ),
+                    )
+                    .ok()?;
+            }
+            dev.dtoh_sync_copy_into(
+                &self.epg_spikes_dev,
+                &mut self.epg_spikes_host[..num_epg as usize],
+            )
+            .ok()?;
+        }
         let lif_ms = t_lif.elapsed().as_secs_f64() * 1000.0;
 
-        // 12. Swap device handles: spikes_prev ← spikes_next, g ← g_next
+        // 13. Swap device handles: spikes_prev ← spikes_next, g ← g_next
         std::mem::swap(&mut self.spikes_prev, &mut self.spikes_next);
         std::mem::swap(&mut self.g, &mut self.g_next);
 
-        Some((recurrent_ms, lif_ms))
+        Some((recurrent_ms, lif_ms, total_spikes))
     }
 
-    pub fn last_spikes(&self) -> &[u8] {
-        &self.spikes_host
+    pub fn last_epg_spikes(&self) -> &[u8] {
+        &self.epg_spikes_host[..self.connectome.epg_indices_host.len()]
+    }
+
+    pub fn epg_indices(&self) -> &[u32] {
+        &self.connectome.epg_indices_host
     }
 
     pub fn ensure_delay_len(&mut self, new_delay_len: usize) {

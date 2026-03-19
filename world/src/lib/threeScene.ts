@@ -760,25 +760,16 @@ export function initThreeScene(
       const isFlying = wasFlying ? z > FLY_THRESHOLD_DOWN : z > FLY_THRESHOLD_UP;
       const lowLodIsFlying = inst.lowLodWasFlying ? z > FLY_THRESHOLD_DOWN : z > FLY_THRESHOLD_UP;
 
-      // Fly heading = direction of motion only. Smoothly lerp toward target (like compass arrow).
+      // Fly heading = direction of motion only. Snap instantly to correct direction.
       const dx = x - inst.prevPos.x;
       const dy = y - inst.prevPos.y;
       const motionDistSq = dx * dx + dy * dy;
       const MOTION_THRESHOLD_SQ = 1e-8;
       if (motionDistSq > MOTION_THRESHOLD_SQ) {
-        inst.targetHeading = Math.atan2(dy, dx);
-      }
-      if (!inst.initialized) {
-        inst.heading = inst.targetHeading;
+        inst.heading = Math.atan2(dy, dx);
+      } else if (!inst.initialized) {
+        inst.heading = 0;
         inst.initialized = true;
-      } else {
-        const delta = ((d: number) => {
-          while (d > Math.PI) d -= 2 * Math.PI;
-          while (d < -Math.PI) d += 2 * Math.PI;
-          return d;
-        })(inst.targetHeading - inst.heading);
-        const FLY_HEADING_SMOOTH_ALPHA = 0.22;
-        inst.heading += delta * FLY_HEADING_SMOOTH_ALPHA;
       }
       inst.prevPos = { x, y };
 

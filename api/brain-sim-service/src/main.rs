@@ -229,8 +229,8 @@ fn main() {
             match brain_sim_service::gpu::init_gpu_connectome(&template) {
                 Some(conn) => {
                     eprintln!(
-                        "[brain-service][gpu] CUDA device ready, connectome on GPU ({} edges). All sims will use GPU.",
-                        conn.ne
+                        "[brain-service][gpu] CUDA device ready, connectome on GPU (CSR: {} neurons, {} edges). All sims will use GPU.",
+                        conn.n, conn.ne
                     );
                 }
                 None => {

@@ -761,18 +761,17 @@ export function initThreeScene(
       const isFlying = wasFlying ? z > FLY_THRESHOLD_DOWN : z > FLY_THRESHOLD_UP;
       const lowLodIsFlying = inst.lowLodWasFlying ? z > FLY_THRESHOLD_DOWN : z > FLY_THRESHOLD_UP;
 
-      // Prefer EPG bump for heading (compass direction); fall back to motion or state.heading.
-      // Snap instantly (up to 360°) so fly/arrow align with neural activity.
-      const bumpDeg = refs.derivedBumpBySimIndexRef.current[i];
+      // Face direction of movement when moving; otherwise use EPG bump or state.heading.
       const dx = x - inst.prevPos.x;
       const dy = y - inst.prevPos.y;
       const motionDistSq = dx * dx + dy * dy;
       const MOTION_THRESHOLD_SQ = 1e-6; // ~0.001 units moved
+      const bumpDeg = refs.derivedBumpBySimIndexRef.current[i];
       const headingRad =
-        typeof bumpDeg === 'number'
-          ? (bumpDeg * Math.PI) / 180
-          : inst.initialized && motionDistSq > MOTION_THRESHOLD_SQ
-            ? Math.atan2(dy, dx)
+        inst.initialized && motionDistSq > MOTION_THRESHOLD_SQ
+          ? Math.atan2(dy, dx) // Moving: face where we're going
+          : typeof bumpDeg === 'number'
+            ? (bumpDeg * Math.PI) / 180 // Stationary: use EPG bump
             : (state.heading ?? inst.heading);
       inst.prevPos = { x, y };
 

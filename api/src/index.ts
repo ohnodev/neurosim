@@ -870,8 +870,8 @@ function startSim(): void {
           },
           activity: snap.activity_sparse ?? {},
           inputActivity: undefined,
-          eatenFoodIds: undefined,
-          feedingSugarTaken: 0,
+          eatenFoodIds: snap.eaten_food_id ? [snap.eaten_food_id] : undefined,
+          feedingSugarTaken: snap.feeding_sugar_taken ?? 0,
           bumpAngleDeg: snap.bump_angle_deg ?? null,
           epgBins: snap.epg_bins ?? null,
         };
@@ -904,7 +904,8 @@ function startSim(): void {
         }
         if (state.eatenFoodIds && state.eatenFoodIds.length > 0) {
           for (const foodId of state.eatenFoodIds) {
-            removeFood(foodId);
+            const removed = removeFood(foodId);
+            if (removed) spawnFood();
             const deployment = findDeploymentBySimIndex(j);
             if (deployment) {
               recordFoodDepleted(deployment.address, deployment.slotIndex);

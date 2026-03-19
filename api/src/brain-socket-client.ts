@@ -410,6 +410,8 @@ export interface WorldFlySnapshot {
   activity_sparse: Record<string, number>;
   bump_angle_deg?: number | null;
   epg_bins?: number[];
+  eaten_food_id?: string;
+  feeding_sugar_taken?: number;
   compute_ms: number;
   kernel_ms: number;
   recurrent_ms: number;

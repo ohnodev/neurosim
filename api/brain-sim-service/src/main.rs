@@ -1083,6 +1083,9 @@ struct WorldSnapshotFly {
     #[serde(skip_serializing_if = "Option::is_none")]
     bump_angle_deg: Option<f64>,
     epg_bins: Vec<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    eaten_food_id: Option<String>,
+    feeding_sugar_taken: f64,
     compute_ms: f64,
     kernel_ms: f64,
     recurrent_ms: f64,
@@ -1127,6 +1130,7 @@ struct WorldRuntimeState {
     flies: Mutex<HashMap<u32, Arc<Mutex<WorldFlyRuntime>>>>,
     snapshots: Mutex<HashMap<u32, WorldSnapshotFly>>,
     sources: Mutex<Vec<SourceInput>>,
+    food_state: Mutex<FoodState>,
     ticks: Mutex<VecDeque<WorldTickRecord>>,
     /// epg_index (0..n_epg) -> bin (0..15) for frontend bump derivation.
     epg_index_to_bin: Vec<u8>,
@@ -1137,6 +1141,8 @@ struct WorldRuntimeState {
 struct WorldFlyStepResult {
     fly_id: u32,
     snapshot: WorldSnapshotFly,
+    feeding_candidate_id: Option<String>,
+    dt_batch: f64,
     /// Per-step ticks for this batch (steps_per_batch entries).
     step_ticks: Vec<(u64, f64, Vec<u8>)>,
 }
@@ -1235,6 +1241,9 @@ fn update_world_fly_kinematics(
                 fly.y = src.y;
                 fly.z = 0.9;
                 feeding = true;
+            } else {
+                runtime.feeding_source_id = None;
+                runtime.feeding_time_left_sec = 0.0;
             }
         }
     } else {
@@ -1420,6 +1429,8 @@ fn step_world_fly_runtime(
         activity_sparse: last_activity_sparse,
         bump_angle_deg,
         epg_bins: epg_bins_arr.to_vec(),
+        eaten_food_id: None,
+        feeding_sugar_taken: 0.0,
         compute_ms: last_timing.compute_ms,
         kernel_ms: last_timing.kernel_ms,
         recurrent_ms: last_timing.recurrent_ms,
@@ -1430,6 +1441,8 @@ fn step_world_fly_runtime(
     WorldFlyStepResult {
         fly_id,
         snapshot: snap,
+        feeding_candidate_id: runtime.feeding_source_id.clone(),
+        dt_batch,
         step_ticks,
     }
 }
@@ -1645,6 +1658,7 @@ fn spawn_world_runtime_thread(
         flies: Mutex::new(HashMap::new()),
         snapshots: Mutex::new(HashMap::new()),
         sources: Mutex::new(Vec::new()),
+        food_state: Mutex::new(FoodState::default()),
         ticks: Mutex::new(VecDeque::with_capacity(WORLD_TICK_BUFFER_CAP)),
         epg_index_to_bin,
         epg_index_to_root_id,
@@ -1667,7 +1681,7 @@ fn spawn_world_runtime_thread(
                             .collect()
                     };
                     let base_tick = state_thr.tick.load(Ordering::Relaxed);
-                    let step_results: Vec<WorldFlyStepResult> = if world_parallel_flies {
+                    let mut step_results: Vec<WorldFlyStepResult> = if world_parallel_flies {
                         fly_handles
                             .into_par_iter()
                             .map(|(fly_id, runtime_handle)| {
@@ -1700,6 +1714,45 @@ fn spawn_world_runtime_thread(
                             })
                             .collect()
                     };
+                    let source_lookup: HashMap<String, (f64, f64)> = sources_now
+                        .iter()
+                        .map(|s| (s.id.clone(), (s.x, s.y)))
+                        .collect();
+                    {
+                        let mut food_state = state_thr.food_state.lock().unwrap();
+                        food_state.sync(sources_now.iter().map(|s| s.id.clone()));
+                        for result in step_results.iter_mut() {
+                            let sugar_per_fly = (FEED_SUGAR_PER_SEC * result.dt_batch).max(0.0);
+                            if sugar_per_fly <= 0.0 {
+                                result.snapshot.fly.feeding = false;
+                                result.snapshot.feeding_sugar_taken = 0.0;
+                                result.snapshot.eaten_food_id = None;
+                                continue;
+                            }
+                            let Some(source_id) = result.feeding_candidate_id.clone() else {
+                                result.snapshot.feeding_sugar_taken = 0.0;
+                                result.snapshot.eaten_food_id = None;
+                                continue;
+                            };
+                            let taken = food_state.take_sugar(&source_id, sugar_per_fly);
+                            result.snapshot.fly.feeding = taken > 0.0;
+                            result.snapshot.feeding_sugar_taken = taken;
+                            result.snapshot.fly.hunger =
+                                (result.snapshot.fly.hunger + taken * HUNGER_PER_SUGAR).clamp(0.0, 100.0);
+                            result.snapshot.fly.health =
+                                (result.snapshot.fly.health + taken * HEALTH_PER_SUGAR).clamp(0.0, 100.0);
+                            if let Some((sx, sy)) = source_lookup.get(&source_id) {
+                                result.snapshot.fly.x = *sx;
+                                result.snapshot.fly.y = *sy;
+                                result.snapshot.fly.z = 0.9;
+                            }
+                            if food_state.depleted(&source_id) {
+                                result.snapshot.eaten_food_id = Some(source_id);
+                            } else {
+                                result.snapshot.eaten_food_id = None;
+                            }
+                        }
+                    }
                     let tick = base_tick + 1;
                     {
                         let mut snapshots = state_thr.snapshots.lock().unwrap();
@@ -2565,6 +2618,8 @@ fn handle(
                 activity_sparse: HashMap::new(),
                 bump_angle_deg: None,
                 epg_bins: vec![0.0; 16],
+                eaten_food_id: None,
+                feeding_sugar_taken: 0.0,
                 compute_ms: 0.0,
                 kernel_ms: 0.0,
                 recurrent_ms: 0.0,

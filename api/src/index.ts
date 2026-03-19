@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import { createServer } from 'http';
+import net from 'net';
 import { WebSocketServer } from 'ws';
 import { loadConnectome } from './connectome.js';
 import * as socketClient from './brain-socket-client.js';
@@ -270,14 +271,65 @@ const viewerNeuronIndexSet = new Set<number>(viewerNeuronIndices);
 const CUDA_ONLY = process.env.NEUROSIM_MODE === 'cuda' || process.env.USE_CUDA === '1';
 const PROBE_RETRIES = 40;
 const PROBE_DELAY_MS = 3000;
+const BRAIN_SOCKET_PATH = process.env.NEUROSIM_BRAIN_SOCKET ?? '/tmp/neurosim-brain.sock';
 
-let backendInfo = { engine: 'rust', gpu: process.env.USE_CUDA === '1' };
+async function probeBrainServicePing(): Promise<{ ok: boolean; gpu: boolean }> {
+  return new Promise((resolve, reject) => {
+    const sock = net.createConnection(BRAIN_SOCKET_PATH);
+    let settled = false;
+    let buf = '';
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      sock.destroy();
+      reject(new Error('brain-service ping timeout'));
+    }, 5000);
+    const finish = (err?: Error, payload?: { ok: boolean; gpu: boolean }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      sock.destroy();
+      if (err) reject(err);
+      else resolve(payload ?? { ok: false, gpu: false });
+    };
+    sock.once('error', (err) => finish(err));
+    sock.once('connect', () => {
+      try {
+        sock.write(`${JSON.stringify({ method: 'ping' })}\n`);
+      } catch (err) {
+        finish(err as Error);
+      }
+    });
+    sock.on('data', (chunk) => {
+      buf += chunk.toString('utf8');
+      const nl = buf.indexOf('\n');
+      if (nl < 0) return;
+      const line = buf.slice(0, nl).trim();
+      if (!line) {
+        finish(new Error('empty ping response'));
+        return;
+      }
+      try {
+        const parsed = JSON.parse(line) as { ok?: boolean; gpu?: boolean };
+        if (!parsed.ok) {
+          finish(new Error('brain-service ping failed'));
+          return;
+        }
+        finish(undefined, { ok: true, gpu: Boolean(parsed.gpu) });
+      } catch (err) {
+        finish(err as Error);
+      }
+    });
+  });
+}
+
+let backendInfo = { engine: 'rust', gpu: false };
 let probeOk = false;
 for (let i = 0; i < PROBE_RETRIES; i++) {
   try {
-    await socketClient.ping();
+    const ping = await probeBrainServicePing();
     console.log('[backend] handshake: API ↔ brain-service OK');
-    backendInfo = { engine: 'rust', gpu: process.env.USE_CUDA === '1' };
+    backendInfo = { engine: 'rust', gpu: Boolean(ping.gpu) };
     probeOk = true;
     break;
   } catch (e) {
@@ -371,14 +423,17 @@ function findDeploymentBySimIndex(simIndex: number): { address: string; slotInde
   return null;
 }
 
-function removeSimAtIndex(simIndex: number): { address: string; slotIndex: number } | null {
+async function removeSimAtIndex(simIndex: number): Promise<{ address: string; slotIndex: number } | null> {
   if (simIndex < 0 || simIndex >= sims.length) return null;
   const deployment = findDeploymentBySimIndex(simIndex);
   const removedFlyId = sims[simIndex]?.flyId;
   if (typeof removedFlyId === 'number') {
-    void socketClient.worldRemoveFly(removedFlyId).catch((err) => {
-      console.error('[world] world_remove_fly failed', { flyId: removedFlyId, err });
-    });
+    try {
+      await socketClient.worldRemoveFly(removedFlyId);
+    } catch (err) {
+      console.error('[world] world_remove_fly failed; aborting local removal', { flyId: removedFlyId, simIndex, err });
+      return null;
+    }
   }
   sims.splice(simIndex, 1);
   simActivityTrail.splice(simIndex, 1);
@@ -839,7 +894,7 @@ function startSim(): void {
       if (deadSimIndexes.length > 0) {
         const uniqueDead = [...new Set(deadSimIndexes)].sort((a, b) => b - a);
         for (const simIndex of uniqueDead) {
-          const removed = removeSimAtIndex(simIndex);
+          const removed = await removeSimAtIndex(simIndex);
           if (!removed) continue;
           const graveyarded = removeFlyAtSlot(removed.address, removed.slotIndex);
           deactivateDeployment(removed.address, removed.slotIndex);

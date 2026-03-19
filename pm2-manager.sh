@@ -47,9 +47,19 @@ setup_log_rotation() {
     log_success "Log rotation configured"
 }
 
-api_exists() { pm2 list 2>/dev/null | grep -q "│ $API_SERVICE" || false; }
-brain_exists() { pm2 list 2>/dev/null | grep -q "│ $BRAIN_SERVICE" || false; }
-python_brain_exists() { pm2 list 2>/dev/null | grep -q "│ python-brain" || false; }
+pm2_is_online() {
+    local svc="$1"
+    if command -v jq >/dev/null 2>&1; then
+        pm2 jlist 2>/dev/null | jq -e --arg n "$svc" '.[] | select(.name == $n and .pm2_env.status == "online")' >/dev/null 2>&1
+    else
+        # Fallback when jq is unavailable.
+        pm2 list 2>/dev/null | grep -q "│ $svc" || false
+    fi
+}
+
+api_exists() { pm2_is_online "$API_SERVICE"; }
+brain_exists() { pm2_is_online "$BRAIN_SERVICE"; }
+python_brain_exists() { pm2_is_online "python-brain"; }
 
 ensure_ecosystem_file() {
     [ -f "$ECOSYSTEM_FILE" ] || { log_error "Missing ecosystem file: $ECOSYSTEM_FILE"; exit 1; }
@@ -69,10 +79,14 @@ start_service() {
 }
 
 stop_service() {
+    local had_online=0
     python_brain_exists && pm2 stop "python-brain" 2>/dev/null || true
-    brain_exists && pm2 stop "$BRAIN_SERVICE" 2>/dev/null || true
-    api_exists && pm2 stop "$API_SERVICE" 2>/dev/null || true
-    brain_exists || api_exists || { log_warning "Not running"; return 0; }
+    if brain_exists; then had_online=1; pm2 stop "$BRAIN_SERVICE" 2>/dev/null || true; fi
+    if api_exists; then had_online=1; pm2 stop "$API_SERVICE" 2>/dev/null || true; fi
+    if [ "$had_online" -eq 0 ]; then
+        log_warning "Not running"
+        return 0
+    fi
     log_success "Stopped"
 }
 

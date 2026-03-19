@@ -520,6 +520,22 @@ fn build_default_world_stim_presets(class_path: Option<&Path>) -> HashMap<String
     out
 }
 
+fn poisson_seed_base() -> u64 {
+    std::env::var("NEUROSIM_POISSON_SEED")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(17290319)
+}
+
+fn apply_sim_poisson_seed(sim: &mut BrainSim, sim_id: u32, explicit_seed: Option<u64>) {
+    if let Some(seed) = explicit_seed {
+        sim.set_rng_seed(seed);
+    } else {
+        // Keep create/world_add_fly deterministic parity: first sim uses base+1.
+        sim.set_rng_seed(poisson_seed_base().wrapping_add(sim_id as u64).wrapping_add(1));
+    }
+}
+
 /// Boost right PEN_a -> EPG excitation (and optionally weaken right -> ER / direct inh to EPG).
 ///
 /// - `NEUROSIM_PEN_A_RIGHT_EPG_MATCH_LEFT=1`: scale right PEN_a->EPG excitatory weights so total
@@ -1641,13 +1657,27 @@ fn handle(
         }
     let req_id = GLOBAL_REQ_ID.fetch_add(1, Ordering::Relaxed);
     let out = if line.contains("\"method\":\"ping\"") {
+        let gpu_enabled = {
+            #[cfg(feature = "cuda")]
+            {
+                brain_sim_service::gpu::try_init_device().is_some()
+            }
+            #[cfg(not(feature = "cuda"))]
+            {
+                false
+            }
+        };
         eprintln!(
-            "[brain-service] req={} conn={} method=ping pid={} ok=1",
+            "[brain-service] req={} conn={} method=ping pid={} ok=1 gpu={}",
             req_id,
             conn_id,
-            std::process::id()
+            std::process::id(),
+            if gpu_enabled { 1 } else { 0 }
         );
-        r#"{"ok":true}"#.to_string()
+        serde_json::to_string(&serde_json::json!({
+            "ok": true,
+            "gpu": gpu_enabled,
+        }))?
     } else if line.contains("\"method\":\"create\"") {
         let t_create_start = Instant::now();
         let v: serde_json::Value = serde_json::from_str(line)?;
@@ -1694,15 +1724,7 @@ fn handle(
         let id = *g;
         *g = g.saturating_add(1);
         drop(g);
-        if let Some(seed) = create_params.rng_seed {
-            sim.set_rng_seed(seed);
-        } else if let Some(base_seed) = std::env::var("NEUROSIM_POISSON_SEED")
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-        {
-            // Python parity: first created sim uses seed+1.
-            sim.set_rng_seed(base_seed.wrapping_add(id as u64).wrapping_add(1));
-        }
+        apply_sim_poisson_seed(&mut sim, id, create_params.rng_seed);
         sims.lock().unwrap().insert(id, sim);
         let create_total_ms = t_create_start.elapsed().as_secs_f64() * 1000.0;
         eprintln!(
@@ -2298,15 +2320,28 @@ fn handle(
                 let (bump_angle_deg, epg_bins_arr) =
                     compute_bump_and_epg_bins(&last_activity_sparse, epg_id_to_bin);
                 (
-                    None,
+                    Some(FlyRespJson {
+                        x: fly.x,
+                        y: fly.y,
+                        z: fly.z,
+                        heading: fly.heading,
+                        t: fly.t,
+                        hunger: fly.hunger,
+                        health: fly.health,
+                        dead: fly.dead,
+                        fly_time_left: 1.0,
+                        rest_time_left: fly.rest_time_left.max(0.0),
+                        rest_duration: 0.0,
+                        feeding: false,
+                    }),
                     Some(last_activity_sparse),
                     bump_angle_deg,
                     Some(epg_bins_arr.to_vec()),
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(Vec::new()),
+                    Some(0.0),
                 )
             } else {
                 (None, None, None, None, None, None, None, None, None)
@@ -2364,6 +2399,7 @@ fn handle(
             let mut sim = BrainSim::from_template(template.clone(), w_syn, epg_recurrence_boost);
             sim.set_world_stim_presets(&world_stim_presets);
             let fly_id = world.next_fly_id.fetch_add(1, Ordering::Relaxed);
+            apply_sim_poisson_seed(&mut sim, fly_id, None);
             let fly = FlyInput {
                 x: p.fly.x,
                 y: p.fly.y,

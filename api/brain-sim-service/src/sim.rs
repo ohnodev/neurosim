@@ -1074,10 +1074,8 @@ impl BrainSim {
         let mut activity_sparse = HashMap::new();
         let mut activity: Vec<f32> = Vec::new();
         let all_spike_ids: Vec<String> = if build_spike_ids {
-            self.epg_indices
-                .iter()
-                .filter_map(|&idx| {
-                    let i = idx as usize;
+            (0..self.n)
+                .filter_map(|i| {
                     if self.spikes[i] >= ACTIVITY_THRESHOLD {
                         self.template.neuron_ids.get(i).cloned()
                     } else {
@@ -1091,8 +1089,7 @@ impl BrainSim {
         if include_activity {
             activity = vec![0.0f32; self.n];
             let cap = self.max_activity_entries;
-            for &idx in &self.epg_indices {
-                let i = idx as usize;
+            for i in 0..self.n {
                 if self.spikes[i] >= ACTIVITY_THRESHOLD {
                     activity[i] = 1.0;
                     if activity_sparse.len() < cap {
@@ -1117,19 +1114,20 @@ impl BrainSim {
         }
         let readout_ms = t_readout.elapsed().as_secs_f64() * 1000.0;
         let compute_ms = t_compute.elapsed().as_secs_f64() * 1000.0;
-        let t = fly.t + dt;
+        let next_t = fly.t + dt;
+        let next_rest_time_left = fly.rest_time_left.max(0.0);
 
         let fly_out = FlyStepOutput {
             x: fly.x,
             y: fly.y,
             z: fly.z,
             heading: fly.heading,
-            t,
+            t: next_t,
             hunger: fly.hunger,
             health: fly.health,
             dead: fly.dead,
             fly_time_left: 1.0,
-            rest_time_left: fly.rest_time_left.max(0.0),
+            rest_time_left: next_rest_time_left,
             rest_duration: 0.0,
             feeding: false,
             eaten_food_id: None,

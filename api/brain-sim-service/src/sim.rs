@@ -264,6 +264,11 @@ impl BrainSim {
             );
             if gs.is_some() {
                 eprintln!("[brain-service][gpu] sim state allocated on GPU (n={})", n);
+            } else {
+                eprintln!(
+                    "[brain-service][gpu] sim state allocation failed; falling back to CPU (n={})",
+                    n
+                );
             }
             gs
         });
@@ -878,10 +883,10 @@ impl BrainSim {
                 return None;
             }
         };
-        for &idx in &self.epg_indices {
+        let epg_indices = gpu.epg_indices();
+        for &idx in epg_indices {
             self.spikes[idx as usize] = 0;
         }
-        let epg_indices = gpu.epg_indices();
         let epg_spikes = gpu.last_epg_spikes();
         for (j, &idx) in epg_indices.iter().enumerate() {
             if j < epg_spikes.len() {

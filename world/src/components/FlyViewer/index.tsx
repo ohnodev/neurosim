@@ -16,7 +16,12 @@ import {
 } from '../../lib/api';
 import { BrainOverlay } from '../BrainOverlay';
 import { HeadingCompass } from '../HeadingCompass';
-import { computeBumpFromEpgBins, computeBumpFromEpgIndices, getEpgIndicesInWindow } from '../../lib/compassEpgData';
+import {
+  computeBumpFromEpgBins,
+  computeBumpFromEpgCounts,
+  computeBumpFromEpgIndices,
+  getEpgCountsInWindow,
+} from '../../lib/compassEpgData';
 import { SimRefsProvider } from '../../lib/simDisplayContext';
 import { ConnectButton } from '../ConnectButton';
 import { BuyFlyModal } from '../BuyFlyModal';
@@ -285,6 +290,17 @@ export default function FlyViewer() {
           const flyIdBySimIndex = payload.flyIdBySimIndex ?? [];
           const epgSpikesByNeuronByFly = payload.epgSpikesByNeuronByFly ?? [];
 
+          const activeFlyIds = new Set<number>();
+          for (const flyId of flyIdBySimIndex) {
+            if (typeof flyId === 'number') activeFlyIds.add(flyId);
+          }
+          for (const batch of epgSpikesByNeuronByFly) {
+            activeFlyIds.add(batch.flyId);
+          }
+          for (const flyId of Array.from(epgSpikesByFlyRef.current.keys())) {
+            if (!activeFlyIds.has(flyId)) epgSpikesByFlyRef.current.delete(flyId);
+          }
+
           // Merge per-neuron EPG spikes into running buffer (cap ~5s at 10k ticks/sec)
           const EPG_BUFFER_MAX_TICKS = 50_000;
           for (const batch of epgSpikesByNeuronByFly) {
@@ -313,11 +329,13 @@ export default function FlyViewer() {
           const viewedEpg = viewedFlyId != null ? epgSpikesByFlyRef.current.get(viewedFlyId) : null;
           let binCounts: number[] | null = null;
           if (viewedEpg && epgIndexToBin.length > 0) {
-            const indices = getEpgIndicesInWindow(viewedEpg.spikes, viewedEpg.tickEnd, 100);
+            const counts = getEpgCountsInWindow(viewedEpg.spikes, viewedEpg.tickEnd, 100);
             binCounts = new Array(16).fill(0);
-            for (const idx of indices) {
+            for (let idx = 0; idx < counts.length; idx++) {
+              const count = counts[idx] ?? 0;
+              if (count <= 0) continue;
               const bin = epgIndexToBin[idx];
-              if (typeof bin === 'number' && bin >= 0 && bin < 16) binCounts[bin] += 1;
+              if (typeof bin === 'number' && bin >= 0 && bin < 16) binCounts[bin] += count;
             }
             const max = Math.max(...binCounts, 1);
             bins = binCounts.map((c) => c / max);
@@ -333,8 +351,8 @@ export default function FlyViewer() {
               const flyData = epgSpikesByFlyRef.current.get(flyId);
               const bump =
                 flyData && flyData.spikes.some((s) => s.length > 0)
-                  ? computeBumpFromEpgIndices(
-                      getEpgIndicesInWindow(flyData.spikes, flyData.tickEnd, 100),
+                  ? computeBumpFromEpgCounts(
+                      getEpgCountsInWindow(flyData.spikes, flyData.tickEnd, 100),
                       epgIndexToBin
                     )
                   : (() => {

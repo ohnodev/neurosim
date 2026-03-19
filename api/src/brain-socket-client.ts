@@ -26,10 +26,11 @@ let lastRequestTiming: {
   batchSize?: number;
 } | null = null;
 const TRACE_SOCKET_TIMING = process.env.NEUROSIM_SOCKET_TRACE === '1';
-const TRACE_SOCKET_TIMING_EVERY = Math.max(
-  1,
-  Number(process.env.NEUROSIM_SOCKET_TRACE_EVERY ?? 20),
-);
+const TRACE_SOCKET_TIMING_EVERY = (() => {
+  const raw = Number.parseInt(String(process.env.NEUROSIM_SOCKET_TRACE_EVERY ?? '20'), 10);
+  if (!Number.isFinite(raw)) return 20;
+  return Math.max(1, raw);
+})();
 const REQUEST_TIMEOUT_MS = Number(process.env.NEUROSIM_BRAIN_REQUEST_TIMEOUT_MS ?? 60_000);
 let traceTimingCounter = 0;
 

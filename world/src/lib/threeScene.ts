@@ -573,6 +573,19 @@ export function initThreeScene(
     return helper;
   }
 
+  function disposeArrowHelper(arrow: THREE.ArrowHelper): void {
+    if (arrow.parent) arrow.parent.remove(arrow);
+    if (arrow.line?.geometry) arrow.line.geometry.dispose();
+    const lineMaterial = arrow.line?.material;
+    if (Array.isArray(lineMaterial)) lineMaterial.forEach((m) => m.dispose());
+    else lineMaterial?.dispose();
+    if (arrow.cone?.geometry) arrow.cone.geometry.dispose();
+    const coneMaterial = arrow.cone?.material;
+    if (Array.isArray(coneMaterial)) coneMaterial.forEach((m) => m.dispose());
+    else coneMaterial?.dispose();
+    disposeObject3D(arrow);
+  }
+
   getOrCreateApple();
   getOrCreateApple();
 
@@ -659,8 +672,7 @@ export function initThreeScene(
       }
       if (flyHeadingArrowDebugPool.length > flyInstances.length) {
         const arrow = flyHeadingArrowDebugPool.pop()!;
-        fliesGroup.remove(arrow);
-        disposeObject3D(arrow);
+        disposeArrowHelper(arrow);
       }
     }
     while (flyInstances.length < count && flyTemplate && flyClips.length > 0) {
@@ -800,6 +812,9 @@ export function initThreeScene(
       const x = state.x ?? 0;
       const y = state.y ?? 0;
       const z = state.z ?? 0;
+      if (!inst.initialized) {
+        inst.prevPos = { x, y };
+      }
       const dx = x - inst.prevPos.x;
       const dy = y - inst.prevPos.y;
       const motionDistSq = dx * dx + dy * dy;
@@ -966,8 +981,7 @@ export function initThreeScene(
       else smell.material.dispose();
     }
     for (const arrow of flyHeadingArrowDebugPool) {
-      fliesGroup.remove(arrow);
-      disposeObject3D(arrow);
+      disposeArrowHelper(arrow);
     }
     for (const c of sourcesGroup.children.slice()) {
       sourcesGroup.remove(c);

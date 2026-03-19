@@ -88,8 +88,9 @@ fn load_epg_id_to_bin() -> HashMap<String, u8> {
     };
     let mut out = HashMap::new();
     for e in map.entries {
-        // Exclude EPGt; only EPG (51 canonical compass neurons) for bump.
-        if e.hemibrain_type.as_deref() != Some("EPG") {
+        // Keep legacy tile-map rows with missing hemibrain_type.
+        // Exclude only when hemibrain_type is explicitly present and not EPG.
+        if matches!(e.hemibrain_type.as_deref(), Some(ht) if ht != "EPG") {
             continue;
         }
         let (Some(side), Some(tile)) = (e.side.as_deref(), e.tile_index_0_7) else {
@@ -113,13 +114,13 @@ fn build_epg_index_to_bin(
         if v == 0 {
             continue;
         }
-        if let Some(id) = template.neuron_ids.get(i) {
-            if let Some(&bin) = epg_id_to_bin.get(id) {
-                if (bin as usize) < 16 {
-                    out.push(bin);
-                }
-            }
-        }
+        let bin = template
+            .neuron_ids
+            .get(i)
+            .and_then(|id| epg_id_to_bin.get(id).copied())
+            .filter(|&b| (b as usize) < 16)
+            .unwrap_or(u8::MAX);
+        out.push(bin);
     }
     out
 }
@@ -141,13 +142,13 @@ fn build_epg_index_to_root_id(template: &connectome::ConnectomeTemplate) -> Vec<
 /// Compute bump_angle_deg from compact epg_spike_indices (0..n_epg) using epg_index_to_bin.
 /// Frontend uses same formula; kept here for parity testing.
 #[allow(dead_code)]
-fn compute_bump_from_epg_indices(epg_spike_indices: &[u8], epg_index_to_bin: &[u8]) -> Option<f64> {
+fn compute_bump_from_epg_indices(epg_spike_indices: &[usize], epg_index_to_bin: &[u8]) -> Option<f64> {
     if epg_index_to_bin.is_empty() {
         return None;
     }
     let mut bins: [f64; 16] = [0.0; 16];
     for &idx in epg_spike_indices {
-        let bin = epg_index_to_bin.get(idx as usize).copied().unwrap_or(255);
+        let bin = epg_index_to_bin.get(idx).copied().unwrap_or(255);
         if (bin as usize) < 16 {
             bins[bin as usize] += 1.0;
         }
@@ -1033,7 +1034,7 @@ struct ContinuousLiveState {
     dt_sec: f64,
 }
 
-const WORLD_TICK_BUFFER_CAP: usize = 120_000;
+const WORLD_TICK_BUFFER_BASE_CAP: usize = 120_000;
 
 #[derive(Deserialize)]
 struct WorldAddFlyParams {
@@ -1072,7 +1073,7 @@ struct WorldTickRecord {
     fly_id: u32,
     time_sec: f64,
     /// Compact: EPG neuron indices 0..n_epg that spiked. Frontend derives bump from these.
-    epg: Vec<u8>,
+    epg: Vec<usize>,
 }
 
 #[derive(Clone, Serialize)]
@@ -1131,6 +1132,7 @@ struct WorldRuntimeState {
     snapshots: Mutex<HashMap<u32, WorldSnapshotFly>>,
     sources: Mutex<Vec<SourceInput>>,
     food_state: Mutex<FoodState>,
+    tick_buffer_cap: usize,
     ticks: Mutex<VecDeque<WorldTickRecord>>,
     /// epg_index (0..n_epg) -> bin (0..15) for frontend bump derivation.
     epg_index_to_bin: Vec<u8>,
@@ -1144,7 +1146,7 @@ struct WorldFlyStepResult {
     feeding_candidate_id: Option<String>,
     dt_batch: f64,
     /// Per-step ticks for this batch (steps_per_batch entries).
-    step_ticks: Vec<(u64, f64, Vec<u8>)>,
+    step_ticks: Vec<(u64, f64, Vec<usize>)>,
 }
 
 /// No arena boundaries — flies move freely.
@@ -1341,14 +1343,15 @@ fn step_world_fly_runtime(
     // Always run juice (11PM/3PM/8PM). Throttle preset change to at most once per 2s.
     let desired_preset = brain_sim_service::sim::BrainSim::choose_world_preset_for_fly(&fly, sources_now);
     if desired_preset != runtime.current_preset.as_str()
-        && fly.t - runtime.last_preset_change_t >= WORLD_PRESET_CHANGE_INTERVAL_SEC
+        && (runtime.last_preset_change_t <= 0.0
+            || fly.t - runtime.last_preset_change_t >= WORLD_PRESET_CHANGE_INTERVAL_SEC)
     {
         runtime.current_preset = desired_preset.to_string();
         runtime.last_preset_change_t = fly.t;
     }
     let stim_preset = Some(runtime.current_preset.as_str());
 
-    let mut step_ticks: Vec<(u64, f64, Vec<u8>)> = Vec::with_capacity(steps_per_batch as usize);
+    let mut step_ticks: Vec<(u64, f64, Vec<usize>)> = Vec::with_capacity(steps_per_batch as usize);
     for step in 0..steps_per_batch {
         let is_last = step + 1 == steps_per_batch;
         // Always use stim: world preset (11PM/3PM/8PM) when no rates_by_id, else rates. Ensures continuous juice.
@@ -1397,8 +1400,8 @@ fn step_world_fly_runtime(
             rest_time_left: fly_out.rest_time_left,
             dead: fly_out.dead,
         };
-        let step_tick = base_tick * steps_per_batch as u64 + step as u64;
-        let step_time = (step_tick + 1) as f64 * dt_sec;
+        let step_tick = base_tick + step as u64 + 1;
+        let step_time = step_tick as f64 * dt_sec;
         let epg = runtime.sim.epg_spike_indices();
         step_ticks.push((step_tick, step_time, epg));
         if is_last {
@@ -1647,6 +1650,7 @@ fn spawn_world_runtime_thread(
         .ok()
         .map(|s| s == "1" || s.eq_ignore_ascii_case("true"))
         .unwrap_or(true);
+    let world_tick_buffer_cap = WORLD_TICK_BUFFER_BASE_CAP.saturating_mul(steps_per_batch as usize);
     let epg_index_to_bin = build_epg_index_to_bin(template.as_ref(), &epg_id_to_bin);
     let epg_index_to_root_id = build_epg_index_to_root_id(template.as_ref());
     let state = Arc::new(WorldRuntimeState {
@@ -1659,7 +1663,8 @@ fn spawn_world_runtime_thread(
         snapshots: Mutex::new(HashMap::new()),
         sources: Mutex::new(Vec::new()),
         food_state: Mutex::new(FoodState::default()),
-        ticks: Mutex::new(VecDeque::with_capacity(WORLD_TICK_BUFFER_CAP)),
+        tick_buffer_cap: world_tick_buffer_cap,
+        ticks: Mutex::new(VecDeque::with_capacity(world_tick_buffer_cap)),
         epg_index_to_bin,
         epg_index_to_root_id,
     });
@@ -1753,7 +1758,7 @@ fn spawn_world_runtime_thread(
                             }
                         }
                     }
-                    let tick = base_tick + 1;
+                    let tick = base_tick + steps_per_batch as u64;
                     {
                         let mut snapshots = state_thr.snapshots.lock().unwrap();
                         for result in &step_results {
@@ -1762,9 +1767,10 @@ fn spawn_world_runtime_thread(
                     }
                     {
                         let mut ticks = state_thr.ticks.lock().unwrap();
+                        let mut merged_ticks: Vec<WorldTickRecord> = Vec::new();
                         for result in &step_results {
                             for (step_tick, step_time, epg) in &result.step_ticks {
-                                ticks.push_back(WorldTickRecord {
+                                merged_ticks.push(WorldTickRecord {
                                     tick: *step_tick,
                                     fly_id: result.fly_id,
                                     time_sec: *step_time,
@@ -1772,7 +1778,15 @@ fn spawn_world_runtime_thread(
                                 });
                             }
                         }
-                        while ticks.len() > WORLD_TICK_BUFFER_CAP {
+                        merged_ticks.sort_unstable_by(|a, b| {
+                            a.tick
+                                .cmp(&b.tick)
+                                .then_with(|| a.fly_id.cmp(&b.fly_id))
+                        });
+                        for rec in merged_ticks {
+                            ticks.push_back(rec);
+                        }
+                        while ticks.len() > state_thr.tick_buffer_cap {
                             ticks.pop_front();
                         }
                     }

@@ -130,13 +130,13 @@ impl BrainSim {
 
     /// Return compact EPG spike indices (0..n_epg) for neurons that spiked this step.
     /// Frontend can derive bump angle from these using same formula as compute_bump_and_epg_bins.
-    pub fn epg_spike_indices(&self) -> Vec<u8> {
+    pub fn epg_spike_indices(&self) -> Vec<usize> {
         self.epg_indices
             .iter()
             .enumerate()
             .filter_map(|(j, &idx)| {
                 if (idx as usize) < self.spikes.len() && self.spikes[idx as usize] >= ACTIVITY_THRESHOLD {
-                    Some(j as u8)
+                    Some(j)
                 } else {
                     None
                 }

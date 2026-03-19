@@ -5,10 +5,11 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { lerpFlyState } from './flyInterpolation';
+import { MAX_DELTA, lerpFlyState } from './flyInterpolation';
 import type { Snapshot } from './flyInterpolation';
 import type { FlyState } from './simWsClient';
 import type { WorldSource } from '../../../api/src/world';
+import { DEFAULT_FLY } from './flyViewerUtils';
 import {
   applyLowLodWingPose,
   createLowLodFlyProxy,
@@ -52,7 +53,6 @@ export interface ThreeSceneRefs {
 /** Ground plane size — large so flies can roam freely (no edges). */
 const ARENA_SIZE = 500;
 const LERP_RATE = 0.45;
-const MAX_DELTA = 0.05;
 const LANDING_Z_THRESHOLD = 1.2;
 const LANDING_Z_BOOST = 4;
 /** Wing animation: start as soon as fly leaves ground (z > 0.5), stop when back at rest */
@@ -100,8 +100,6 @@ const SHOW_FLY_SMELL_RADIUS_DEBUG = true;
 const FLY_SMELL_RADIUS_DEBUG = 24; // Keep aligned with Rust ODOR_DETECTION_RADIUS.
 const FLY_SMELL_RADIUS_DEBUG_COLOR = 0xffd75e;
 const FLY_SMELL_RADIUS_DEBUG_OPACITY = 0.1;
-
-const DEFAULT_FLY: FlyState = { x: 0, y: 0, z: 0.35, heading: 0, t: 0, hunger: 100 };
 
 function createSimStatusBar(
   slot: HTMLElement,
@@ -432,15 +430,33 @@ export function initThreeScene(
   });
 
   const loader = new GLTFLoader();
+  const flyLoadStatus = document.createElement('div');
+  flyLoadStatus.style.cssText =
+    'position:absolute;top:8px;right:8px;padding:6px 8px;background:rgba(120,20,20,0.88);color:#ffd9d9;border:1px solid #ff8a8a;border-radius:4px;font:11px/1.2 monospace;z-index:4;display:none';
+  container.appendChild(flyLoadStatus);
   loader.load(
     '/models/fly-animated/fly2-animation.glb',
     (gltf) => {
       const src = gltf.scene;
       flyTemplate = src.clone(true);
       flyClips = gltf.animations;
+      flyLoadStatus.style.display = 'none';
     },
     undefined,
-    (err) => console.error('[threeScene] fly load error:', err)
+    (err) => {
+      console.error('[threeScene] fly load error:', err);
+      // Keep flies visible even if glTF fails by using a simple fallback body.
+      const fallback = new THREE.Group();
+      const body = new THREE.Mesh(
+        new THREE.BoxGeometry(0.26, 0.12, 0.44),
+        new THREE.MeshStandardMaterial({ color: 0x6fa8ff, roughness: 0.7, metalness: 0.1 })
+      );
+      fallback.add(body);
+      flyTemplate = fallback;
+      flyClips = [];
+      flyLoadStatus.textContent = 'Fly model failed to load; using fallback mesh';
+      flyLoadStatus.style.display = 'block';
+    }
   );
 
   function createFruitSliceTexture(): THREE.CanvasTexture {
@@ -887,6 +903,7 @@ export function initThreeScene(
     scene.remove(neuralBackdrop.group);
     neuralBackdrop.dispose();
     container.removeChild(renderer.domElement);
+    if (container.contains(flyLoadStatus)) container.removeChild(flyLoadStatus);
     if (cameraButton) cameraButton.el.remove();
     if (disposeStatus) disposeStatus();
     if (disposeDebug) disposeDebug();

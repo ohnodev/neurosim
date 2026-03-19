@@ -145,9 +145,9 @@ fn load_epg_viewer_indices(
         .entries
         .iter()
         .filter(|e| {
-            // Exclude EPGt; only EPG (51 canonical compass neurons).
-            let ht = e.hemibrain_type.as_deref().unwrap_or("");
-            ht == "EPG"
+            // Keep legacy tile-map rows with missing hemibrain_type.
+            // Exclude only when hemibrain_type is explicitly present and not EPG.
+            !matches!(e.hemibrain_type.as_deref(), Some(ht) if ht != "EPG")
         })
         .filter_map(|e| id_to_idx.get(&e.root_id).copied())
         .collect();

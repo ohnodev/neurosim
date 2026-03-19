@@ -804,15 +804,29 @@ function startSim(): void {
       await socketClient.worldSetSources(
         currentSources.map((s) => ({ id: s.id, x: s.x ?? 0, y: s.y ?? 0, radius: s.radius ?? 1 })),
       );
-      const ticksToRequest = Math.min(8000, Math.max(1250, worldStepsPerBatch * nSims * 2));
-      const [worldSnap, ticksResp] = await Promise.all([
+      const ticksToRequest = Math.max(1250, worldStepsPerBatch * Math.max(1, nSims) * 2);
+      const [worldSnap, firstTicksResp] = await Promise.all([
         socketClient.worldGetSnapshot(),
         socketClient.worldReadTicks(lastTicksAfter, ticksToRequest),
       ]);
-      if (ticksResp.epg_index_to_bin?.length) epgIndexToBin = ticksResp.epg_index_to_bin;
-      if (ticksResp.steps_per_batch) worldStepsPerBatch = ticksResp.steps_per_batch;
-      const rawTicks = ticksResp.ticks ?? [];
-      if (rawTicks.length > 0) lastTicksAfter = Math.max(...rawTicks.map((r) => r.tick));
+      if (firstTicksResp.epg_index_to_bin?.length) epgIndexToBin = firstTicksResp.epg_index_to_bin;
+      if (firstTicksResp.steps_per_batch) worldStepsPerBatch = firstTicksResp.steps_per_batch;
+      const rawTicks: typeof firstTicksResp.ticks = [];
+      let batch = firstTicksResp.ticks ?? [];
+      if (batch.length > 0) {
+        rawTicks.push(...batch);
+        lastTicksAfter = Math.max(lastTicksAfter, Math.max(...batch.map((r) => r.tick)));
+      }
+      // Drain backlog when producer outruns a single read window.
+      while (batch.length >= ticksToRequest) {
+        const extra = await socketClient.worldReadTicks(lastTicksAfter, ticksToRequest);
+        if (extra.epg_index_to_bin?.length) epgIndexToBin = extra.epg_index_to_bin;
+        if (extra.steps_per_batch) worldStepsPerBatch = extra.steps_per_batch;
+        batch = extra.ticks ?? [];
+        if (batch.length === 0) break;
+        rawTicks.push(...batch);
+        lastTicksAfter = Math.max(lastTicksAfter, Math.max(...batch.map((r) => r.tick)));
+      }
       // Per-neuron format: spikes[neuronIndex] = [tick1, tick2, ...]. Saves data vs per-tick.
       const nEpg = epgIndexToBin.length;
       const epgSpikesByNeuronByFly = (() => {
@@ -1503,7 +1517,8 @@ app.post('/api/world-record-ticks', async (req, res) => {
     const durationSec = Math.max(1, Math.min(30, Number(req.body?.durationSec ?? 10)));
     const pollIntervalMs = 800;
     const pollCount = Math.ceil((durationSec * 1000) / pollIntervalMs);
-    let lastAfterTick = 0;
+    const cursorResp = await socketClient.worldReadTicks(0, 1);
+    let lastAfterTick = Number.isFinite(cursorResp.latest_tick) ? cursorResp.latest_tick : 0;
     const allTicks: Array<{ tick: number; fly_id: number; time_sec: number; epg: number[] }> = [];
     let epgIndexToRootId: string[] = [];
     let dtSec = 0.0008;

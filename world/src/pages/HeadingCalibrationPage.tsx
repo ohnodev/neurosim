@@ -49,6 +49,41 @@ export default function HeadingCalibrationPage() {
   const [headingMode, setHeadingMode] = useState<HeadingMode>('analytic_tangent')
 
   const yawOffsetRad = useMemo(() => degToRad(yawOffsetDeg), [yawOffsetDeg])
+  const controlsRef = useRef({
+    yawOffsetRad,
+    pathSpeed,
+    radius,
+    headingMode,
+    arrowTurnMode,
+    arrowTurnRateDegPerSec,
+    flyTurnMode,
+    flyTurnRateDegPerSec,
+    lockFlyToArrow,
+  })
+
+  useEffect(() => {
+    controlsRef.current = {
+      yawOffsetRad,
+      pathSpeed,
+      radius,
+      headingMode,
+      arrowTurnMode,
+      arrowTurnRateDegPerSec,
+      flyTurnMode,
+      flyTurnRateDegPerSec,
+      lockFlyToArrow,
+    }
+  }, [
+    yawOffsetRad,
+    pathSpeed,
+    radius,
+    headingMode,
+    arrowTurnMode,
+    arrowTurnRateDegPerSec,
+    flyTurnMode,
+    flyTurnRateDegPerSec,
+    lockFlyToArrow,
+  ])
 
   useEffect(() => {
     const el = containerRef.current
@@ -81,10 +116,11 @@ export default function HeadingCalibrationPage() {
     )
     ground.rotation.x = -Math.PI / 2
     scene.add(ground)
-    scene.add(new THREE.GridHelper(120, 60, 0x5e9f5f, GRID_COLOR))
+    const grid = new THREE.GridHelper(120, 60, 0x5e9f5f, GRID_COLOR)
+    scene.add(grid)
 
     const path = new THREE.Mesh(
-      new THREE.RingGeometry(Math.max(0.1, radius) - 0.02, Math.max(0.12, radius) + 0.02, 128),
+      new THREE.RingGeometry(0.98, 1.02, 128),
       new THREE.MeshBasicMaterial({ color: 0x8db7ff, transparent: true, opacity: 0.45, side: THREE.DoubleSide }),
     )
     path.rotation.x = -Math.PI / 2
@@ -139,7 +175,7 @@ export default function HeadingCalibrationPage() {
       loadFly('/models/fly-animated/fly2-animation.gltf', 'fly2-animation.gltf')
     })
 
-    let prevX = radius
+    let prevX = controlsRef.current.radius
     let prevY = 0
     let flyDisplayHeading = 0
     let arrowDisplayHeading = 0
@@ -151,9 +187,12 @@ export default function HeadingCalibrationPage() {
       const dtSec = Math.max(1 / 240, (now - prevTimeMs) / 1000)
       prevTimeMs = now
 
-      const t = ((now - startMs) / 1000) * pathSpeed
-      const x = Math.cos(t) * radius
-      const y = Math.sin(t) * radius
+      const c = controlsRef.current
+      const safeRadius = Math.max(0.1, c.radius)
+      path.scale.setScalar(safeRadius)
+      const t = ((now - startMs) / 1000) * c.pathSpeed
+      const x = Math.cos(t) * safeRadius
+      const y = Math.sin(t) * safeRadius
       const dx = x - prevX
       const dy = y - prevY
       prevX = x
@@ -161,21 +200,21 @@ export default function HeadingCalibrationPage() {
 
       const tangentHeading = normalizeAngleRad(t + Math.PI / 2)
       const sampledHeading = normalizeAngleRad(Math.atan2(dy, dx))
-      const targetHeading = headingMode === 'analytic_tangent' ? tangentHeading : sampledHeading
+      const targetHeading = c.headingMode === 'analytic_tangent' ? tangentHeading : sampledHeading
 
-      if (arrowTurnMode === 'snap') {
+      if (c.arrowTurnMode === 'snap') {
         arrowDisplayHeading = targetHeading
       } else {
-        const maxStep = degToRad(arrowTurnRateDegPerSec) * dtSec
+        const maxStep = degToRad(c.arrowTurnRateDegPerSec) * dtSec
         arrowDisplayHeading = stepTowardAngle(arrowDisplayHeading, targetHeading, maxStep)
       }
 
-      if (lockFlyToArrow) {
+      if (c.lockFlyToArrow) {
         flyDisplayHeading = arrowDisplayHeading
-      } else if (flyTurnMode === 'snap') {
+      } else if (c.flyTurnMode === 'snap') {
         flyDisplayHeading = targetHeading
       } else {
-        const maxStep = degToRad(flyTurnRateDegPerSec) * dtSec
+        const maxStep = degToRad(c.flyTurnRateDegPerSec) * dtSec
         flyDisplayHeading = stepTowardAngle(flyDisplayHeading, targetHeading, maxStep)
       }
 
@@ -183,7 +222,7 @@ export default function HeadingCalibrationPage() {
       setVelocityDeg(radToDeg(targetHeading))
 
       flyRoot.position.set(x, 0.12, y)
-      flyRoot.rotation.y = -flyDisplayHeading + yawOffsetRad
+      flyRoot.rotation.y = -flyDisplayHeading + c.yawOffsetRad
 
       velocityArrow.position.set(x, 0.12, y)
       velocityArrow.setDirection(new THREE.Vector3(Math.cos(arrowDisplayHeading), 0, Math.sin(arrowDisplayHeading)))
@@ -209,24 +248,34 @@ export default function HeadingCalibrationPage() {
       cancelAnimationFrame(rafId)
       ro.disconnect()
       controls.dispose()
+      for (const mixer of mixers) mixer.stopAllAction()
       renderer.dispose()
+      velocityArrow.line.geometry.dispose()
+      ;(velocityArrow.line.material as THREE.Material).dispose()
+      velocityArrow.cone.geometry.dispose()
+      ;(velocityArrow.cone.material as THREE.Material).dispose()
+      scene.remove(velocityArrow)
+      scene.remove(grid)
+      grid.geometry.dispose()
+      if (Array.isArray(grid.material)) grid.material.forEach((m) => m.dispose())
+      else grid.material.dispose()
       path.geometry.dispose()
       ;(path.material as THREE.Material).dispose()
+      scene.remove(path)
       ground.geometry.dispose()
       ;(ground.material as THREE.Material).dispose()
+      scene.remove(ground)
+      flyRoot.traverse((obj) => {
+        if (obj instanceof THREE.Mesh) {
+          obj.geometry.dispose()
+          if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose())
+          else obj.material.dispose()
+        }
+      })
+      scene.remove(flyRoot)
       if (el.contains(renderer.domElement)) el.removeChild(renderer.domElement)
     }
-  }, [
-    arrowTurnMode,
-    arrowTurnRateDegPerSec,
-    flyTurnMode,
-    flyTurnRateDegPerSec,
-    headingMode,
-    lockFlyToArrow,
-    radius,
-    pathSpeed,
-    yawOffsetRad,
-  ])
+  }, [])
 
   return (
     <div style={{ width: '100vw', height: '100vh', position: 'relative', overflow: 'hidden', background: '#05080f' }}>

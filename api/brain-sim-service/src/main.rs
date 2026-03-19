@@ -219,6 +219,33 @@ fn main() {
     let sims: Mutex<HashMap<u32, BrainSim>> = Mutex::new(HashMap::new());
     let food_state: Mutex<FoodState> = Mutex::new(FoodState::default());
     let next_id: Mutex<u32> = Mutex::new(0);
+    #[cfg(feature = "cuda")]
+    {
+        let use_cuda = std::env::var("USE_CUDA")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        if use_cuda {
+            eprintln!("[brain-service] USE_CUDA=1 — initializing GPU...");
+            match brain_sim_service::gpu::init_gpu_connectome(&template) {
+                Some(conn) => {
+                    eprintln!(
+                        "[brain-service][gpu] CUDA device ready, connectome on GPU ({} edges). All sims will use GPU.",
+                        conn.ne
+                    );
+                }
+                None => {
+                    eprintln!("[brain-service][gpu] WARNING: GPU init failed — falling back to CPU for all sims.");
+                }
+            }
+        } else {
+            eprintln!("[brain-service] USE_CUDA not set — running CPU-only.");
+        }
+    }
+    #[cfg(not(feature = "cuda"))]
+    {
+        eprintln!("[brain-service] compiled without CUDA feature — CPU-only mode.");
+    }
+
     let template = Arc::new(template);
 
     let w_syn = std::env::var("NEUROSIM_W_SYN")

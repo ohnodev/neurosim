@@ -286,7 +286,6 @@ fn main() {
     let epg_id_to_bin = load_epg_id_to_bin();
     let world_runtime = Some(spawn_world_runtime_thread(
         template.clone(),
-        world_stim_presets.clone(),
         epg_id_to_bin.clone(),
     ));
 
@@ -1037,14 +1036,12 @@ const WORLD_HEALTH_RECOVERY_FEEDING_PER_SEC: f64 = 1.0;
 const WORLD_HUNGER_RECOVERY_FEEDING_PER_SEC: f64 = 14.0;
 
 fn normalize_angle_rad(a: f64) -> f64 {
-    let mut out = a;
-    while out > std::f64::consts::PI {
-        out -= 2.0 * std::f64::consts::PI;
+    if !a.is_finite() {
+        return a;
     }
-    while out < -std::f64::consts::PI {
-        out += 2.0 * std::f64::consts::PI;
-    }
-    out
+    let pi = std::f64::consts::PI;
+    let tau = 2.0 * pi;
+    (a + pi).rem_euclid(tau) - pi
 }
 
 fn clamp_turn_toward(current: f64, target: f64, max_turn: f64) -> f64 {
@@ -1490,7 +1487,6 @@ fn run_continuous_live_loop(
 
 fn spawn_world_runtime_thread(
     template: Arc<connectome::ConnectomeTemplate>,
-    world_stim_presets: Arc<HashMap<String, HashMap<String, f64>>>,
     epg_id_to_bin: HashMap<String, u8>,
 ) -> Arc<WorldRuntimeState> {
     let dt_sec = std::env::var("NEUROSIM_WORLD_DT_SEC")
@@ -1605,7 +1601,6 @@ fn spawn_world_runtime_thread(
         dt_sec * steps_per_batch as f64 * 1000.0,
         world_parallel_flies
     );
-    let _ = world_stim_presets;
     state
 }
 

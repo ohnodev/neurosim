@@ -538,9 +538,7 @@ export function initThreeScene(
     return mesh;
   }
 
-  function getOrCreateFlySmellRadiusDebug(): THREE.Mesh {
-    const unused = flySmellDebugPool.find((m) => !m.visible);
-    if (unused) return unused;
+  function createFlySmellRadiusDebug(): THREE.Mesh {
     const geom = new THREE.SphereGeometry(1, 20, 16);
     const mat = new THREE.MeshBasicMaterial({
       color: FLY_SMELL_RADIUS_DEBUG_COLOR,
@@ -556,12 +554,7 @@ export function initThreeScene(
     return mesh;
   }
 
-  function getOrCreateFlyHeadingArrowDebug(): THREE.ArrowHelper {
-    const unused = flyHeadingArrowDebugPool.find((h) => !h.userData.inUse);
-    if (unused) {
-      unused.userData.inUse = true;
-      return unused;
-    }
+  function createFlyHeadingArrowDebug(inUse: boolean): THREE.ArrowHelper {
     const helper = new THREE.ArrowHelper(
       new THREE.Vector3(1, 0, 0),
       new THREE.Vector3(0, 0, 0),
@@ -570,7 +563,7 @@ export function initThreeScene(
       FLY_HEADING_ARROW_HEAD_LENGTH,
       FLY_HEADING_ARROW_HEAD_WIDTH
     );
-    helper.userData.inUse = true;
+    helper.userData.inUse = inUse;
     helper.visible = false;
     flyHeadingArrowDebugPool.push(helper);
     fliesGroup.add(helper);
@@ -715,12 +708,12 @@ export function initThreeScene(
         wingActions: instWingActions,
       });
       if (SHOW_FLY_SMELL_RADIUS_DEBUG && refs.devModeRef.current) {
-        const smell = getOrCreateFlySmellRadiusDebug();
+        const smell = createFlySmellRadiusDebug();
         smell.scale.setScalar(FLY_SMELL_RADIUS_DEBUG);
         smell.visible = true;
       }
       if (headingArrowDebugEnabled && flyHeadingArrowDebugPool.length < flyInstances.length) {
-        const arrow = getOrCreateFlyHeadingArrowDebug();
+        const arrow = createFlyHeadingArrowDebug(false);
         releaseArrowHelper(arrow);
       }
     }
@@ -794,7 +787,7 @@ export function initThreeScene(
     if (SHOW_FLY_SMELL_RADIUS_DEBUG) {
       if (debugEnabled) {
         while (flySmellDebugPool.length < flyInstances.length) {
-          const smell = getOrCreateFlySmellRadiusDebug();
+          const smell = createFlySmellRadiusDebug();
           smell.scale.setScalar(FLY_SMELL_RADIUS_DEBUG);
           smell.visible = false;
         }
@@ -806,7 +799,7 @@ export function initThreeScene(
     for (const arrow of flyHeadingArrowDebugPool) releaseArrowHelper(arrow);
     if (headingArrowDebugEnabled) {
       while (flyHeadingArrowDebugPool.length < flyInstances.length) {
-        const arrow = getOrCreateFlyHeadingArrowDebug();
+        const arrow = createFlyHeadingArrowDebug(false);
         releaseArrowHelper(arrow);
       }
     }

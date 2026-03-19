@@ -557,8 +557,11 @@ export function initThreeScene(
   }
 
   function getOrCreateFlyHeadingArrowDebug(): THREE.ArrowHelper {
-    const unused = flyHeadingArrowDebugPool.find((h) => !h.visible);
-    if (unused) return unused;
+    const unused = flyHeadingArrowDebugPool.find((h) => !h.userData.inUse);
+    if (unused) {
+      unused.userData.inUse = true;
+      return unused;
+    }
     const helper = new THREE.ArrowHelper(
       new THREE.Vector3(1, 0, 0),
       new THREE.Vector3(0, 0, 0),
@@ -567,10 +570,16 @@ export function initThreeScene(
       FLY_HEADING_ARROW_HEAD_LENGTH,
       FLY_HEADING_ARROW_HEAD_WIDTH
     );
+    helper.userData.inUse = true;
     helper.visible = false;
     flyHeadingArrowDebugPool.push(helper);
     fliesGroup.add(helper);
     return helper;
+  }
+
+  function releaseArrowHelper(arrow: THREE.ArrowHelper): void {
+    arrow.userData.inUse = false;
+    arrow.visible = false;
   }
 
   function disposeArrowHelper(arrow: THREE.ArrowHelper): void {
@@ -710,9 +719,9 @@ export function initThreeScene(
         smell.scale.setScalar(FLY_SMELL_RADIUS_DEBUG);
         smell.visible = true;
       }
-      if (headingArrowDebugEnabled) {
+      if (headingArrowDebugEnabled && flyHeadingArrowDebugPool.length < flyInstances.length) {
         const arrow = getOrCreateFlyHeadingArrowDebug();
-        arrow.visible = true;
+        releaseArrowHelper(arrow);
       }
     }
   }
@@ -794,13 +803,12 @@ export function initThreeScene(
       }
     }
     const headingArrowDebugEnabled = ENABLE_FLY_HEADING_ARROW_DEBUG && debugEnabled;
+    for (const arrow of flyHeadingArrowDebugPool) releaseArrowHelper(arrow);
     if (headingArrowDebugEnabled) {
       while (flyHeadingArrowDebugPool.length < flyInstances.length) {
         const arrow = getOrCreateFlyHeadingArrowDebug();
-        arrow.visible = false;
+        releaseArrowHelper(arrow);
       }
-    } else {
-      for (const arrow of flyHeadingArrowDebugPool) arrow.visible = false;
     }
 
     const headingArrowDir = new THREE.Vector3();
@@ -844,6 +852,7 @@ export function initThreeScene(
       }
       if (headingArrowDebugEnabled && flyHeadingArrowDebugPool[i]) {
         const arrow = flyHeadingArrowDebugPool[i]!;
+        arrow.userData.inUse = true;
         if (motionDistSq > MOTION_HEADING_THRESHOLD_SQ) {
           headingArrowDir.set(dx, 0, dy).normalize();
         } else {
@@ -899,7 +908,7 @@ export function initThreeScene(
     }
     if (headingArrowDebugEnabled) {
       for (let i = flyInstances.length; i < flyHeadingArrowDebugPool.length; i++) {
-        flyHeadingArrowDebugPool[i]!.visible = false;
+        releaseArrowHelper(flyHeadingArrowDebugPool[i]!);
       }
     }
 

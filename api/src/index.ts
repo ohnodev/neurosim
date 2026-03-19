@@ -196,6 +196,24 @@ function chooseWorldPresetFromAngleDeg(angleToTargetDeg: number): WorldCompassPo
   return best;
 }
 
+function chooseWorldPresetForFly(
+  fly: { x: number; y: number; heading: number },
+  sources: WorldSource[],
+): WorldCompassPosition {
+  let angleDeg = (fly.heading * 180) / Math.PI;
+  let nearestDistSq = Number.POSITIVE_INFINITY;
+  for (const s of sources) {
+    const dx = s.x - fly.x;
+    const dy = s.y - fly.y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < nearestDistSq) {
+      nearestDistSq = d2;
+      angleDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
+    }
+  }
+  return chooseWorldPresetFromAngleDeg(angleDeg);
+}
+
 function createSeededRandom(seed: number): () => number {
   let state = seed >>> 0;
   return () => {
@@ -692,6 +710,11 @@ function startSim(): void {
       const currentSources = getSources();
       const states = await Promise.all(
         sims.map(async (s, idx) => {
+          const beforeFly = beforeStates[idx]?.fly;
+          if (beforeFly) {
+            penPresetBySimIndex[idx] = chooseWorldPresetForFly(beforeFly, currentSources);
+            smoothedBumpBySimIndex[idx] = normalizeAngleDeg((beforeFly.heading * 180) / Math.PI);
+          }
           const preset = penPresetBySimIndex[idx] ?? '11PM';
           const ratesById = WORLD_PEN_PRESETS[preset];
           const state = await (s as { stepBatch?: (dt: number, n: number, src: WorldSource[], rates?: Record<string, number>) => Promise<ReturnType<typeof sims[0]['getState']>> }).stepBatch?.(
@@ -1040,8 +1063,13 @@ app.get('/api/neurosim-live/ticks', async (req, res) => {
 
 app.post('/api/neurosim-live/apply', async (req, res) => {
   try {
-    const left = Math.max(0, Math.min(500, Number(req.body?.penALeftHz ?? 0)));
-    const right = Math.max(0, Math.min(500, Number(req.body?.penARightHz ?? 0)));
+    const rawLeft = Number(req.body?.penALeftHz);
+    const rawRight = Number(req.body?.penARightHz);
+    if (!Number.isFinite(rawLeft) || !Number.isFinite(rawRight)) {
+      return res.status(400).json({ error: 'penALeftHz and penARightHz must be finite numbers' });
+    }
+    const left = Math.max(0, Math.min(500, rawLeft));
+    const right = Math.max(0, Math.min(500, rawRight));
     const rawRates = req.body?.ratesById;
     if (rawRates != null && (typeof rawRates !== 'object' || Array.isArray(rawRates))) {
       return res.status(400).json({ error: 'ratesById must be an object map of neuronId -> hz' });

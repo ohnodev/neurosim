@@ -408,7 +408,11 @@ export async function createSim(params?: CreateParams & {
   epgRecurrenceBoost?: number;
 }): Promise<{ simId: number }> {
   const { rngSeed, epgRecurrenceBoost, ...rest } = (params ?? {});
-  const p: JsonObj = { ...rest as JsonObj };
+  const toSnakeKey = (k: string): string => k.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+  const p: JsonObj = {};
+  for (const [k, v] of Object.entries(rest as JsonObj)) {
+    p[toSnakeKey(k)] = v;
+  }
   if (rngSeed != null && Number.isFinite(rngSeed)) {
     p.rng_seed = Math.floor(rngSeed as number);
   }

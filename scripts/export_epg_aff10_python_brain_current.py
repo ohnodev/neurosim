@@ -9,16 +9,56 @@ from pathlib import Path
 from rpc import Rpc
 
 ROOT = Path(__file__).resolve().parents[1]
-SOCKET_PATH = Path(os.environ.get("NEUROSIM_BRAIN_SOCKET", "/tmp/neurosim-brain.sock"))
+def _resolve_socket_path() -> Path:
+    env_path = os.environ.get("NEUROSIM_BRAIN_SOCKET")
+    if env_path:
+        return Path(env_path)
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+    if runtime_dir:
+        base = Path(runtime_dir)
+    else:
+        base = Path.home() / ".local" / "run"
+    try:
+        base.mkdir(mode=0o700, parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return base / "neurosim-brain.sock"
 
-TICKS = int(os.environ.get("NEUROSIM_EXPORT_TICKS", "1000"))
-DT_MS = float(os.environ.get("NEUROSIM_EXPORT_DT_MS", "1.0"))
+
+def parse_env_int(name: str, default: int, min_value: int | None = None) -> int:
+    raw = os.environ.get(name, str(default))
+    try:
+        value = int(raw)
+    except ValueError as e:
+        raise ValueError(f"{name} must be an integer, got {raw!r}") from e
+    if min_value is not None and value < min_value:
+        raise ValueError(f"{name} must be >= {min_value}, got {value}")
+    return value
+
+
+def parse_env_float(name: str, default: float, min_value: float | None = None) -> float:
+    raw = os.environ.get(name, str(default))
+    try:
+        value = float(raw)
+    except ValueError as e:
+        raise ValueError(f"{name} must be a float, got {raw!r}") from e
+    if min_value is not None and value < min_value:
+        raise ValueError(f"{name} must be >= {min_value}, got {value}")
+    return value
+
+
+SOCKET_PATH = _resolve_socket_path()
+
+TICKS = parse_env_int("NEUROSIM_EXPORT_TICKS", 1000, min_value=1)
+DT_MS = parse_env_float("NEUROSIM_EXPORT_DT_MS", 1.0, min_value=1e-9)
 DT_SEC = DT_MS / 1000.0
-HZ = float(os.environ.get("NEUROSIM_EXPORT_STIM_HZ", "600.0"))
-OLFACTORY_BASE_HZ = float(os.environ.get("NEUROSIM_EXPORT_OLFACTORY_BASE_HZ", "0.0"))
-PEN_CURRENT = float(os.environ.get("NEUROSIM_EXPORT_PEN_CURRENT", "5.0"))
-PEN_BASE_CURRENT = float(os.environ.get("NEUROSIM_EXPORT_PEN_BASE_CURRENT", "0.0"))
+HZ = parse_env_float("NEUROSIM_EXPORT_STIM_HZ", 600.0, min_value=0.0)
+OLFACTORY_BASE_HZ = parse_env_float("NEUROSIM_EXPORT_OLFACTORY_BASE_HZ", 0.0, min_value=0.0)
+PEN_CURRENT = parse_env_float("NEUROSIM_EXPORT_PEN_CURRENT", 5.0, min_value=0.0)
+PEN_BASE_CURRENT = parse_env_float("NEUROSIM_EXPORT_PEN_BASE_CURRENT", 0.0, min_value=0.0)
 PEN_DIRECTION = os.environ.get("NEUROSIM_EXPORT_PEN_DIRECTION", "cw").strip().lower()
+if PEN_DIRECTION not in {"cw", "ccw"}:
+    raise ValueError("NEUROSIM_EXPORT_PEN_DIRECTION must be 'cw' or 'ccw'")
 
 AFF10 = [
     720575940626768442,

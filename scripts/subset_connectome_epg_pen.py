@@ -162,6 +162,13 @@ def main() -> None:
 
     total_rows = table.num_rows
     print(f"  Rows: {total_rows:,}  Columns: pre={pre_col} post={post_col} weight={weight_col}")
+    if total_rows == 0:
+        print("  Input parquet has no rows; writing empty output and exiting.")
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        pq.write_table(table, args.out)
+        print(f"Wrote {args.out}")
+        print("Compression: 0 -> 0 edges (0.0% reduction)")
+        return
 
     print("Building adjacency...")
     pre_to_posts, post_to_pres = build_adjacency(table, pre_col, post_col)

@@ -245,6 +245,7 @@ fn main() {
         eprintln!("[brain-service] continuous live disabled (set NEUROSIM_LIVE_ENABLED=1 to enable)");
         None
     };
+    let epg_id_to_bin = load_epg_id_to_bin();
 
     for stream in listener.incoming() {
         if let Ok(mut s) = stream {
@@ -254,7 +255,6 @@ fn main() {
                 conn_id,
                 std::process::id()
             );
-            let epg_id_to_bin = load_epg_id_to_bin();
             let _ = handle(
                 &mut s,
                 &sims,
@@ -852,12 +852,18 @@ fn run_continuous_live_loop(
     };
     let mut tick: u32 = 0;
     let mut stim: HashMap<String, f64> = HashMap::new();
+    let live_no_sleep = std::env::var("NEUROSIM_LIVE_NO_SLEEP")
+        .ok()
+        .map(|s| s == "1" || s.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let target_interval = std::time::Duration::from_secs_f64(dt.max(0.0));
     eprintln!(
         "[brain-service] continuous live stepping (seed={}, EPG filter {} ids)",
         seed,
         epg_ids.len()
     );
     loop {
+        let tick_start = Instant::now();
         let use_custom = {
             let guard = state.custom_rates.lock().unwrap();
             if let Some(ref map) = *guard {
@@ -935,6 +941,12 @@ fn run_continuous_live_loop(
         buf.push_back(rec);
         while buf.len() > LIVE_TICK_BUFFER_CAP {
             buf.pop_front();
+        }
+        if !live_no_sleep && target_interval > std::time::Duration::ZERO {
+            let elapsed = tick_start.elapsed();
+            if elapsed < target_interval {
+                std::thread::sleep(target_interval - elapsed);
+            }
         }
     }
 }
@@ -1607,7 +1619,7 @@ fn handle(
                     lif_ms: 0.0,
                     readout_ms: 0.0,
                 }];
-                if !source_lookup.is_empty() {
+                if !source_lookup.is_empty() && one[0].feeding_candidate_id.is_some() {
                     let mut fg = food_state.lock().unwrap();
                     fg.sync(source_lookup.keys().cloned());
                     apply_feeding_tick(&mut *fg, &source_lookup, &mut one);

@@ -1592,7 +1592,6 @@ export default function VisualizationPage() {
   const displayNeurons = useMemo(() => {
     const seen = new Set<string>();
     return neurons.filter((neuron) => {
-      if (!isCompassEpgNeuron(neuron)) return false;
       if (seen.has(neuron.root_id)) return false;
       seen.add(neuron.root_id);
       return true;
@@ -1874,7 +1873,6 @@ export default function VisualizationPage() {
         if (!cancelled) setError((e as Error).message);
       }
     };
-    void init();
     const poll = async () => {
       if (cancelled) return;
       try {
@@ -1928,7 +1926,12 @@ export default function VisualizationPage() {
         schedule(() => void poll(), Math.max(NEUROSIM_LIVE_POLL_MS, backoff));
       }
     };
-    schedule(() => void poll(), NEUROSIM_LIVE_POLL_MS);
+    const startPolling = async () => {
+      await init();
+      if (cancelled) return;
+      schedule(() => void poll(), NEUROSIM_LIVE_POLL_MS);
+    };
+    void startPolling();
     return () => {
       cancelled = true;
       if (timerId != null) clearTimeout(timerId);

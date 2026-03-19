@@ -187,7 +187,10 @@ def main() -> int:
                 })
             finally:
                 # Service currently does not expose delete(sim_id); keep sims bounded with reset.
-                rpc.request("reset", {})
+                try:
+                    rpc.request("reset", {})
+                except Exception as e:
+                    print(f"warning: reset failed for pen_bias={pen_bias}: {e}")
     finally:
         rpc.close()
 

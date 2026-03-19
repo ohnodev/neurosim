@@ -523,12 +523,10 @@ fn build_template(
         .map(|(i, id)| (id.clone(), i))
         .collect();
     let mut is_epg = vec![0u8; n];
-    if let Some(epg_indices) = loaded_epg_indices {
-        for &idx in &epg_indices {
-            let i = idx as usize;
-            if i < n {
-                is_epg[i] = 1;
-            }
+    for &idx in &viewer_subset_indices {
+        let i = idx as usize;
+        if i < n {
+            is_epg[i] = 1;
         }
     }
 

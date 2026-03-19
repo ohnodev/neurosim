@@ -16,6 +16,30 @@ export function sceneAngleForBin(bin: number, binCount: number): number {
   return COMPASS_ROTATION_RAD - (bin / binCount) * Math.PI * 2;
 }
 
+/** Get EPG indices that spiked in tick range [tickEnd - window, tickEnd] from per-neuron format. */
+export function getEpgIndicesInWindow(
+  spikes: number[][],
+  tickEnd: number,
+  window: number,
+): number[] {
+  const tickStart = Math.max(0, tickEnd - window);
+  const out: number[] = [];
+  for (let i = 0; i < spikes.length; i++) {
+    const arr = spikes[i];
+    if (!arr?.length) continue;
+    // Binary search: first tick >= tickStart
+    let lo = 0;
+    let hi = arr.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (arr[mid]! < tickStart) lo = mid + 1;
+      else hi = mid;
+    }
+    if (lo < arr.length && arr[lo]! <= tickEnd) out.push(i);
+  }
+  return out;
+}
+
 /** Derive bump angle (deg) from compact epg spike indices. Same formula as Rust compute_bump_and_epg_bins. */
 export function computeBumpFromEpgIndices(
   epgSpikeIndices: number[],

@@ -570,6 +570,14 @@ function broadcast(data: unknown): void {
   }
 }
 
+/** Per-neuron EPG spikes: spikes[neuronIndex] = [tick1, tick2, ...]. Compact format for replay. */
+export type EpgSpikesByNeuronFly = {
+  flyId: number;
+  tickStart: number;
+  tickEnd: number;
+  spikes: number[][];
+};
+
 /** Build per-client payload. Activity and sources sent once per batch (client only uses last). */
 function buildClientPayload(
   frames: {
@@ -581,6 +589,7 @@ function buildClientPayload(
     epgBinsPerSim: (number[] | null)[];
   }[],
   ticks: Array<{ tick: number; fly_id: number; time_sec: number; epg: number[] }>,
+  epgSpikesByNeuronByFly: EpgSpikesByNeuronFly[],
 ): void {
   const nowMs = Date.now();
   const sources = getSources();
@@ -609,6 +618,7 @@ function buildClientPayload(
           sources,
           simRunning: true,
           ticks,
+          epgSpikesByNeuronByFly,
           epgIndexToBin,
           worldDtSec: WORLD_SIM_DT_SEC,
           worldStepsPerBatch,
@@ -794,14 +804,48 @@ function startSim(): void {
       await socketClient.worldSetSources(
         currentSources.map((s) => ({ id: s.id, x: s.x ?? 0, y: s.y ?? 0, radius: s.radius ?? 1 })),
       );
+      const ticksToRequest = Math.min(8000, Math.max(1250, worldStepsPerBatch * nSims * 2));
       const [worldSnap, ticksResp] = await Promise.all([
         socketClient.worldGetSnapshot(),
-        socketClient.worldReadTicks(lastTicksAfter, 50_000),
+        socketClient.worldReadTicks(lastTicksAfter, ticksToRequest),
       ]);
       if (ticksResp.epg_index_to_bin?.length) epgIndexToBin = ticksResp.epg_index_to_bin;
       if (ticksResp.steps_per_batch) worldStepsPerBatch = ticksResp.steps_per_batch;
-      const ticks = ticksResp.ticks ?? [];
-      if (ticks.length > 0) lastTicksAfter = Math.max(...ticks.map((r) => r.tick));
+      const rawTicks = ticksResp.ticks ?? [];
+      if (rawTicks.length > 0) lastTicksAfter = Math.max(...rawTicks.map((r) => r.tick));
+      // Per-neuron format: spikes[neuronIndex] = [tick1, tick2, ...]. Saves data vs per-tick.
+      const nEpg = epgIndexToBin.length;
+      const epgSpikesByNeuronByFly = (() => {
+        const byFly = new Map<number, (typeof rawTicks)[0][]>();
+        for (const t of rawTicks) {
+          const arr = byFly.get(t.fly_id) ?? [];
+          arr.push(t);
+          byFly.set(t.fly_id, arr);
+        }
+        const out: Array<{ flyId: number; tickStart: number; tickEnd: number; spikes: number[][] }> = [];
+        for (const [flyId, ticks] of byFly) {
+          ticks.sort((a, b) => a.tick - b.tick);
+          const spikes: number[][] = Array.from({ length: nEpg }, () => []);
+          for (const t of ticks) {
+            for (const idx of t.epg ?? []) {
+              if (idx >= 0 && idx < nEpg) spikes[idx].push(t.tick);
+            }
+          }
+          const tickStart = ticks[0]?.tick ?? 0;
+          const tickEnd = ticks[ticks.length - 1]?.tick ?? 0;
+          out.push({ flyId, tickStart, tickEnd, spikes });
+        }
+        return out;
+      })();
+      // Legacy: latest tick per fly for bump (frontend can also derive from epgSpikesByNeuron)
+      const ticks = (() => {
+        const byFly = new Map<number, (typeof rawTicks)[0]>();
+        for (const t of rawTicks) {
+          const cur = byFly.get(t.fly_id);
+          if (!cur || t.tick > cur.tick) byFly.set(t.fly_id, t);
+        }
+        return Array.from(byFly.values());
+      })();
       const pullMs = performance.now() - pullStart;
       const byFlyId = new Map<number, socketClient.WorldFlySnapshot>();
       for (const item of worldSnap.flies ?? []) byFlyId.set(item.fly_id, item);
@@ -956,7 +1000,7 @@ function startSim(): void {
         frames.push({ t, flies, activities, inputActivities, bumpAngleDegs, epgBinsPerSim });
       }
       const beforePayload = performance.now();
-      buildClientPayload(frames, ticks);
+      buildClientPayload(frames, ticks, epgSpikesByNeuronByFly);
       const buildPayloadMs = Math.round(performance.now() - beforePayload);
       connectionStep += 1;
       if (connectionStep % 15 === 0) {
@@ -1711,6 +1755,11 @@ wss.on('connection', (ws) => {
     activity: activities[viewIndex] ?? {},
     sources: getSources(),
     simRunning,
+    ticks: [],
+    epgIndexToBin,
+    worldDtSec: WORLD_SIM_DT_SEC,
+    worldStepsPerBatch,
+    flyIdBySimIndex: sims.map((s) => s.flyId),
   }));
 
   ws.on('message', (data) => {

@@ -761,11 +761,17 @@ export function initThreeScene(
       const isFlying = wasFlying ? z > FLY_THRESHOLD_DOWN : z > FLY_THRESHOLD_UP;
       const lowLodIsFlying = inst.lowLodWasFlying ? z > FLY_THRESHOLD_DOWN : z > FLY_THRESHOLD_UP;
 
-      inst.prevPos = { x, y };
-      // Use derived bump from tick EPG data when available; else Rust fly.heading.
-      const derivedBump = refs.derivedBumpBySimIndexRef.current[i];
+      // Direction of motion: rotate fly to face where it's actually traveling.
+      const dx = x - inst.prevPos.x;
+      const dy = y - inst.prevPos.y;
+      const motionDistSq = dx * dx + dy * dy;
+      const MOTION_THRESHOLD_SQ = 1e-6; // ~0.001 units moved
       const headingRad =
-        derivedBump != null ? (derivedBump * Math.PI) / 180 : (state.heading ?? 0);
+        inst.initialized && motionDistSq > MOTION_THRESHOLD_SQ
+          ? Math.atan2(dy, dx)
+          : (state.heading ?? inst.heading);
+      inst.prevPos = { x, y };
+
       inst.targetHeading = headingRad;
       let d = headingRad - inst.heading;
       if (d > Math.PI) d -= 2 * Math.PI;
@@ -779,7 +785,7 @@ export function initThreeScene(
 
       const visualZ = Math.max(0, z - GROUND_Z);
       inst.group.position.set(x, visualZ, y);
-      // Convert Rust heading (0=+X, π/2=+Y) to Three.js rotation.y (default forward -Z, so +π/2 = +X)
+      // Three.js: default forward -Z, so rotation.y = heading + π/2 to face (dx,dy) in XZ
       inst.group.rotation.y = inst.heading + Math.PI / 2;
       if (SHOW_FLY_SMELL_RADIUS_DEBUG && debugEnabled && flySmellDebugPool[i]) {
         const smell = flySmellDebugPool[i]!;

@@ -16,7 +16,7 @@ import {
 } from '../../lib/api';
 import { BrainOverlay } from '../BrainOverlay';
 import { HeadingCompass } from '../HeadingCompass';
-import { computeBumpFromEpgIndices, getEpgIndicesInWindow } from '../../lib/compassEpgData';
+import { computeBumpFromEpgBins, computeBumpFromEpgIndices, getEpgIndicesInWindow } from '../../lib/compassEpgData';
 import { SimRefsProvider } from '../../lib/simDisplayContext';
 import { ConnectButton } from '../ConnectButton';
 import { BuyFlyModal } from '../BuyFlyModal';
@@ -310,7 +310,26 @@ export default function FlyViewer() {
 
           let deg: number | null = null;
           const derivedBySim: (number | null)[] = [];
-          if (ticks.length > 0 && epgIndexToBin.length > 0 && flyIdBySimIndex.length > 0) {
+          let bins: number[] | null = lastFrame.epgBinsPerSim?.[simIdx] ?? null;
+          const viewedFlyId = flyIdBySimIndex[simIdx];
+          const viewedEpg = viewedFlyId != null ? epgSpikesByFlyRef.current.get(viewedFlyId) : null;
+          let binCounts: number[] | null = null;
+          if (viewedEpg && epgIndexToBin.length > 0) {
+            const indices = getEpgIndicesInWindow(viewedEpg.spikes, viewedEpg.tickEnd, 100);
+            binCounts = new Array(16).fill(0);
+            for (const idx of indices) {
+              const bin = epgIndexToBin[idx];
+              if (typeof bin === 'number' && bin >= 0 && bin < 16) binCounts[bin] += 1;
+            }
+            const max = Math.max(...binCounts, 1);
+            bins = binCounts.map((c) => c / max);
+          }
+          // Arrow: use epgBins-based bump (same as Visualization page). Never fall back to fly.heading or Rust bump.
+          if (bins && bins.length === 16) {
+            const counts = binCounts ?? bins; // use raw counts when available, else bins as proxy
+            deg = computeBumpFromEpgBins(bins, counts);
+          }
+          if (deg == null && ticks.length > 0 && epgIndexToBin.length > 0 && flyIdBySimIndex.length > 0) {
             for (let j = 0; j < flyIdBySimIndex.length; j++) {
               const flyId = flyIdBySimIndex[j];
               const flyData = epgSpikesByFlyRef.current.get(flyId);
@@ -331,25 +350,9 @@ export default function FlyViewer() {
             }
             derivedBumpBySimIndexRef.current = derivedBySim;
             deg = derivedBySim[simIdx] ?? null;
-          } else {
-            derivedBumpBySimIndexRef.current = [];
-            deg = lastFrame.bumpAngleDegs?.[simIdx] ?? (fly != null && typeof fly.heading === 'number' ? (fly.heading * 180) / Math.PI : null);
           }
+          if (deg == null) derivedBumpBySimIndexRef.current = [];
           setBumpAngleDeg(deg);
-          // Compute epgBins from per-neuron buffer when available (denser display)
-          let bins = lastFrame.epgBinsPerSim?.[simIdx] ?? null;
-          const viewedFlyId = flyIdBySimIndex[simIdx];
-          const viewedEpg = viewedFlyId != null ? epgSpikesByFlyRef.current.get(viewedFlyId) : null;
-          if (viewedEpg && epgIndexToBin.length > 0) {
-            const indices = getEpgIndicesInWindow(viewedEpg.spikes, viewedEpg.tickEnd, 100);
-            const binCounts = new Array(16).fill(0);
-            for (const idx of indices) {
-              const bin = epgIndexToBin[idx];
-              if (typeof bin === 'number' && bin >= 0 && bin < 16) binCounts[bin] += 1;
-            }
-            const max = Math.max(...binCounts, 1);
-            bins = binCounts.map((c) => c / max);
-          }
           setEpgBins(Array.isArray(bins) && bins.length === 16 ? bins : null);
         } else if (last) {
           latestFliesRef.current = last.flies;

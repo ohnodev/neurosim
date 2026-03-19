@@ -169,7 +169,18 @@ fn compute_bump_from_epg_indices(epg_spike_indices: &[u8], epg_index_to_bin: &[u
     }
 }
 
-/// Fill 16 EPG bins from activity_sparse and return (bump_angle_deg, normalized bins 0..1 for frontend).
+/// Same as frontend compassEpgData: inactive bins get negative weight.
+const EPG_INACTIVE_BIN_PENALTY: f64 = 0.35;
+/// When a bin has this fraction of total activity, point arrow at that bin center.
+const EPG_DOMINANT_BIN_THRESHOLD: f64 = 0.8;
+
+/// Scene angle for bin (matches frontend sceneAngleForBin: bin 0 at top, clockwise).
+fn scene_angle_for_bin(bin: usize) -> f64 {
+    std::f64::consts::FRAC_PI_2 - (bin as f64 / 16.0) * std::f64::consts::TAU
+}
+
+/// Fill 16 EPG bins from activity_sparse and return (bump_angle_deg, normalized bins 0..1).
+/// Bump uses EXACT same algorithm as frontend computeBumpFromEpgBins (Visualization page).
 fn compute_bump_and_epg_bins(
     activity_sparse: &HashMap<String, f64>,
     epg_id_to_bin: &HashMap<String, u8>,
@@ -185,27 +196,49 @@ fn compute_bump_and_epg_bins(
             }
         }
     }
-    let bin_angle_deg = |bin: usize| 90.0 - (bin as f64) * 22.5;
-    let mut sum_cos = 0.0f64;
-    let mut sum_sin = 0.0f64;
-    for (bin, &w) in bins.iter().enumerate() {
-        if w > 0.0 {
-            let rad = bin_angle_deg(bin).to_radians();
-            sum_cos += w * rad.cos();
-            sum_sin += w * rad.sin();
-        }
+    let max_bin = bins.iter().cloned().fold(1e-12f64, f64::max);
+    for v in &mut bins {
+        *v /= max_bin;
     }
-    let bump_deg = if sum_cos.abs() < 1e-10 && sum_sin.abs() < 1e-10 {
-        None
+    // epgBinsSigned: active - inactive * penalty (same as frontend)
+    let mut signed: [f64; 16] = [0.0; 16];
+    for (i, &v) in bins.iter().enumerate() {
+        let active = v.clamp(0.0, 1.0);
+        let inactive = 1.0 - active;
+        signed[i] = active - inactive * EPG_INACTIVE_BIN_PENALTY;
+    }
+    let mut bump_x = 0.0f64;
+    let mut bump_y = 0.0f64;
+    for (i, &w) in signed.iter().enumerate() {
+        if w.abs() <= 1e-8 {
+            continue;
+        }
+        let a = scene_angle_for_bin(i);
+        bump_x += w * a.cos();
+        bump_y += w * a.sin();
+    }
+    let vector_bump_deg = if bump_x * bump_x + bump_y * bump_y > 1e-8 {
+        Some(bump_y.atan2(bump_x).to_degrees())
     } else {
-        Some(sum_sin.atan2(sum_cos).to_degrees())
+        None
     };
-    let max_bin = bins.iter().cloned().fold(0.0f64, f64::max);
-    if max_bin > 0.0 {
-        for v in &mut bins {
-            *v /= max_bin;
+    let total: f64 = bins.iter().sum();
+    let mut dominant_bin: Option<usize> = None;
+    if total > 0.0 {
+        for i in 0..16 {
+            let frac = bins[i] / total;
+            if frac >= EPG_DOMINANT_BIN_THRESHOLD {
+                if dominant_bin.map_or(true, |d| bins[i] > bins[d]) {
+                    dominant_bin = Some(i);
+                }
+            }
         }
     }
+    let bump_deg = if let Some(b) = dominant_bin {
+        Some(scene_angle_for_bin(b).to_degrees())
+    } else {
+        vector_bump_deg
+    };
     (bump_deg, bins)
 }
 

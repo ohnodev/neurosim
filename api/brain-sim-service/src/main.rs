@@ -1112,6 +1112,8 @@ const WORLD_ARENA_LIMIT: f64 = 25.0;
 const WORLD_BASE_SPEED_UNITS_PER_SEC: f64 = 18.0;
 const WORLD_REST_DURATION_SEC: f64 = 4.0;
 const WORLD_FLY_TIME_MAX_SEC: f64 = 6.0;
+/// Fatigue decay rate when flying. 0.1 = 1/10th as fast (fly ~10× longer before rest).
+const WORLD_FATIGUE_DECAY_RATE: f64 = 0.1;
 const WORLD_FEED_DURATION_SEC: f64 = 1.2;
 const WORLD_FEED_START_RADIUS: f64 = 2.2;
 const WORLD_WANDER_INTERVAL_SEC: f64 = 10.0;
@@ -1184,7 +1186,8 @@ fn update_world_fly_kinematics(
         fly.rest_time_left = (fly.rest_time_left - dt_batch).max(0.0);
         runtime.fly_time_left_sec = (runtime.fly_time_left_sec + dt_batch * 0.75).min(WORLD_FLY_TIME_MAX_SEC);
     } else {
-        runtime.fly_time_left_sec = (runtime.fly_time_left_sec - dt_batch).max(0.0);
+        runtime.fly_time_left_sec =
+            (runtime.fly_time_left_sec - dt_batch * WORLD_FATIGUE_DECAY_RATE).max(0.0);
         if runtime.fly_time_left_sec <= 0.0 {
             fly.rest_time_left = WORLD_REST_DURATION_SEC;
         }

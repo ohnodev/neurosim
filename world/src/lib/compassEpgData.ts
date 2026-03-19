@@ -120,21 +120,62 @@ const PROCESSED_LABELS_URL = '/processed_labels.csv';
 
 let cached: { neurons: CompassEpgNeuron[]; positions: Float32Array } | null = null;
 
+function buildFallbackCompassEpgData(): { neurons: CompassEpgNeuron[]; positions: Float32Array } {
+  // Fallback ring with one logical point per compass bin so heading UI
+  // still renders from websocket bump/EPG bins even if static assets fail.
+  const n = EPG_COMPASS_BINS;
+  const baseRadius = 0.5;
+  const scale = 1.5;
+  const positions = new Float32Array(n * 3);
+  const neurons: CompassEpgNeuron[] = [];
+  for (let i = 0; i < n; i++) {
+    const angle = sceneAngleForBin(i, EPG_COMPASS_BINS);
+    positions[i * 3] = (Math.cos(angle) * baseRadius) / scale;
+    positions[i * 3 + 1] = (Math.sin(angle) * baseRadius) / scale;
+    positions[i * 3 + 2] = 0;
+    const label = EPG_SLICE_ORDER_CLOCKWISE[i] ?? `B${i}`;
+    neurons.push({
+      root_id: `EPG-${label}`,
+      bin: i,
+      binLabel: label,
+      side: label.startsWith('L') ? 'left' : 'right',
+      hemibrain_type: 'EPG',
+      hemilineage: '',
+      flow: '',
+      super_class: '',
+      class: 'EPG',
+      sub_class: '',
+      cell_type: '',
+      nerve: '',
+    });
+  }
+  return { neurons, positions };
+}
+
 export async function fetchCompassEpgData(): Promise<{
   neurons: CompassEpgNeuron[];
   positions: Float32Array;
 }> {
   if (cached) return cached;
 
-  const [replayRes, labelsRes] = await Promise.all([
-    fetch(REPLAY_URL, { cache: 'default' }),
-    fetch(PROCESSED_LABELS_URL + '?v=' + Date.now(), { cache: 'no-store' }),
-  ]);
-  if (!replayRes.ok || !labelsRes.ok) {
-    throw new Error('Failed to load compass EPG data');
+  let replay: { neurons: ReplayNeuronMinimal[] } | null = null;
+  let labelsText = '';
+  try {
+    const [replayRes, labelsRes] = await Promise.all([
+      fetch(REPLAY_URL, { cache: 'default' }),
+      fetch(PROCESSED_LABELS_URL + '?v=' + Date.now(), { cache: 'no-store' }),
+    ]);
+    if (!replayRes.ok || !labelsRes.ok) {
+      throw new Error(`asset fetch failed replay=${replayRes.status} labels=${labelsRes.status}`);
+    }
+    replay = (await replayRes.json()) as { neurons: ReplayNeuronMinimal[] };
+    labelsText = await labelsRes.text();
+  } catch (err) {
+    console.warn('[heading-compass] Using fallback EPG ring:', err);
+    cached = buildFallbackCompassEpgData();
+    return cached;
   }
-  const replay = (await replayRes.json()) as { neurons: ReplayNeuronMinimal[] };
-  const labelsText = await labelsRes.text();
+
   const epgLabelMap = new Map<string, string>();
   for (const line of labelsText.split('\n')) {
     const row = parseProcessedLabelsLine(line);

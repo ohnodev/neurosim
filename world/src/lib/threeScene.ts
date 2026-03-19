@@ -776,7 +776,8 @@ export function initThreeScene(
 
       const visualZ = Math.max(0, z - GROUND_Z);
       inst.group.position.set(x, visualZ, y);
-      inst.group.rotation.y = inst.heading + Math.PI / 2;
+      // Fly model faces opposite: add PI so head points in movement direction
+      inst.group.rotation.y = inst.heading + Math.PI / 2 + Math.PI;
       if (SHOW_FLY_SMELL_RADIUS_DEBUG && debugEnabled && flySmellDebugPool[i]) {
         const smell = flySmellDebugPool[i]!;
         smell.position.set(x, visualZ, y);

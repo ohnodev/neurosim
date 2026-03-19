@@ -690,7 +690,7 @@ impl BrainSim {
         forced_spikes: &[String],
         stim_rates_by_id: Option<&HashMap<String, f64>>,
         stim_preset: Option<&str>,
-    ) -> (f64, f64) {
+    ) -> Option<(f64, f64)> {
         let gpu = self.gpu.take().expect("[brain-service] run_step_gpu called without GPU state");
 
         let delay_steps = Self::compute_synaptic_delay_steps(dt);
@@ -852,7 +852,7 @@ impl BrainSim {
         }
 
         // --- GPU step ---
-        let (recurrent_ms, lif_ms, network_spikes_step_gpu) = gpu.step(
+        let (recurrent_ms, lif_ms, network_spikes_step_gpu) = match gpu.step(
             dt,
             syn_input_host,
             if gpu_stim_indices.is_empty() {
@@ -863,11 +863,21 @@ impl BrainSim {
             self.w_syn,
             self.epg_recurrence_boost,
             &forced_indices,
-        )
-        .unwrap_or_else(|| {
-            eprintln!("[brain-service][gpu] GPU step failed — this is fatal with USE_CUDA=1");
-            std::process::exit(1);
-        });
+        ) {
+            Some(v) => v,
+            None => {
+                eprintln!(
+                    "[brain-service][gpu] GPU step failed, falling back to CPU (dt={:.6}, forced={}, stim_rates={}, preset={})",
+                    dt,
+                    forced_indices.len(),
+                    stim_rates_by_id.map(|m| m.len()).unwrap_or(0),
+                    stim_preset.unwrap_or("none"),
+                );
+                // Disable GPU for this sim instance after failure.
+                self.gpu = None;
+                return None;
+            }
+        };
         for &idx in &self.epg_indices {
             self.spikes[idx as usize] = 0;
         }
@@ -904,7 +914,7 @@ impl BrainSim {
                 self.network_spikes_total
             );
         }
-        (recurrent_ms, lif_ms)
+        Some((recurrent_ms, lif_ms))
     }
 
     pub fn step(
@@ -1031,7 +1041,7 @@ impl BrainSim {
             #[cfg(feature = "cuda")]
             {
                 if self.gpu.is_some() {
-                    self.run_step_gpu(
+                    if let Some(v) = self.run_step_gpu(
                         dt,
                         &fly,
                         &sources,
@@ -1040,7 +1050,20 @@ impl BrainSim {
                         &forced_spikes,
                         stim_rates_by_id,
                         stim_preset,
-                    )
+                    ) {
+                        v
+                    } else {
+                        self.run_step_cpu(
+                            dt,
+                            &fly,
+                            &sources,
+                            skip_olfactory,
+                            olfactory_baseline_rate_hz,
+                            &forced_spikes,
+                            stim_rates_by_id,
+                            stim_preset,
+                        )
+                    }
                 } else {
                     self.run_step_cpu(
                         dt,

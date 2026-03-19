@@ -158,7 +158,7 @@ type EpgTileMapApiEntry = {
   hemibrain_type?: string;
   side?: string;
   hemilineage?: string;
-  tile_index_0_7?: number;
+  tile_index_0_7?: number | string | null;
   tile_label?: string;
 };
 
@@ -168,7 +168,11 @@ function mapEntryToBinLabel(entry: EpgTileMapApiEntry): { bin: number; label: st
   const fromLabel = (entry.tile_label ?? '').trim().toUpperCase();
   const labelMatch = /^EPG(\d+)$/.exec(fromLabel);
   const tileFromLabel = labelMatch ? Number(labelMatch[1]) - 1 : null;
-  const tile = Number.isFinite(Number(entry.tile_index_0_7))
+  const hasNumericTile =
+    entry.tile_index_0_7 != null &&
+    entry.tile_index_0_7 !== '' &&
+    Number.isFinite(Number(entry.tile_index_0_7));
+  const tile = hasNumericTile
     ? Number(entry.tile_index_0_7)
     : tileFromLabel;
   if (!side || tile == null || tile < 0 || tile > 7) return null;
@@ -262,8 +266,11 @@ export async function fetchCompassEpgData(): Promise<{
       const data = (await epgMapRes.json()) as { entries?: EpgTileMapApiEntry[] };
       const entries = Array.isArray(data.entries) ? data.entries : [];
       if (entries.length > 0) {
-        cached = buildCompassFromTileMapEntries(entries);
-        return cached;
+        const built = buildCompassFromTileMapEntries(entries);
+        if (built.neurons.length > 0) {
+          cached = built;
+          return cached;
+        }
       }
     }
   } catch {
@@ -382,6 +389,10 @@ export async function fetchCompassEpgData(): Promise<{
     });
   }
 
-  cached = { neurons, positions };
+  if (neurons.length > 0) {
+    cached = { neurons, positions };
+    return cached;
+  }
+  cached = buildFallbackCompassEpgData();
   return cached;
 }

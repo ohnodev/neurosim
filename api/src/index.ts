@@ -251,18 +251,18 @@ const CUDA_ONLY = process.env.NEUROSIM_MODE === 'cuda' || process.env.USE_CUDA =
 const PROBE_RETRIES = 40;
 const PROBE_DELAY_MS = 3000;
 
-let backendInfo = { engine: 'python-brain', gpu: process.env.USE_CUDA === '1' };
+let backendInfo = { engine: 'rust', gpu: process.env.USE_CUDA === '1' };
 let probeOk = false;
 for (let i = 0; i < PROBE_RETRIES; i++) {
   try {
     await socketClient.ping();
     console.log('[backend] handshake: API ↔ brain-service OK');
-    backendInfo = { engine: 'python-brain', gpu: process.env.USE_CUDA === '1' };
+    backendInfo = { engine: 'rust', gpu: process.env.USE_CUDA === '1' };
     probeOk = true;
     break;
   } catch (e) {
     if (i === PROBE_RETRIES - 1) {
-      console.error('[backend] Brain service (Unix socket) unavailable after', PROBE_RETRIES, 'retries. Is python-brain running?', e);
+      console.error('[backend] Brain service (Unix socket) unavailable after', PROBE_RETRIES, 'retries. Is neurosim-brain running?', e);
       process.exit(1);
     }
     console.warn('[backend] Brain service not ready, retry', i + 1, '/', PROBE_RETRIES, 'in', PROBE_DELAY_MS, 'ms');

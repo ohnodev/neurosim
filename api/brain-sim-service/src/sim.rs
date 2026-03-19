@@ -156,7 +156,8 @@ impl BrainSim {
         std::env::var("NEUROSIM_STIM_LOG_EVERY")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(100)
+            // Quiet by default in production; set env var to re-enable periodic stim logs.
+            .unwrap_or(0)
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -2,10 +2,10 @@
  * Exact copy of Visualization page compass: ring of EPG points (one per neuron),
  * hover tooltip (ID, hemilineage, flow, class, hemibrain_type, side, bin), same thin pink arrow.
  */
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { fetchCompassEpgData, EPG_COMPASS_BINS, type CompassEpgNeuron } from '../lib/compassEpgData';
+import { fetchCompassEpgData, type CompassEpgNeuron } from '../lib/compassEpgData';
 
 const SMOOTH_ALPHA = 0.18;
 /** Fixed arrow length — never changes (direction only). */

@@ -4,6 +4,8 @@ import type { WorldSource } from '../../../api/src/world';
 export interface Snapshot {
   t: number;
   flies: FlyState[];
+  bumpAngleDegs?: Array<number | null>;
+  epgBinsPerSim?: Array<number[] | null>;
   activities?: (Record<string, number> | undefined)[];
   activity?: Record<string, number>;
   sources?: WorldSource[];

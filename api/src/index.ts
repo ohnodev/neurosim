@@ -447,10 +447,17 @@ async function restoreDeployFromStore(): Promise<void> {
     console.log('[deploy] restored', records.length, 'deployments from store');
   }
 }
-try {
-  await restoreDeployFromStore();
-} catch (err) {
-  console.error('[deploy] restore error:', err);
+const RESTORE_DEPLOYMENTS_ON_START =
+  process.env.NEUROSIM_RESTORE_DEPLOYMENTS_ON_START === '1' ||
+  process.env.NEUROSIM_RESTORE_DEPLOYMENTS_ON_START?.toLowerCase() === 'true';
+if (RESTORE_DEPLOYMENTS_ON_START) {
+  try {
+    await restoreDeployFromStore();
+  } catch (err) {
+    console.error('[deploy] restore error:', err);
+  }
+} else {
+  console.log('[deploy] startup restore disabled; waiting for user deploys');
 }
 let simRunning = false;
 let simIntervalId: ReturnType<typeof setInterval> | null = null;
@@ -1543,11 +1550,12 @@ if (process.env.VITEST !== 'true') {
     );
     const activeDeploymentCount = Array.from(deployedFlies.values()).reduce((sum, slots) => sum + slots.size, 0);
     console.log(
-      '[sim] auto-started with',
+      '[sim] started with',
       sims.length,
-      'active sims from',
+      'active sims;',
+      'tracked active deployments:',
       activeDeploymentCount,
-      'deployments; users deploy flies via POST /api/deploy',
+      '(users deploy flies via POST /api/deploy)',
     );
   });
 }

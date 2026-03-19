@@ -50,6 +50,8 @@ def main() -> int:
     out_timeline = ROOT / "world" / "public" / f"{SCENARIO_ID}_timeline.csv"
     out_aff = ROOT / "world" / "public" / f"{SCENARIO_ID}_stimulated-afferents.csv"
     out_summary = ROOT / "logs" / f"{SCENARIO_ID}_summary.json"
+    out_replay.parent.mkdir(parents=True, exist_ok=True)
+    out_summary.parent.mkdir(parents=True, exist_ok=True)
 
     epg_entries = json.loads((ROOT / "data" / "epg-tile-map.json").read_text(encoding="utf-8"))["entries"]
     epg_set = {str(e["root_id"]) for e in epg_entries}

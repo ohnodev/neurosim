@@ -27,8 +27,21 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+def _default_socket_path() -> Path:
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+    if runtime_dir:
+        base = Path(runtime_dir)
+    else:
+        base = Path.home() / ".local" / "run"
+    base.mkdir(parents=True, exist_ok=True)
+    return base / "neurosim-brain.sock"
+
+
 SOCKET_PATH = Path(
-    os.environ.get("NEUROSIM_BRAIN_SOCKET_RUST", os.environ.get("NEUROSIM_BRAIN_SOCKET", "/tmp/neurosim-brain.sock"))
+    os.environ.get(
+        "NEUROSIM_BRAIN_SOCKET_RUST",
+        os.environ.get("NEUROSIM_BRAIN_SOCKET", str(_default_socket_path())),
+    )
 )
 DT_MS = 0.1
 CALIBRATION_DURATION_MS = float(os.environ.get("NEUROSIM_CALIBRATION_DURATION_MS", "1000.0"))
@@ -45,8 +58,16 @@ def load_benchmark_ids() -> tuple[list[str], list[str]]:
         raise RuntimeError(f"Benchmark ID file is invalid JSON: {path} ({e})") from e
     except OSError as e:
         raise RuntimeError(f"Failed reading benchmark ID file: {path} ({e})") from e
-    sugar = [str(x) for x in data["sugar_grn_root_ids"]]
-    mn9 = [str(x) for x in data["mn9_root_ids"]]
+    if not isinstance(data, dict):
+        raise ValueError(f"Benchmark ID file must contain a JSON object: {path}")
+    sugar_raw = data.get("sugar_grn_root_ids")
+    mn9_raw = data.get("mn9_root_ids")
+    if not isinstance(sugar_raw, list) or not isinstance(mn9_raw, list):
+        raise ValueError(
+            f"Benchmark ID file must contain list keys 'sugar_grn_root_ids' and 'mn9_root_ids': {path}"
+        )
+    sugar = [str(x) for x in sugar_raw]
+    mn9 = [str(x) for x in mn9_raw]
     return sugar, mn9
 
 
@@ -57,7 +78,7 @@ def main() -> int:
         return 1
 
     sugar_ids, mn9_ids = load_benchmark_ids()
-    n_steps = round(CALIBRATION_DURATION_MS / DT_MS)
+    n_steps = max(1, round(CALIBRATION_DURATION_MS / DT_MS))
     dt_sec = DT_MS / 1000.0
     stim_rates = {rid: SUGAR_HZ_CALIB for rid in sugar_ids}
 
@@ -75,7 +96,12 @@ def main() -> int:
     try:
         f.write(b'{"method":"create","params":{}}\n')
         f.flush()
-        out = json.loads(f.readline().decode("utf-8"))
+        try:
+            create_line = f.readline()
+            out = json.loads(create_line.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError, OSError) as e:
+            sys.stderr.write(f"Failed to decode create response: {e}\n")
+            return 1
         if out.get("error"):
             raise RuntimeError(out["error"])
         sim_id = int(out["sim_id"])
@@ -92,10 +118,14 @@ def main() -> int:
         }
         f.write((json.dumps(req) + "\n").encode("utf-8"))
         f.flush()
-        line = f.readline()
-        if not line:
-            raise RuntimeError("socket closed")
-        step = json.loads(line.decode("utf-8"))
+        try:
+            line = f.readline()
+            if not line:
+                raise RuntimeError("socket closed")
+            step = json.loads(line.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError, OSError, RuntimeError) as e:
+            sys.stderr.write(f"Failed to decode run_steps response: {e}\n")
+            return 1
         if step.get("error"):
             raise RuntimeError(step["error"])
     finally:

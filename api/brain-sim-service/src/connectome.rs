@@ -464,11 +464,11 @@ fn build_template(
     sensory_target.sort_unstable();
     sensory_target.dedup();
 
-    let loaded_epg_indices = load_epg_viewer_indices(path, &id_to_idx)
-        .filter(|v| !v.is_empty());
-    let viewer_subset_indices = loaded_epg_indices
-        .clone()
-        .unwrap_or_else(|| compute_viewer_subset_indices(&neuron_ids, viewer_subset_limit()));
+    let loaded_epg_indices = load_epg_viewer_indices(path, &id_to_idx).filter(|v| !v.is_empty());
+    let viewer_subset_indices = match loaded_epg_indices.as_ref() {
+        Some(v) => v.clone(),
+        None => compute_viewer_subset_indices(&neuron_ids, viewer_subset_limit()),
+    };
     let mut edges_pre = Vec::with_capacity(data.connections.len());
     let mut edges_post = Vec::with_capacity(data.connections.len());
     let mut edges_weight = Vec::with_capacity(data.connections.len());

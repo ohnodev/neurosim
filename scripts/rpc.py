@@ -9,6 +9,7 @@ from typing import Any
 class Rpc:
     def __init__(self, path: Path):
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.settimeout(60.0)
         self.sock.connect(str(path))
         self.f = self.sock.makefile("rwb")
 

@@ -36,26 +36,27 @@ fn connectome_path() -> PathBuf {
 }
 
 /// 16-bin order: L5,R4,L6,R3,L7,R2,L8,R1, L1,R8,L2,R7,L3,R6,L4,R5 (matches frontend compass).
-fn epg_side_tile_to_bin_16(side: &str, tile: u8) -> u8 {
-    let t = (tile as usize).min(7);
+fn epg_side_tile_to_bin_16(side: &str, tile: u8) -> Option<u8> {
+    if tile > 7 {
+        return None;
+    }
+    let t = tile as usize;
     let is_left = side.eq_ignore_ascii_case("left");
     let is_right = side.eq_ignore_ascii_case("right");
     if is_left {
-        [8, 10, 12, 14, 0, 2, 4, 6][t]
+        Some([8, 10, 12, 14, 0, 2, 4, 6][t])
     } else if is_right {
-        [7, 5, 3, 1, 15, 13, 11, 9][t]
+        Some([7, 5, 3, 1, 15, 13, 11, 9][t])
     } else {
-        0
+        None
     }
 }
 
 #[derive(Deserialize)]
 struct EpgTileMapEntry {
     root_id: String,
-    #[serde(default)]
-    side: String,
-    #[serde(default)]
-    tile_index_0_7: u8,
+    side: Option<String>,
+    tile_index_0_7: Option<u8>,
 }
 
 #[derive(Deserialize)]
@@ -84,7 +85,12 @@ fn load_epg_id_to_bin() -> HashMap<String, u8> {
     };
     let mut out = HashMap::new();
     for e in map.entries {
-        let bin = epg_side_tile_to_bin_16(&e.side, e.tile_index_0_7);
+        let (Some(side), Some(tile)) = (e.side.as_deref(), e.tile_index_0_7) else {
+            continue;
+        };
+        let Some(bin) = epg_side_tile_to_bin_16(side, tile) else {
+            continue;
+        };
         out.insert(e.root_id, bin);
     }
     out
@@ -534,14 +540,34 @@ struct FlyRespJson {
     feeding: bool,
 }
 
-#[derive(Serialize)]
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
+struct CreateConnection {
+    pre: String,
+    post: String,
+    #[serde(default)]
+    weight: Option<f64>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CreateParams {
     #[serde(default)]
     rng_seed: Option<u64>,
     /// If set, overrides NEUROSIM_EPG_RECURRENCE_BOOST for this sim only.
     #[serde(default)]
     epg_recurrence_boost: Option<f32>,
+    #[serde(default)]
+    neuron_ids: Option<Vec<String>>,
+    #[serde(default)]
+    connections: Option<Vec<CreateConnection>>,
+    #[serde(default)]
+    sensory_indices: Option<Vec<u32>>,
+    #[serde(default)]
+    motor_left: Option<Vec<u32>>,
+    #[serde(default)]
+    motor_right: Option<Vec<u32>>,
+    #[serde(default)]
+    motor_unknown: Option<Vec<u32>>,
 }
 
 #[derive(Serialize)]
@@ -968,14 +994,12 @@ fn handle(
         r#"{"ok":true}"#.to_string()
     } else if line.contains("\"method\":\"create\"") {
         let t_create_start = Instant::now();
-        let create_params: CreateParams = serde_json::from_str::<serde_json::Value>(line)
-            .ok()
-            .and_then(|v| v.get("params").cloned())
-            .and_then(|p| serde_json::from_value(p).ok())
-            .unwrap_or(CreateParams {
-                rng_seed: None,
-                epg_recurrence_boost: None,
-            });
+        let v: serde_json::Value = serde_json::from_str(line)?;
+        let params = v
+            .get("params")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({}));
+        let create_params: CreateParams = serde_json::from_value(params)?;
         let w_syn = std::env::var("NEUROSIM_W_SYN")
             .ok()
             .and_then(|s| s.parse::<f32>().ok())
@@ -1378,6 +1402,32 @@ fn handle(
         } else {
             0.0001
         };
+        let mut schedule_validation_error: Option<String> = None;
+        if let Some(ref schedule) = p.forced_spike_schedule {
+            let mut all_ids: HashSet<String> = HashSet::new();
+            for (i, entry) in schedule.iter().enumerate() {
+                if let Err(err) = validate_forced_spikes(&entry.neuron_ids) {
+                    schedule_validation_error = Some(format!(
+                        "invalid run_steps.forced_spike_schedule[{}].neuron_ids: {}",
+                        i, err
+                    ));
+                    break;
+                }
+                for id in &entry.neuron_ids {
+                    all_ids.insert(id.clone());
+                }
+            }
+            if schedule_validation_error.is_none() && all_ids.len() > MAX_FORCED_SPIKES {
+                schedule_validation_error = Some(format!(
+                    "run_steps.forced_spike_schedule aggregate unique IDs {} exceeds max {}",
+                    all_ids.len(),
+                    MAX_FORCED_SPIKES
+                ));
+            }
+        }
+        if let Some(error) = schedule_validation_error {
+            serde_json::to_string(&ErrResp { error })?
+        } else {
         let mut g = sims.lock().unwrap();
         if !g.contains_key(&p.sim_id) {
             drop(g);
@@ -1675,6 +1725,7 @@ fn handle(
             p.record_ticks
         );
         json_str
+        }
         }
     } else if line.contains("\"method\":\"live_set_pen_a\"") || line.contains("\"method\": \"live_set_pen_a\"")
     {

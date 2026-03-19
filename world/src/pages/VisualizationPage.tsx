@@ -2012,7 +2012,7 @@ export default function VisualizationPage() {
 
   const totalTicks =
     isNeuroSimLive && liveReplaySource === 'live' && latestLiveTickNumber > 0
-      ? latestLiveTickNumber
+      ? Math.max(latestLiveTickNumber, replay?.ticks.length ?? 0)
       : replay?.ticks.length ?? 1;
   const smoothedArrowAngleDeg = sceneRef.current?.arrowState?.angleCurrentDeg;
   const bumpTheta = Number.isFinite(smoothedArrowAngleDeg)

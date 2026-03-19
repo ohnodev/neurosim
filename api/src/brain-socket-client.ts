@@ -267,19 +267,9 @@ function flushStepBatch(): void {
 
 function request<T>(payload: object): Promise<T> {
   const method = (payload as { method?: string })?.method ?? 'unknown';
-  if (method === 'step') {
-    return new Promise<T>((resolve, reject) => {
-      pendingStepBatch.push({
-        payload: payload as JsonObj,
-        resolve: resolve as (value: unknown) => void,
-        reject,
-      });
-      if (!flushStepBatchScheduled) {
-        flushStepBatchScheduled = true;
-        queueMicrotask(flushStepBatch);
-      }
-    });
-  }
+  // Step batching intentionally disabled until step_many includes full parity fields
+  // (notably bump_angle_deg/epg_bins) with single-step responses.
+  if (method === 'step') return enqueueRequest(() => sendRequest(payload as JsonObj));
   return enqueueRequest(() => sendRequest(payload as JsonObj));
 }
 
@@ -601,6 +591,7 @@ export async function runSteps(params: {
   steps_done: number;
   duration_sec: number;
   wall_sec: number;
+  steps_loop_ms: number;
   ticks?: Array<{ tick: number; time_sec: number; spikes: string[] }>;
 }> {
   return request({

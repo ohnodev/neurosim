@@ -56,17 +56,25 @@ def load_epg_and_pen_a(classification_path: Path) -> tuple[set[str], set[str]]:
 
 def build_adjacency(table: pa.Table, pre_col: str, post_col: str):
     """Build pre->[posts] and post->[pres] from parquet table."""
-    pre_arr = table.column(pre_col)
-    post_arr = table.column(post_col)
+    pre_values = (
+        pc.cast(table.column(pre_col), pa.string())
+        .combine_chunks()
+        .to_pylist()
+    )
+    post_values = (
+        pc.cast(table.column(post_col), pa.string())
+        .combine_chunks()
+        .to_pylist()
+    )
     pre_to_posts: dict[str, list[str]] = {}
     post_to_pres: dict[str, list[str]] = {}
-    for i in range(table.num_rows):
-        pre = str(pre_arr[i]) if pre_arr[i] is not None else None
-        post = str(post_arr[i]) if post_arr[i] is not None else None
+    for pre, post in zip(pre_values, post_values):
         if pre is None or post is None:
             continue
-        pre_to_posts.setdefault(pre, []).append(post)
-        post_to_pres.setdefault(post, []).append(pre)
+        pre_s = str(pre)
+        post_s = str(post)
+        pre_to_posts.setdefault(pre_s, []).append(post_s)
+        post_to_pres.setdefault(post_s, []).append(pre_s)
     return pre_to_posts, post_to_pres
 
 

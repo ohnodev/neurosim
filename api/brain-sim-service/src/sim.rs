@@ -198,6 +198,14 @@ impl BrainSim {
         edges_weight: &[f32],
     ) -> (Vec<u32>, Vec<u32>, Vec<f32>) {
         let num_edges = edges_pre.len();
+        if edges_post.len() != num_edges || edges_weight.len() != num_edges {
+            panic!(
+                "build_csr_by_pre: mismatched edge arrays (pre={}, post={}, weight={})",
+                num_edges,
+                edges_post.len(),
+                edges_weight.len()
+            );
+        }
         let mut out_degree = vec![0u32; n];
         for &pre in edges_pre {
             if (pre as usize) < n {

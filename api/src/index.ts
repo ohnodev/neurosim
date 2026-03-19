@@ -1042,15 +1042,41 @@ app.post('/api/neurosim-live/apply', async (req, res) => {
   try {
     const left = Math.max(0, Math.min(500, Number(req.body?.penALeftHz ?? 0)));
     const right = Math.max(0, Math.min(500, Number(req.body?.penARightHz ?? 0)));
-    const ratesById = req.body?.ratesById as Record<string, number> | undefined;
+    const rawRates = req.body?.ratesById;
+    if (rawRates != null && (typeof rawRates !== 'object' || Array.isArray(rawRates))) {
+      return res.status(400).json({ error: 'ratesById must be an object map of neuronId -> hz' });
+    }
+    const ratesById = rawRates as Record<string, unknown> | undefined;
+    const knownPenIds = new Set<string>([...PEN_A_BY_SIDE.left, ...PEN_A_BY_SIDE.right]);
+    const unknownNeuronIds: string[] = [];
+    const explicitRatesById: Record<string, number> = {};
+    if (ratesById) {
+      for (const [id, value] of Object.entries(ratesById)) {
+        if (!knownPenIds.has(id)) {
+          unknownNeuronIds.push(id);
+          continue;
+        }
+        const hz = Number(value);
+        if (!Number.isFinite(hz) || hz < 0 || hz > 500) {
+          return res.status(400).json({
+            error: `Invalid ratesById value for ${id}; expected finite number in [0, 500]`,
+          });
+        }
+        explicitRatesById[id] = hz;
+      }
+    }
+    if (unknownNeuronIds.length > 0) {
+      return res.status(400).json({
+        error: 'ratesById contains unknown PEN_a neuron IDs',
+        unknownNeuronIds,
+      });
+    }
     const merged: Record<string, number> = {};
     for (const id of PEN_A_BY_SIDE.left) {
-      const v = ratesById?.[id];
-      merged[id] = Number.isFinite(Number(v)) ? Math.min(500, Math.max(0, Number(v))) : left;
+      merged[id] = explicitRatesById[id] ?? left;
     }
     for (const id of PEN_A_BY_SIDE.right) {
-      const v = ratesById?.[id];
-      merged[id] = Number.isFinite(Number(v)) ? Math.min(500, Math.max(0, Number(v))) : right;
+      merged[id] = explicitRatesById[id] ?? right;
     }
     await socketClient.liveSetPenA(left, right, merged);
     res.json({ ok: true, penALeftHz: left, penARightHz: right });

@@ -141,7 +141,8 @@ def main() -> int:
         rpc.request("ping")
         for pen_bias in _frange(PEN_BIAS_MIN, PEN_BIAS_MAX, PEN_BIAS_STEP):
             sim_id = int(rpc.request("create")["sim_id"])
-            headings = []
+            headings: list[float] = []
+            heading_ticks: list[int] = []
             epg_events = 0
             try:
                 for tick in range(1, TICKS + 1):
@@ -166,10 +167,13 @@ def main() -> int:
                         h = _heading_from_spikes(epg_ids, epg_label_map)
                         if h is not None:
                             headings.append(h)
+                            heading_ticks.append(tick)
                 unwrapped = _unwrap_angles(headings)
                 if len(unwrapped) >= 2:
                     delta_rad = unwrapped[-1] - unwrapped[0]
-                    seconds = ((TICKS - INIT_TICKS) * DT_MS) / 1000.0
+                    first_tick = heading_ticks[0]
+                    last_tick = heading_ticks[-1]
+                    seconds = ((last_tick - first_tick) * DT_MS) / 1000.0
                     deg_per_sec = (math.degrees(delta_rad) / seconds) if seconds > 0 else 0.0
                 else:
                     deg_per_sec = 0.0

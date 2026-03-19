@@ -68,7 +68,7 @@ def build_adjacency(table: pa.Table, pre_col: str, post_col: str):
     )
     pre_to_posts: dict[str, list[str]] = {}
     post_to_pres: dict[str, list[str]] = {}
-    for pre, post in zip(pre_values, post_values):
+    for pre, post in zip(pre_values, post_values, strict=True):
         if pre is None or post is None:
             continue
         pre_s = str(pre)

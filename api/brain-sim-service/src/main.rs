@@ -1028,6 +1028,21 @@ fn handle(
             }
         }
         let t_before_sim = Instant::now();
+        let has_overrides = create_params.neuron_ids.is_some()
+            || create_params.connections.is_some()
+            || create_params.sensory_indices.is_some()
+            || create_params.motor_left.is_some()
+            || create_params.motor_right.is_some()
+            || create_params.motor_unknown.is_some();
+        if has_overrides {
+            let err_json = serde_json::to_string(&ErrResp {
+                error: "topology override fields (neuron_ids, connections, sensory_indices, motor_*) are not yet supported; omit them or pass null".into(),
+            })?;
+            s.write_all(err_json.as_bytes())?;
+            s.write_all(b"\n")?;
+            s.flush()?;
+            continue;
+        }
         let mut sim = BrainSim::from_template(template.clone(), w_syn, epg_recurrence_boost);
         let from_template_ms = t_before_sim.elapsed().as_secs_f64() * 1000.0;
         let mut g = next_id.lock().unwrap();
@@ -1675,21 +1690,26 @@ fn handle(
             if p.return_final_state {
                 let (bump_angle_deg, epg_bins_arr) =
                     compute_bump_and_epg_bins(&last_activity_sparse, epg_id_to_bin);
-                let fallback_fly = FlyRespJson {
-                    x: fly.x,
-                    y: fly.y,
-                    z: fly.z,
-                    heading: fly.heading,
-                    t: fly.t,
-                    hunger: fly.hunger,
-                    health: fly.health,
-                    dead: fly.dead,
-                    fly_time_left: 1.0,
-                    rest_time_left: fly.rest_time_left,
-                    rest_duration: 4.0,
-                    feeding: false,
-                };
-                let final_fly = last_fly_resp.unwrap_or(fallback_fly);
+                let final_fly = last_fly_resp.unwrap_or_else(|| {
+                    // Zero-step run: no sim step was executed, so return the
+                    // initial fly state.  Timer fields (fly_time_left,
+                    // rest_duration) are not part of the input; derive from the
+                    // initial rest state so callers see consistent values.
+                    FlyRespJson {
+                        x: fly.x,
+                        y: fly.y,
+                        z: fly.z,
+                        heading: fly.heading,
+                        t: fly.t,
+                        hunger: fly.hunger,
+                        health: fly.health,
+                        dead: fly.dead,
+                        fly_time_left: if fly.rest_time_left > 0.0 { 0.0 } else { 1.0 },
+                        rest_time_left: fly.rest_time_left,
+                        rest_duration: if fly.rest_time_left > 0.0 { fly.rest_time_left } else { 0.0 },
+                        feeding: false,
+                    }
+                });
                 (
                     Some(final_fly),
                     Some(last_activity_sparse),

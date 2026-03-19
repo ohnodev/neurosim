@@ -154,12 +154,18 @@ def main() -> int:
                     if tick <= INIT_BUMP_TICKS:
                         for rid in seed_epg_ids:
                             ext[rid] = ext.get(rid, 0.0) + INIT_BUMP_CURRENT
-                    step = rpc.request("step", {
+                    payload: dict = {
                         "sim_id": sim_id,
-                        "dt_ms": DT_MS,
-                        "external_current_by_id": ext,
-                        "global_external_current": GLOBAL_BASE_CURRENT,
-                    })
+                        "dt": DT_MS / 1000.0,
+                        "rates_by_id": ext,
+                        "forced_spikes": seed_epg_ids if tick <= INIT_BUMP_TICKS else [],
+                        "fly": {"x": 0, "y": 0, "z": 1, "heading": 0, "t": 0,
+                                "hunger": 100, "health": 100, "rest_time_left": 0, "dead": False},
+                        "sources": [],
+                    }
+                    if GLOBAL_BASE_CURRENT > 0:
+                        payload["olfactory_baseline_rate_hz"] = GLOBAL_BASE_CURRENT
+                    step = rpc.request("step", payload)
                     ids = [str(x) for x in step.get("spike_ids_step", [])]
                     epg_ids = [rid for rid in ids if rid in epg_set]
                     epg_events += len(epg_ids)

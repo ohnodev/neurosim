@@ -20,8 +20,8 @@ def _resolve_socket_path() -> Path:
         base = Path.home() / ".local" / "run"
     try:
         base.mkdir(mode=0o700, parents=True, exist_ok=True)
-    except Exception:
-        pass
+    except OSError as e:
+        raise ValueError(f"cannot create runtime directory {base}: {e}") from e
     return base / "neurosim-brain.sock"
 
 

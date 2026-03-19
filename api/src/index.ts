@@ -1038,6 +1038,7 @@ app.get('/api/neurosim-live/status', async (_req, res) => {
       penALeftHz: s.left_hz,
       penARightHz: s.right_hz,
       dtSec: s.dt_sec,
+      ratesById: s.rates_by_id ?? null,
     });
   } catch (e) {
     console.error('[neurosim-live/status]', e);

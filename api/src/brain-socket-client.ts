@@ -651,6 +651,8 @@ export async function stepSim(params: StepParams): Promise<StepResult> {
     params: {
       sim_id: params.simId,
       dt: params.dt,
+      olfactory_baseline_rate_hz: params.olfactory_baseline_rate_hz,
+      forced_spikes: params.forced_spikes ?? [],
       fly: {
         x: params.fly.x,
         y: params.fly.y,

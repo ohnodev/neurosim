@@ -1856,6 +1856,7 @@ export default function VisualizationPage() {
           dtSec?: number;
           penALeftHz?: number;
           penARightHz?: number;
+          ratesById?: Record<string, number> | null;
         };
         if (cancelled) return;
         const latest = Math.max(0, Math.floor(j.latestTick ?? 0));
@@ -1865,6 +1866,9 @@ export default function VisualizationPage() {
         setAppliedPenRight(j.penARightHz ?? 0);
         setPenALeftHz(j.penALeftHz ?? 0);
         setPenARightHz(j.penARightHz ?? 0);
+        if (j.ratesById && typeof j.ratesById === 'object') {
+          setPenARatesById(j.ratesById);
+        }
         if (typeof j.dtSec === 'number' && j.dtSec > 0) setLiveSettings({ dtSec: j.dtSec });
         setLiveTicks([]);
         setRecordedTicks([]);

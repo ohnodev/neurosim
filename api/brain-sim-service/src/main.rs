@@ -1065,6 +1065,9 @@ struct WorldSnapshotResp {
     flies: Vec<WorldSnapshotFly>,
 }
 
+/// Min seconds between preset (11PM/3PM/8PM) changes. Keeps heading stable.
+const WORLD_PRESET_CHANGE_INTERVAL_SEC: f64 = 2.0;
+
 struct WorldFlyRuntime {
     sim: BrainSim,
     fly: FlyInput,
@@ -1076,6 +1079,10 @@ struct WorldFlyRuntime {
     feeding_source_id: Option<String>,
     feeding_time_left_sec: f64,
     rng_state: u64,
+    /// Current stim preset (11PM/3PM/8PM). Always one of these for continuous juice.
+    current_preset: String,
+    /// Sim time when preset was last changed. Throttle changes.
+    last_preset_change_t: f64,
 }
 
 struct WorldRuntimeState {
@@ -1286,10 +1293,21 @@ fn step_world_fly_runtime(
         lif_ms: 0.0,
         readout_ms: 0.0,
     };
+    // Always run juice (11PM/3PM/8PM). Throttle preset change to at most once per 2s.
+    let desired_preset = brain_sim_service::sim::BrainSim::choose_world_preset_for_fly(&fly, sources_now);
+    if desired_preset != runtime.current_preset.as_str()
+        && fly.t - runtime.last_preset_change_t >= WORLD_PRESET_CHANGE_INTERVAL_SEC
+    {
+        runtime.current_preset = desired_preset.to_string();
+        runtime.last_preset_change_t = fly.t;
+    }
+    let stim_preset = Some(runtime.current_preset.as_str());
+
     let mut step_ticks: Vec<(u64, f64, Vec<u8>)> = Vec::with_capacity(steps_per_batch as usize);
     for step in 0..steps_per_batch {
         let is_last = step + 1 == steps_per_batch;
-        let use_stim = !runtime.rates_by_id.is_empty() || !sources_now.is_empty();
+        // Always use stim: world preset (11PM/3PM/8PM) when no rates_by_id, else rates. Ensures continuous juice.
+        let use_stim = true;
         let (_a, activity_sparse, _spike_ids, _ml, _mr, _mf, _cl, _cr, _cf, _mlm, _mrm, _mfm, timing, fly_out) =
             if is_last {
                 runtime.sim.step_with_options(
@@ -1305,7 +1323,7 @@ fn step_world_fly_runtime(
                     } else {
                         Some(&runtime.rates_by_id)
                     },
-                    None,
+                    stim_preset,
                 )
             } else {
                 runtime.sim.step_fast(
@@ -1320,7 +1338,7 @@ fn step_world_fly_runtime(
                     } else {
                         Some(&runtime.rates_by_id)
                     },
-                    None,
+                    stim_preset,
                 )
             };
         fly = FlyInput {
@@ -2530,6 +2548,8 @@ fn handle(
                     feeding_source_id: None,
                     feeding_time_left_sec: 0.0,
                     rng_state: (fly_id as u64).wrapping_mul(0x9E3779B97F4A7C15u64).wrapping_add(1),
+                    current_preset: "11PM".to_string(),
+                    last_preset_change_t: 0.0,
                 })),
             );
             world

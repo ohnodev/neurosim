@@ -89,7 +89,8 @@ pub struct FlyStepOutput {
 }
 
 impl BrainSim {
-    fn choose_world_preset_for_fly(fly: &FlyInput, sources: &[SourceInput]) -> &'static str {
+    /// Choose 11PM/3PM/8PM preset from fly heading vs nearest source. Public for world loop.
+    pub fn choose_world_preset_for_fly(fly: &FlyInput, sources: &[SourceInput]) -> &'static str {
         let heading_deg = fly.heading.to_degrees();
         let mut target_deg = heading_deg;
         let mut nearest_d2 = f64::INFINITY;

@@ -6,6 +6,7 @@ use brain_sim_service::feeding::{
     FoodState, FEED_SUGAR_PER_SEC, HEALTH_PER_SUGAR, HUNGER_PER_SUGAR,
 };
 use brain_sim_service::sim::{BrainSim, FlyInput, SourceInput};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, Write};
@@ -219,6 +220,43 @@ fn main() {
     let sims: Mutex<HashMap<u32, BrainSim>> = Mutex::new(HashMap::new());
     let food_state: Mutex<FoodState> = Mutex::new(FoodState::default());
     let next_id: Mutex<u32> = Mutex::new(0);
+    #[cfg(feature = "cuda")]
+    {
+        let use_cuda = std::env::var("USE_CUDA")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        if use_cuda {
+            eprintln!("[brain-service] USE_CUDA=1 — initializing GPU...");
+            match brain_sim_service::gpu::init_gpu_connectome(&template) {
+                Some(conn) => {
+                    eprintln!(
+                        "[brain-service][gpu] CUDA device ready, connectome on GPU (CSR: {} neurons, {} edges). All sims will use GPU.",
+                        conn.n, conn.ne
+                    );
+                }
+                None => {
+                    eprintln!("[brain-service][gpu] WARNING: GPU init failed — falling back to CPU for all sims.");
+                }
+            }
+        } else {
+            eprintln!("[brain-service] USE_CUDA not set — running CPU-only.");
+        }
+    }
+    #[cfg(not(feature = "cuda"))]
+    {
+        eprintln!("[brain-service] compiled without CUDA feature — CPU-only mode.");
+    }
+
+    let world_stim_presets = Arc::new(build_default_world_stim_presets(classification_path.as_deref()));
+    let preset_sizes = (
+        world_stim_presets.get("11PM").map(|m| m.len()).unwrap_or(0),
+        world_stim_presets.get("3PM").map(|m| m.len()).unwrap_or(0),
+        world_stim_presets.get("8PM").map(|m| m.len()).unwrap_or(0),
+    );
+    eprintln!(
+        "[brain-service] world PEN presets resolved at startup: 11PM={} 3PM={} 8PM={}",
+        preset_sizes.0, preset_sizes.1, preset_sizes.2
+    );
     let template = Arc::new(template);
 
     let w_syn = std::env::var("NEUROSIM_W_SYN")
@@ -246,6 +284,10 @@ fn main() {
         None
     };
     let epg_id_to_bin = load_epg_id_to_bin();
+    let world_runtime = Some(spawn_world_runtime_thread(
+        template.clone(),
+        epg_id_to_bin.clone(),
+    ));
 
     for stream in listener.incoming() {
         if let Ok(mut s) = stream {
@@ -261,8 +303,10 @@ fn main() {
                 &food_state,
                 &next_id,
                 template.clone(),
+                world_stim_presets.clone(),
                 conn_id,
                 continuous_live.clone(),
+                world_runtime.clone(),
                 &epg_id_to_bin,
             );
             eprintln!(
@@ -376,6 +420,119 @@ fn load_pen_a_sides_and_er_ids(
         }
     }
     Ok((pen_left, pen_right, er_ids))
+}
+
+fn parse_pen_a_index(hemibrain_type: &str) -> Option<usize> {
+    if !hemibrain_type.starts_with("PEN_a") {
+        return None;
+    }
+    let digits: String = hemibrain_type.chars().filter(|c| c.is_ascii_digit()).collect();
+    let idx = digits.parse::<usize>().ok()?;
+    if idx == 0 {
+        None
+    } else {
+        Some(idx - 1)
+    }
+}
+
+fn load_pen_a_by_side_index(path: &Path) -> Result<(Vec<String>, Vec<String>), std::io::Error> {
+    let mut left_rows: Vec<(usize, String)> = Vec::new();
+    let mut right_rows: Vec<(usize, String)> = Vec::new();
+    let mut left_seen = HashSet::new();
+    let mut right_seen = HashSet::new();
+    let mut rdr = csv::Reader::from_path(path)?;
+    let headers = rdr
+        .headers()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    let root_idx = headers
+        .iter()
+        .position(|h| h.trim().eq_ignore_ascii_case("root_id"))
+        .unwrap_or(0);
+    let hemibrain_idx = headers
+        .iter()
+        .position(|h| h.trim().eq_ignore_ascii_case("hemibrain_type"))
+        .unwrap_or(6);
+    let side_idx = headers
+        .iter()
+        .position(|h| h.trim().eq_ignore_ascii_case("side"))
+        .unwrap_or(8);
+    for row in rdr.records() {
+        let row = row.map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let rid = row
+            .get(root_idx)
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+        if rid.is_empty() {
+            continue;
+        }
+        let hb = row
+            .get(hemibrain_idx)
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+        let Some(idx) = parse_pen_a_index(&hb) else {
+            continue;
+        };
+        let side = row
+            .get(side_idx)
+            .map(|s| s.trim().to_ascii_lowercase())
+            .unwrap_or_default();
+        if side == "left" {
+            if left_seen.insert(rid.clone()) {
+                left_rows.push((idx, rid));
+            }
+        } else if side == "right" {
+            if right_seen.insert(rid.clone()) {
+                right_rows.push((idx, rid));
+            }
+        }
+    }
+    left_rows.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    right_rows.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    Ok((
+        left_rows.into_iter().map(|(_, id)| id).collect(),
+        right_rows.into_iter().map(|(_, id)| id).collect(),
+    ))
+}
+
+fn build_default_world_stim_presets(class_path: Option<&Path>) -> HashMap<String, HashMap<String, f64>> {
+    let mut out: HashMap<String, HashMap<String, f64>> = HashMap::new();
+    let Some(cp) = class_path else {
+        return out;
+    };
+    let Ok((left, right)) = load_pen_a_by_side_index(cp) else {
+        return out;
+    };
+    let mut p11 = HashMap::new();
+    if let Some(id) = left.get(0) { p11.insert(id.clone(), 50.0); }
+    if let Some(id) = left.get(1) { p11.insert(id.clone(), 50.0); }
+    if let Some(id) = left.get(5) { p11.insert(id.clone(), 50.0); }
+    let mut p3 = HashMap::new();
+    if let Some(id) = left.get(2) { p3.insert(id.clone(), 50.0); }
+    if let Some(id) = right.get(5) { p3.insert(id.clone(), 70.0); }
+    let mut p8 = HashMap::new();
+    if let Some(id) = left.get(3) { p8.insert(id.clone(), 50.0); }
+    if let Some(id) = left.get(8) { p8.insert(id.clone(), 50.0); }
+    if let Some(id) = right.get(0) { p8.insert(id.clone(), 60.0); }
+    out.insert("11PM".to_string(), p11);
+    out.insert("3PM".to_string(), p3);
+    out.insert("8PM".to_string(), p8);
+    out
+}
+
+fn poisson_seed_base() -> u64 {
+    std::env::var("NEUROSIM_POISSON_SEED")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(17290319)
+}
+
+fn apply_sim_poisson_seed(sim: &mut BrainSim, sim_id: u32, explicit_seed: Option<u64>) {
+    if let Some(seed) = explicit_seed {
+        sim.set_rng_seed(seed);
+    } else {
+        // Keep create/world_add_fly deterministic parity: first sim uses base+1.
+        sim.set_rng_seed(poisson_seed_base().wrapping_add(sim_id as u64).wrapping_add(1));
+    }
 }
 
 /// Boost right PEN_a -> EPG excitation (and optionally weaken right -> ER / direct inh to EPG).
@@ -771,6 +928,381 @@ struct ContinuousLiveState {
     dt_sec: f64,
 }
 
+const WORLD_TICK_BUFFER_CAP: usize = 120_000;
+
+#[derive(Deserialize)]
+struct WorldAddFlyParams {
+    fly: FlyJson,
+}
+
+#[derive(Deserialize)]
+struct WorldRemoveFlyParams {
+    fly_id: u32,
+}
+
+#[derive(Deserialize)]
+struct WorldSetRatesParams {
+    fly_id: u32,
+    #[serde(default)]
+    rates_by_id: HashMap<String, f64>,
+}
+
+#[derive(Deserialize)]
+struct WorldSetSourcesParams {
+    #[serde(default)]
+    sources: Vec<SourceJson>,
+}
+
+#[derive(Deserialize)]
+struct WorldReadTicksParams {
+    #[serde(default)]
+    after_tick: u64,
+    #[serde(default)]
+    max_ticks: usize,
+}
+
+#[derive(Clone, Serialize)]
+struct WorldTickRecord {
+    tick: u64,
+    fly_id: u32,
+    time_sec: f64,
+    spikes: Vec<String>,
+}
+
+#[derive(Clone, Serialize)]
+struct WorldSnapshotFly {
+    fly_id: u32,
+    fly: FlyRespJson,
+    activity_sparse: HashMap<String, f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bump_angle_deg: Option<f64>,
+    epg_bins: Vec<f64>,
+    compute_ms: f64,
+    kernel_ms: f64,
+    recurrent_ms: f64,
+    lif_ms: f64,
+    readout_ms: f64,
+}
+
+#[derive(Serialize)]
+struct WorldSnapshotResp {
+    ok: bool,
+    tick: u64,
+    dt_sec: f64,
+    flies: Vec<WorldSnapshotFly>,
+}
+
+struct WorldFlyRuntime {
+    sim: BrainSim,
+    fly: FlyInput,
+    rates_by_id: HashMap<String, f64>,
+    snapshot: WorldSnapshotFly,
+    fly_time_left_sec: f64,
+    wander_heading_rad: f64,
+    wander_time_left_sec: f64,
+    feeding_source_id: Option<String>,
+    feeding_time_left_sec: f64,
+    rng_state: u64,
+}
+
+struct WorldRuntimeState {
+    next_fly_id: AtomicU32,
+    tick: AtomicU64,
+    dt_sec: f64,
+    steps_per_batch: u32,
+    paused: AtomicU32,
+    flies: Mutex<HashMap<u32, Arc<Mutex<WorldFlyRuntime>>>>,
+    snapshots: Mutex<HashMap<u32, WorldSnapshotFly>>,
+    sources: Mutex<Vec<SourceInput>>,
+    ticks: Mutex<VecDeque<WorldTickRecord>>,
+}
+
+struct WorldFlyStepResult {
+    fly_id: u32,
+    snapshot: WorldSnapshotFly,
+    epg_spikes: Vec<String>,
+}
+
+const WORLD_ARENA_LIMIT: f64 = 25.0;
+const WORLD_BASE_SPEED_UNITS_PER_SEC: f64 = 18.0;
+const WORLD_REST_DURATION_SEC: f64 = 4.0;
+const WORLD_FLY_TIME_MAX_SEC: f64 = 6.0;
+const WORLD_FEED_DURATION_SEC: f64 = 1.2;
+const WORLD_FEED_START_RADIUS: f64 = 2.2;
+const WORLD_WANDER_INTERVAL_SEC: f64 = 10.0;
+const WORLD_HUNGER_DECAY_PER_SEC: f64 = 1.2;
+const WORLD_HEALTH_DECAY_STARVING_PER_SEC: f64 = 2.0;
+const WORLD_HEALTH_RECOVERY_FEEDING_PER_SEC: f64 = 1.0;
+const WORLD_HUNGER_RECOVERY_FEEDING_PER_SEC: f64 = 14.0;
+
+fn normalize_angle_rad(a: f64) -> f64 {
+    if !a.is_finite() {
+        return a;
+    }
+    let pi = std::f64::consts::PI;
+    let tau = 2.0 * pi;
+    (a + pi).rem_euclid(tau) - pi
+}
+
+fn clamp_turn_toward(current: f64, target: f64, max_turn: f64) -> f64 {
+    let delta = normalize_angle_rad(target - current);
+    if delta > max_turn {
+        normalize_angle_rad(current + max_turn)
+    } else if delta < -max_turn {
+        normalize_angle_rad(current - max_turn)
+    } else {
+        normalize_angle_rad(current + delta)
+    }
+}
+
+fn next_uniform01(state: &mut u64) -> f64 {
+    // xorshift64*
+    let mut x = *state;
+    x ^= x >> 12;
+    x ^= x << 25;
+    x ^= x >> 27;
+    *state = x;
+    let y = x.wrapping_mul(0x2545F4914F6CDD1D);
+    (y as f64) / (u64::MAX as f64)
+}
+
+fn nearest_source<'a>(x: f64, y: f64, sources: &'a [SourceInput]) -> Option<(&'a SourceInput, f64)> {
+    let mut best: Option<(&SourceInput, f64)> = None;
+    for s in sources {
+        let dx = s.x - x;
+        let dy = s.y - y;
+        let d = (dx * dx + dy * dy).sqrt();
+        match best {
+            Some((_, bd)) if d >= bd => {}
+            _ => best = Some((s, d)),
+        }
+    }
+    best
+}
+
+fn update_world_fly_kinematics(
+    runtime: &mut WorldFlyRuntime,
+    dt_batch: f64,
+    sources_now: &[SourceInput],
+    bump_angle_deg: Option<f64>,
+) -> bool {
+    let fly = &mut runtime.fly;
+    let hunger = fly.hunger.clamp(0.0, 100.0);
+    let hunger_drive = ((100.0 - hunger) / 100.0).clamp(0.0, 1.0);
+    let mut feeding = false;
+
+    let nearest = nearest_source(fly.x, fly.y, sources_now);
+    let is_hungry = hunger <= 85.0;
+
+    // Rest/fatigue gate.
+    if fly.rest_time_left > 0.0 {
+        fly.rest_time_left = (fly.rest_time_left - dt_batch).max(0.0);
+        runtime.fly_time_left_sec = (runtime.fly_time_left_sec + dt_batch * 0.75).min(WORLD_FLY_TIME_MAX_SEC);
+    } else {
+        runtime.fly_time_left_sec = (runtime.fly_time_left_sec - dt_batch).max(0.0);
+        if runtime.fly_time_left_sec <= 0.0 {
+            fly.rest_time_left = WORLD_REST_DURATION_SEC;
+        }
+    }
+
+    // Feeding behavior: when hungry and near source, pin to source briefly.
+    if runtime.feeding_time_left_sec > 0.0 {
+        runtime.feeding_time_left_sec = (runtime.feeding_time_left_sec - dt_batch).max(0.0);
+        if let Some(ref sid) = runtime.feeding_source_id {
+            if let Some(src) = sources_now.iter().find(|s| &s.id == sid) {
+                fly.x = src.x;
+                fly.y = src.y;
+                fly.z = 0.9;
+                feeding = true;
+            }
+        }
+    } else {
+        runtime.feeding_source_id = None;
+        if let Some((src, dist)) = nearest {
+            if is_hungry && dist <= WORLD_FEED_START_RADIUS + src.radius.max(0.0) {
+                runtime.feeding_source_id = Some(src.id.clone());
+                runtime.feeding_time_left_sec = WORLD_FEED_DURATION_SEC;
+                fly.x = src.x;
+                fly.y = src.y;
+                fly.z = 0.9;
+                feeding = true;
+            }
+        }
+    }
+
+    if feeding {
+        fly.hunger = (fly.hunger + WORLD_HUNGER_RECOVERY_FEEDING_PER_SEC * dt_batch).clamp(0.0, 100.0);
+        fly.health = (fly.health + WORLD_HEALTH_RECOVERY_FEEDING_PER_SEC * dt_batch).clamp(0.0, 100.0);
+        runtime.fly_time_left_sec = (runtime.fly_time_left_sec + dt_batch * 0.5).min(WORLD_FLY_TIME_MAX_SEC);
+    } else {
+        fly.hunger = (fly.hunger - WORLD_HUNGER_DECAY_PER_SEC * dt_batch).clamp(0.0, 100.0);
+        if fly.hunger < 15.0 {
+            fly.health = (fly.health - WORLD_HEALTH_DECAY_STARVING_PER_SEC * dt_batch).clamp(0.0, 100.0);
+        }
+        if fly.rest_time_left <= 0.0 {
+            let desired_heading = if let Some(deg) = bump_angle_deg {
+                normalize_angle_rad(deg.to_radians())
+            } else if is_hungry {
+                if let Some((src, _)) = nearest {
+                    (src.y - fly.y).atan2(src.x - fly.x)
+                } else {
+                    runtime.wander_heading_rad
+                }
+            } else {
+                runtime.wander_time_left_sec -= dt_batch;
+                if runtime.wander_time_left_sec <= 0.0 {
+                    let u = next_uniform01(&mut runtime.rng_state);
+                    runtime.wander_heading_rad =
+                        normalize_angle_rad((u * 2.0 * std::f64::consts::PI) - std::f64::consts::PI);
+                    runtime.wander_time_left_sec = WORLD_WANDER_INTERVAL_SEC;
+                }
+                runtime.wander_heading_rad
+            };
+            let max_turn_rate = 1.4 + 2.6 * hunger_drive;
+            fly.heading = clamp_turn_toward(fly.heading, desired_heading, max_turn_rate * dt_batch);
+
+            let fatigue_scale = (runtime.fly_time_left_sec / WORLD_FLY_TIME_MAX_SEC).clamp(0.0, 1.0);
+            let speed = WORLD_BASE_SPEED_UNITS_PER_SEC * (0.35 + 0.65 * fatigue_scale);
+            let nx = fly.x + fly.heading.cos() * speed * dt_batch;
+            let ny = fly.y + fly.heading.sin() * speed * dt_batch;
+            fly.x = nx.clamp(-WORLD_ARENA_LIMIT, WORLD_ARENA_LIMIT);
+            fly.y = ny.clamp(-WORLD_ARENA_LIMIT, WORLD_ARENA_LIMIT);
+            fly.z = (fly.z + 0.2 * dt_batch).clamp(0.35, 1.1);
+        } else {
+            fly.z = (fly.z - 0.4 * dt_batch).clamp(0.35, 1.1);
+        }
+    }
+
+    if fly.health <= 0.0 {
+        fly.dead = true;
+    }
+
+    feeding
+}
+
+fn step_world_fly_runtime(
+    fly_id: u32,
+    runtime: &mut WorldFlyRuntime,
+    dt_sec: f64,
+    steps_per_batch: u32,
+    sources_now: &[SourceInput],
+    epg_id_to_bin: &HashMap<String, u8>,
+) -> WorldFlyStepResult {
+    let mut fly = FlyInput {
+        x: runtime.fly.x,
+        y: runtime.fly.y,
+        z: runtime.fly.z,
+        heading: runtime.fly.heading,
+        t: runtime.fly.t,
+        hunger: runtime.fly.hunger,
+        health: runtime.fly.health,
+        rest_time_left: runtime.fly.rest_time_left,
+        dead: runtime.fly.dead,
+    };
+    let mut last_activity_sparse: HashMap<String, f64> = HashMap::new();
+    let mut last_spike_ids: Vec<String> = Vec::new();
+    let mut last_timing = brain_sim_service::sim::StepTiming {
+        compute_ms: 0.0,
+        kernel_ms: 0.0,
+        recurrent_ms: 0.0,
+        lif_ms: 0.0,
+        readout_ms: 0.0,
+    };
+    for step in 0..steps_per_batch {
+        let is_last = step + 1 == steps_per_batch;
+        let use_stim = !runtime.rates_by_id.is_empty() || !sources_now.is_empty();
+        let (_a, activity_sparse, spike_ids, _ml, _mr, _mf, _cl, _cr, _cf, _mlm, _mrm, _mfm, timing, fly_out) =
+            if is_last {
+                runtime.sim.step_with_options(
+                    dt_sec,
+                    fly,
+                    sources_now.to_vec(),
+                    true,
+                    use_stim,
+                    None,
+                    Vec::new(),
+                    if runtime.rates_by_id.is_empty() {
+                        None
+                    } else {
+                        Some(&runtime.rates_by_id)
+                    },
+                    None,
+                )
+            } else {
+                runtime.sim.step_fast(
+                    dt_sec,
+                    fly,
+                    sources_now.to_vec(),
+                    use_stim,
+                    None,
+                    Vec::new(),
+                    if runtime.rates_by_id.is_empty() {
+                        None
+                    } else {
+                        Some(&runtime.rates_by_id)
+                    },
+                    None,
+                )
+            };
+        fly = FlyInput {
+            x: fly_out.x,
+            y: fly_out.y,
+            z: fly_out.z,
+            heading: fly_out.heading,
+            t: fly_out.t,
+            hunger: fly_out.hunger,
+            health: fly_out.health,
+            rest_time_left: fly_out.rest_time_left,
+            dead: fly_out.dead,
+        };
+        if is_last {
+            last_activity_sparse = activity_sparse;
+            last_spike_ids = spike_ids;
+            last_timing = timing;
+        }
+    }
+    let (bump_angle_deg, epg_bins_arr) = compute_bump_and_epg_bins(&last_activity_sparse, epg_id_to_bin);
+    let dt_batch = dt_sec * steps_per_batch as f64;
+    let feeding = update_world_fly_kinematics(runtime, dt_batch, sources_now, bump_angle_deg);
+    runtime.fly.t = fly.t;
+    let snap = WorldSnapshotFly {
+        fly_id,
+        fly: FlyRespJson {
+            x: runtime.fly.x,
+            y: runtime.fly.y,
+            z: runtime.fly.z,
+            heading: runtime.fly.heading,
+            t: fly.t,
+            hunger: runtime.fly.hunger,
+            health: runtime.fly.health,
+            dead: runtime.fly.dead,
+            fly_time_left: (runtime.fly_time_left_sec / WORLD_FLY_TIME_MAX_SEC).clamp(0.0, 1.0),
+            rest_time_left: runtime.fly.rest_time_left.max(0.0),
+            rest_duration: WORLD_REST_DURATION_SEC,
+            feeding,
+        },
+        activity_sparse: last_activity_sparse,
+        bump_angle_deg,
+        epg_bins: epg_bins_arr.to_vec(),
+        compute_ms: last_timing.compute_ms,
+        kernel_ms: last_timing.kernel_ms,
+        recurrent_ms: last_timing.recurrent_ms,
+        lif_ms: last_timing.lif_ms,
+        readout_ms: last_timing.readout_ms,
+    };
+    runtime.snapshot = snap.clone();
+    let mut epg_spikes: Vec<String> = last_spike_ids
+        .into_iter()
+        .filter(|id| epg_id_to_bin.contains_key(id))
+        .collect();
+    epg_spikes.sort();
+    WorldFlyStepResult {
+        fly_id,
+        snapshot: snap,
+        epg_spikes,
+    }
+}
+
 fn spawn_continuous_live_thread(
     template: Arc<connectome::ConnectomeTemplate>,
     class_path: &Path,
@@ -911,6 +1443,7 @@ fn run_continuous_live_loop(
             } else {
                 Some(&stim)
             },
+            None,
         );
         fly = FlyInput {
             x: fly_out.x,
@@ -952,6 +1485,125 @@ fn run_continuous_live_loop(
     }
 }
 
+fn spawn_world_runtime_thread(
+    template: Arc<connectome::ConnectomeTemplate>,
+    epg_id_to_bin: HashMap<String, u8>,
+) -> Arc<WorldRuntimeState> {
+    let dt_sec = std::env::var("NEUROSIM_WORLD_DT_SEC")
+        .ok()
+        .and_then(|s| s.parse::<f64>().ok())
+        .filter(|&v| v.is_finite() && v > 0.0)
+        .unwrap_or(0.0001);
+    let steps_per_batch = std::env::var("NEUROSIM_WORLD_STEPS_PER_BATCH")
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+        .filter(|&v| v > 0)
+        .unwrap_or_else(|| (0.125 / dt_sec).round().max(1.0) as u32);
+    let world_parallel_flies = std::env::var("NEUROSIM_WORLD_PARALLEL_FLIES")
+        .ok()
+        .map(|s| s == "1" || s.eq_ignore_ascii_case("true"))
+        .unwrap_or(true);
+    let state = Arc::new(WorldRuntimeState {
+        next_fly_id: AtomicU32::new(0),
+        tick: AtomicU64::new(0),
+        dt_sec,
+        steps_per_batch,
+        paused: AtomicU32::new(0),
+        flies: Mutex::new(HashMap::new()),
+        snapshots: Mutex::new(HashMap::new()),
+        sources: Mutex::new(Vec::new()),
+        ticks: Mutex::new(VecDeque::with_capacity(8192)),
+    });
+    let state_thr = state.clone();
+    std::thread::Builder::new()
+        .name("neurosim-world-loop".into())
+        .spawn(move || {
+            let target_interval =
+                std::time::Duration::from_secs_f64((dt_sec * steps_per_batch as f64).max(0.0));
+            loop {
+                let batch_start = Instant::now();
+                if state_thr.paused.load(Ordering::Relaxed) == 0 {
+                    let sources_now = state_thr.sources.lock().unwrap().clone();
+                    let fly_handles: Vec<(u32, Arc<Mutex<WorldFlyRuntime>>)> = {
+                        let flies = state_thr.flies.lock().unwrap();
+                        flies
+                            .iter()
+                            .map(|(fly_id, runtime)| (*fly_id, Arc::clone(runtime)))
+                            .collect()
+                    };
+                    let step_results: Vec<WorldFlyStepResult> = if world_parallel_flies {
+                        fly_handles
+                            .into_par_iter()
+                            .map(|(fly_id, runtime_handle)| {
+                                let mut runtime = runtime_handle.lock().unwrap();
+                                step_world_fly_runtime(
+                                    fly_id,
+                                    &mut runtime,
+                                    dt_sec,
+                                    steps_per_batch,
+                                    &sources_now,
+                                    &epg_id_to_bin,
+                                )
+                            })
+                            .collect()
+                    } else {
+                        fly_handles
+                            .into_iter()
+                            .map(|(fly_id, runtime_handle)| {
+                                let mut runtime = runtime_handle.lock().unwrap();
+                                step_world_fly_runtime(
+                                    fly_id,
+                                    &mut runtime,
+                                    dt_sec,
+                                    steps_per_batch,
+                                    &sources_now,
+                                    &epg_id_to_bin,
+                                )
+                            })
+                            .collect()
+                    };
+                    let tick = state_thr.tick.load(Ordering::Relaxed) + 1;
+                    {
+                        let mut snapshots = state_thr.snapshots.lock().unwrap();
+                        for result in &step_results {
+                            snapshots.insert(result.fly_id, result.snapshot.clone());
+                        }
+                    }
+                    {
+                        let mut ticks = state_thr.ticks.lock().unwrap();
+                        for result in step_results {
+                            ticks.push_back(WorldTickRecord {
+                                tick,
+                                fly_id: result.fly_id,
+                                time_sec: tick as f64 * dt_sec * steps_per_batch as f64,
+                                spikes: result.epg_spikes,
+                            });
+                        }
+                        while ticks.len() > WORLD_TICK_BUFFER_CAP {
+                            ticks.pop_front();
+                        }
+                    }
+                    state_thr.tick.fetch_add(1, Ordering::Release);
+                }
+                if target_interval > std::time::Duration::ZERO {
+                    let elapsed = batch_start.elapsed();
+                    if elapsed < target_interval {
+                        std::thread::sleep(target_interval - elapsed);
+                    }
+                }
+            }
+        })
+        .expect("spawn world runtime thread");
+    eprintln!(
+        "[brain-service] world runtime started (dt={}s, steps_per_batch={}, batch_interval_ms={:.1}, parallel_flies={})",
+        dt_sec,
+        steps_per_batch,
+        dt_sec * steps_per_batch as f64 * 1000.0,
+        world_parallel_flies
+    );
+    state
+}
+
 fn validate_forced_spikes(forced_spikes: &[String]) -> Result<(), String> {
     if forced_spikes.len() > MAX_FORCED_SPIKES {
         return Err(format!(
@@ -981,8 +1633,10 @@ fn handle(
     food_state: &Mutex<FoodState>,
     next_id: &Mutex<u32>,
     template: Arc<connectome::ConnectomeTemplate>,
+    world_stim_presets: Arc<HashMap<String, HashMap<String, f64>>>,
     conn_id: u64,
     continuous_live: Option<Arc<ContinuousLiveState>>,
+    world_runtime: Option<Arc<WorldRuntimeState>>,
     epg_id_to_bin: &HashMap<String, u8>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut reader = BufReader::new(s.try_clone()?);
@@ -998,13 +1652,27 @@ fn handle(
         }
     let req_id = GLOBAL_REQ_ID.fetch_add(1, Ordering::Relaxed);
     let out = if line.contains("\"method\":\"ping\"") {
+        let gpu_enabled = {
+            #[cfg(feature = "cuda")]
+            {
+                brain_sim_service::gpu::try_init_device().is_some()
+            }
+            #[cfg(not(feature = "cuda"))]
+            {
+                false
+            }
+        };
         eprintln!(
-            "[brain-service] req={} conn={} method=ping pid={} ok=1",
+            "[brain-service] req={} conn={} method=ping pid={} ok=1 gpu={}",
             req_id,
             conn_id,
-            std::process::id()
+            std::process::id(),
+            if gpu_enabled { 1 } else { 0 }
         );
-        r#"{"ok":true}"#.to_string()
+        serde_json::to_string(&serde_json::json!({
+            "ok": true,
+            "gpu": gpu_enabled,
+        }))?
     } else if line.contains("\"method\":\"create\"") {
         let t_create_start = Instant::now();
         let v: serde_json::Value = serde_json::from_str(line)?;
@@ -1045,20 +1713,13 @@ fn handle(
             continue;
         }
         let mut sim = BrainSim::from_template(template.clone(), w_syn, epg_recurrence_boost);
+        sim.set_world_stim_presets(&world_stim_presets);
         let from_template_ms = t_before_sim.elapsed().as_secs_f64() * 1000.0;
         let mut g = next_id.lock().unwrap();
         let id = *g;
         *g = g.saturating_add(1);
         drop(g);
-        if let Some(seed) = create_params.rng_seed {
-            sim.set_rng_seed(seed);
-        } else if let Some(base_seed) = std::env::var("NEUROSIM_POISSON_SEED")
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-        {
-            // Python parity: first created sim uses seed+1.
-            sim.set_rng_seed(base_seed.wrapping_add(id as u64).wrapping_add(1));
-        }
+        apply_sim_poisson_seed(&mut sim, id, create_params.rng_seed);
         sims.lock().unwrap().insert(id, sim);
         let create_total_ms = t_create_start.elapsed().as_secs_f64() * 1000.0;
         eprintln!(
@@ -1169,6 +1830,7 @@ fn handle(
                     step.olfactory_baseline_rate_hz,
                     step.forced_spikes,
                     stim_rates,
+                    None,
                 );
             compute_ms_sum += timing.compute_ms;
             kernel_ms_sum += timing.kernel_ms;
@@ -1325,6 +1987,7 @@ fn handle(
                 p.olfactory_baseline_rate_hz,
                 p.forced_spikes,
                 stim_rates_by_id,
+                None,
             );
         let compute_ms = timing.compute_ms;
         let mut source_lookup: HashMap<String, (f64, f64)> = HashMap::new();
@@ -1538,19 +2201,7 @@ fn handle(
             })
             .unwrap_or_default();
         let duration_sec = num_steps as f64 * dt;
-        let mut source_lookup: HashMap<String, (f64, f64)> = HashMap::new();
-        if let Some(ref sources) = p.sources {
-            for s in sources {
-                source_lookup.insert(s.id.clone(), (s.x, s.y));
-            }
-        }
         let mut last_activity_sparse: HashMap<String, f64> = HashMap::new();
-        let mut last_motor_left = 0.0f64;
-        let mut last_motor_right = 0.0f64;
-        let mut last_motor_fwd = 0.0f64;
-        let mut eaten_food_ids: Vec<String> = Vec::new();
-        let mut feeding_sugar_taken_total = 0.0f64;
-        let mut last_fly_resp: Option<FlyRespJson> = None;
         // Log once if any forced-spike IDs are not in the connectome (they will be silently dropped).
         if let Some(ref schedule) = p.forced_spike_schedule {
             let all_forced: Vec<String> = schedule
@@ -1566,8 +2217,9 @@ fn handle(
         let t_loop_start = Instant::now();
         let mut forced_rng: u64 = (p.sim_id as u64).wrapping_mul(12345).wrapping_add(67890);
         let mut global_tick: u32 = 0;
+        let needs_per_step_ids = p.record_ticks || count_ids.is_some();
         for (phase_steps, stim_map) in phase_slices {
-            for _ in 0..phase_steps {
+            for _step_in_phase in 0..phase_steps {
                 let mut forced_spikes: Vec<String> = Vec::new();
                 if let Some(ref schedule) = p.forced_spike_schedule {
                     for entry in schedule {
@@ -1588,82 +2240,49 @@ fn handle(
                         }
                     }
                 }
-                let (_a, activity_sparse, spike_ids, ml, mr, mf, _cl, _cr, _cf, _mlm, _mrm, _mfm, _timing, fly_out) =
-                    sim.step_with_options(
-                        dt,
-                        fly,
-                        srcs.clone(),
-                        true,
-                        !stim_map.is_empty(),
-                        None,
-                        forced_spikes,
-                        if stim_map.is_empty() { None } else { Some(stim_map) },
-                    );
-                let mut one = vec![StepManyItemResp {
-                    sim_id: p.sim_id,
-                    activity_sparse: activity_sparse.clone(),
-                    motor_left: ml,
-                    motor_right: mr,
-                    motor_fwd: mf,
-                    motor_left_count: 0.0,
-                    motor_right_count: 0.0,
-                    motor_fwd_count: 0.0,
-                    motor_left_magnitude: 0.0,
-                    motor_right_magnitude: 0.0,
-                    motor_fwd_magnitude: 0.0,
-                    fly: FlyRespJson {
-                        x: fly_out.x,
-                        y: fly_out.y,
-                        z: fly_out.z,
-                        heading: fly_out.heading,
-                        t: fly_out.t,
-                        hunger: fly_out.hunger,
-                        health: fly_out.health,
-                        dead: fly_out.dead,
-                        fly_time_left: fly_out.fly_time_left,
-                        rest_time_left: fly_out.rest_time_left,
-                        rest_duration: fly_out.rest_duration,
-                        feeding: fly_out.feeding,
-                    },
-                    eaten_food_id: fly_out.eaten_food_id.clone(),
-                    feeding_sugar_taken: fly_out.feeding_sugar_taken,
-                    feeding_candidate_id: fly_out.feeding_candidate_id.clone(),
-                    dt,
-                    compute_ms: 0.0,
-                    kernel_ms: 0.0,
-                    recurrent_ms: 0.0,
-                    lif_ms: 0.0,
-                    readout_ms: 0.0,
-                }];
-                if !source_lookup.is_empty() && one[0].feeding_candidate_id.is_some() {
-                    let mut fg = food_state.lock().unwrap();
-                    fg.sync(source_lookup.keys().cloned());
-                    apply_feeding_tick(&mut *fg, &source_lookup, &mut one);
-                }
-                let fed = &one[0];
+                let is_last = global_tick + 1 == num_steps;
+                let use_full_readout = is_last || needs_per_step_ids;
+                let use_stim = !stim_map.is_empty() || (p.return_final_state && !srcs.is_empty());
+                let (_a, activity_sparse, spike_ids, _ml, _mr, _mf, _cl, _cr, _cf, _mlm, _mrm, _mfm, _timing, fly_out) =
+                    if use_full_readout {
+                        sim.step_with_options(
+                            dt,
+                            fly,
+                            srcs.clone(),
+                            is_last,
+                            use_stim,
+                            None,
+                            forced_spikes,
+                            if stim_map.is_empty() { None } else { Some(stim_map) },
+                            None,
+                        )
+                    } else {
+                        sim.step_fast(
+                            dt,
+                            fly,
+                            srcs.clone(),
+                            use_stim,
+                            None,
+                            forced_spikes,
+                            if stim_map.is_empty() { None } else { Some(stim_map) },
+                            None,
+                        )
+                    };
                 if p.return_final_state {
-                    last_activity_sparse = fed.activity_sparse.clone();
-                    last_motor_left = fed.motor_left;
-                    last_motor_right = fed.motor_right;
-                    last_motor_fwd = fed.motor_fwd;
-                    if let Some(ref id) = fed.eaten_food_id {
-                        if !id.is_empty() && !eaten_food_ids.contains(id) {
-                            eaten_food_ids.push(id.clone());
-                        }
+                    if is_last {
+                        last_activity_sparse = activity_sparse.clone();
                     }
-                    feeding_sugar_taken_total += fed.feeding_sugar_taken;
-                    last_fly_resp = Some(fed.fly.clone());
                 }
                 fly = FlyInput {
-                    x: fed.fly.x,
-                    y: fed.fly.y,
-                    z: fed.fly.z,
-                    heading: fed.fly.heading,
-                    t: fed.fly.t,
-                    hunger: fed.fly.hunger,
-                    health: fed.fly.health,
-                    rest_time_left: fed.fly.rest_time_left,
-                    dead: fed.fly.dead,
+                    x: fly_out.x,
+                    y: fly_out.y,
+                    z: fly_out.z,
+                    heading: fly_out.heading,
+                    t: fly_out.t,
+                    hunger: fly_out.hunger,
+                    health: fly_out.health,
+                    rest_time_left: fly_out.rest_time_left,
+                    dead: fly_out.dead,
                 };
                 if count_ids.is_some() {
                     for id in &spike_ids {
@@ -1695,8 +2314,8 @@ fn handle(
             if p.return_final_state {
                 let (bump_angle_deg, epg_bins_arr) =
                     compute_bump_and_epg_bins(&last_activity_sparse, epg_id_to_bin);
-                let final_fly = last_fly_resp.unwrap_or_else(|| {
-                    FlyRespJson {
+                (
+                    Some(FlyRespJson {
                         x: fly.x,
                         y: fly.y,
                         z: fly.z,
@@ -1705,22 +2324,19 @@ fn handle(
                         hunger: fly.hunger,
                         health: fly.health,
                         dead: fly.dead,
-                        fly_time_left: if fly.rest_time_left > 0.0 { 0.0 } else { 1.0 },
-                        rest_time_left: fly.rest_time_left,
-                        rest_duration: if fly.rest_time_left > 0.0 { fly.rest_time_left } else { 0.0 },
+                        fly_time_left: 1.0,
+                        rest_time_left: fly.rest_time_left.max(0.0),
+                        rest_duration: 0.0,
                         feeding: false,
-                    }
-                });
-                (
-                    Some(final_fly),
+                    }),
                     Some(last_activity_sparse),
                     bump_angle_deg,
                     Some(epg_bins_arr.to_vec()),
-                    Some(last_motor_left),
-                    Some(last_motor_right),
-                    Some(last_motor_fwd),
-                    if eaten_food_ids.is_empty() { None } else { Some(eaten_food_ids) },
-                    Some(feeding_sugar_taken_total),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(0.0),
+                    Some(Vec::new()),
+                    Some(0.0),
                 )
             } else {
                 (None, None, None, None, None, None, None, None, None)
@@ -1759,6 +2375,241 @@ fn handle(
         );
         json_str
         }
+        }
+    } else if line.contains("\"method\":\"world_add_fly\"") || line.contains("\"method\": \"world_add_fly\"")
+    {
+        if let Some(ref world) = world_runtime {
+            let v: serde_json::Value = serde_json::from_str(line)?;
+            let p: WorldAddFlyParams = serde_json::from_value(v["params"].clone())?;
+            let w_syn = std::env::var("NEUROSIM_W_SYN")
+                .ok()
+                .and_then(|s| s.parse::<f32>().ok())
+                .filter(|&vv| vv.is_finite() && vv > 0.0)
+                .unwrap_or_else(|| brain_sim_service::model_constants::W_SYN);
+            let epg_recurrence_boost = std::env::var("NEUROSIM_EPG_RECURRENCE_BOOST")
+                .ok()
+                .and_then(|s| s.parse::<f32>().ok())
+                .filter(|&vv| vv.is_finite() && vv >= 0.0)
+                .unwrap_or_else(|| brain_sim_service::model_constants::EPG_RECURRENCE_BOOST);
+            let mut sim = BrainSim::from_template(template.clone(), w_syn, epg_recurrence_boost);
+            sim.set_world_stim_presets(&world_stim_presets);
+            let fly_id = world.next_fly_id.fetch_add(1, Ordering::Relaxed);
+            apply_sim_poisson_seed(&mut sim, fly_id, None);
+            let fly = FlyInput {
+                x: p.fly.x,
+                y: p.fly.y,
+                z: p.fly.z,
+                heading: p.fly.heading,
+                t: p.fly.t,
+                hunger: p.fly.hunger,
+                health: p.fly.health,
+                rest_time_left: p.fly.rest_time_left,
+                dead: p.fly.dead,
+            };
+            let snapshot = WorldSnapshotFly {
+                fly_id,
+                fly: FlyRespJson {
+                    x: fly.x,
+                    y: fly.y,
+                    z: fly.z,
+                    heading: fly.heading,
+                    t: fly.t,
+                    hunger: fly.hunger,
+                    health: fly.health,
+                    dead: fly.dead,
+                    fly_time_left: 1.0,
+                    rest_time_left: fly.rest_time_left.max(0.0),
+                    rest_duration: 0.0,
+                    feeding: false,
+                },
+                activity_sparse: HashMap::new(),
+                bump_angle_deg: None,
+                epg_bins: vec![0.0; 16],
+                compute_ms: 0.0,
+                kernel_ms: 0.0,
+                recurrent_ms: 0.0,
+                lif_ms: 0.0,
+                readout_ms: 0.0,
+            };
+            world.flies.lock().unwrap().insert(
+                fly_id,
+                Arc::new(Mutex::new(WorldFlyRuntime {
+                    sim,
+                    fly,
+                    rates_by_id: HashMap::new(),
+                    snapshot: snapshot.clone(),
+                    fly_time_left_sec: WORLD_FLY_TIME_MAX_SEC,
+                    wander_heading_rad: p.fly.heading,
+                    wander_time_left_sec: WORLD_WANDER_INTERVAL_SEC,
+                    feeding_source_id: None,
+                    feeding_time_left_sec: 0.0,
+                    rng_state: (fly_id as u64).wrapping_mul(0x9E3779B97F4A7C15u64).wrapping_add(1),
+                })),
+            );
+            world
+                .snapshots
+                .lock()
+                .unwrap()
+                .insert(fly_id, snapshot.clone());
+            serde_json::to_string(&serde_json::json!({
+                "ok": true,
+                "fly_id": fly_id,
+                "fly": snapshot.fly,
+            }))?
+        } else {
+            serde_json::to_string(&ErrResp {
+                error: "world runtime not available".into(),
+            })?
+        }
+    } else if line.contains("\"method\":\"world_remove_fly\"") || line.contains("\"method\": \"world_remove_fly\"")
+    {
+        if let Some(ref world) = world_runtime {
+            let v: serde_json::Value = serde_json::from_str(line)?;
+            let p: WorldRemoveFlyParams = serde_json::from_value(v["params"].clone())?;
+            let removed = world.flies.lock().unwrap().remove(&p.fly_id).is_some();
+            world.snapshots.lock().unwrap().remove(&p.fly_id);
+            serde_json::to_string(&serde_json::json!({
+                "ok": removed,
+                "fly_id": p.fly_id,
+            }))?
+        } else {
+            serde_json::to_string(&ErrResp {
+                error: "world runtime not available".into(),
+            })?
+        }
+    } else if line.contains("\"method\":\"world_set_rates\"") || line.contains("\"method\": \"world_set_rates\"")
+    {
+        if let Some(ref world) = world_runtime {
+            let v: serde_json::Value = serde_json::from_str(line)?;
+            let p: WorldSetRatesParams = serde_json::from_value(v["params"].clone())?;
+            let runtime_handle = {
+                let flies = world.flies.lock().unwrap();
+                flies.get(&p.fly_id).cloned()
+            };
+            if let Some(runtime_handle) = runtime_handle {
+                let mut runtime = runtime_handle.lock().unwrap();
+                runtime.rates_by_id = p
+                    .rates_by_id
+                    .into_iter()
+                    .filter(|(_, hz)| hz.is_finite() && *hz > 0.0)
+                    .collect();
+                serde_json::to_string(&serde_json::json!({
+                    "ok": true,
+                    "fly_id": p.fly_id,
+                    "rates_len": runtime.rates_by_id.len(),
+                }))?
+            } else {
+                serde_json::to_string(&ErrResp {
+                    error: format!("fly {} not found", p.fly_id),
+                })?
+            }
+        } else {
+            serde_json::to_string(&ErrResp {
+                error: "world runtime not available".into(),
+            })?
+        }
+    } else if line.contains("\"method\":\"world_set_sources\"") || line.contains("\"method\": \"world_set_sources\"")
+    {
+        if let Some(ref world) = world_runtime {
+            let v: serde_json::Value = serde_json::from_str(line)?;
+            let p: WorldSetSourcesParams = serde_json::from_value(v["params"].clone())?;
+            let srcs: Vec<SourceInput> = p
+                .sources
+                .into_iter()
+                .map(|x| SourceInput {
+                    id: x.id,
+                    x: x.x,
+                    y: x.y,
+                    radius: x.radius,
+                })
+                .collect();
+            *world.sources.lock().unwrap() = srcs;
+            serde_json::to_string(&serde_json::json!({
+                "ok": true
+            }))?
+        } else {
+            serde_json::to_string(&ErrResp {
+                error: "world runtime not available".into(),
+            })?
+        }
+    } else if line.contains("\"method\":\"world_get_snapshot\"") || line.contains("\"method\": \"world_get_snapshot\"")
+    {
+        if let Some(ref world) = world_runtime {
+            let tick = world.tick.load(Ordering::Acquire);
+            let flies: Vec<WorldSnapshotFly> = world
+                .snapshots
+                .lock()
+                .unwrap()
+                .values()
+                .cloned()
+                .collect();
+            serde_json::to_string(&WorldSnapshotResp {
+                ok: true,
+                tick,
+                dt_sec: world.dt_sec,
+                flies,
+            })?
+        } else {
+            serde_json::to_string(&ErrResp {
+                error: "world runtime not available".into(),
+            })?
+        }
+    } else if line.contains("\"method\":\"world_read_ticks\"")
+        || line.contains("\"method\": \"world_read_ticks\"")
+    {
+        if let Some(ref world) = world_runtime {
+            let v: serde_json::Value = serde_json::from_str(line)?;
+            let p: WorldReadTicksParams = serde_json::from_value(
+                v.get("params")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!({})),
+            )?;
+            let after = p.after_tick;
+            let max_ticks = p.max_ticks.clamp(1, 8000);
+            let mut ticks: Vec<WorldTickRecord> = {
+                let buf = world.ticks.lock().unwrap();
+                let mut out = Vec::new();
+                for rec in buf.iter().rev() {
+                    if rec.tick <= after {
+                        break;
+                    }
+                    out.push(rec.clone());
+                    if out.len() >= max_ticks {
+                        break;
+                    }
+                }
+                out
+            };
+            ticks.reverse();
+            serde_json::to_string(&serde_json::json!({
+                "ticks": ticks,
+                "latest_tick": world.tick.load(Ordering::Acquire),
+                "dt_sec": world.dt_sec,
+            }))?
+        } else {
+            serde_json::to_string(&ErrResp {
+                error: "world runtime not available".into(),
+            })?
+        }
+    } else if line.contains("\"method\":\"world_pause\"") || line.contains("\"method\": \"world_pause\"")
+    {
+        if let Some(ref world) = world_runtime {
+            world.paused.store(1, Ordering::Release);
+            serde_json::to_string(&serde_json::json!({ "ok": true }))?
+        } else {
+            serde_json::to_string(&ErrResp {
+                error: "world runtime not available".into(),
+            })?
+        }
+    } else if line.contains("\"method\":\"world_resume\"") || line.contains("\"method\": \"world_resume\"")
+    {
+        if let Some(ref world) = world_runtime {
+            world.paused.store(0, Ordering::Release);
+            serde_json::to_string(&serde_json::json!({ "ok": true }))?
+        } else {
+            serde_json::to_string(&ErrResp {
+                error: "world runtime not available".into(),
+            })?
         }
     } else if line.contains("\"method\":\"live_set_pen_a\"") || line.contains("\"method\": \"live_set_pen_a\"")
     {

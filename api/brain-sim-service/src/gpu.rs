@@ -1,4 +1,7 @@
 #![cfg(feature = "cuda")]
+//! Full GPU-accelerated LIF pipeline: recurrent propagation, synaptic delay,
+//! conductance update, LIF integration, forced spikes — all on device.
+//! Poisson sensory input is computed on CPU and uploaded per step.
 
 use cudarc::driver::safe::{CudaDevice, CudaSlice, LaunchAsync, LaunchConfig};
 use cudarc::nvrtc::safe::compile_ptx;
@@ -6,38 +9,117 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Instant;
 
-use crate::model_constants::{REFRACT_MS, TAU_MEM_MS, TAU_SYN_MS, V_RESET, V_REST, V_THRESH, W_SYN};
+use crate::connectome::ConnectomeTemplate;
+use crate::model_constants::{REFRACT_MS, TAU_MEM_MS, TAU_SYN_MS, V_RESET, V_REST, V_THRESH};
 
 static DEVICE: OnceLock<Option<Arc<CudaDevice>>> = OnceLock::new();
+static GPU_CONNECTOME: OnceLock<Option<Arc<GpuConnectome>>> = OnceLock::new();
 
-const K: &str = r#"
-extern "C" __global__ void decay_g_kernel(float* g, int N, float syn_decay) {
+const KERNELS: &str = r#"
+extern "C" __global__ void clear_kernel(float* arr, int N) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < N) g[i] = g[i] * syn_decay;
+    if (i < N) arr[i] = 0.0f;
 }
 
-extern "C" __global__ void recurrent_kernel(
+extern "C" __global__ void compact_spikes_kernel(
     const unsigned char* spikes_prev,
-    float* g,
-    const unsigned int* ep, const unsigned int* epo, const float* ew,
-    int ne, int N, float recurrent_scale
+    unsigned int* active_indices,
+    int* num_active,
+    int N
 ) {
-    int e = blockIdx.x * blockDim.x + threadIdx.x;
-    if (e >= ne) return;
-    unsigned int pi = ep[e], po = epo[e];
-    if (pi >= (unsigned)N || po >= (unsigned)N) return;
-    if (spikes_prev[pi] == 0) return;
-    float w = fminf(ew[e], 10.0f);
-    atomicAdd(&g[po], w * recurrent_scale);
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= N || spikes_prev[i] == 0) return;
+    int pos = atomicAdd(num_active, 1);
+    active_indices[pos] = (unsigned int)i;
 }
 
-extern "C" __global__ void add_uniform_kernel(float* g, const unsigned int* idx, int n_idx, float val, int N) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= n_idx) return;
-    unsigned int k = idx[i];
-    if (k < (unsigned)N) {
-        atomicAdd(&g[k], val);
+extern "C" __global__ void csr_scatter_kernel(
+    const unsigned int* active_indices,
+    int num_active,
+    const unsigned int* out_offsets,
+    const unsigned int* out_post,
+    const float* out_weight,
+    const unsigned char* is_epg,
+    float* syn_input,
+    int N,
+    float w_syn,
+    float epg_recurrence_boost
+) {
+    int active_idx = blockIdx.x;
+    if (active_idx >= num_active) return;
+    unsigned int pre = active_indices[active_idx];
+    unsigned int start = out_offsets[pre];
+    unsigned int end = out_offsets[pre + 1];
+    int pre_is_epg = is_epg[pre];
+    for (unsigned int e = threadIdx.x; e < (end - start); e += blockDim.x) {
+        unsigned int j = start + e;
+        unsigned int post = out_post[j];
+        if (post >= (unsigned int)N) continue;
+        float w = out_weight[j];
+        if (epg_recurrence_boost != 1.0f && pre_is_epg && is_epg[post]) {
+            w *= epg_recurrence_boost;
+        }
+        atomicAdd(&syn_input[post], w * w_syn);
     }
+}
+
+extern "C" __global__ void add_syn_input_kernel(
+    float* syn_input_dev,
+    const float* syn_input_host,
+    int N
+) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < N) syn_input_dev[i] += syn_input_host[i];
+}
+
+extern "C" __global__ void poisson_stim_sparse_kernel(
+    float* syn_input,
+    const unsigned int* stim_indices,
+    const float* stim_rates_hz,
+    unsigned long long* rng_state,
+    int num_stim,
+    float dt_sec,
+    float spike_amp,
+    int N
+) {
+    int j = blockIdx.x * blockDim.x + threadIdx.x;
+    if (j >= num_stim) return;
+    unsigned int idx = stim_indices[j];
+    if (idx >= (unsigned int)N) return;
+    float rate_hz = stim_rates_hz[j];
+    if (!(rate_hz > 0.0f)) return;
+    float p = rate_hz * dt_sec;
+    if (p <= 0.0f) return;
+    if (p > 1.0f) p = 1.0f;
+    unsigned long long s = rng_state[idx];
+    s ^= s >> 12;
+    s ^= s << 25;
+    s ^= s >> 27;
+    rng_state[idx] = s;
+    unsigned int u = (unsigned int)(s >> 32);
+    float u01 = (float)u * 2.3283064365386963e-10f; // 1 / 2^32
+    if (u01 < p) {
+        syn_input[idx] += spike_amp;
+    }
+}
+
+extern "C" __global__ void delay_conductance_kernel(
+    const float* g,
+    float* g_next,
+    float* delay_buffer,
+    const float* syn_input,
+    const unsigned short* refractory,
+    int N,
+    int delay_base,
+    float syn_decay
+) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= N) return;
+    int idx = delay_base + i;
+    float delayed = delay_buffer[idx];
+    float refrac_mask = (refractory[i] > 0) ? 0.0f : 1.0f;
+    g_next[i] = g[i] * syn_decay + delayed * refrac_mask;
+    delay_buffer[idx] = syn_input[i];
 }
 
 extern "C" __global__ void lif_kernel(
@@ -53,247 +135,517 @@ extern "C" __global__ void lif_kernel(
     unsigned short refrac_steps
 ) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < N) {
-        if (refrac[i] > 0) {
-            refrac[i] -= 1;
-            v[i] = v_reset;
-            spikes_next[i] = 0;
-            return;
-        }
-        float v_next = v[i] + mem_alpha * (v_rest - v[i] + g[i]);
-        if (!isfinite(v_next)) {
-            v_next = v_rest;
-        }
-        if (v_next >= v_thresh) {
-            v[i] = v_reset;
-            refrac[i] = refrac_steps;
-            spikes_next[i] = 1;
-        } else {
-            v[i] = v_next;
-            spikes_next[i] = 0;
-        }
+    if (i >= N) return;
+    if (refrac[i] > 0) {
+        refrac[i] -= 1;
+        v[i] = v_reset;
+        spikes_next[i] = 0;
+        return;
     }
+    float v_next = v[i] + mem_alpha * (v_rest - v[i] + g[i]);
+    if (!isfinite(v_next)) v_next = v_rest;
+    if (v_next >= v_thresh) {
+        v[i] = v_reset;
+        refrac[i] = refrac_steps;
+        spikes_next[i] = 1;
+    } else {
+        v[i] = v_next;
+        spikes_next[i] = 0;
+    }
+}
+
+extern "C" __global__ void reset_g_on_spike_kernel(
+    float* g_next,
+    const unsigned char* spikes_next,
+    int N
+) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < N && spikes_next[i] > 0) g_next[i] = 0.0f;
+}
+
+extern "C" __global__ void apply_forced_spikes_kernel(
+    float* v,
+    unsigned short* refrac,
+    float* g_next,
+    unsigned char* spikes_next,
+    const unsigned int* forced_indices,
+    int num_forced,
+    float v_reset,
+    unsigned short refrac_steps
+) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= num_forced) return;
+    unsigned int idx = forced_indices[i];
+    spikes_next[idx] = 1;
+    v[idx] = v_reset;
+    refrac[idx] = refrac_steps;
+    g_next[idx] = 0.0f;
+}
+
+extern "C" __global__ void gather_epg_spikes_kernel(
+    const unsigned char* spikes_next,
+    const unsigned int* epg_indices,
+    unsigned char* epg_spikes,
+    int num_epg,
+    int N
+) {
+    int j = blockIdx.x * blockDim.x + threadIdx.x;
+    if (j >= num_epg) return;
+    unsigned int idx = epg_indices[j];
+    if (idx >= (unsigned int)N) {
+        epg_spikes[j] = 0;
+        return;
+    }
+    epg_spikes[j] = spikes_next[idx];
 }
 "#;
 
-pub struct GpuStepResult {
-    pub spikes: Vec<u8>,
-    pub recurrent_ms: f64,
-    pub lif_ms: f64,
+/// Shared read-only connectome data on GPU (uploaded once at startup, reused by all sims).
+pub struct GpuConnectome {
+    dev: Arc<CudaDevice>,
+    pub ne: usize,
+    pub n: usize,
+    is_epg: CudaSlice<u8>,
+    out_offsets: CudaSlice<u32>,
+    out_post: CudaSlice<u32>,
+    out_weight: CudaSlice<f32>,
+    epg_indices_dev: CudaSlice<u32>,
+    epg_indices_host: Vec<u32>,
 }
 
+// CudaSlice wraps a device pointer — no host-side aliasing issues across threads.
+unsafe impl Send for GpuConnectome {}
+unsafe impl Sync for GpuConnectome {}
+
+/// Per-sim GPU state: voltage, conductance, spikes, delay buffer.
 pub struct GpuSimState {
-    dev: Arc<CudaDevice>,
+    connectome: Arc<GpuConnectome>,
     n: usize,
-    ne: usize,
-    edge_pre: CudaSlice<u32>,
-    edge_post: CudaSlice<u32>,
-    edge_weight: CudaSlice<f32>,
     v: CudaSlice<f32>,
     g: CudaSlice<f32>,
+    g_next: CudaSlice<f32>,
+    syn_input: CudaSlice<f32>,
+    delay_buffer: CudaSlice<f32>,
     refrac: CudaSlice<u16>,
     spikes_prev: CudaSlice<u8>,
     spikes_next: CudaSlice<u8>,
+    delay_head: usize,
+    delay_len: usize,
+    syn_input_host_dev: CudaSlice<f32>,
+    active_indices: CudaSlice<u32>,
+    num_active: CudaSlice<i32>,
+    rng_state: CudaSlice<u64>,
+    epg_spikes_dev: CudaSlice<u8>,
+    epg_spikes_host: Vec<u8>,
+}
+
+pub fn try_init_device() -> Option<Arc<CudaDevice>> {
+    DEVICE
+        .get_or_init(|| {
+            let d = CudaDevice::new(0).ok()?;
+            let ptx = compile_ptx(KERNELS).ok()?;
+            d.load_ptx(
+                ptx,
+                "bs",
+                &[
+                    "clear_kernel",
+                    "compact_spikes_kernel",
+                    "csr_scatter_kernel",
+                    "add_syn_input_kernel",
+                    "poisson_stim_sparse_kernel",
+                    "delay_conductance_kernel",
+                    "lif_kernel",
+                    "reset_g_on_spike_kernel",
+                    "apply_forced_spikes_kernel",
+                    "gather_epg_spikes_kernel",
+                ],
+            )
+            .ok()?;
+            Some(d)
+        })
+        .clone()
+}
+
+/// Upload connectome CSR data to GPU once. Called from main() after loading the template.
+pub fn init_gpu_connectome(template: &ConnectomeTemplate) -> Option<Arc<GpuConnectome>> {
+    GPU_CONNECTOME
+        .get_or_init(|| {
+            let dev = try_init_device()?;
+            let t0 = Instant::now();
+            let is_epg = dev.htod_sync_copy(&template.is_epg).ok()?;
+            let out_offsets = dev.htod_sync_copy(&template.out_offsets).ok()?;
+            let out_post = dev.htod_sync_copy(&template.out_post).ok()?;
+            let out_weight = dev.htod_sync_copy(&template.out_weight).ok()?;
+            let epg_indices_host: Vec<u32> = template
+                .is_epg
+                .iter()
+                .enumerate()
+                .filter_map(|(i, &v)| if v > 0 { Some(i as u32) } else { None })
+                .collect();
+            let epg_indices_dev = dev.htod_sync_copy(&epg_indices_host).ok()?;
+            let upload_ms = t0.elapsed().as_secs_f64() * 1000.0;
+            let ne = template.edges_pre.len();
+            let n = template.neuron_ids.len();
+            let mem_mb = ((n + 1) * 4 + ne * (4 + 4) + n) as f64 / 1_048_576.0;
+            eprintln!(
+                "[brain-service][gpu] connectome uploaded (CSR): {} neurons, {} edges, {:.1} MB, {:.1}ms",
+                n, ne, mem_mb, upload_ms
+            );
+            Some(Arc::new(GpuConnectome {
+                dev,
+                ne,
+                n,
+                is_epg,
+                out_offsets,
+                out_post,
+                out_weight,
+                epg_indices_dev,
+                epg_indices_host,
+            }))
+        })
+        .clone()
+}
+
+pub fn get_gpu_connectome() -> Option<Arc<GpuConnectome>> {
+    GPU_CONNECTOME.get().and_then(|opt| opt.clone())
 }
 
 impl GpuSimState {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         n: usize,
-        edges_pre: &[u32],
-        edges_post: &[u32],
-        edges_weight: &[f32],
+        connectome: Arc<GpuConnectome>,
         v_init: &[f32],
         g_init: &[f32],
         refrac_init: &[u16],
         spikes_init: &[u8],
+        delay_len: usize,
     ) -> Option<Self> {
-        if edges_pre.len() != edges_post.len() || edges_pre.len() != edges_weight.len() {
-            return None;
-        }
-        if v_init.len() != n || g_init.len() != n || refrac_init.len() != n || spikes_init.len() != n {
-            return None;
-        }
-        let ne = edges_pre.len();
-        let dev = DEVICE
-            .get_or_init(|| {
-                let d = CudaDevice::new(0).ok()?;
-                let ptx = compile_ptx(K).ok()?;
-                d.load_ptx(
-                    ptx,
-                    "bs",
-                    &[
-                        "decay_g_kernel",
-                        "recurrent_kernel",
-                        "add_uniform_kernel",
-                        "lif_kernel",
-                    ],
-                )
-                    .ok()?;
-                Some(d)
-            })
-            .clone()?;
-        let edge_pre = dev.htod_sync_copy(edges_pre).ok()?;
-        let edge_post = dev.htod_sync_copy(edges_post).ok()?;
-        let edge_weight = dev.htod_sync_copy(edges_weight).ok()?;
+        let dev = &connectome.dev;
         let v = dev.htod_sync_copy(v_init).ok()?;
         let g = dev.htod_sync_copy(g_init).ok()?;
+        let g_next: CudaSlice<f32> = dev.alloc_zeros(n).ok()?;
+        let syn_input: CudaSlice<f32> = dev.alloc_zeros(n).ok()?;
+        let delay_buffer: CudaSlice<f32> = dev.alloc_zeros(n * delay_len).ok()?;
         let refrac = dev.htod_sync_copy(refrac_init).ok()?;
         let spikes_prev = dev.htod_sync_copy(spikes_init).ok()?;
-        let spikes_next = dev.alloc_zeros(n).ok()?;
+        let spikes_next: CudaSlice<u8> = dev.alloc_zeros(n).ok()?;
+        let syn_input_host_dev: CudaSlice<f32> = dev.alloc_zeros(n).ok()?;
+        let active_indices: CudaSlice<u32> = dev.alloc_zeros(n).ok()?;
+        let num_active: CudaSlice<i32> = dev.alloc_zeros(1).ok()?;
+        let num_epg = connectome.epg_indices_host.len().max(1);
+        let epg_spikes_dev: CudaSlice<u8> = dev.alloc_zeros(num_epg).ok()?;
+        let epg_spikes_host = vec![0u8; num_epg];
+        let mut rng_init = vec![0u64; n];
+        for (i, s) in rng_init.iter_mut().enumerate() {
+            *s = 0x9E3779B97F4A7C15u64 ^ ((i as u64).wrapping_mul(0xD1B54A32D192ED03u64));
+        }
+        let rng_state = dev.htod_sync_copy(&rng_init).ok()?;
         Some(Self {
-            ne,
-            dev,
+            connectome,
             n,
-            edge_pre,
-            edge_post,
-            edge_weight,
             v,
             g,
+            g_next,
+            syn_input,
+            delay_buffer,
             refrac,
             spikes_prev,
             spikes_next,
+            delay_head: 0,
+            delay_len,
+            syn_input_host_dev,
+            active_indices,
+            num_active,
+            rng_state,
+            epg_spikes_dev,
+            epg_spikes_host,
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// Run one full simulation tick on GPU.
+    ///
+    /// `syn_input_host` — CPU-computed Poisson/stim additions (added on top of
+    /// recurrent input computed by the GPU).
+    /// `forced_indices` — neuron indices to force-spike (already resolved from IDs).
+    ///
+    /// Returns `(recurrent_ms, lif_ms)`. Spikes are in `last_spikes()`.
     pub fn step(
         &mut self,
-        dt_sec: f32,
-        sensory_left_indices: &[u32],
-        sensory_right_indices: &[u32],
-        sensory_unknown_indices: &[u32],
-        sensory_left_strength: f32,
-        sensory_right_strength: f32,
-        sensory_unknown_strength: f32,
-    ) -> Option<GpuStepResult> {
-        if !dt_sec.is_finite() || dt_sec <= 0.0 {
-            eprintln!(
-                "[brain-service][gpu] invalid dt_sec={} (requires finite > 0); n={} ne={}",
-                dt_sec, self.n, self.ne
-            );
-            return None;
-        }
-        let decay = self.dev.get_func("bs", "decay_g_kernel")?;
-        let recurrent = self.dev.get_func("bs", "recurrent_kernel")?;
-        let add_uniform = self.dev.get_func("bs", "add_uniform_kernel")?;
-        let lif = self.dev.get_func("bs", "lif_kernel")?;
-        let n = self.n as i32;
-        let ne = self.ne as i32;
-        let dt_ms = dt_sec * 1000.0;
-        let syn_decay = (-dt_ms / TAU_SYN_MS).exp();
+        dt_sec: f64,
+        syn_input_host: Option<&[f32]>,
+        gpu_stim_sparse: Option<(&[u32], &[f32], f32)>,
+        w_syn: f32,
+        epg_recurrence_boost: f32,
+        forced_indices: &[u32],
+    ) -> Option<(f64, f64, u32)> {
+        let dt_ms = (dt_sec * 1000.0) as f32;
+        let syn_decay = 1.0f32 - dt_ms / TAU_SYN_MS;
         let mem_alpha = dt_ms / TAU_MEM_MS;
         let refrac_steps = ((REFRACT_MS / dt_ms).ceil().max(1.0)) as u16;
+        let n = self.n as i32;
+        let delay_base = (self.delay_head * self.n) as i32;
 
+        let conn = Arc::clone(&self.connectome);
+        let dev = &conn.dev;
+
+        // 1. Clear syn_input
+        let clear_fn = dev.get_func("bs", "clear_kernel")?;
         unsafe {
-            decay
-                .launch(LaunchConfig::for_num_elems(self.n as u32), (&mut self.g, n, syn_decay))
+            clear_fn
+                .launch(
+                    LaunchConfig::for_num_elems(self.n as u32),
+                    (&mut self.syn_input, n),
+                )
                 .ok()?;
         }
+
         let t_recurrent = Instant::now();
+
+        // 2. Stream compaction: find spiking neuron indices (~60 out of 138K)
+        dev.htod_sync_copy_into(&[0i32], &mut self.num_active).ok()?;
+        let compact_fn = dev.get_func("bs", "compact_spikes_kernel")?;
         unsafe {
-            recurrent.launch(
-                LaunchConfig::for_num_elems(self.ne as u32),
-                (
-                    &self.spikes_prev,
-                    &mut self.g,
-                    &self.edge_pre,
-                    &self.edge_post,
-                    &self.edge_weight,
-                    ne,
-                    n,
-                    W_SYN,
-                ),
-            )
-            .ok()?;
+            compact_fn
+                .launch(
+                    LaunchConfig::for_num_elems(self.n as u32),
+                    (&self.spikes_prev, &mut self.active_indices, &mut self.num_active, n),
+                )
+                .ok()?;
         }
+
+        // Download spike count (sync point for compaction kernel)
+        let mut count_host = [0i32];
+        dev.dtoh_sync_copy_into(&self.num_active, &mut count_host).ok()?;
+        let num_active = count_host[0].max(0) as u32;
+
+        // 4. CSR scatter: one block per spiking neuron, 128 threads iterate its edges
+        if num_active > 0 {
+            let scatter_fn = dev.get_func("bs", "csr_scatter_kernel")?;
+            let cfg = LaunchConfig {
+                grid_dim: (num_active, 1, 1),
+                block_dim: (128, 1, 1),
+                shared_mem_bytes: 0,
+            };
+            unsafe {
+                scatter_fn
+                    .launch(
+                        cfg,
+                        (
+                            &self.active_indices,
+                            num_active as i32,
+                            &conn.out_offsets,
+                            &conn.out_post,
+                            &conn.out_weight,
+                            &conn.is_epg,
+                            &mut self.syn_input,
+                            n,
+                            w_syn,
+                            epg_recurrence_boost,
+                        ),
+                    )
+                    .ok()?;
+            }
+        }
+
+        // 5. GPU sparse Poisson stimulation (world path: small PEN set)
+        if let Some((stim_indices, stim_rates_hz, spike_amp)) = gpu_stim_sparse {
+            if stim_indices.len() != stim_rates_hz.len() {
+                return None;
+            }
+            if !stim_indices.is_empty() {
+                // Copy exact-length sparse vectors to avoid size-mismatch assertions.
+                let stim_indices_dev = dev.htod_sync_copy(stim_indices).ok()?;
+                let stim_rates_dev = dev.htod_sync_copy(stim_rates_hz).ok()?;
+                let stim_fn = dev.get_func("bs", "poisson_stim_sparse_kernel")?;
+                unsafe {
+                    stim_fn
+                        .launch(
+                            LaunchConfig::for_num_elems(stim_indices.len() as u32),
+                            (
+                                &mut self.syn_input,
+                                &stim_indices_dev,
+                                &stim_rates_dev,
+                                &mut self.rng_state,
+                                stim_indices.len() as i32,
+                                dt_sec as f32,
+                                spike_amp,
+                                n,
+                            ),
+                        )
+                        .ok()?;
+                }
+            }
+        }
+
+        // 6. Add CPU-computed Poisson / stim_rates_by_id additions when needed
+        if let Some(syn_input_host) = syn_input_host {
+            if syn_input_host.len() != self.n {
+                return None;
+            }
+            dev.htod_sync_copy_into(syn_input_host, &mut self.syn_input_host_dev).ok()?;
+            let add_fn = dev.get_func("bs", "add_syn_input_kernel")?;
+            unsafe {
+                add_fn
+                    .launch(
+                        LaunchConfig::for_num_elems(self.n as u32),
+                        (&mut self.syn_input, &self.syn_input_host_dev, n),
+                    )
+                    .ok()?;
+            }
+        }
+
         let recurrent_ms = t_recurrent.elapsed().as_secs_f64() * 1000.0;
-        if sensory_left_strength > 0.0 && !sensory_left_indices.is_empty() {
-            let dev_indices = self.dev.htod_sync_copy(sensory_left_indices).ok()?;
-            unsafe {
-                add_uniform.clone()
-                    .launch(
-                        LaunchConfig::for_num_elems(sensory_left_indices.len() as u32),
-                        (
-                            &mut self.g,
-                            &dev_indices,
-                            sensory_left_indices.len() as i32,
-                            sensory_left_strength,
-                            n,
-                        ),
-                    )
-                    .ok()?;
-            }
-        }
-        if sensory_right_strength > 0.0 && !sensory_right_indices.is_empty() {
-            let dev_indices = self.dev.htod_sync_copy(sensory_right_indices).ok()?;
-            unsafe {
-                add_uniform.clone()
-                    .launch(
-                        LaunchConfig::for_num_elems(sensory_right_indices.len() as u32),
-                        (
-                            &mut self.g,
-                            &dev_indices,
-                            sensory_right_indices.len() as i32,
-                            sensory_right_strength,
-                            n,
-                        ),
-                    )
-                    .ok()?;
-            }
-        }
-        if sensory_unknown_strength > 0.0 && !sensory_unknown_indices.is_empty() {
-            let dev_indices = self.dev.htod_sync_copy(sensory_unknown_indices).ok()?;
-            unsafe {
-                add_uniform.clone()
-                    .launch(
-                        LaunchConfig::for_num_elems(sensory_unknown_indices.len() as u32),
-                        (
-                            &mut self.g,
-                            &dev_indices,
-                            sensory_unknown_indices.len() as i32,
-                            sensory_unknown_strength,
-                            n,
-                        ),
-                    )
-                    .ok()?;
-            }
-        }
         let t_lif = Instant::now();
+
+        // 7. Delay buffer + conductance update (matches CPU alpha-synapse with 1.8ms delay)
+        let delay_fn = dev.get_func("bs", "delay_conductance_kernel")?;
         unsafe {
-            lif.launch(
-                LaunchConfig::for_num_elems(self.n as u32),
-                (
-                    &mut self.v,
-                    &self.g,
-                    &mut self.refrac,
-                    &mut self.spikes_next,
-                    n,
-                    mem_alpha,
-                    // Intentional: this model uses v_rest == v_reset for direct
-                    // reset to baseline after spikes/refractory.
-                    V_REST,
-                    V_RESET,
-                    V_THRESH,
-                    refrac_steps,
-                ),
+            delay_fn
+                .launch(
+                    LaunchConfig::for_num_elems(self.n as u32),
+                    (
+                        &self.g,
+                        &mut self.g_next,
+                        &mut self.delay_buffer,
+                        &self.syn_input,
+                        &self.refrac,
+                        n,
+                        delay_base,
+                        syn_decay,
+                    ),
+                )
+                .ok()?;
+        }
+        self.delay_head = (self.delay_head + 1) % self.delay_len;
+
+        // 8. LIF integration — uses OLD g (not g_next), matching CPU Euler scheme
+        let lif_fn = dev.get_func("bs", "lif_kernel")?;
+        unsafe {
+            lif_fn
+                .launch(
+                    LaunchConfig::for_num_elems(self.n as u32),
+                    (
+                        &mut self.v,
+                        &self.g,
+                        &mut self.refrac,
+                        &mut self.spikes_next,
+                        n,
+                        mem_alpha,
+                        V_REST,
+                        V_RESET,
+                        V_THRESH,
+                        refrac_steps,
+                    ),
+                )
+                .ok()?;
+        }
+
+        // 9. Reset g_next for neurons that just spiked
+        let reset_fn = dev.get_func("bs", "reset_g_on_spike_kernel")?;
+        unsafe {
+            reset_fn
+                .launch(
+                    LaunchConfig::for_num_elems(self.n as u32),
+                    (&mut self.g_next, &self.spikes_next, n),
+                )
+                .ok()?;
+        }
+
+        // 10. Apply forced spikes on device
+        if !forced_indices.is_empty() {
+            let forced_dev = dev.htod_sync_copy(forced_indices).ok()?;
+            let forced_fn = dev.get_func("bs", "apply_forced_spikes_kernel")?;
+            unsafe {
+                forced_fn
+                    .launch(
+                        LaunchConfig::for_num_elems(forced_indices.len() as u32),
+                        (
+                            &mut self.v,
+                            &mut self.refrac,
+                            &mut self.g_next,
+                            &mut self.spikes_next,
+                            &forced_dev,
+                            forced_indices.len() as i32,
+                            V_RESET,
+                            refrac_steps,
+                        ),
+                    )
+                    .ok()?;
+            }
+        }
+
+        // 11. Count total spikes in spikes_next without full D2H copy
+        dev.htod_sync_copy_into(&[0i32], &mut self.num_active).ok()?;
+        let compact_next_fn = dev.get_func("bs", "compact_spikes_kernel")?;
+        unsafe {
+            compact_next_fn
+                .launch(
+                    LaunchConfig::for_num_elems(self.n as u32),
+                    (&self.spikes_next, &mut self.active_indices, &mut self.num_active, n),
+                )
+                .ok()?;
+        }
+        let mut total_spikes_host = [0i32];
+        dev.dtoh_sync_copy_into(&self.num_active, &mut total_spikes_host).ok()?;
+        let total_spikes = total_spikes_host[0].max(0) as u32;
+
+        // 12. Gather and download only EPG spikes
+        let num_epg = conn.epg_indices_host.len() as i32;
+        if num_epg > 0 {
+            let gather_fn = dev.get_func("bs", "gather_epg_spikes_kernel")?;
+            unsafe {
+                gather_fn
+                    .launch(
+                        LaunchConfig::for_num_elems(num_epg as u32),
+                        (
+                            &self.spikes_next,
+                            &conn.epg_indices_dev,
+                            &mut self.epg_spikes_dev,
+                            num_epg,
+                            n,
+                        ),
+                    )
+                    .ok()?;
+            }
+            dev.dtoh_sync_copy_into(
+                &self.epg_spikes_dev,
+                &mut self.epg_spikes_host[..num_epg as usize],
             )
             .ok()?;
         }
-        let spikes = self.dev.dtoh_sync_copy(&self.spikes_next).ok()?;
-        std::mem::swap(&mut self.spikes_prev, &mut self.spikes_next);
         let lif_ms = t_lif.elapsed().as_secs_f64() * 1000.0;
-        Some(GpuStepResult {
-            spikes,
-            recurrent_ms,
-            lif_ms,
-        })
+
+        // 13. Swap device handles: spikes_prev ← spikes_next, g ← g_next
+        std::mem::swap(&mut self.spikes_prev, &mut self.spikes_next);
+        std::mem::swap(&mut self.g, &mut self.g_next);
+
+        Some((recurrent_ms, lif_ms, total_spikes))
     }
 
-    pub fn host_state(&self) -> Option<(Vec<f32>, Vec<f32>, Vec<u16>)> {
-        let v = self.dev.dtoh_sync_copy(&self.v).ok()?;
-        let g = self.dev.dtoh_sync_copy(&self.g).ok()?;
-        let refrac = self.dev.dtoh_sync_copy(&self.refrac).ok()?;
-        Some((v, g, refrac))
+    pub fn last_epg_spikes(&self) -> &[u8] {
+        &self.epg_spikes_host[..self.connectome.epg_indices_host.len()]
+    }
+
+    pub fn epg_indices(&self) -> &[u32] {
+        &self.connectome.epg_indices_host
+    }
+
+    pub fn ensure_delay_len(&mut self, new_delay_len: usize) {
+        if self.delay_len == new_delay_len {
+            return;
+        }
+        if let Ok(buf) = self.connectome.dev.alloc_zeros::<f32>(self.n * new_delay_len) {
+            self.delay_buffer = buf;
+            self.delay_head = 0;
+            self.delay_len = new_delay_len;
+        }
+    }
+
+    /// Push host spikes into device spikes_prev (used when step_with_options
+    /// zeros spikes during fly rest periods).
+    pub fn sync_spikes_from_host(&mut self, spikes: &[u8]) {
+        if let Ok(s) = self.connectome.dev.htod_sync_copy(spikes) {
+            self.spikes_prev = s;
+        }
     }
 }

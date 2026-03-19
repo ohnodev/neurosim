@@ -2,17 +2,13 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import { createServer } from 'http';
+import net from 'net';
 import { WebSocketServer } from 'ws';
 import { loadConnectome } from './connectome.js';
-import { createBrainSim } from './brain-sim.js';
 import * as socketClient from './brain-socket-client.js';
 import { getWorld, spawnFood, removeFood, getSources, type WorldSource } from './world.js';
 import {
-  getWorldPenPresets,
-  WORLD_COMPASS_DEG,
-  WORLD_COMPASS_STEP_DEG,
   WORLD_SIM_DT_SEC,
-  type WorldCompassPosition,
 } from './world-pen-presets.js';
 import claimsRouter from './routes/claims.js';
 import { getFlies, removeFlyAtSlot } from './services/flyStore.js';
@@ -33,19 +29,39 @@ import { flushRewards } from './services/rewardDistributor.js';
 const PORT = Number(process.env.PORT) || 3001;
 const connectome = loadConnectome();
 const EPG_TILE_MAP_PATH = path.resolve(process.cwd(), '..', 'data', 'epg-tile-map.json');
-const epgRootIdSet = (() => {
+type EpgTileMapEntry = {
+  root_id: string;
+  hemibrain_type?: string;
+  side?: string;
+  hemilineage?: string;
+  tile_index_0_7?: number;
+  tile_label?: string;
+  parsed_from?: string;
+};
+const epgTileMapEntries: EpgTileMapEntry[] = (() => {
   try {
     const raw = fs.readFileSync(EPG_TILE_MAP_PATH, 'utf-8');
-    const parsed = JSON.parse(raw) as { entries?: Array<{ root_id?: string }> };
-    return new Set(
-      (parsed.entries ?? [])
-        .map((e) => String(e?.root_id ?? ''))
-        .filter((id) => id.length > 0),
-    );
+    const parsed = JSON.parse(raw) as { entries?: Array<Record<string, unknown>> };
+    return (parsed.entries ?? [])
+      .map((e) => {
+        const rootId = String(e?.root_id ?? '').trim();
+        if (!rootId) return null;
+        return {
+          root_id: rootId,
+          hemibrain_type: typeof e?.hemibrain_type === 'string' ? e.hemibrain_type : undefined,
+          side: typeof e?.side === 'string' ? e.side : undefined,
+          hemilineage: typeof e?.hemilineage === 'string' ? e.hemilineage : undefined,
+          tile_index_0_7: Number.isFinite(Number(e?.tile_index_0_7)) ? Number(e?.tile_index_0_7) : undefined,
+          tile_label: typeof e?.tile_label === 'string' ? e.tile_label : undefined,
+          parsed_from: typeof e?.parsed_from === 'string' ? e.parsed_from : undefined,
+        } as EpgTileMapEntry;
+      })
+      .filter((e): e is EpgTileMapEntry => e != null);
   } catch {
-    return new Set<string>();
+    return [];
   }
 })();
+const epgRootIdSet = new Set(epgTileMapEntries.map((e) => e.root_id));
 const ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
 const MAX_SLOT_INDEX = 2;
 const VIEWER_NEURON_LIMIT = Math.max(1, Number(process.env.NEUROSIM_VIEWER_NEURON_LIMIT ?? 10_000));
@@ -153,12 +169,6 @@ function loadPenABySide(): { left: string[]; right: string[] } {
 const PEN_A_BY_SIDE = loadPenABySide();
 const EPG_IDS_FOR_RUN_STEPS = [...epgRootIdSet].sort();
 
-/** World 3-position PEN_a presets (11PM, 3PM, 8PM). */
-const WORLD_PEN_PRESETS = getWorldPenPresets(PEN_A_BY_SIDE);
-
-/** Per-sim next PEN_a preset for world steering. Index = sim index. */
-const penPresetBySimIndex: WorldCompassPosition[] = [];
-
 /** Per-sim smoothed bump angle (deg) for stable heading and compass. */
 const smoothedBumpBySimIndex: (number | null)[] = [];
 
@@ -180,38 +190,6 @@ function normalizeAngleDeg(deg: number): number {
   while (a > 180) a -= 360;
   while (a < -180) a += 360;
   return a;
-}
-
-/** Pick the world compass position (11PM, 3PM, 8PM) closest to the given target angle in degrees. */
-function chooseWorldPresetFromAngleDeg(angleToTargetDeg: number): WorldCompassPosition {
-  let best: WorldCompassPosition = '11PM';
-  let bestDiff = Infinity;
-  for (const pos of ['11PM', '3PM', '8PM'] as const) {
-    const d = Math.abs(normalizeAngleDeg(angleToTargetDeg - WORLD_COMPASS_DEG[pos]));
-    if (d < bestDiff) {
-      bestDiff = d;
-      best = pos;
-    }
-  }
-  return best;
-}
-
-function chooseWorldPresetForFly(
-  fly: { x: number; y: number; heading: number },
-  sources: WorldSource[],
-): WorldCompassPosition {
-  let angleDeg = (fly.heading * 180) / Math.PI;
-  let nearestDistSq = Number.POSITIVE_INFINITY;
-  for (const s of sources) {
-    const dx = s.x - fly.x;
-    const dy = s.y - fly.y;
-    const d2 = dx * dx + dy * dy;
-    if (d2 < nearestDistSq) {
-      nearestDistSq = d2;
-      angleDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
-    }
-  }
-  return chooseWorldPresetFromAngleDeg(angleDeg);
 }
 
 function createSeededRandom(seed: number): () => number {
@@ -293,19 +271,70 @@ const viewerNeuronIndexSet = new Set<number>(viewerNeuronIndices);
 const CUDA_ONLY = process.env.NEUROSIM_MODE === 'cuda' || process.env.USE_CUDA === '1';
 const PROBE_RETRIES = 40;
 const PROBE_DELAY_MS = 3000;
+const BRAIN_SOCKET_PATH = process.env.NEUROSIM_BRAIN_SOCKET ?? '/tmp/neurosim-brain.sock';
 
-let backendInfo = { engine: 'python-brain', gpu: process.env.USE_CUDA === '1' };
+async function probeBrainServicePing(): Promise<{ ok: boolean; gpu: boolean }> {
+  return new Promise((resolve, reject) => {
+    const sock = net.createConnection(BRAIN_SOCKET_PATH);
+    let settled = false;
+    let buf = '';
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      sock.destroy();
+      reject(new Error('brain-service ping timeout'));
+    }, 5000);
+    const finish = (err?: Error, payload?: { ok: boolean; gpu: boolean }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      sock.destroy();
+      if (err) reject(err);
+      else resolve(payload ?? { ok: false, gpu: false });
+    };
+    sock.once('error', (err) => finish(err));
+    sock.once('connect', () => {
+      try {
+        sock.write(`${JSON.stringify({ method: 'ping' })}\n`);
+      } catch (err) {
+        finish(err as Error);
+      }
+    });
+    sock.on('data', (chunk) => {
+      buf += chunk.toString('utf8');
+      const nl = buf.indexOf('\n');
+      if (nl < 0) return;
+      const line = buf.slice(0, nl).trim();
+      if (!line) {
+        finish(new Error('empty ping response'));
+        return;
+      }
+      try {
+        const parsed = JSON.parse(line) as { ok?: boolean; gpu?: boolean };
+        if (!parsed.ok) {
+          finish(new Error('brain-service ping failed'));
+          return;
+        }
+        finish(undefined, { ok: true, gpu: Boolean(parsed.gpu) });
+      } catch (err) {
+        finish(err as Error);
+      }
+    });
+  });
+}
+
+let backendInfo = { engine: 'rust', gpu: false };
 let probeOk = false;
 for (let i = 0; i < PROBE_RETRIES; i++) {
   try {
-    await socketClient.ping();
+    const ping = await probeBrainServicePing();
     console.log('[backend] handshake: API ↔ brain-service OK');
-    backendInfo = { engine: 'python-brain', gpu: process.env.USE_CUDA === '1' };
+    backendInfo = { engine: 'rust', gpu: Boolean(ping.gpu) };
     probeOk = true;
     break;
   } catch (e) {
     if (i === PROBE_RETRIES - 1) {
-      console.error('[backend] Brain service (Unix socket) unavailable after', PROBE_RETRIES, 'retries. Is python-brain running?', e);
+      console.error('[backend] Brain service (Unix socket) unavailable after', PROBE_RETRIES, 'retries. Is neurosim-brain running?', e);
       process.exit(1);
     }
     console.warn('[backend] Brain service not ready, retry', i + 1, '/', PROBE_RETRIES, 'in', PROBE_DELAY_MS, 'ms');
@@ -328,7 +357,41 @@ let foodIntervalId: ReturnType<typeof setInterval> | null = null;
 let rewardFlushIntervalId: ReturnType<typeof setInterval> | null = null;
 
 /** Simulation flies; starts empty, users deploy flies. */
-const sims: Awaited<ReturnType<typeof createBrainSim>>[] = [];
+type RuntimeFly = {
+  x: number;
+  y: number;
+  z: number;
+  heading: number;
+  t: number;
+  hunger: number;
+  health: number;
+  dead?: boolean;
+  flyTimeLeft?: number;
+  restTimeLeft?: number;
+  restDuration?: number;
+  feeding?: boolean;
+};
+type RuntimeSimState = {
+  t: number;
+  fly: RuntimeFly;
+  activity?: Record<string, number>;
+  inputActivity?: Record<string, number>;
+  eatenFoodIds?: string[];
+  feedingSugarTaken?: number;
+  bumpAngleDeg?: number | null;
+  epgBins?: number[] | null;
+};
+type RuntimeSim = {
+  flyId: number;
+  state: RuntimeSimState;
+  timing: {
+    rustMs: number;
+    jsMs: number;
+    socketTotalMs: number;
+    socketResponseWaitMs: number;
+  };
+};
+const sims: RuntimeSim[] = [];
 /** address -> slotIndex -> simIndex */
 const deployedFlies = new Map<string, Map<number, number>>();
 /** Per-sim rolling activity memory so clients can receive rotating recent spikes/inputs. */
@@ -360,12 +423,20 @@ function findDeploymentBySimIndex(simIndex: number): { address: string; slotInde
   return null;
 }
 
-function removeSimAtIndex(simIndex: number): { address: string; slotIndex: number } | null {
+async function removeSimAtIndex(simIndex: number): Promise<{ address: string; slotIndex: number } | null> {
   if (simIndex < 0 || simIndex >= sims.length) return null;
   const deployment = findDeploymentBySimIndex(simIndex);
+  const removedFlyId = sims[simIndex]?.flyId;
+  if (typeof removedFlyId === 'number') {
+    try {
+      await socketClient.worldRemoveFly(removedFlyId);
+    } catch (err) {
+      console.error('[world] world_remove_fly failed; aborting local removal', { flyId: removedFlyId, simIndex, err });
+      return null;
+    }
+  }
   sims.splice(simIndex, 1);
   simActivityTrail.splice(simIndex, 1);
-  penPresetBySimIndex.splice(simIndex, 1);
   smoothedBumpBySimIndex.splice(simIndex, 1);
 
   for (const [address, slotMap] of deployedFlies) {
@@ -389,7 +460,7 @@ async function addFlyToSim(spawnKey?: string): Promise<number> {
   const x = INITIAL_SPREAD * Math.cos(baseAngle) + jitterRadius * Math.cos(jitterAngle);
   const y = INITIAL_SPREAD * Math.sin(baseAngle) + jitterRadius * Math.sin(jitterAngle);
   const heading = (((h >>> 20) & 1023) / 1023) * 2 * Math.PI - Math.PI;
-  const sim = await createBrainSim(connectome, () => getSources(), {
+  const created = await socketClient.worldAddFly({
     x,
     y,
     z: GROUND_Z,
@@ -397,22 +468,39 @@ async function addFlyToSim(spawnKey?: string): Promise<number> {
     t: 0,
     hunger: 100,
     health: 100,
+    restTimeLeft: 0,
+    dead: false,
   });
-  sims.push(sim);
+  sims.push({
+    flyId: created.fly_id,
+    state: {
+      t: 0,
+      fly: {
+        x,
+        y,
+        z: GROUND_Z,
+        heading,
+        t: 0,
+        hunger: 100,
+        health: 100,
+        dead: false,
+        flyTimeLeft: 1,
+        restTimeLeft: 0,
+        restDuration: 0,
+        feeding: false,
+      },
+      activity: {},
+      bumpAngleDeg: null,
+      epgBins: null,
+    },
+    timing: {
+      rustMs: 0,
+      jsMs: 0,
+      socketTotalMs: 0,
+      socketResponseWaitMs: 0,
+    },
+  });
   simActivityTrail.push(new Map());
-  const sources = getSources();
-  let angleDeg = (heading * 180) / Math.PI;
-  let nearestDistSq = Number.POSITIVE_INFINITY;
-  for (const s of sources) {
-    const dx = s.x - x;
-    const dy = s.y - y;
-    const d2 = dx * dx + dy * dy;
-    if (d2 < nearestDistSq) {
-      nearestDistSq = d2;
-      angleDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
-    }
-  }
-  penPresetBySimIndex.push(chooseWorldPresetFromAngleDeg(angleDeg));
   smoothedBumpBySimIndex.push(normalizeAngleDeg((heading * 180) / Math.PI));
   return sims.length - 1;
 }
@@ -434,10 +522,17 @@ async function restoreDeployFromStore(): Promise<void> {
     console.log('[deploy] restored', records.length, 'deployments from store');
   }
 }
-try {
-  await restoreDeployFromStore();
-} catch (err) {
-  console.error('[deploy] restore error:', err);
+const RESTORE_DEPLOYMENTS_ON_START =
+  process.env.NEUROSIM_RESTORE_DEPLOYMENTS_ON_START === '1' ||
+  process.env.NEUROSIM_RESTORE_DEPLOYMENTS_ON_START?.toLowerCase() === 'true';
+if (RESTORE_DEPLOYMENTS_ON_START) {
+  try {
+    await restoreDeployFromStore();
+  } catch (err) {
+    console.error('[deploy] restore error:', err);
+  }
+} else {
+  console.log('[deploy] startup restore disabled; waiting for user deploys');
 }
 let simRunning = false;
 let simIntervalId: ReturnType<typeof setInterval> | null = null;
@@ -473,20 +568,9 @@ function broadcast(data: unknown): void {
 function buildClientPayload(
   frames: {
     t: number;
-    flies: ReturnType<typeof sims[0]['getState']>['fly'][];
+    flies: RuntimeFly[];
     activities: (Record<string, number> | undefined)[];
     inputActivities: (Record<string, number> | undefined)[];
-    motorReadouts: ({
-      left: number;
-      right: number;
-      fwd: number;
-      leftCount: number;
-      rightCount: number;
-      fwdCount: number;
-      leftMagnitude: number;
-      rightMagnitude: number;
-      fwdMagnitude: number;
-    } | undefined)[];
     bumpAngleDegs: (number | null)[];
     epgBinsPerSim: (number[] | null)[];
   }[],
@@ -510,9 +594,8 @@ function buildClientPayload(
       lastFrame ? (lastFrame.inputActivities[viewIndex] ?? {}) : {},
       nowMs,
     );
-    const motor = lastFrame ? (lastFrame.motorReadouts[viewIndex] ?? undefined) : undefined;
     try {
-      ws.send(JSON.stringify({ frames: clientFrames, activity, motor, sources, simRunning: true }));
+      ws.send(JSON.stringify({ frames: clientFrames, activity, sources, simRunning: true }));
     } catch (err) {
       console.error('[ws] send error', err);
     }
@@ -661,45 +744,25 @@ function startSim(): void {
       const dtFrame = 1 / SIM_FPS;
       const frames: {
         t: number;
-        flies: ReturnType<typeof sims[0]['getState']>['fly'][];
+        flies: RuntimeFly[];
         activities: (Record<string, number> | undefined)[];
         inputActivities: (Record<string, number> | undefined)[];
-        motorReadouts: ({
-          left: number;
-          right: number;
-          fwd: number;
-          leftCount: number;
-          rightCount: number;
-          fwdCount: number;
-          leftMagnitude: number;
-          rightMagnitude: number;
-          fwdMagnitude: number;
-        } | undefined)[];
         bumpAngleDegs: (number | null)[];
         epgBinsPerSim: (number[] | null)[];
       }[] = [];
 
       const transitions: Array<{
-        fromFly: ReturnType<typeof sims[0]['getState']>['fly'];
-        toFly: ReturnType<typeof sims[0]['getState']>['fly'];
+        fromFly: RuntimeFly;
+        toFly: RuntimeFly;
         fromT: number;
         toT: number;
         activity?: Record<string, number>;
         inputActivity?: Record<string, number>;
-        motorLeft?: number;
-        motorRight?: number;
-        motorFwd?: number;
-        motorLeftCount?: number;
-        motorRightCount?: number;
-        motorFwdCount?: number;
-        motorLeftMagnitude?: number;
-        motorRightMagnitude?: number;
-        motorFwdMagnitude?: number;
         bumpAngleDeg?: number | null;
         epgBins?: number[] | null;
       }> = [];
 
-      const beforeStates = sims.map((s) => s.getState());
+      const beforeStates = sims.map((s) => s.state);
       const viewedSimIndexes = new Set<number>();
       if (wsClients.size > 0) {
         for (const ws of wsClients) {
@@ -708,56 +771,63 @@ function startSim(): void {
         }
       }
       const currentSources = getSources();
-      const states = await Promise.all(
-        sims.map(async (s, idx) => {
-          const beforeFly = beforeStates[idx]?.fly;
-          if (beforeFly) {
-            penPresetBySimIndex[idx] = chooseWorldPresetForFly(beforeFly, currentSources);
-            if (smoothedBumpBySimIndex[idx] == null) {
-              smoothedBumpBySimIndex[idx] = normalizeAngleDeg((beforeFly.heading * 180) / Math.PI);
-            }
-          }
-          const preset = penPresetBySimIndex[idx] ?? '11PM';
-          const ratesById = WORLD_PEN_PRESETS[preset];
-          const state = await (s as { stepBatch?: (dt: number, n: number, src: WorldSource[], rates?: Record<string, number>) => Promise<ReturnType<typeof sims[0]['getState']>> }).stepBatch?.(
-            WORLD_SIM_DT_SEC,
-            WORLD_STEPS_PER_BATCH,
-            currentSources,
-            ratesById,
-          );
-          return state ?? s.getState();
-        }),
+      const pullStart = performance.now();
+      await socketClient.worldSetSources(
+        currentSources.map((s) => ({ id: s.id, x: s.x ?? 0, y: s.y ?? 0, radius: s.radius ?? 1 })),
       );
+      const worldSnap = await socketClient.worldGetSnapshot();
+      const pullMs = performance.now() - pullStart;
+      const byFlyId = new Map<number, socketClient.WorldFlySnapshot>();
+      for (const item of worldSnap.flies ?? []) byFlyId.set(item.fly_id, item);
+      const states: RuntimeSimState[] = sims.map((sim, idx) => {
+        const snap = byFlyId.get(sim.flyId);
+        if (!snap) return sim.state;
+        const next: RuntimeSimState = {
+          t: snap.fly.t,
+          fly: {
+            x: snap.fly.x,
+            y: snap.fly.y,
+            z: snap.fly.z,
+            heading: snap.fly.heading,
+            t: snap.fly.t,
+            hunger: snap.fly.hunger,
+            health: snap.fly.health,
+            dead: snap.fly.dead,
+            flyTimeLeft: snap.fly.fly_time_left,
+            restTimeLeft: snap.fly.rest_time_left,
+            restDuration: snap.fly.rest_duration,
+            feeding: snap.fly.feeding,
+          },
+          activity: snap.activity_sparse ?? {},
+          inputActivity: undefined,
+          eatenFoodIds: undefined,
+          feedingSugarTaken: 0,
+          bumpAngleDeg: snap.bump_angle_deg ?? null,
+          epgBins: snap.epg_bins ?? null,
+        };
+        sim.state = next;
+        sim.timing = {
+          rustMs: snap.compute_ms ?? 0,
+          jsMs: 0,
+          socketTotalMs: Math.round(pullMs),
+          socketResponseWaitMs: Math.round(pullMs),
+        };
+        return next;
+      });
       const activityNowMs = Date.now();
       const deadSimIndexes: number[] = [];
       for (let j = 0; j < nSims; j++) {
         const before = beforeStates[j];
         const state = states[j];
-        const gt = (sims[j] as {
-          getTiming?: () => {
-            rustMs: number;
-            jsMs: number;
-            socketTotalMs?: number;
-            socketResponseWaitMs?: number;
-            socketBatchSize?: number;
-          };
-        }).getTiming?.();
+        const gt = sims[j]?.timing;
         if (gt) {
           stepMs += gt.rustMs;
           jsMs += gt.jsMs;
-          const thisBatchSize = gt.socketBatchSize ?? 1;
-          if (thisBatchSize > 1) {
-            if (j === 0) {
-              socketRoundtripMs += gt.socketTotalMs ?? 0;
-              socketWaitMs += gt.socketResponseWaitMs ?? 0;
-              batchCalls += 1;
-              batchSize = thisBatchSize;
-            }
-          } else {
+          if (j === 0) {
             socketRoundtripMs += gt.socketTotalMs ?? 0;
             socketWaitMs += gt.socketResponseWaitMs ?? 0;
-            batchCalls += 1;
-            if (batchSize < 1) batchSize = 1;
+            batchCalls = 1;
+            batchSize = Math.max(1, nSims);
           }
           if (gt.rustMs > maxStepMs) maxStepMs = gt.rustMs;
           if (gt.jsMs > maxJsMs) maxJsMs = gt.jsMs;
@@ -800,18 +870,14 @@ function startSim(): void {
           deadSimIndexes.push(j);
         }
 
-        // Position 1 only: 11PM (L1:50, L2:50, L6:50). Smooth bump so heading and compass are stable.
-        let toFly = state.fly;
+        // Keep heading from Rust world kinematics; smooth bump is for compass rendering only.
+        const toFly = state.fly;
         const rawBump = state.bumpAngleDeg ?? null;
         const smoothed =
           rawBump != null
             ? smoothBumpDeg(smoothedBumpBySimIndex[j] ?? null, rawBump, BUMP_SMOOTH_ALPHA)
             : null;
         if (smoothed != null) smoothedBumpBySimIndex[j] = smoothed;
-
-        if (smoothed != null) {
-          toFly = { ...toFly, heading: (smoothed * Math.PI) / 180 };
-        }
 
         transitions.push({
           fromFly: before.fly,
@@ -820,15 +886,6 @@ function startSim(): void {
           toT: state.t,
           activity: state.activity,
           inputActivity: state.inputActivity,
-          motorLeft: state.motorLeft,
-          motorRight: state.motorRight,
-          motorFwd: state.motorFwd,
-          motorLeftCount: state.motorLeftCount,
-          motorRightCount: state.motorRightCount,
-          motorFwdCount: state.motorFwdCount,
-          motorLeftMagnitude: state.motorLeftMagnitude,
-          motorRightMagnitude: state.motorRightMagnitude,
-          motorFwdMagnitude: state.motorFwdMagnitude,
           bumpAngleDeg: smoothed ?? rawBump ?? undefined,
           epgBins: state.epgBins ?? undefined,
         });
@@ -837,7 +894,7 @@ function startSim(): void {
       if (deadSimIndexes.length > 0) {
         const uniqueDead = [...new Set(deadSimIndexes)].sort((a, b) => b - a);
         for (const simIndex of uniqueDead) {
-          const removed = removeSimAtIndex(simIndex);
+          const removed = await removeSimAtIndex(simIndex);
           if (!removed) continue;
           const graveyarded = removeFlyAtSlot(removed.address, removed.slotIndex);
           deactivateDeployment(removed.address, removed.slotIndex);
@@ -855,7 +912,7 @@ function startSim(): void {
 
       for (let i = 1; i <= FRAMES_PER_BATCH; i++) {
         const alpha = i / FRAMES_PER_BATCH;
-        const flies: ReturnType<typeof sims[0]['getState']>['fly'][] = transitions.map((tr) => ({
+        const flies: RuntimeFly[] = transitions.map((tr) => ({
           ...tr.toFly,
           x: lerp(tr.fromFly.x, tr.toFly.x, alpha),
           y: lerp(tr.fromFly.y, tr.toFly.y, alpha),
@@ -867,25 +924,10 @@ function startSim(): void {
         }));
         const activities = transitions.map((tr) => (i === FRAMES_PER_BATCH ? tr.activity : undefined));
         const inputActivities = transitions.map((tr) => (i === FRAMES_PER_BATCH ? tr.inputActivity : undefined));
-        const motorReadouts = transitions.map((tr) =>
-          i === FRAMES_PER_BATCH
-            ? {
-                left: tr.motorLeft ?? 0,
-                right: tr.motorRight ?? 0,
-                fwd: tr.motorFwd ?? 0,
-                leftCount: tr.motorLeftCount ?? 0,
-                rightCount: tr.motorRightCount ?? 0,
-                fwdCount: tr.motorFwdCount ?? 0,
-                leftMagnitude: tr.motorLeftMagnitude ?? 0,
-                rightMagnitude: tr.motorRightMagnitude ?? 0,
-                fwdMagnitude: tr.motorFwdMagnitude ?? 0,
-              }
-            : undefined,
-        );
         const t = transitions.length ? lerp(transitions[0].fromT, transitions[0].toT, alpha) : 0;
         const bumpAngleDegs = transitions.map((tr) => tr.bumpAngleDeg ?? null);
         const epgBinsPerSim = transitions.map((tr) => tr.epgBins ?? null);
-        frames.push({ t, flies, activities, inputActivities, motorReadouts, bumpAngleDegs, epgBinsPerSim });
+        frames.push({ t, flies, activities, inputActivities, bumpAngleDegs, epgBinsPerSim });
       }
       const beforePayload = performance.now();
       buildClientPayload(frames);
@@ -1022,6 +1064,14 @@ app.get('/api/neurons', (req, res) => {
     viewerNeuronLimit: VIEWER_NEURON_LIMIT,
     viewerNeuronCount: viewerNeuronIndices.length,
     totalNeuronCount: connectome.neurons.length,
+  });
+});
+
+app.get('/api/epg-tile-map', (_req, res) => {
+  res.json({
+    entries: epgTileMapEntries,
+    count: epgTileMapEntries.length,
+    source: 'api:data/epg-tile-map.json',
   });
 });
 
@@ -1528,29 +1578,14 @@ wss.on('connection', (ws) => {
   clientActivityCursor.set(ws, 0);
   console.log('[ws] client connected, total=', wsClients.size);
 
-  const flies = sims.map((s) => s.getState().fly);
+  const flies = sims.map((s) => s.state.fly);
   const viewIndex = Math.max(0, Math.min(sims.length - 1, 0));
-  const states = sims.map((s) => s.getState());
+  const states = sims.map((s) => s.state);
   const activities = states.map((s) => s.activity);
-  const firstState = sims[0]?.getState();
-  const viewedState = states[viewIndex];
-  const motor = viewedState
-    ? {
-        left: viewedState.motorLeft ?? 0,
-        right: viewedState.motorRight ?? 0,
-        fwd: viewedState.motorFwd ?? 0,
-        leftCount: viewedState.motorLeftCount ?? 0,
-        rightCount: viewedState.motorRightCount ?? 0,
-        fwdCount: viewedState.motorFwdCount ?? 0,
-        leftMagnitude: viewedState.motorLeftMagnitude ?? 0,
-        rightMagnitude: viewedState.motorRightMagnitude ?? 0,
-        fwdMagnitude: viewedState.motorFwdMagnitude ?? 0,
-      }
-    : undefined;
+  const firstState = sims[0]?.state;
   ws.send(JSON.stringify({
     frames: [{ t: firstState?.t ?? 0, flies }],
     activity: activities[viewIndex] ?? {},
-    motor,
     sources: getSources(),
     simRunning,
   }));
@@ -1594,11 +1629,12 @@ if (process.env.VITEST !== 'true') {
     );
     const activeDeploymentCount = Array.from(deployedFlies.values()).reduce((sum, slots) => sum + slots.size, 0);
     console.log(
-      '[sim] auto-started with',
+      '[sim] started with',
       sims.length,
-      'active sims from',
+      'active sims;',
+      'tracked active deployments:',
       activeDeploymentCount,
-      'deployments; users deploy flies via POST /api/deploy',
+      '(users deploy flies via POST /api/deploy)',
     );
   });
 }
@@ -1608,7 +1644,6 @@ export function resetDeployStateForTesting(): void {
   deployedFlies.clear();
   sims.splice(0, sims.length);
   simActivityTrail.splice(0, simActivityTrail.length);
-  penPresetBySimIndex.splice(0, penPresetBySimIndex.length);
   smoothedBumpBySimIndex.splice(0, smoothedBumpBySimIndex.length);
   clearForTesting();
 }

@@ -26,7 +26,7 @@ let lastRequestTiming: {
   batchSize?: number;
 } | null = null;
 const TRACE_SOCKET_TIMING = process.env.NEUROSIM_SOCKET_TRACE === '1';
-const REQUEST_TIMEOUT_MS = Number(process.env.NEUROSIM_BRAIN_REQUEST_TIMEOUT_MS ?? 10_000);
+const REQUEST_TIMEOUT_MS = Number(process.env.NEUROSIM_BRAIN_REQUEST_TIMEOUT_MS ?? 60_000);
 
 function getConnection(): Promise<{ sock: net.Socket; rl: ReturnType<typeof createInterface> }> {
   if (sharedSocket && sharedRl && !sharedSocket.destroyed) {
@@ -377,38 +377,125 @@ export interface RunStepsWithStateParams {
   sources: Array<{ id: string; x: number; y: number; radius: number }>;
 }
 
-/** Run N steps in one round-trip; returns final state (same shape as step) when used for world loop. */
-export async function runStepsWithState(params: RunStepsWithStateParams): Promise<StepResult> {
+export interface RunStepsWithStateResult {
+  activitySparse: Record<string, number>;
+  bumpAngleDeg?: number | null;
+  epgBins?: number[] | null;
+}
+
+export interface WorldFlySnapshot {
+  fly_id: number;
+  fly: {
+    x: number;
+    y: number;
+    z: number;
+    heading: number;
+    t: number;
+    hunger: number;
+    health: number;
+    dead: boolean;
+    fly_time_left: number;
+    rest_time_left: number;
+    rest_duration: number;
+    feeding: boolean;
+  };
+  activity_sparse: Record<string, number>;
+  bump_angle_deg?: number | null;
+  epg_bins?: number[];
+  compute_ms: number;
+  kernel_ms: number;
+  recurrent_ms: number;
+  lif_ms: number;
+  readout_ms: number;
+}
+
+export interface WorldSnapshot {
+  ok: boolean;
+  tick: number;
+  dt_sec: number;
+  flies: WorldFlySnapshot[];
+}
+
+export async function worldAddFly(fly: {
+  x: number;
+  y: number;
+  z: number;
+  heading: number;
+  t: number;
+  hunger: number;
+  health: number;
+  restTimeLeft: number;
+  dead: boolean;
+}): Promise<{ ok: boolean; fly_id: number }> {
+  return request({
+    method: 'world_add_fly',
+    params: {
+      fly: {
+        x: fly.x,
+        y: fly.y,
+        z: fly.z,
+        heading: fly.heading,
+        t: fly.t,
+        hunger: fly.hunger,
+        health: fly.health,
+        rest_time_left: fly.restTimeLeft,
+        dead: fly.dead,
+      },
+    },
+  });
+}
+
+export async function worldRemoveFly(flyId: number): Promise<{ ok: boolean; fly_id: number }> {
+  return request({
+    method: 'world_remove_fly',
+    params: { fly_id: flyId },
+  });
+}
+
+export async function worldSetRates(flyId: number, ratesById: Record<string, number>): Promise<{ ok: boolean }> {
+  return request({
+    method: 'world_set_rates',
+    params: { fly_id: flyId, rates_by_id: ratesById },
+  });
+}
+
+export async function worldSetSources(
+  sources: Array<{ id: string; x: number; y: number; radius: number }>,
+): Promise<{ ok: boolean }> {
+  return request({
+    method: 'world_set_sources',
+    params: { sources },
+  });
+}
+
+export async function worldGetSnapshot(): Promise<WorldSnapshot> {
+  return request({
+    method: 'world_get_snapshot',
+    params: {},
+  });
+}
+
+export async function worldReadTicks(afterTick: number, maxTicks = 2000): Promise<{
+  ticks: Array<{ tick: number; fly_id: number; time_sec: number; spikes: string[] }>;
+  latest_tick: number;
+  dt_sec: number;
+}> {
+  return request({
+    method: 'world_read_ticks',
+    params: {
+      after_tick: Math.max(0, Math.floor(afterTick)),
+      max_ticks: Math.min(8000, Math.max(1, Math.floor(maxTicks))),
+    },
+  });
+}
+
+/** Run N steps in one round-trip; world path returns EPG-only readout. */
+export async function runStepsWithState(params: RunStepsWithStateParams): Promise<RunStepsWithStateResult> {
   const res = await request<{
     steps_done: number;
-    fly?: {
-      x: number;
-      y: number;
-      z: number;
-      heading: number;
-      t: number;
-      hunger: number;
-      health: number;
-      dead: boolean;
-      fly_time_left: number;
-      rest_time_left: number;
-      rest_duration: number;
-      feeding: boolean;
-    };
     activity_sparse?: Record<string, number>;
     bump_angle_deg?: number | null;
     epg_bins?: number[] | null;
-    motor_left?: number;
-    motor_right?: number;
-    motor_fwd?: number;
-    motor_left_count?: number;
-    motor_right_count?: number;
-    motor_fwd_count?: number;
-    motor_left_magnitude?: number;
-    motor_right_magnitude?: number;
-    motor_fwd_magnitude?: number;
-    eaten_food_ids?: string[];
-    feeding_sugar_taken?: number;
   }>({
     method: 'run_steps',
     params: {
@@ -433,45 +520,10 @@ export async function runStepsWithState(params: RunStepsWithStateParams): Promis
       sources: params.sources,
     },
   });
-  if (!res.fly) {
-    throw new Error('run_steps return_final_state=true but response missing fly');
-  }
-  const fly = res.fly;
   return {
-    activity: [],
     activitySparse: res.activity_sparse ?? {},
-    motorLeft: res.motor_left ?? 0,
-    motorRight: res.motor_right ?? 0,
-    motorFwd: res.motor_fwd ?? 0,
-    motorLeftCount: res.motor_left_count ?? 0,
-    motorRightCount: res.motor_right_count ?? 0,
-    motorFwdCount: res.motor_fwd_count ?? 0,
-    motorLeftMagnitude: res.motor_left_magnitude ?? 0,
-    motorRightMagnitude: res.motor_right_magnitude ?? 0,
-    motorFwdMagnitude: res.motor_fwd_magnitude ?? 0,
-    fly: {
-      x: fly.x,
-      y: fly.y,
-      z: fly.z,
-      heading: fly.heading,
-      t: fly.t,
-      hunger: fly.hunger,
-      health: fly.health,
-      dead: fly.dead,
-      flyTimeLeft: fly.fly_time_left,
-      restTimeLeft: fly.rest_time_left,
-      restDuration: fly.rest_duration,
-      feeding: fly.feeding,
-    },
-    eatenFoodIds: res.eaten_food_ids,
-    feedingSugarTaken: res.feeding_sugar_taken ?? 0,
     bumpAngleDeg: res.bump_angle_deg ?? null,
     epgBins: res.epg_bins ?? null,
-    computeMs: 0,
-    kernelMs: 0,
-    recurrentMs: 0,
-    lifMs: 0,
-    readoutMs: 0,
   };
 }
 

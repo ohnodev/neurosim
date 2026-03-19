@@ -117,8 +117,142 @@ function isCompassEpgNeuron(neuron: ReplayNeuronMinimal): boolean {
 
 const REPLAY_URL = '/neurosim_rust_pen_L100_R0_B0_100k_rec3p5x_seed17290319_replay.json';
 const PROCESSED_LABELS_URL = '/processed_labels.csv';
+const EPG_TILE_MAP_API_URL = '/api/epg-tile-map';
 
 let cached: { neurons: CompassEpgNeuron[]; positions: Float32Array } | null = null;
+
+function buildFallbackCompassEpgData(): { neurons: CompassEpgNeuron[]; positions: Float32Array } {
+  // Fallback ring with one logical point per compass bin so heading UI
+  // still renders from websocket bump/EPG bins even if static assets fail.
+  const n = EPG_COMPASS_BINS;
+  const baseRadius = 0.5;
+  const scale = 1.5;
+  const positions = new Float32Array(n * 3);
+  const neurons: CompassEpgNeuron[] = [];
+  for (let i = 0; i < n; i++) {
+    const angle = sceneAngleForBin(i, EPG_COMPASS_BINS);
+    positions[i * 3] = (Math.cos(angle) * baseRadius) / scale;
+    positions[i * 3 + 1] = (Math.sin(angle) * baseRadius) / scale;
+    positions[i * 3 + 2] = 0;
+    const label = EPG_SLICE_ORDER_CLOCKWISE[i] ?? `B${i}`;
+    neurons.push({
+      root_id: `EPG-${label}`,
+      bin: i,
+      binLabel: label,
+      side: label.startsWith('L') ? 'left' : 'right',
+      hemibrain_type: 'EPG',
+      hemilineage: '',
+      flow: '',
+      super_class: '',
+      class: 'EPG',
+      sub_class: '',
+      cell_type: '',
+      nerve: '',
+    });
+  }
+  return { neurons, positions };
+}
+
+type EpgTileMapApiEntry = {
+  root_id?: string;
+  hemibrain_type?: string;
+  side?: string;
+  hemilineage?: string;
+  tile_index_0_7?: number | string | null;
+  tile_label?: string;
+};
+
+function mapEntryToBinLabel(entry: EpgTileMapApiEntry): { bin: number; label: string } | null {
+  const sideRaw = (entry.side ?? '').trim().toLowerCase();
+  const side = sideRaw === 'left' || sideRaw === 'right' ? sideRaw : '';
+  const fromLabel = (entry.tile_label ?? '').trim().toUpperCase();
+  const labelMatch = /^EPG(\d+)$/.exec(fromLabel);
+  const tileFromLabel = labelMatch ? Number(labelMatch[1]) - 1 : null;
+  const hasNumericTile =
+    entry.tile_index_0_7 != null &&
+    entry.tile_index_0_7 !== '' &&
+    Number.isFinite(Number(entry.tile_index_0_7));
+  const tile = hasNumericTile
+    ? Number(entry.tile_index_0_7)
+    : tileFromLabel;
+  if (!side || tile == null || tile < 0 || tile > 7) return null;
+  const label = `${side === 'left' ? 'L' : 'R'}${tile + 1}`;
+  const bin = EPG_LABEL_TO_BIN.get(label);
+  if (bin == null) return null;
+  return { bin, label };
+}
+
+function buildCompassFromTileMapEntries(entries: EpgTileMapApiEntry[]): {
+  neurons: CompassEpgNeuron[];
+  positions: Float32Array;
+} {
+  const filtered = entries.filter((e) => {
+    const hb = (e.hemibrain_type ?? '').trim().toUpperCase();
+    return hb.startsWith('EPG');
+  });
+  const tileGroups = new Map<number, EpgTileMapApiEntry[]>();
+  const unassigned: EpgTileMapApiEntry[] = [];
+  for (const e of filtered) {
+    const mapped = mapEntryToBinLabel(e);
+    if (!mapped) {
+      unassigned.push(e);
+      continue;
+    }
+    const group = tileGroups.get(mapped.bin) ?? [];
+    group.push(e);
+    tileGroups.set(mapped.bin, group);
+  }
+
+  const baseRadius = 0.5;
+  const scale = 1.5;
+  const sector = (Math.PI * 2) / EPG_COMPASS_BINS;
+  const spread = sector * 0.35;
+  const ordered: Array<{ e: EpgTileMapApiEntry; bin: number; label: string; angle: number }> = [];
+
+  for (const [bin, items] of tileGroups.entries()) {
+    items.sort((a, b) => String(a.root_id ?? '').localeCompare(String(b.root_id ?? '')));
+    const center = sceneAngleForBin(bin, EPG_COMPASS_BINS);
+    for (let i = 0; i < items.length; i++) {
+      const centered = items.length > 1 ? (i / (items.length - 1)) - 0.5 : 0;
+      const angle = center + centered * spread;
+      const label = EPG_SLICE_ORDER_CLOCKWISE[bin] ?? '';
+      ordered.push({ e: items[i]!, bin, label, angle });
+    }
+  }
+  for (let i = 0; i < unassigned.length; i++) {
+    const bin = i % EPG_COMPASS_BINS;
+    ordered.push({
+      e: unassigned[i]!,
+      bin,
+      label: EPG_SLICE_ORDER_CLOCKWISE[bin] ?? '',
+      angle: sceneAngleForBin(bin, EPG_COMPASS_BINS),
+    });
+  }
+
+  const positions = new Float32Array(ordered.length * 3);
+  const neurons: CompassEpgNeuron[] = [];
+  for (let i = 0; i < ordered.length; i++) {
+    const item = ordered[i]!;
+    positions[i * 3] = (Math.cos(item.angle) * baseRadius) / scale;
+    positions[i * 3 + 1] = (Math.sin(item.angle) * baseRadius) / scale;
+    positions[i * 3 + 2] = 0;
+    neurons.push({
+      root_id: String(item.e.root_id ?? `EPG-${i}`),
+      bin: item.bin,
+      binLabel: item.label,
+      side: item.e.side ?? '',
+      hemibrain_type: item.e.hemibrain_type ?? '',
+      hemilineage: item.e.hemilineage ?? '',
+      flow: '',
+      super_class: '',
+      class: 'EPG',
+      sub_class: '',
+      cell_type: '',
+      nerve: '',
+    });
+  }
+  return { neurons, positions };
+}
 
 export async function fetchCompassEpgData(): Promise<{
   neurons: CompassEpgNeuron[];
@@ -126,15 +260,41 @@ export async function fetchCompassEpgData(): Promise<{
 }> {
   if (cached) return cached;
 
-  const [replayRes, labelsRes] = await Promise.all([
-    fetch(REPLAY_URL, { cache: 'default' }),
-    fetch(PROCESSED_LABELS_URL + '?v=' + Date.now(), { cache: 'no-store' }),
-  ]);
-  if (!replayRes.ok || !labelsRes.ok) {
-    throw new Error('Failed to load compass EPG data');
+  try {
+    const epgMapRes = await fetch(EPG_TILE_MAP_API_URL, { cache: 'no-store' });
+    if (epgMapRes.ok) {
+      const data = (await epgMapRes.json()) as { entries?: EpgTileMapApiEntry[] };
+      const entries = Array.isArray(data.entries) ? data.entries : [];
+      if (entries.length > 0) {
+        const built = buildCompassFromTileMapEntries(entries);
+        if (built.neurons.length > 0) {
+          cached = built;
+          return cached;
+        }
+      }
+    }
+  } catch {
+    // Continue to replay+labels path below.
   }
-  const replay = (await replayRes.json()) as { neurons: ReplayNeuronMinimal[] };
-  const labelsText = await labelsRes.text();
+
+  let replay: { neurons: ReplayNeuronMinimal[] } | null = null;
+  let labelsText = '';
+  try {
+    const [replayRes, labelsRes] = await Promise.all([
+      fetch(REPLAY_URL, { cache: 'default' }),
+      fetch(PROCESSED_LABELS_URL + '?v=' + Date.now(), { cache: 'no-store' }),
+    ]);
+    if (!replayRes.ok || !labelsRes.ok) {
+      throw new Error(`asset fetch failed replay=${replayRes.status} labels=${labelsRes.status}`);
+    }
+    replay = (await replayRes.json()) as { neurons: ReplayNeuronMinimal[] };
+    labelsText = await labelsRes.text();
+  } catch (err) {
+    console.warn('[heading-compass] Using fallback EPG ring:', err);
+    cached = buildFallbackCompassEpgData();
+    return cached;
+  }
+
   const epgLabelMap = new Map<string, string>();
   for (const line of labelsText.split('\n')) {
     const row = parseProcessedLabelsLine(line);
@@ -229,6 +389,10 @@ export async function fetchCompassEpgData(): Promise<{
     });
   }
 
-  cached = { neurons, positions };
+  if (neurons.length > 0) {
+    cached = { neurons, positions };
+    return cached;
+  }
+  cached = buildFallbackCompassEpgData();
   return cached;
 }

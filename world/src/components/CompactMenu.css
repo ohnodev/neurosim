@@ -40,7 +40,7 @@
   display: block;
   width: 36px;
   height: 36px;
-  background: currentColor;
+  background: currentcolor;
   mask: url('/neurosim-logo-v2.svg') center/contain no-repeat;
   -webkit-mask: url('/neurosim-logo-v2.svg') center/contain no-repeat;
   transition: filter 0.15s ease;

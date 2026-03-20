@@ -1486,6 +1486,8 @@ export default function VisualizationPage() {
   const [templateReplay, setTemplateReplay] = useState<ReplayData | null>(null);
   const [liveReplay, setLiveReplay] = useState<ReplayData | null>(null);
   const [liveTicks, setLiveTicks] = useState<ReplayTick[]>([]);
+  const liveTicksRef = useRef<ReplayTick[]>([]);
+  const [liveTicksVersion, setLiveTicksVersion] = useState(0);
   const [recordedTicks, setRecordedTicks] = useState<ReplayTick[]>([]);
   const liveReplayTickCountRef = useRef(0);
   const liveReplayRef = useRef<ReplayData | null>(null);
@@ -1503,6 +1505,7 @@ export default function VisualizationPage() {
   const [penARatesById, setPenARatesById] = useState<Record<string, number>>({});
   const [showPenAMapping, setShowPenAMapping] = useState(false);
   const [copiedPenAId, setCopiedPenAId] = useState<string | null>(null);
+  const copyInFlightRef = useRef(false);
   const [showCompassInfo, setShowCompassInfo] = useState(false);
   const [showRecordMenu, setShowRecordMenu] = useState(true);
   const [bottomControlTab, setBottomControlTab] = useState<'individual' | 'sliders'>('individual');
@@ -1513,6 +1516,9 @@ export default function VisualizationPage() {
   const notification = useNotification();
   const liveAfterTickRef = useRef(0);
   const recordingRef = useRef(false);
+  useEffect(() => {
+    liveTicksRef.current = liveTicks;
+  }, [liveTicks]);
   useEffect(() => {
     recordingRef.current = recording;
   }, [recording]);
@@ -1739,7 +1745,7 @@ export default function VisualizationPage() {
       setLiveReplay(null);
       return;
     }
-    const ticks = liveTicks;
+    const ticks = liveTicksRef.current;
     const current = liveReplayRef.current;
     const replayMissing = current == null;
     const tickReset = ticks.length < liveReplayTickCountRef.current;
@@ -1839,7 +1845,7 @@ export default function VisualizationPage() {
     }
 
     liveReplayTickCountRef.current = ticks.length;
-  }, [selectedReplayId, templateReplay, liveTicks, liveSettings.dtSec, epgLabelMap]);
+  }, [selectedReplayId, templateReplay, liveTicks.length, liveTicksVersion, liveSettings.dtSec, epgLabelMap]);
 
   const isNeuroSimLive = selectedReplayId === 'neurosim_live';
   const apiBase = getApiBase();
@@ -1893,7 +1899,11 @@ export default function VisualizationPage() {
       setLiveTicks((prev) => {
         const merged = [...prev, ...batch as ReplayTick[]];
         if (merged.length > NEUROSIM_LIVE_MAX_STORED_TICKS) {
-          return merged.slice(-NEUROSIM_LIVE_MAX_STORED_TICKS);
+          const next = merged.slice(-NEUROSIM_LIVE_MAX_STORED_TICKS);
+          if (next.length === prev.length) {
+            setLiveTicksVersion((v) => v + 1);
+          }
+          return next;
         }
         return merged;
       });
@@ -2060,7 +2070,7 @@ export default function VisualizationPage() {
   const preventNumberWheelAdjust = (event: WheelEvent<HTMLElement>) => {
     const target = event.target as EventTarget | null;
     if (target instanceof HTMLInputElement && target.type === 'number' && document.activeElement === target) {
-      target.blur();
+      event.stopPropagation();
       event.preventDefault();
     }
   };
@@ -2602,14 +2612,18 @@ export default function VisualizationPage() {
                             <button
                               type="button"
                               onClick={async () => {
+                                if (copyInFlightRef.current) return;
+                                copyInFlightRef.current = true;
                                 try {
                                   await navigator.clipboard.writeText(id);
                                   setCopiedPenAId(id);
                                   window.setTimeout(() => {
                                     setCopiedPenAId((prev) => (prev === id ? null : prev));
+                                    copyInFlightRef.current = false;
                                   }, 1200);
                                 } catch {
                                   setError('Failed to copy neuron ID');
+                                  copyInFlightRef.current = false;
                                 }
                               }}
                               title={copiedPenAId === id ? 'Copied' : 'Copy neuron ID'}
@@ -2651,14 +2665,18 @@ export default function VisualizationPage() {
                             <button
                               type="button"
                               onClick={async () => {
+                                if (copyInFlightRef.current) return;
+                                copyInFlightRef.current = true;
                                 try {
                                   await navigator.clipboard.writeText(id);
                                   setCopiedPenAId(id);
                                   window.setTimeout(() => {
                                     setCopiedPenAId((prev) => (prev === id ? null : prev));
+                                    copyInFlightRef.current = false;
                                   }, 1200);
                                 } catch {
                                   setError('Failed to copy neuron ID');
+                                  copyInFlightRef.current = false;
                                 }
                               }}
                               title={copiedPenAId === id ? 'Copied' : 'Copy neuron ID'}

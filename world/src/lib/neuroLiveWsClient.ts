@@ -46,6 +46,7 @@ let retryTimeoutId: ReturnType<typeof setTimeout> | null = null;
 let disposed = false;
 let subscriptionStarted = false;
 let runId = 0;
+let lastDeliveredTick = -1;
 
 function clearClient(): void {
   if (!client) return;
@@ -105,7 +106,10 @@ function startSubscription(): void {
 
   const iterator = client.iterate({
     query: SUBSCRIPTION,
-    variables: { maxTicks: 2000 },
+    variables: {
+      maxTicks: 2000,
+      ...(lastDeliveredTick >= 0 ? { fromTick: lastDeliveredTick + 1 } : {}),
+    },
   });
 
   (async () => {
@@ -119,6 +123,12 @@ function startSubscription(): void {
         if (typeof raw !== "string") continue;
         const payload = JSON.parse(raw) as NeuroLiveEvent;
         emit(payload);
+        if (payload.type === "ticks" && Array.isArray(payload.ticks) && payload.ticks.length > 0) {
+          const highestTick = payload.ticks[payload.ticks.length - 1]?.tick;
+          if (typeof highestTick === "number" && Number.isFinite(highestTick)) {
+            lastDeliveredTick = Math.max(lastDeliveredTick, highestTick);
+          }
+        }
       }
     } catch (err) {
       emit({ type: "error", error: toErrorMessage(err) });
@@ -148,4 +158,5 @@ export function disposeNeuroLiveClient(): void {
   clearClient();
   listeners = new Set();
   retryDelayMs = INITIAL_RETRY_MS;
+  lastDeliveredTick = -1;
 }

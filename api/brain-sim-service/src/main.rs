@@ -421,6 +421,8 @@ fn main() {
             epg_id_to_bin.clone(),
         ))
     } else {
+        // Keep world RPC methods deterministic in continuous mode by returning
+        // explicit disabled payloads (handled in the world_* branches below).
         eprintln!("[brain-service] world runtime disabled by runtime mode");
         None
     };
@@ -2701,9 +2703,11 @@ fn handle(
                 "fly": snapshot.fly,
             }))?
         } else {
-            serde_json::to_string(&ErrResp {
-                error: "world runtime not available".into(),
-            })?
+            serde_json::to_string(&serde_json::json!({
+                "ok": false,
+                "disabled": true,
+                "fly_id": 0
+            }))?
         }
     } else if line.contains("\"method\":\"world_remove_fly\"") || line.contains("\"method\": \"world_remove_fly\"")
     {
@@ -2717,9 +2721,10 @@ fn handle(
                 "fly_id": p.fly_id,
             }))?
         } else {
-            serde_json::to_string(&ErrResp {
-                error: "world runtime not available".into(),
-            })?
+            serde_json::to_string(&serde_json::json!({
+                "ok": false,
+                "disabled": true
+            }))?
         }
     } else if line.contains("\"method\":\"world_set_rates\"") || line.contains("\"method\": \"world_set_rates\"")
     {
@@ -2748,9 +2753,11 @@ fn handle(
                 })?
             }
         } else {
-            serde_json::to_string(&ErrResp {
-                error: "world runtime not available".into(),
-            })?
+            serde_json::to_string(&serde_json::json!({
+                "ok": false,
+                "disabled": true,
+                "rates_len": 0
+            }))?
         }
     } else if line.contains("\"method\":\"world_set_sources\"") || line.contains("\"method\": \"world_set_sources\"")
     {
@@ -2772,9 +2779,10 @@ fn handle(
                 "ok": true
             }))?
         } else {
-            serde_json::to_string(&ErrResp {
-                error: "world runtime not available".into(),
-            })?
+            serde_json::to_string(&serde_json::json!({
+                "ok": false,
+                "disabled": true
+            }))?
         }
     } else if line.contains("\"method\":\"world_get_snapshot\"") || line.contains("\"method\": \"world_get_snapshot\"")
     {
@@ -2794,8 +2802,11 @@ fn handle(
                 flies,
             })?
         } else {
-            serde_json::to_string(&ErrResp {
-                error: "world runtime not available".into(),
+            serde_json::to_string(&WorldSnapshotResp {
+                ok: false,
+                tick: 0,
+                dt_sec: 0.0001,
+                flies: Vec::new(),
             })?
         }
     } else if line.contains("\"method\":\"world_read_ticks\"")
@@ -2834,9 +2845,15 @@ fn handle(
                 "epg_index_to_root_id": world.epg_index_to_root_id,
             }))?
         } else {
-            serde_json::to_string(&ErrResp {
-                error: "world runtime not available".into(),
-            })?
+            serde_json::to_string(&serde_json::json!({
+                "ticks": [],
+                "latest_tick": 0u64,
+                "dt_sec": 0.0001f64,
+                "steps_per_batch": 0u32,
+                "epg_index_to_bin": Vec::<u8>::new(),
+                "epg_index_to_root_id": Vec::<String>::new(),
+                "disabled": true
+            }))?
         }
     } else if line.contains("\"method\":\"world_pause\"") || line.contains("\"method\": \"world_pause\"")
     {
@@ -2844,9 +2861,7 @@ fn handle(
             world.paused.store(1, Ordering::Release);
             serde_json::to_string(&serde_json::json!({ "ok": true }))?
         } else {
-            serde_json::to_string(&ErrResp {
-                error: "world runtime not available".into(),
-            })?
+            serde_json::to_string(&serde_json::json!({ "ok": false, "disabled": true }))?
         }
     } else if line.contains("\"method\":\"world_resume\"") || line.contains("\"method\": \"world_resume\"")
     {
@@ -2854,9 +2869,7 @@ fn handle(
             world.paused.store(0, Ordering::Release);
             serde_json::to_string(&serde_json::json!({ "ok": true }))?
         } else {
-            serde_json::to_string(&ErrResp {
-                error: "world runtime not available".into(),
-            })?
+            serde_json::to_string(&serde_json::json!({ "ok": false, "disabled": true }))?
         }
     } else if line.contains("\"method\":\"live_set_pen_a\"") || line.contains("\"method\": \"live_set_pen_a\"")
     {

@@ -573,6 +573,7 @@ type WorldWsPayload = {
     epgBinsPerSim?: (number[] | null)[];
   }[];
   activity: Record<string, number>;
+  rotatedActivityBySim: Record<string, number>[];
   activities: (Record<string, number> | undefined)[];
   sources: WorldSource[];
   simRunning: boolean;
@@ -650,6 +651,7 @@ function buildClientPayload(
   }));
   const lastFrame = frames[frames.length - 1];
   const allActivities = Array.isArray(lastFrame?.activities) ? lastFrame.activities : [];
+  const allInputActivities = Array.isArray(lastFrame?.inputActivities) ? lastFrame.inputActivities : [];
   for (const ws of wsClients) {
     if (ws.readyState !== 1) continue;
     const viewIndex = Math.max(0, Math.min(sims.length - 1, clientViewFlyIndex.get(ws) ?? 0));
@@ -681,9 +683,25 @@ function buildClientPayload(
     }
   }
 
+  // Preserve decayed/input-highlighted activity for GraphQL subscribers too.
+  const rotatedActivityBySim: Record<string, number>[] = [];
+  for (let simIndex = 0; simIndex < sims.length; simIndex += 1) {
+    const syntheticSocket = (`gql-sim-${simIndex}` as unknown) as import('ws').WebSocket;
+    rotatedActivityBySim.push(
+      buildRotatingActivityWindow(
+        syntheticSocket,
+        simIndex,
+        allActivities[simIndex] ?? allActivities[0] ?? {},
+        allInputActivities[simIndex] ?? allInputActivities[0] ?? {},
+        nowMs,
+      ),
+    );
+  }
+
   publishWorldPayload({
     frames: clientFrames,
-    activity: (allActivities[0] ?? {}) as Record<string, number>,
+    activity: rotatedActivityBySim[0] ?? (allActivities[0] ?? {}) as Record<string, number>,
+    rotatedActivityBySim,
     activities: allActivities,
     sources,
     simRunning: true,
@@ -1853,7 +1871,8 @@ const gqlRoot = {
       const queue: WorldWsPayload[] = [];
       let resolveNext: (() => void) | null = null;
       const unsub = subscribeWorldPayload((payload) => {
-        queue.push(payload);
+        queue.length = 0;
+        queue[0] = payload;
         if (resolveNext) {
           const wake = resolveNext;
           resolveNext = null;
@@ -1870,7 +1889,11 @@ const gqlRoot = {
           const payload = queue.shift();
           if (!payload) continue;
           const viewFlyIndex = Math.max(0, Number.isFinite(args?.viewFlyIndex) ? Math.floor(args.viewFlyIndex as number) : 0);
-          const activity = (payload.activities?.[viewFlyIndex] ?? payload.activity ?? {}) as Record<string, number>;
+          const activity =
+            (payload.rotatedActivityBySim?.[viewFlyIndex]
+              ?? payload.activity
+              ?? payload.activities?.[viewFlyIndex]
+              ?? {}) as Record<string, number>;
           yield {
             worldSimulation: JSON.stringify({
               ...payload,

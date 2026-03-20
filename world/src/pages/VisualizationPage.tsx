@@ -1509,7 +1509,7 @@ export default function VisualizationPage() {
   const copyTimeoutRef = useRef<number | null>(null);
   const isMountedRef = useRef(true);
   const [showCompassInfo, setShowCompassInfo] = useState(false);
-  const [showRecordMenu, setShowRecordMenu] = useState(true);
+  const [showRecordMenu, setShowRecordMenu] = useState(false);
   const [bottomControlTab, setBottomControlTab] = useState<'individual' | 'sliders'>('individual');
   const [compassPos, setCompassPos] = useState({ x: 12, y: 34 });
   const [draggingCompass, setDraggingCompass] = useState(false);
@@ -2533,10 +2533,11 @@ export default function VisualizationPage() {
                   style={{
                     marginLeft: 8,
                     display: 'flex',
-                    alignItems: 'center',
+                    flexDirection: 'column',
+                    alignItems: 'stretch',
                     gap: 8,
-                    flexWrap: 'wrap',
-                    padding: '6px 8px',
+                    padding: 10,
+                    minWidth: 250,
                     border: '1px solid rgba(140,170,220,0.38)',
                     borderRadius: 8,
                     background: 'rgba(8, 16, 30, 0.62)',
@@ -2545,45 +2546,57 @@ export default function VisualizationPage() {
                     boxShadow: '0 10px 22px rgba(0,0,0,0.36)',
                   }}
                 >
-                  <button
-                    type="button"
-                    onClick={() => setRecording((r) => !r)}
-                    style={controlButtonStyle(recording)}
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 8,
+                      padding: 8,
+                      border: '1px solid rgba(126, 165, 222, 0.35)',
+                      borderRadius: 8,
+                      background: 'linear-gradient(180deg, rgba(19, 33, 56, 0.72) 0%, rgba(10, 21, 38, 0.82) 100%)',
+                    }}
                   >
-                    Record {recording ? '(on)' : ''}
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => setRecording((r) => !r)}
+                      style={{ ...controlButtonStyle(recording), width: '100%', justifyContent: 'center' }}
+                    >
+                      Record {recording ? '(on)' : ''}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!templateReplay) return;
+                        const payload: ReplayData = {
+                          meta: {
+                            ...templateReplay.meta,
+                            generated_at: new Date().toISOString(),
+                            source_csv: 'neurosim-live/recording',
+                            ticks: recordedTicks.length,
+                            scenario: 'neurosim_live_pen_a_recording',
+                            dt_sec: liveSettings.dtSec,
+                            note: `Continuous live sim; rolling capture up to ${NEUROSIM_RECORDING_MAX_STORED_TICKS} ticks; applied PEN_a last L=${appliedPenLeft} R=${appliedPenRight} Hz`,
+                          },
+                          neurons: templateReplay.neurons,
+                          ticks: recordedTicks,
+                        };
+                        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+                        const a = document.createElement('a');
+                        a.href = URL.createObjectURL(blob);
+                        a.download = `neurosim_live_pen_a_${Date.now()}.json`;
+                        a.click();
+                        URL.revokeObjectURL(a.href);
+                      }}
+                      style={{ ...controlButtonStyle(false), width: '100%', justifyContent: 'center', fontVariantNumeric: 'tabular-nums' }}
+                      disabled={recordedTicks.length === 0}
+                    >
+                      Download JSON ({recordedTicks.length.toLocaleString()} ticks)
+                    </button>
+                  </div>
                   <span style={{ fontSize: 11, color: '#7a9cc4' }}>
                     Recording keeps last {NEUROSIM_RECORDING_MAX_STORED_TICKS.toLocaleString()} ticks (rolling window)
                   </span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!templateReplay) return;
-                      const payload: ReplayData = {
-                        meta: {
-                          ...templateReplay.meta,
-                          generated_at: new Date().toISOString(),
-                          source_csv: 'neurosim-live/recording',
-                          ticks: recordedTicks.length,
-                          scenario: 'neurosim_live_pen_a_recording',
-                          dt_sec: liveSettings.dtSec,
-                          note: `Continuous live sim; rolling capture up to ${NEUROSIM_RECORDING_MAX_STORED_TICKS} ticks; applied PEN_a last L=${appliedPenLeft} R=${appliedPenRight} Hz`,
-                        },
-                        neurons: templateReplay.neurons,
-                        ticks: recordedTicks,
-                      };
-                      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-                      const a = document.createElement('a');
-                      a.href = URL.createObjectURL(blob);
-                      a.download = `neurosim_live_pen_a_${Date.now()}.json`;
-                      a.click();
-                      URL.revokeObjectURL(a.href);
-                    }}
-                    style={{ ...controlButtonStyle(false), width: 214, justifyContent: 'center', fontVariantNumeric: 'tabular-nums' }}
-                    disabled={recordedTicks.length === 0}
-                  >
-                    Download JSON ({recordedTicks.length.toLocaleString()} ticks)
-                  </button>
                 </div>
               ) : null}
             </div>

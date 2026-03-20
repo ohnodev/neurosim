@@ -1898,8 +1898,11 @@ export default function VisualizationPage() {
         if (typeof event.dtSec === 'number' && event.dtSec > 0) {
           setLiveSettings({ dtSec: event.dtSec });
         }
-        setLiveTicks([]);
-        setRecordedTicks([]);
+        if (latest < liveAfterTickRef.current) {
+          liveTicksRef.current = [];
+          setLiveTicks([]);
+          setRecordedTicks([]);
+        }
         return;
       }
       if (typeof event.dtSec === 'number' && event.dtSec > 0) {
@@ -1911,17 +1914,15 @@ export default function VisualizationPage() {
       setError(null);
       const last = batch[batch.length - 1]?.tick;
       if (typeof last === 'number') liveAfterTickRef.current = last;
-      setLiveTicks((prev) => {
-        const merged = [...prev, ...batch as ReplayTick[]];
-        if (merged.length > NEUROSIM_LIVE_MAX_STORED_TICKS) {
-          const next = merged.slice(-NEUROSIM_LIVE_MAX_STORED_TICKS);
-          if (next.length === prev.length) {
-            setLiveTicksVersion((v) => v + 1);
-          }
-          return next;
-        }
-        return merged;
-      });
+      const prev = liveTicksRef.current;
+      const merged = [...prev, ...batch as ReplayTick[]];
+      const trimmed = merged.length > NEUROSIM_LIVE_MAX_STORED_TICKS;
+      const next = trimmed ? merged.slice(-NEUROSIM_LIVE_MAX_STORED_TICKS) : merged;
+      liveTicksRef.current = next;
+      setLiveTicks(next);
+      if (trimmed && next.length === prev.length) {
+        setLiveTicksVersion((v) => v + 1);
+      }
       if (recordingRef.current) {
         setRecordedTicks((prev) => {
           const merged = [...prev, ...batch as ReplayTick[]];

@@ -1,7 +1,9 @@
 /**
- * Robust WebSocket client for sim stream.
- * Single global connection with exponential backoff retry, matching basemarket pattern.
+ * GraphQL WebSocket client for world simulation stream.
+ * Read-only from frontend perspective: we subscribe to server state and only
+ * send view selection (which fly index to inspect).
  */
+import { createClient, type Client } from "graphql-ws";
 import { getWsUrl } from "./wsUrl";
 import type { FlyState } from "../../../api/src/fly-state";
 import type { WorldSource } from "../../../api/src/world";
@@ -70,41 +72,23 @@ type Listener = (event: SimEvent) => void;
 const INITIAL_RETRY_MS = 1_000;
 const MAX_RETRY_DELAY_MS = 30_000;
 const BACKOFF_FACTOR = 2;
+const SUBSCRIPTION = `
+  subscription WorldSimulation($viewFlyIndex: Int) {
+    worldSimulation(viewFlyIndex: $viewFlyIndex)
+  }
+`;
 
-let ws: WebSocket | null = null;
+let client: Client | null = null;
 let listeners = new Set<Listener>();
 let lastPayload: SimPayload | null = null;
 let lastError: string | null = null;
 let lastMessageTime = 0;
 let retryDelayMs = INITIAL_RETRY_MS;
 let retryTimeoutId: ReturnType<typeof setTimeout> | null = null;
+let subscriptionRunId = 0;
+let subscriptionStarted = false;
 let disposed = false;
-let deferredCleanup = false;
-
-function doTeardown(): void {
-  if (!ws) return;
-  ws.onclose = null;
-  ws.onerror = null;
-  ws.onmessage = null;
-  if (ws.readyState === WebSocket.OPEN) {
-    try {
-      ws.close();
-    } catch {
-      /* ignore */
-    }
-  }
-  ws = null;
-  deferredCleanup = false;
-}
-
-function clearConnection(): void {
-  if (!ws) return;
-  if (ws.readyState === WebSocket.CONNECTING) {
-    deferredCleanup = true;
-    return;
-  }
-  doTeardown();
-}
+let currentViewFlyIndex = 0;
 
 function scheduleRestart(): void {
   if (retryTimeoutId != null || disposed) return;
@@ -116,58 +100,91 @@ function scheduleRestart(): void {
   retryTimeoutId = setTimeout(() => {
     retryTimeoutId = null;
     retryDelayMs = Math.min(MAX_RETRY_DELAY_MS, retryDelayMs * BACKOFF_FACTOR);
-    connect();
+    startSubscription();
   }, delay);
 }
 
-function connect(): void {
-  if (disposed || ws?.readyState === WebSocket.OPEN) return;
-  // Don't abandon a handshaking socket; wait for it to finish (open/close) first
-  if (ws?.readyState === WebSocket.CONNECTING) return;
-  clearConnection();
+function clearClient(): void {
+  if (!client) return;
+  try {
+    client.dispose();
+  } catch {
+    /* ignore */
+  }
+  client = null;
+  subscriptionStarted = false;
+}
+
+function toErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === "string") return err;
+  const s = String(err);
+  if (s === "[object Event]" || s === "[object Object]") return "Connection error";
+  return s || "Connection error";
+}
+
+function startSubscription(): void {
+  if (disposed || listeners.size === 0 || subscriptionStarted) return;
+  subscriptionStarted = true;
+  const runId = ++subscriptionRunId;
   const url = getWsUrl();
-  ws = new WebSocket(url);
-
-  ws.onopen = () => {
-    if (deferredCleanup) {
-      doTeardown();
-      return;
-    }
-    retryDelayMs = INITIAL_RETRY_MS;
-    lastError = null;
-    for (const fn of listeners) fn({ _event: "open" });
-  };
-
-  ws.onmessage = (e) => {
-    try {
-      const data = JSON.parse(e.data as string) as SimPayload;
-      if (data.error) {
-        lastError = data.error;
-      } else {
-        lastPayload = data;
+  client = createClient({
+    url,
+    on: {
+      connected: () => {
+        retryDelayMs = INITIAL_RETRY_MS;
         lastError = null;
-        lastMessageTime = Date.now();
+        for (const fn of listeners) fn({ _event: "open" });
+      },
+      closed: () => {
+        for (const fn of listeners) fn({ _event: "closed" });
+      },
+      error: (error) => {
+        const message = toErrorMessage(error);
+        lastError = message;
+        for (const fn of listeners) fn({ _event: "error", error: message });
+      },
+    },
+  });
+  const iterator = client.iterate({
+    query: SUBSCRIPTION,
+    variables: { viewFlyIndex: currentViewFlyIndex },
+  });
+  (async () => {
+    try {
+      for await (const result of iterator) {
+        if (result.errors?.length) {
+          const message = result.errors.map((e) => e.message).join("; ");
+          lastError = message || "Subscription error";
+          for (const fn of listeners) fn({ _event: "error", error: lastError });
+          continue;
+        }
+        const raw = (result.data as { worldSimulation?: string } | undefined)?.worldSimulation;
+        if (typeof raw !== "string") continue;
+        const data = JSON.parse(raw) as SimPayload;
+        if (data.error) {
+          lastError = data.error;
+        } else {
+          lastPayload = data;
+          lastError = null;
+          lastMessageTime = Date.now();
+        }
+        for (const fn of listeners) fn(data);
       }
-      for (const fn of listeners) fn(data as SimPayload);
     } catch (err) {
-      if (import.meta.env?.DEV) {
-        console.warn("[simWsClient] parse error", err);
-      }
+      lastError = toErrorMessage(err);
+      for (const fn of listeners) fn({ _event: "error", error: lastError });
+    } finally {
+      if (runId !== subscriptionRunId) return;
+      clearClient();
+      if (listeners.size > 0 && !disposed) scheduleRestart();
     }
-  };
+  })();
+}
 
-  ws.onclose = () => {
-    for (const fn of listeners) fn({ _event: "closed" });
-    deferredCleanup = false;
-    doTeardown();
-    if (listeners.size > 0 && !disposed) scheduleRestart();
-  };
-
-  ws.onerror = () => {
-    const err = lastError ?? "Connection error";
-    lastError = err;
-    for (const fn of listeners) fn({ _event: "error", error: err });
-  };
+function restartSubscriptionForViewChange(): void {
+  clearClient();
+  startSubscription();
 }
 
 /**
@@ -176,7 +193,7 @@ function connect(): void {
  */
 export function subscribeSim(listener: Listener): () => void {
   listeners.add(listener);
-  if (ws?.readyState !== WebSocket.OPEN) connect();
+  startSubscription();
   if (lastPayload) {
     try {
       listener(lastPayload);
@@ -184,49 +201,25 @@ export function subscribeSim(listener: Listener): () => void {
       /* ignore */
     }
   }
-  if (ws?.readyState === WebSocket.OPEN) {
-    try {
-      listener({ _event: "open" });
-    } catch {
-      /* ignore */
-    }
-  }
   return () => {
     listeners.delete(listener);
+    if (listeners.size === 0) clearClient();
   };
-}
-
-/** Send start message to start the sim. No-op if not connected. */
-export function sendStart(): void {
-  if (ws?.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: "start" }));
-  }
-}
-
-/** Send stop message to stop the sim. No-op if not connected. */
-export function sendStop(): void {
-  if (ws?.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: "stop" }));
-  }
 }
 
 /** Tell server which fly's activity to send (sim index). Reduces payload size. */
 export function sendViewFlyIndex(simIndex: number): void {
-  if (ws?.readyState === WebSocket.OPEN && Number.isInteger(simIndex) && simIndex >= 0) {
-    ws.send(JSON.stringify({ viewFlyIndex: simIndex }));
+  if (!Number.isInteger(simIndex) || simIndex < 0) return;
+  if (currentViewFlyIndex !== simIndex) {
+    currentViewFlyIndex = simIndex;
+    if (!disposed && listeners.size > 0) restartSubscriptionForViewChange();
   }
 }
 
 export function getConnectionState(): "connecting" | "open" | "closed" {
-  if (!ws) return "closed";
-  switch (ws.readyState) {
-    case WebSocket.CONNECTING:
-      return "connecting";
-    case WebSocket.OPEN:
-      return "open";
-    default:
-      return "closed";
-  }
+  if (subscriptionStarted && client) return "open";
+  if (!disposed && listeners.size > 0) return "connecting";
+  return "closed";
 }
 
 export function getLastError(): string | null {
@@ -244,10 +237,11 @@ export function disposeSimClient(): void {
     clearTimeout(retryTimeoutId);
     retryTimeoutId = null;
   }
-  clearConnection();
+  clearClient();
   listeners = new Set();
   lastPayload = null;
   lastError = null;
   lastMessageTime = 0;
   retryDelayMs = INITIAL_RETRY_MS;
+  currentViewFlyIndex = 0;
 }

@@ -376,24 +376,56 @@ fn main() {
         .filter(|&v| v.is_finite() && v >= 0.0)
         .unwrap_or_else(|| brain_sim_service::model_constants::EPG_RECURRENCE_BOOST);
 
-    // Live visualization: extra sim thread that streams EPG ticks. Disabled by default to save resources.
-    let live_enabled = std::env::var("NEUROSIM_LIVE_ENABLED")
-        .as_ref()
-        .map(|s| s == "1" || s.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-    let continuous_live: Option<Arc<ContinuousLiveState>> = if live_enabled {
+    // Runtime mode switch to avoid mixing continuous-live and world simulation flows.
+    // Supported values:
+    // - world (default): world runtime only
+    // - continuous: continuous live runtime only
+    // - hybrid: both runtimes (legacy compatibility)
+    let brain_mode_raw = std::env::var("NEUROSIM_BRAIN_MODE")
+        .unwrap_or_else(|_| "world".to_string())
+        .to_ascii_lowercase();
+    let run_world = match brain_mode_raw.as_str() {
+        "world" => true,
+        "continuous" => false,
+        "hybrid" => true,
+        other => {
+            eprintln!(
+                "[brain-service] unknown NEUROSIM_BRAIN_MODE='{}' (expected world|continuous|hybrid); defaulting to world",
+                other
+            );
+            true
+        }
+    };
+    let run_continuous = match brain_mode_raw.as_str() {
+        "world" => false,
+        "continuous" => true,
+        "hybrid" => true,
+        _ => false,
+    };
+    eprintln!(
+        "[brain-service] runtime mode: {} (world={}, continuous={})",
+        brain_mode_raw, run_world, run_continuous
+    );
+    let continuous_live: Option<Arc<ContinuousLiveState>> = if run_continuous {
         classification_path
             .as_ref()
             .and_then(|cp| spawn_continuous_live_thread(template.clone(), cp, w_syn, epg_boost_live))
     } else {
-        eprintln!("[brain-service] continuous live disabled (set NEUROSIM_LIVE_ENABLED=1 to enable)");
+        eprintln!("[brain-service] continuous live disabled by runtime mode");
         None
     };
     let epg_id_to_bin = load_epg_id_to_bin();
-    let world_runtime = Some(spawn_world_runtime_thread(
-        template.clone(),
-        epg_id_to_bin.clone(),
-    ));
+    let world_runtime = if run_world {
+        Some(spawn_world_runtime_thread(
+            template.clone(),
+            epg_id_to_bin.clone(),
+        ))
+    } else {
+        // Keep world RPC methods deterministic in continuous mode by returning
+        // explicit disabled payloads (handled in the world_* branches below).
+        eprintln!("[brain-service] world runtime disabled by runtime mode");
+        None
+    };
 
     for stream in listener.incoming() {
         if let Ok(mut s) = stream {
@@ -1862,7 +1894,10 @@ fn handle(
         let gpu_enabled = {
             #[cfg(feature = "cuda")]
             {
-                brain_sim_service::gpu::try_init_device().is_some()
+                let use_cuda = std::env::var("USE_CUDA")
+                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false);
+                use_cuda && brain_sim_service::gpu::try_init_device().is_some()
             }
             #[cfg(not(feature = "cuda"))]
             {
@@ -2668,9 +2703,11 @@ fn handle(
                 "fly": snapshot.fly,
             }))?
         } else {
-            serde_json::to_string(&ErrResp {
-                error: "world runtime not available".into(),
-            })?
+            serde_json::to_string(&serde_json::json!({
+                "ok": false,
+                "disabled": true,
+                "fly_id": 0
+            }))?
         }
     } else if line.contains("\"method\":\"world_remove_fly\"") || line.contains("\"method\": \"world_remove_fly\"")
     {
@@ -2684,9 +2721,10 @@ fn handle(
                 "fly_id": p.fly_id,
             }))?
         } else {
-            serde_json::to_string(&ErrResp {
-                error: "world runtime not available".into(),
-            })?
+            serde_json::to_string(&serde_json::json!({
+                "ok": false,
+                "disabled": true
+            }))?
         }
     } else if line.contains("\"method\":\"world_set_rates\"") || line.contains("\"method\": \"world_set_rates\"")
     {
@@ -2715,9 +2753,11 @@ fn handle(
                 })?
             }
         } else {
-            serde_json::to_string(&ErrResp {
-                error: "world runtime not available".into(),
-            })?
+            serde_json::to_string(&serde_json::json!({
+                "ok": false,
+                "disabled": true,
+                "rates_len": 0
+            }))?
         }
     } else if line.contains("\"method\":\"world_set_sources\"") || line.contains("\"method\": \"world_set_sources\"")
     {
@@ -2739,9 +2779,10 @@ fn handle(
                 "ok": true
             }))?
         } else {
-            serde_json::to_string(&ErrResp {
-                error: "world runtime not available".into(),
-            })?
+            serde_json::to_string(&serde_json::json!({
+                "ok": false,
+                "disabled": true
+            }))?
         }
     } else if line.contains("\"method\":\"world_get_snapshot\"") || line.contains("\"method\": \"world_get_snapshot\"")
     {
@@ -2761,8 +2802,11 @@ fn handle(
                 flies,
             })?
         } else {
-            serde_json::to_string(&ErrResp {
-                error: "world runtime not available".into(),
+            serde_json::to_string(&WorldSnapshotResp {
+                ok: false,
+                tick: 0,
+                dt_sec: 0.0001,
+                flies: Vec::new(),
             })?
         }
     } else if line.contains("\"method\":\"world_read_ticks\"")
@@ -2801,9 +2845,15 @@ fn handle(
                 "epg_index_to_root_id": world.epg_index_to_root_id,
             }))?
         } else {
-            serde_json::to_string(&ErrResp {
-                error: "world runtime not available".into(),
-            })?
+            serde_json::to_string(&serde_json::json!({
+                "ticks": [],
+                "latest_tick": 0u64,
+                "dt_sec": 0.0001f64,
+                "steps_per_batch": 0u32,
+                "epg_index_to_bin": Vec::<u8>::new(),
+                "epg_index_to_root_id": Vec::<String>::new(),
+                "disabled": true
+            }))?
         }
     } else if line.contains("\"method\":\"world_pause\"") || line.contains("\"method\": \"world_pause\"")
     {
@@ -2811,9 +2861,7 @@ fn handle(
             world.paused.store(1, Ordering::Release);
             serde_json::to_string(&serde_json::json!({ "ok": true }))?
         } else {
-            serde_json::to_string(&ErrResp {
-                error: "world runtime not available".into(),
-            })?
+            serde_json::to_string(&serde_json::json!({ "ok": false, "disabled": true }))?
         }
     } else if line.contains("\"method\":\"world_resume\"") || line.contains("\"method\": \"world_resume\"")
     {
@@ -2821,9 +2869,7 @@ fn handle(
             world.paused.store(0, Ordering::Release);
             serde_json::to_string(&serde_json::json!({ "ok": true }))?
         } else {
-            serde_json::to_string(&ErrResp {
-                error: "world runtime not available".into(),
-            })?
+            serde_json::to_string(&serde_json::json!({ "ok": false, "disabled": true }))?
         }
     } else if line.contains("\"method\":\"live_set_pen_a\"") || line.contains("\"method\": \"live_set_pen_a\"")
     {

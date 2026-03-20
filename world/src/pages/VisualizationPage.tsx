@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { type WheelEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import PlaybackControls from '../components/PlaybackControls';
+import CompactMenu from '../components/CompactMenu';
 import { useNotification } from '../contexts/NotificationContext';
 import { getApiBase } from '../lib/constants';
+import { subscribeNeuroLive, type LiveReplayTick } from '../lib/neuroLiveWsClient';
 
 type ReplayNeuron = {
   root_id: string;
@@ -129,8 +131,7 @@ type SceneState = {
   dispose: () => void;
 };
 
-type ViewMode = 'raw' | 'aligned' | 'compass';
-type PlaybackSpeed = number | 'irl';
+type ViewMode = 'biological' | 'compass';
 type ReplayDataset = { id: string; label: string; url: string };
 
 const INACTIVE_COLOR = new THREE.Color(0x2e3e5d);
@@ -147,7 +148,6 @@ const ACTIVE_DELTA7_COLOR = new THREE.Color(0xd08cff);
 const EPG_HEAT_ORANGE = new THREE.Color(0xff9f43);
 const EPG_HEAT_RED = new THREE.Color(0xff3b30);
 const NO_GLOW_COLOR = new THREE.Color(0x000000);
-const PLAYBACK_BASE_MS = 80;
 /** EPG compass bins: 16 alternating L/R wedges in anatomical order from top clockwise. */
 const EPG_COMPASS_BINS = 16;
 const EPG_SLICE_ORDER_CLOCKWISE = [
@@ -210,22 +210,12 @@ const EPG_INACTIVE_BIN_PENALTY = 0.35;
 const SHOW_BIOLOGICAL_EPG_COPY = false;
 /** If a bin has this fraction of its EPG population active (in window), we point the arrow at that bin center (clear bump signal). */
 const EPG_DOMINANT_BIN_THRESHOLD = 0.8;
-const PREFERRED_REPLAY_ID = 'neurosim_rust_pen_L100_R0_B0_100k_rec3p5x_replay';
+const PREFERRED_REPLAY_ID = 'neurosim_live';
 const DEFAULT_REPLAY_DATASETS: ReplayDataset[] = [
-  {
-    id: 'neurosim_rust_pen_L100_R0_B0_100k_rec3p5x_replay',
-    label: 'Baseline replay (PEN_a L100 R0, 100k, 3.5× EPG rec)',
-    url: '/neurosim_rust_pen_L100_R0_B0_100k_rec3p5x_replay.json',
-  },
   {
     id: 'neurosim_live',
     label: 'Live — tweak PEN_a L/R Hz (3.5× EPG rec, seed 17290319, record)',
     url: 'neurosim_live',
-  },
-  {
-    id: 'world_record',
-    label: 'World record — record ~10s from live world sim (EPG ticks)',
-    url: 'world_record',
   },
 ];
 
@@ -491,7 +481,7 @@ function buildScene(
   let minZ = Infinity; let maxZ = -Infinity;
   let compassCenter: { x: number; y: number; z: number } | null = null;
   let compassBaseRadius: number | null = null;
-  const aligned = computeAlignedPoints(neurons, viewMode !== 'raw');
+  const aligned = computeAlignedPoints(neurons, viewMode !== 'biological');
   if (viewMode === 'compass') {
     const ringIndices: number[] = [];
     for (let i = 0; i < neurons.length; i += 1) {
@@ -1046,7 +1036,7 @@ function buildScene(
     0.06,
     0.03,
   );
-  bumpArrow.visible = true;
+  bumpArrow.visible = viewMode !== 'biological';
   scene.add(bumpArrow);
 
   const arrowState = {
@@ -1488,20 +1478,18 @@ function applyTickSpikes(
 }
 
 const NEUROSIM_LIVE_DT_SEC = 0.0001;
-const NEUROSIM_LIVE_POLL_MS = 20;
-const NEUROSIM_LIVE_MAX_TICKS_PER_POLL = 3000;
 const NEUROSIM_LIVE_MAX_STORED_TICKS = 100_000;
-const NEUROSIM_LIVE_MAX_BACKOFF_MS = 2000;
+const NEUROSIM_RECORDING_MAX_STORED_TICKS = 300_000;
 
 export default function VisualizationPage() {
   const [fetchedReplay, setFetchedReplay] = useState<ReplayData | null>(null);
   const [templateReplay, setTemplateReplay] = useState<ReplayData | null>(null);
   const [liveReplay, setLiveReplay] = useState<ReplayData | null>(null);
   const [liveTicks, setLiveTicks] = useState<ReplayTick[]>([]);
+  const liveTicksRef = useRef<ReplayTick[]>([]);
+  const [liveTicksVersion, setLiveTicksVersion] = useState(0);
   const [recordedTicks, setRecordedTicks] = useState<ReplayTick[]>([]);
-  const [liveReplaySource, setLiveReplaySource] = useState<'live' | 'recording'>('live');
   const liveReplayTickCountRef = useRef(0);
-  const liveReplaySourceRef = useRef<'live' | 'recording'>('live');
   const liveReplayRef = useRef<ReplayData | null>(null);
   const liveEpgSeenRef = useRef<Set<string>>(new Set());
   const [liveEpgUniqueFired, setLiveEpgUniqueFired] = useState(0);
@@ -1513,29 +1501,42 @@ export default function VisualizationPage() {
   const [appliedPenLeft, setAppliedPenLeft] = useState(0);
   const [appliedPenRight, setAppliedPenRight] = useState(0);
   const [applyBusy, setApplyBusy] = useState(false);
-  const [worldRecordBusy, setWorldRecordBusy] = useState(false);
-  const [liveAutoplay, setLiveAutoplay] = useState(true);
-  const [latestLiveTickNumber, setLatestLiveTickNumber] = useState(0);
   const [penANeurons, setPenANeurons] = useState<{ left: Array<{ id: string; label: string }>; right: Array<{ id: string; label: string }> }>({ left: [], right: [] });
   const [penARatesById, setPenARatesById] = useState<Record<string, number>>({});
+  const [showPenAMapping, setShowPenAMapping] = useState(false);
+  const [copiedPenAId, setCopiedPenAId] = useState<string | null>(null);
+  const copyInFlightRef = useRef(false);
+  const copyTimeoutRef = useRef<number | null>(null);
+  const isMountedRef = useRef(true);
+  const [showCompassInfo, setShowCompassInfo] = useState(false);
+  const [showRecordMenu, setShowRecordMenu] = useState(true);
+  const [bottomControlTab, setBottomControlTab] = useState<'individual' | 'sliders'>('individual');
+  const [compassPos, setCompassPos] = useState({ x: 12, y: 34 });
+  const [draggingCompass, setDraggingCompass] = useState(false);
+  const compassWidgetRef = useRef<HTMLDivElement | null>(null);
+  const compassDragOffsetRef = useRef({ x: 0, y: 0 });
   const notification = useNotification();
   const liveAfterTickRef = useRef(0);
-  const liveTickOffsetRef = useRef(0);
-  const livePollFailRef = useRef(0);
   const recordingRef = useRef(false);
+  useEffect(() => {
+    liveTicksRef.current = liveTicks;
+  }, [liveTicks]);
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+      copyInFlightRef.current = false;
+      if (copyTimeoutRef.current != null) {
+        window.clearTimeout(copyTimeoutRef.current);
+        copyTimeoutRef.current = null;
+      }
+    };
+  }, []);
   useEffect(() => {
     recordingRef.current = recording;
   }, [recording]);
   const [currentTick, setCurrentTick] = useState(1);
-  const [playing, setPlaying] = useState(false);
-  const [speed, setSpeed] = useState<PlaybackSpeed>(1);
   const [viewMode, setViewMode] = useState<ViewMode>('compass');
-  const [replayDatasets] = useState<ReplayDataset[]>(DEFAULT_REPLAY_DATASETS);
-  const [selectedReplayId, setSelectedReplayId] = useState<string>(
-    DEFAULT_REPLAY_DATASETS.find((d) => d.id === PREFERRED_REPLAY_ID)?.id
-      ?? DEFAULT_REPLAY_DATASETS[0]?.id
-      ?? '',
-  );
+  const selectedReplayId: string = PREFERRED_REPLAY_ID;
   const replay = useMemo(
     () =>
       selectedReplayId === 'neurosim_live'
@@ -1545,7 +1546,7 @@ export default function VisualizationPage() {
           : fetchedReplay,
     [selectedReplayId, liveReplay, fetchedReplay, templateReplay],
   );
-  const [arrowSmoothing, setArrowSmoothing] = useState(true);
+  const arrowSmoothing = true;
   const [epgLabelMap, setEpgLabelMap] = useState<Map<string, string> | null>(null);
   const [compassStats, setCompassStats] = useState<CompassStats>({
     epgActiveCount: 0,
@@ -1609,10 +1610,7 @@ export default function VisualizationPage() {
       return true;
     });
   }, [neurons]);
-  const selectedReplay = useMemo(
-    () => replayDatasets.find((d) => d.id === selectedReplayId) ?? replayDatasets[0],
-    [replayDatasets, selectedReplayId],
-  );
+  const selectedReplay = DEFAULT_REPLAY_DATASETS[0];
 
   useEffect(() => {
     let active = true;
@@ -1682,10 +1680,7 @@ export default function VisualizationPage() {
           setLiveReplay(null);
           setLiveTicks([]);
           setRecordedTicks([]);
-          liveTickOffsetRef.current = 0;
-          setLiveReplaySource('live');
           liveReplayTickCountRef.current = 0;
-          liveReplaySourceRef.current = 'live';
           liveEpgSeenRef.current = new Set();
           setLiveEpgUniqueFired(0);
         } else if (isWorldRecord) {
@@ -1733,7 +1728,6 @@ export default function VisualizationPage() {
           setLiveReplay(null);
         }
         setCurrentTick(1);
-        setPlaying(false);
       } catch (err) {
         if (!active) return;
         setFetchedReplay(null);
@@ -1742,15 +1736,11 @@ export default function VisualizationPage() {
         setLiveReplay(null);
         setLiveTicks([]);
         setRecordedTicks([]);
-        liveTickOffsetRef.current = 0;
-        setLiveReplaySource('live');
         liveReplayTickCountRef.current = 0;
-        liveReplaySourceRef.current = 'live';
         liveEpgSeenRef.current = new Set();
         setLiveEpgUniqueFired(0);
         liveAfterTickRef.current = 0;
         setCurrentTick(0);
-        setPlaying(false);
         setError((err as Error).message);
       }
     };
@@ -1761,20 +1751,18 @@ export default function VisualizationPage() {
   useEffect(() => {
     if (selectedReplayId !== 'neurosim_live' || !templateReplay) {
       liveReplayTickCountRef.current = 0;
-      liveReplaySourceRef.current = 'live';
       liveReplayRef.current = null;
       liveEpgSeenRef.current = new Set();
       setLiveEpgUniqueFired(0);
       setLiveReplay(null);
       return;
     }
-    const ticks = liveReplaySource === 'recording' ? recordedTicks : liveTicks;
-    const sourceChanged = liveReplaySourceRef.current !== liveReplaySource;
+    const ticks = liveTicksRef.current;
     const current = liveReplayRef.current;
     const replayMissing = current == null;
     const tickReset = ticks.length < liveReplayTickCountRef.current;
     const dtChanged = (current?.meta.dt_sec ?? liveSettings.dtSec) !== liveSettings.dtSec;
-    const fullRebuild = replayMissing || sourceChanged || tickReset || dtChanged;
+    const fullRebuild = replayMissing || tickReset || dtChanged;
     const epgIds: Set<string> | null =
       epgLabelMap && epgLabelMap.size > 0
         ? new Set(epgLabelMap.keys())
@@ -1869,8 +1857,7 @@ export default function VisualizationPage() {
     }
 
     liveReplayTickCountRef.current = ticks.length;
-    liveReplaySourceRef.current = liveReplaySource;
-  }, [selectedReplayId, templateReplay, liveReplaySource, liveTicks, recordedTicks, liveSettings.dtSec, epgLabelMap]);
+  }, [selectedReplayId, templateReplay, liveTicks.length, liveTicksVersion, liveSettings.dtSec, epgLabelMap]);
 
   const isNeuroSimLive = selectedReplayId === 'neurosim_live';
   const apiBase = getApiBase();
@@ -1889,119 +1876,93 @@ export default function VisualizationPage() {
 
   useEffect(() => {
     if (!isNeuroSimLive || !templateReplay) return;
-    let cancelled = false;
-    let timerId: number | null = null;
-    const schedule = (fn: () => void, ms: number) => {
-      if (timerId != null) clearTimeout(timerId);
-      timerId = window.setTimeout(fn, ms);
-    };
-    const init = async () => {
-      try {
+    setError(null);
+    const unsubscribe = subscribeNeuroLive((event) => {
+      if (event.type === 'error') {
+        setError(event.error);
+        return;
+      }
+      if (event.type === 'status') {
         setError(null);
-        const st = await fetch(`${apiBase}/api/neurosim-live/status`);
-        if (!st.ok) throw new Error(`live status ${st.status}`);
-        const j = (await st.json()) as {
-          latestTick?: number;
-          dtSec?: number;
-          penALeftHz?: number;
-          penARightHz?: number;
-          ratesById?: Record<string, number> | null;
-        };
-        if (cancelled) return;
-        const latest = Math.max(0, Math.floor(j.latestTick ?? 0));
+        const prevLiveAfter = liveAfterTickRef.current;
+        const latest = Math.max(0, Math.floor(event.latestTick ?? 0));
         liveAfterTickRef.current = latest;
-        setLatestLiveTickNumber(latest);
-        setAppliedPenLeft(j.penALeftHz ?? 0);
-        setAppliedPenRight(j.penARightHz ?? 0);
-        setPenALeftHz(j.penALeftHz ?? 0);
-        setPenARightHz(j.penARightHz ?? 0);
-        if (j.ratesById && typeof j.ratesById === 'object') {
-          setPenARatesById(j.ratesById);
+        setAppliedPenLeft(event.penALeftHz ?? 0);
+        setAppliedPenRight(event.penARightHz ?? 0);
+        setPenALeftHz(event.penALeftHz ?? 0);
+        setPenARightHz(event.penARightHz ?? 0);
+        if (event.ratesById && typeof event.ratesById === 'object') {
+          setPenARatesById(event.ratesById);
         } else {
           setPenARatesById({});
         }
-        if (typeof j.dtSec === 'number' && j.dtSec > 0) setLiveSettings({ dtSec: j.dtSec });
-        setLiveTicks([]);
-        setRecordedTicks([]);
-        liveTickOffsetRef.current = 0;
-        livePollFailRef.current = 0;
-      } catch (e) {
-        if (!cancelled) setError((e as Error).message);
-      }
-    };
-    const poll = async () => {
-      if (cancelled) return;
-      try {
-        const after = liveAfterTickRef.current;
-        const res = await fetch(
-          `${apiBase}/api/neurosim-live/ticks?after=${after}&max=${NEUROSIM_LIVE_MAX_TICKS_PER_POLL}`,
-        );
-        if (!res.ok) throw new Error(`live ticks ${res.status}`);
-        const data = (await res.json()) as {
-          ticks?: ReplayTick[];
-          latestTick?: number;
-          dtSec?: number;
-        };
-        if (cancelled) return;
-        if (typeof data.dtSec === 'number' && data.dtSec > 0) {
-          setLiveSettings({ dtSec: data.dtSec });
+        if (typeof event.dtSec === 'number' && event.dtSec > 0) {
+          setLiveSettings({ dtSec: event.dtSec });
         }
-        const batch = data.ticks ?? [];
-        const latestFromServer = data.latestTick ?? 0;
-        if (latestFromServer > 0) setLatestLiveTickNumber(latestFromServer);
-        if (batch.length > 0) {
-          const last = batch[batch.length - 1]!.tick;
-          liveAfterTickRef.current = last;
-          setLiveTicks((prev) => {
-            const merged = [...prev, ...batch];
-            if (merged.length > NEUROSIM_LIVE_MAX_STORED_TICKS) {
-              const trimCount = merged.length - NEUROSIM_LIVE_MAX_STORED_TICKS;
-              liveTickOffsetRef.current += trimCount;
-              return merged.slice(-NEUROSIM_LIVE_MAX_STORED_TICKS);
-            }
-            return merged;
-          });
-          if (recordingRef.current) {
-            setRecordedTicks((prev) => {
-              const merged = [...prev, ...batch];
-              if (merged.length > NEUROSIM_LIVE_MAX_STORED_TICKS) {
-                return merged.slice(-NEUROSIM_LIVE_MAX_STORED_TICKS);
-              }
-              return merged;
-            });
+        if (latest < prevLiveAfter) {
+          liveTicksRef.current = [];
+          setLiveTicks([]);
+          setRecordedTicks([]);
+        }
+        return;
+      }
+      if (typeof event.dtSec === 'number' && event.dtSec > 0) {
+        setError(null);
+        setLiveSettings({ dtSec: event.dtSec });
+      }
+      const batch = (event.ticks ?? []) as LiveReplayTick[];
+      if (batch.length === 0) return;
+      setError(null);
+      const last = batch[batch.length - 1]?.tick;
+      if (typeof last === 'number') liveAfterTickRef.current = last;
+      const prev = liveTicksRef.current;
+      const merged = [...prev, ...batch as ReplayTick[]];
+      const trimmed = merged.length > NEUROSIM_LIVE_MAX_STORED_TICKS;
+      const next = trimmed ? merged.slice(-NEUROSIM_LIVE_MAX_STORED_TICKS) : merged;
+      liveTicksRef.current = next;
+      setLiveTicks(next);
+      if (trimmed && next.length === prev.length) {
+        setLiveTicksVersion((v) => v + 1);
+      }
+      if (recordingRef.current) {
+        setRecordedTicks((prev) => {
+          const merged = [...prev, ...batch as ReplayTick[]];
+          if (merged.length > NEUROSIM_RECORDING_MAX_STORED_TICKS) {
+            return merged.slice(-NEUROSIM_RECORDING_MAX_STORED_TICKS);
           }
-        }
-        livePollFailRef.current = 0;
-      } catch (err) {
-        if (!cancelled) {
-          setError((err as Error).message);
-          livePollFailRef.current += 1;
-        }
+          return merged;
+        });
       }
-      if (!cancelled) {
-        const backoff = Math.min(
-          NEUROSIM_LIVE_POLL_MS * 2 ** livePollFailRef.current,
-          NEUROSIM_LIVE_MAX_BACKOFF_MS,
-        );
-        schedule(() => void poll(), Math.max(NEUROSIM_LIVE_POLL_MS, backoff));
-      }
-    };
-    const startPolling = async () => {
-      await init();
-      if (cancelled) return;
-      schedule(() => void poll(), NEUROSIM_LIVE_POLL_MS);
-    };
-    void startPolling();
+    });
     return () => {
-      cancelled = true;
-      if (timerId != null) clearTimeout(timerId);
+      unsubscribe();
     };
-  }, [isNeuroSimLive, templateReplay, apiBase]);
+  }, [isNeuroSimLive, templateReplay]);
 
   useEffect(() => {
-    if (!replay?.ticks.length || !isNeuroSimLive || liveReplaySource !== 'live' || !liveAutoplay) return;
+    if (!replay?.ticks.length || !isNeuroSimLive) return;
     setCurrentTick(replay.ticks.length);
-  }, [replay, replay?.ticks.length, isNeuroSimLive, liveReplaySource, liveAutoplay]);
+  }, [replay, replay?.ticks.length, isNeuroSimLive]);
+
+  useEffect(() => {
+    if (!draggingCompass) return;
+    const onMove = (event: PointerEvent) => {
+      const widgetW = compassWidgetRef.current?.offsetWidth ?? 170;
+      const widgetH = compassWidgetRef.current?.offsetHeight ?? 170;
+      const maxX = Math.max(0, window.innerWidth - widgetW - 8);
+      const maxY = Math.max(0, window.innerHeight - widgetH - 8);
+      const nextX = Math.min(maxX, Math.max(8, event.clientX - compassDragOffsetRef.current.x));
+      const nextY = Math.min(maxY, Math.max(8, event.clientY - compassDragOffsetRef.current.y));
+      setCompassPos({ x: nextX, y: nextY });
+    };
+    const onUp = () => setDraggingCompass(false);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+  }, [draggingCompass]);
 
   useEffect(() => {
     const container = sceneContainerRef.current;
@@ -2049,417 +2010,197 @@ export default function VisualizationPage() {
     setCompassStats({ ...stats, ringActiveCount: ringInputActive });
   }, [replay, currentTick, ringIdSet]);
 
-  useEffect(() => {
-    if (!playing || !replay) return undefined;
-    if (speed === 'irl') {
-      const dtSec = getReplayDtSec(replay);
-      const ticksPerSecond = Math.max(1, Math.round(1 / dtSec));
-      const intervalMs = 50;
-      const ticksPerStep = Math.max(1, Math.round((ticksPerSecond * intervalMs) / 1000));
-      const timer = window.setInterval(() => {
-        setCurrentTick((prev) => Math.min(replay.ticks.length, prev + ticksPerStep));
-      }, intervalMs);
-      return () => window.clearInterval(timer);
-    }
-    const delay = Math.max(1, PLAYBACK_BASE_MS / Math.max(0.1, speed));
-    const timer = window.setInterval(() => {
-      setCurrentTick((prev) => (prev >= replay.ticks.length ? replay.ticks.length : prev + 1));
-    }, delay);
-    return () => window.clearInterval(timer);
-  }, [playing, replay, speed]);
-
-  useEffect(() => {
-    if (!replay) return;
-    if (currentTick >= replay.ticks.length) setPlaying(false);
-  }, [currentTick, replay]);
-
-  const totalTicks =
-    isNeuroSimLive && liveReplaySource === 'live' && latestLiveTickNumber > 0
-      ? Math.max(latestLiveTickNumber, replay?.ticks.length ?? 0)
-      : replay?.ticks.length ?? 1;
   const smoothedArrowAngleDeg = sceneRef.current?.arrowState?.angleCurrentDeg;
   const bumpTheta = Number.isFinite(smoothedArrowAngleDeg)
     ? (((smoothedArrowAngleDeg as number) + 360) % 360)
     : (compassStats.bumpAngleDeg != null ? ((compassStats.bumpAngleDeg + 360) % 360) : null);
+  const statusLine = replay
+    ? `replay=${selectedReplay?.id ?? 'n/a'} | scenario=${replay.meta?.scenario ?? 'n/a'} | decode=vector | ticks=${replay.ticks.length} | sim=${(replay.ticks.length * getReplayDtSec(replay)).toFixed(3)}s | dt=${(getReplayDtSec(replay) * 1000).toFixed(3)}ms | epg fired=${epgUniqueFired ?? 'n/a'} | bump=${compassStats.bumpAngleDeg == null ? 'n/a' : `${compassStats.bumpAngleDeg.toFixed(1)}deg`} (${compassStats.bumpStrength.toFixed(2)}) | top bin=${compassStats.epgTopBinIndex}`
+    : 'Loading replay...';
+  const statusTitle = replay
+    ? `replay=${selectedReplay?.id ?? 'n/a'} | scenario=${replay.meta?.scenario ?? 'n/a'} | decode=vector | neurons=${Array.isArray(replay.neurons) ? replay.neurons.length : displayNeurons.length} | rendered=${displayNeurons.length} | ticks=${replay.ticks.length} | sim=${(replay.ticks.length * getReplayDtSec(replay)).toFixed(3)}s | dt=${(getReplayDtSec(replay) * 1000).toFixed(3)}ms | epg fired=${epgUniqueFired ?? 'n/a'} | bump angle=${compassStats.bumpAngleDeg == null ? 'n/a' : `${compassStats.bumpAngleDeg.toFixed(1)}deg`} | bump strength=${compassStats.bumpStrength.toFixed(3)} | top bin=${compassStats.epgTopBinIndex}`
+    : undefined;
+  const viewportW = typeof window !== 'undefined' ? window.innerWidth : 0;
+  const openCompassInfoLeftward = viewportW > 0 && (compassPos.x + 300 > viewportW);
+  const applyPenAHz = async () => {
+    setError(null);
+    setApplyBusy(true);
+    try {
+      const ratesById: Record<string, number> = {};
+      for (const { id } of penANeurons.left) {
+        const v = penARatesById[id];
+        ratesById[id] = typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : penALeftHz;
+      }
+      for (const { id } of penANeurons.right) {
+        const v = penARatesById[id];
+        ratesById[id] = typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : penARightHz;
+      }
+      const res = await fetch(`${apiBase}/api/neurosim-live/apply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          penALeftHz: penALeftHz,
+          penARightHz: penARightHz,
+          ratesById,
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { penALeftHz?: number; penARightHz?: number; error?: string };
+      if (!res.ok) throw new Error(data?.error ?? `apply failed: ${res.status}`);
+      const appliedL = data.penALeftHz ?? penALeftHz;
+      const appliedR = data.penARightHz ?? penARightHz;
+      setAppliedPenLeft(appliedL);
+      setAppliedPenRight(appliedR);
+      const overrides: string[] = [];
+      for (const { id, label } of penANeurons.left) {
+        const v = ratesById[id];
+        if (typeof v === 'number' && v !== appliedL) overrides.push(`${label}=${v}`);
+      }
+      for (const { id, label } of penANeurons.right) {
+        const v = ratesById[id];
+        if (typeof v === 'number' && v !== appliedR) overrides.push(`${label}=${v}`);
+      }
+      const msg =
+        overrides.length > 0
+          ? `PEN_a updated: ${overrides.join(', ')} Hz`
+          : `PEN_a applied: L=${appliedL} R=${appliedR} Hz`;
+      notification.show(msg, 'success');
+      setTimeout(() => notification.hide(), 2500);
+    } catch (e) {
+      const msg = (e as Error).message;
+      setError(msg);
+      notification.show(msg, 'error');
+      setTimeout(() => notification.hide(), 4000);
+    } finally {
+      setApplyBusy(false);
+    }
+  };
+  const clearAllPenAInputs = () => {
+    setPenALeftHz(0);
+    setPenARightHz(0);
+    const cleared: Record<string, number> = {};
+    for (const { id } of penANeurons.left) cleared[id] = 0;
+    for (const { id } of penANeurons.right) cleared[id] = 0;
+    setPenARatesById(cleared);
+    notification.show('Cleared all PEN_a inputs to 0 Hz (not applied)', 'info');
+    setTimeout(() => notification.hide(), 2200);
+  };
+  const handleCopyNeuronId = async (id: string) => {
+    if (copyInFlightRef.current) return;
+    copyInFlightRef.current = true;
+    try {
+      await navigator.clipboard.writeText(id);
+      if (!isMountedRef.current) {
+        copyInFlightRef.current = false;
+        return;
+      }
+      setCopiedPenAId(id);
+      if (copyTimeoutRef.current != null) {
+        window.clearTimeout(copyTimeoutRef.current);
+      }
+      copyTimeoutRef.current = window.setTimeout(() => {
+        if (!isMountedRef.current) return;
+        setCopiedPenAId((prev) => (prev === id ? null : prev));
+        copyInFlightRef.current = false;
+        copyTimeoutRef.current = null;
+      }, 1200);
+    } catch {
+      if (isMountedRef.current) {
+        setError('Failed to copy neuron ID');
+      }
+      copyInFlightRef.current = false;
+    }
+  };
+  const preventNumberWheelAdjust = (event: WheelEvent<HTMLElement>) => {
+    const target = event.target as EventTarget | null;
+    if (target instanceof HTMLInputElement && target.type === 'number' && document.activeElement === target) {
+      event.stopPropagation();
+      event.preventDefault();
+    }
+  };
 
   return (
-    <div style={{ height: '100%', display: 'grid', gridTemplateRows: 'auto 1fr', background: '#060a14' }}>
-      <div style={{ padding: 12, display: 'grid', gap: 10, borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-          <details open style={{ minWidth: 420, color: '#d8e6ff' }}>
-            <summary style={{ cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
-              Replay files
-            </summary>
-            <div style={{ marginTop: 8, display: 'grid', gap: 6 }}>
-              {replayDatasets.map((dataset) => (
-                <button
-                  key={dataset.id}
-                  type="button"
-                  onClick={() => setSelectedReplayId(dataset.id)}
-                  style={{
-                    ...controlButtonStyle(selectedReplayId === dataset.id),
-                    display: 'block',
-                    textAlign: 'left',
-                    width: '100%',
-                  }}
-                >
-                  {dataset.label}
-                </button>
-              ))}
-            </div>
-          </details>
+    <div
+      className="neurosim-viz"
+      onWheelCapture={preventNumberWheelAdjust}
+      style={{ height: '100%', width: '100%', background: '#060a14', position: 'relative', overflow: 'hidden' }}
+    >
+      <div ref={sceneContainerRef} style={{ position: 'absolute', inset: 0 }} />
+      <div
+        style={{
+          position: 'absolute',
+          inset: 12,
+          zIndex: 15,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 8,
+          pointerEvents: 'none',
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'flex-end', pointerEvents: 'auto' }}>
+          <CompactMenu />
         </div>
-        {isNeuroSimLive && templateReplay ? (
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 12, color: '#9ec5ff', maxWidth: 420 }}>
-              One continuous sim runs inside brain-service from startup (0 Hz until you apply). EPG spikes stream here; Apply updates PEN_a input on the fly.
-            </span>
-            <span style={{ fontSize: 11, color: '#7a9cc4' }}>
-              Active input: L={appliedPenLeft} R={appliedPenRight} Hz
-            </span>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-              Left PEN_a
-              <input
-                type="range"
-                min={0}
-                max={200}
-                value={Math.min(200, penALeftHz)}
-                onChange={(e) => setPenALeftHz(Math.max(0, Math.min(500, Number(e.target.value) || 0)))}
-                style={{ width: 120 }}
-              />
-              <input
-                type="number"
-                min={0}
-                max={500}
-                value={penALeftHz}
-                onChange={(e) => setPenALeftHz(Math.max(0, Math.min(500, Number(e.target.value) || 0)))}
-                style={{ width: 48, padding: '2px 4px', fontSize: 12 }}
-              />
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-              Right PEN_a
-              <input
-                type="range"
-                min={0}
-                max={200}
-                value={Math.min(200, penARightHz)}
-                onChange={(e) => setPenARightHz(Math.max(0, Math.min(500, Number(e.target.value) || 0)))}
-                style={{ width: 120 }}
-              />
-              <input
-                type="number"
-                min={0}
-                max={500}
-                value={penARightHz}
-                onChange={(e) => setPenARightHz(Math.max(0, Math.min(500, Number(e.target.value) || 0)))}
-                style={{ width: 48, padding: '2px 4px', fontSize: 12 }}
-              />
-            </label>
-            <details open style={{ fontSize: 12, color: '#b8d4ff', marginTop: 8 }}>
-              <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Per-neuron PEN_a (Hz) — override global L/R</summary>
-              <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 8 }}>
-                {penANeurons.left.length === 0 && penANeurons.right.length === 0 ? (
-                  <span style={{ color: '#f0a050' }}>Loading PEN_a list…</span>
-                ) : null}
-                <div>
-                  <div style={{ marginBottom: 4, fontWeight: 600 }}>Left (L1–L10)</div>
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    {penANeurons.left.map(({ id, label }) => (
-                      <label key={id} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                        <span style={{ minWidth: 24, display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
-                          <span>{label}</span>
-                          <span style={{ fontSize: 9, color: '#6a8aaa', fontWeight: 400 }}>{id}</span>
-                        </span>
-                        <input
-                          type="number"
-                          min={0}
-                          max={500}
-                          placeholder={String(penALeftHz)}
-                          value={penARatesById[id] ?? ''}
-                          onChange={(e) => {
-                            const v = e.target.value === '' ? undefined : Number(e.target.value);
-                            setPenARatesById((prev) => {
-                              const next = { ...prev };
-                              if (v == null || !Number.isFinite(v)) delete next[id];
-                              else next[id] = Math.max(0, Math.min(500, v));
-                              return next;
-                            });
-                          }}
-                          style={{ width: 44, padding: '2px 4px', fontSize: 11 }}
-                        />
-                      </label>
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <div style={{ marginBottom: 4, fontWeight: 600 }}>Right (R1–R10)</div>
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    {penANeurons.right.map(({ id, label }) => (
-                      <label key={id} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                        <span style={{ minWidth: 24, display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
-                          <span>{label}</span>
-                          <span style={{ fontSize: 9, color: '#6a8aaa', fontWeight: 400 }}>{id}</span>
-                        </span>
-                        <input
-                          type="number"
-                          min={0}
-                          max={500}
-                          placeholder={String(penARightHz)}
-                          value={penARatesById[id] ?? ''}
-                          onChange={(e) => {
-                            const v = e.target.value === '' ? undefined : Number(e.target.value);
-                            setPenARatesById((prev) => {
-                              const next = { ...prev };
-                              if (v == null || !Number.isFinite(v)) delete next[id];
-                              else next[id] = Math.max(0, Math.min(500, v));
-                              return next;
-                            });
-                          }}
-                          style={{ width: 44, padding: '2px 4px', fontSize: 11 }}
-                        />
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </details>
-            <button
-              type="button"
-              onClick={async () => {
-                setError(null);
-                setApplyBusy(true);
-                try {
-                  const ratesById: Record<string, number> = {};
-                  for (const { id } of penANeurons.left) {
-                    const v = penARatesById[id];
-                    ratesById[id] = typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : penALeftHz;
-                  }
-                  for (const { id } of penANeurons.right) {
-                    const v = penARatesById[id];
-                    ratesById[id] = typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : penARightHz;
-                  }
-                  const res = await fetch(`${apiBase}/api/neurosim-live/apply`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      penALeftHz: penALeftHz,
-                      penARightHz: penARightHz,
-                      ratesById,
-                    }),
-                  });
-                  const data = (await res.json().catch(() => ({}))) as { penALeftHz?: number; penARightHz?: number; error?: string };
-                  if (!res.ok) throw new Error(data?.error ?? `apply failed: ${res.status}`);
-                  const appliedL = data.penALeftHz ?? penALeftHz;
-                  const appliedR = data.penARightHz ?? penARightHz;
-                  setAppliedPenLeft(appliedL);
-                  setAppliedPenRight(appliedR);
-                  const overrides: string[] = [];
-                  for (const { id, label } of penANeurons.left) {
-                    const v = ratesById[id];
-                    if (typeof v === 'number' && v !== appliedL) overrides.push(`${label}=${v}`);
-                  }
-                  for (const { id, label } of penANeurons.right) {
-                    const v = ratesById[id];
-                    if (typeof v === 'number' && v !== appliedR) overrides.push(`${label}=${v}`);
-                  }
-                  const msg =
-                    overrides.length > 0
-                      ? `PEN_a updated: ${overrides.join(', ')} Hz`
-                      : `PEN_a applied: L=${appliedL} R=${appliedR} Hz`;
-                  notification.show(msg, 'success');
-                  setTimeout(() => notification.hide(), 2500);
-                } catch (e) {
-                  const msg = (e as Error).message;
-                  setError(msg);
-                  notification.show(msg, 'error');
-                  setTimeout(() => notification.hide(), 4000);
-                } finally {
-                  setApplyBusy(false);
-                }
-              }}
-              style={controlButtonStyle(false)}
-              disabled={applyBusy}
-            >
-              Apply PEN_a Hz
-            </button>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer' }}>
-              <input
-                type="checkbox"
-                checked={liveAutoplay}
-                onChange={(e) => setLiveAutoplay(e.target.checked)}
-              />
-              Autoplay live
-            </label>
-            <button
-              type="button"
-              onClick={() => setRecording((r) => !r)}
-              style={controlButtonStyle(recording)}
-            >
-              Record {recording ? '(on)' : ''}
-            </button>
-            {recordedTicks.length > 0 ? (
-              <>
-                <button
-                  type="button"
-                  onClick={() => { setLiveReplaySource('recording'); setCurrentTick(1); setPlaying(false); }}
-                  style={controlButtonStyle(liveReplaySource === 'recording')}
-                >
-                  Replay recording ({recordedTicks.length} ticks)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setLiveReplaySource('live')}
-                  style={controlButtonStyle(liveReplaySource === 'live')}
-                >
-                  View live
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!templateReplay) return;
-                    const payload: ReplayData = {
-                      meta: {
-                        ...templateReplay.meta,
-                        generated_at: new Date().toISOString(),
-                        source_csv: 'neurosim-live/recording',
-                        ticks: recordedTicks.length,
-                        scenario: 'neurosim_live_pen_a_recording',
-                        dt_sec: liveSettings.dtSec,
-                        note: `Continuous live sim; applied PEN_a last L=${appliedPenLeft} R=${appliedPenRight} Hz`,
-                      },
-                      neurons: templateReplay.neurons,
-                      ticks: recordedTicks,
-                    };
-                    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-                    const a = document.createElement('a');
-                    a.href = URL.createObjectURL(blob);
-                    a.download = `neurosim_live_pen_a_${Date.now()}.json`;
-                    a.click();
-                    URL.revokeObjectURL(a.href);
-                  }}
-                  style={controlButtonStyle(false)}
-                >
-                  Download JSON
-                </button>
-              </>
-            ) : null}
-          </div>
-        ) : selectedReplayId === 'world_record' && templateReplay ? (
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 12, color: '#9ec5ff', maxWidth: 420 }}>
-              Record ~10 seconds of EPG ticks from the live world sim. Requires world sim running with at least one fly.
-            </span>
-            <button
-              type="button"
-              onClick={async () => {
-                setError(null);
-                setWorldRecordBusy(true);
-                try {
-                  const apiRoot = getApiBase();
-                  const res = await fetch(`${apiRoot}/api/world-record-ticks`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ durationSec: 10 }),
-                  });
-                  const data = (await res.json().catch(() => ({}))) as {
-                    ok?: boolean;
-                    replay?: ReplayData;
-                    ticks?: number;
-                    logPath?: string;
-                    error?: string;
-                  };
-                  if (!res.ok) throw new Error(data?.error ?? `Record failed: ${res.status}`);
-                  if (data.replay) {
-                    setFetchedReplay(data.replay);
-                    setCurrentTick(1);
-                    setPlaying(false);
-                    notification.show(
-                      `Recorded ${data.ticks ?? 0} ticks (saved to ${data.logPath ?? 'logs'})`,
-                      'success',
-                    );
-                    setTimeout(() => notification.hide(), 3000);
-                  }
-                } catch (e) {
-                  const msg = (e as Error).message;
-                  setError(msg);
-                  notification.show(msg, 'error');
-                  setTimeout(() => notification.hide(), 4000);
-                } finally {
-                  setWorldRecordBusy(false);
-                }
-              }}
-              style={controlButtonStyle(false)}
-              disabled={worldRecordBusy}
-            >
-              {worldRecordBusy ? 'Recording…' : 'Record 10s'}
-            </button>
-          </div>
-        ) : null}
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button type="button" onClick={() => setViewMode('raw')} style={controlButtonStyle(viewMode === 'raw')}>Raw</button>
-          <button type="button" onClick={() => setViewMode('aligned')} style={controlButtonStyle(viewMode === 'aligned')}>Aligned</button>
-          <button type="button" onClick={() => setViewMode('compass')} style={controlButtonStyle(viewMode === 'compass')}>Compass loop</button>
-        </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <button type="button" onClick={() => setArrowSmoothing((v) => !v)} style={controlButtonStyle(arrowSmoothing)}>
-            Arrow smoothing: {arrowSmoothing ? 'ON' : 'OFF'}
-          </button>
-        </div>
-        {replay ? (
-          <PlaybackControls
-            playing={playing}
-            tick={
-              isNeuroSimLive && liveReplaySource === 'live' && liveAutoplay && currentTick === replay.ticks.length && latestLiveTickNumber > 0
-                ? latestLiveTickNumber
-                : currentTick + (isNeuroSimLive ? liveTickOffsetRef.current : 0)
-            }
-            totalTicks={totalTicks}
-            speed={speed}
-            onPlayPause={() => setPlaying((p) => !p)}
-            onPrevTick={() => setCurrentTick((t) => Math.max(1, t - 1))}
-            onNextTick={() => setCurrentTick((t) => Math.min(replay?.ticks.length ?? totalTicks, t + 1))}
-            onSeekTick={(tick) => {
-              if (isNeuroSimLive) {
-                const bufferTick = tick - liveTickOffsetRef.current;
-                const max = replay?.ticks.length ?? 0;
-                setCurrentTick(Math.max(1, Math.min(max, bufferTick)));
-              } else {
-                setCurrentTick(Math.max(1, Math.min(totalTicks, tick)));
-              }
-            }}
-            onSpeedChange={setSpeed}
-          />
-        ) : null}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        {replay ? createPortal((
           <div
+            ref={compassWidgetRef}
             style={{
-              fontSize: 12,
-              opacity: 0.92,
-              minHeight: 18,
-              lineHeight: '18px',
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-              flex: 1,
+              position: 'fixed',
+              top: compassPos.y,
+              left: compassPos.x,
+              zIndex: 18,
+              display: 'inline-flex',
+              alignItems: 'center',
+              padding: 6,
+              border: '1px solid rgba(140,170,220,0.38)',
+              borderRadius: 10,
+              background: 'rgba(8, 16, 30, 0.62)',
+              backdropFilter: 'blur(10px)',
+              WebkitBackdropFilter: 'blur(10px)',
+              boxShadow: '0 10px 22px rgba(0,0,0,0.36)',
             }}
-            title={replay ? `replay=${selectedReplay?.id ?? 'n/a'} | scenario=${replay.meta?.scenario ?? 'n/a'} | decode=vector | neurons=${Array.isArray(replay.neurons) ? replay.neurons.length : displayNeurons.length} | rendered=${displayNeurons.length} | ticks=${replay.ticks.length} | sim=${(replay.ticks.length * getReplayDtSec(replay)).toFixed(3)}s | dt=${(getReplayDtSec(replay) * 1000).toFixed(3)}ms | epg fired=${epgUniqueFired ?? 'n/a'} | bump angle=${compassStats.bumpAngleDeg == null ? 'n/a' : `${compassStats.bumpAngleDeg.toFixed(1)}deg`} | bump strength=${compassStats.bumpStrength.toFixed(3)} | top bin=${compassStats.epgTopBinIndex}` : undefined}
           >
-            {replay
-              ? `replay=${selectedReplay?.id ?? 'n/a'} | scenario=${replay.meta?.scenario ?? 'n/a'} | decode=vector | ticks=${replay.ticks.length} | sim=${(replay.ticks.length * getReplayDtSec(replay)).toFixed(3)}s | dt=${(getReplayDtSec(replay) * 1000).toFixed(3)}ms | epg fired=${epgUniqueFired ?? 'n/a'} | bump=${compassStats.bumpAngleDeg == null ? 'n/a' : `${compassStats.bumpAngleDeg.toFixed(1)}deg`} (${compassStats.bumpStrength.toFixed(2)}) | top bin=${compassStats.epgTopBinIndex}`
-              : 'Loading replay...'}
-          </div>
-          {replay && compassStats.bumpStrength < 0.5 ? (
-            <span
-              style={{ fontSize: 11, color: 'rgba(120,200,255,0.9)', cursor: 'help', whiteSpace: 'nowrap' }}
-              title="Weak bump? Try: (1) organic bump replay (ring drive), (2) run ≥1s, (3) full connectome, (4) match eonsystems scaling. See docs/BUMP_IMPROVEMENT_SUGGESTIONS.md"
+            <button
+              type="button"
+              aria-label="Drag EPG compass"
+              title="Drag compass"
+              onPointerDown={(event) => {
+                const rect = compassWidgetRef.current?.getBoundingClientRect();
+                const baseX = rect?.left ?? compassPos.x;
+                const baseY = rect?.top ?? compassPos.y;
+                compassDragOffsetRef.current = {
+                  x: event.clientX - baseX,
+                  y: event.clientY - baseY,
+                };
+                setDraggingCompass(true);
+              }}
+              style={{
+                position: 'absolute',
+                top: 10,
+                left: 10,
+                width: 18,
+                height: 18,
+                borderRadius: 6,
+                border: '1px solid rgba(150, 185, 235, 0.55)',
+                background: 'rgba(18, 37, 64, 0.95)',
+                color: '#d8e9ff',
+                cursor: draggingCompass ? 'grabbing' : 'grab',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: 0,
+              }}
             >
-              Bump help
-            </span>
-          ) : null}
-        </div>
-        {replay ? (
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+              <svg width="10" height="10" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+                <circle cx="2" cy="2" r="1" />
+                <circle cx="6" cy="2" r="1" />
+                <circle cx="10" cy="2" r="1" />
+                <circle cx="2" cy="6" r="1" />
+                <circle cx="6" cy="6" r="1" />
+                <circle cx="10" cy="6" r="1" />
+                <circle cx="2" cy="10" r="1" />
+                <circle cx="6" cy="10" r="1" />
+                <circle cx="10" cy="10" r="1" />
+              </svg>
+            </button>
             <svg
               width="152"
               height="152"
@@ -2653,7 +2394,7 @@ export default function VisualizationPage() {
                   />
                 );
               })}
-              {bumpTheta != null ? (
+              {viewMode !== 'biological' && bumpTheta != null ? (
                 <line
                   x1="0"
                   y1="0"
@@ -2664,15 +2405,621 @@ export default function VisualizationPage() {
                 />
               ) : null}
             </svg>
-            <div style={{ fontSize: 11, opacity: 0.85, maxWidth: 420 }}>
-              EPG compass: 16 labeled wedges using processed labels and classification side, arranged anatomically.
-              Order is fixed to match the reference slice diagram (top= L5, top-left=R5, right of L5=R4, then L6).
+            <button
+              type="button"
+              onClick={() => setShowCompassInfo((v) => !v)}
+              title="EPG compass info"
+              aria-label="Toggle EPG compass info"
+              style={{
+                position: 'absolute',
+                top: 10,
+                right: 10,
+                width: 18,
+                height: 18,
+                borderRadius: 999,
+                border: '1px solid rgba(150, 185, 235, 0.7)',
+                background: 'rgba(18, 37, 64, 0.95)',
+                color: '#d8e9ff',
+                fontSize: 12,
+                lineHeight: '16px',
+                textAlign: 'center',
+                cursor: 'pointer',
+                padding: 0,
+                fontWeight: 700,
+              }}
+            >
+              i
+            </button>
+            {showCompassInfo ? (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 34,
+                  ...(openCompassInfoLeftward ? { right: 0 } : { left: 0 }),
+                  width: 280,
+                  maxWidth: 'min(280px, calc(100vw - 24px))',
+                  padding: '8px 10px',
+                  borderRadius: 8,
+                  border: '1px solid rgba(130,170,225,0.55)',
+                  background: 'rgba(10,20,36,0.96)',
+                  color: '#d7e8ff',
+                  fontSize: 11,
+                  lineHeight: 1.35,
+                  boxShadow: '0 8px 20px rgba(0,0,0,0.38)',
+                }}
+              >
+                EPG compass: 16 labeled wedges using processed labels and classification side, arranged anatomically.
+                Order is fixed to match the reference slice diagram (top= L5, top-left=R5, right of L5=R4, then L6).
+              </div>
+            ) : null}
+          </div>
+        ), document.body) : null}
+        {isNeuroSimLive && templateReplay ? createPortal((
+          <div
+            style={{
+              position: 'fixed',
+              top: 96,
+              left: 12,
+              zIndex: 21,
+              pointerEvents: 'auto',
+              display: 'grid',
+              gap: 8,
+            }}
+          >
+            <div
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setViewMode((v) => (v === 'compass' ? 'biological' : 'compass'))}
+                style={{
+                  border: 'none',
+                  background: 'transparent',
+                  color: '#d7e8ff',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: 0,
+                  cursor: 'pointer',
+                }}
+                title="Toggle view mode"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M1.5 12S5.2 5.5 12 5.5S22.5 12 22.5 12S18.8 18.5 12 18.5S1.5 12 1.5 12Z" stroke="currentColor" strokeWidth="1.8" />
+                  <circle cx="12" cy="12" r="2.2" fill="currentColor" />
+                </svg>
+                {viewMode === 'compass' ? (
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <circle cx="12" cy="12" r="8" stroke="currentColor" strokeWidth="1.8" />
+                    <path d="M12 4V20M4 12H20" stroke="currentColor" strokeWidth="1.8" />
+                  </svg>
+                ) : (
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M7 4C10 4 10 8 13 8C16 8 16 4 19 4M7 20C10 20 10 16 13 16C16 16 16 20 19 20M7 4V20M19 4V20" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                  </svg>
+                )}
+              </button>
+              <span style={{ fontSize: 12, color: '#b6cfe9', fontWeight: 600 }}>
+                View: {viewMode === 'compass' ? 'EPG Compass' : 'Biological'}
+              </span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'flex-start', position: 'relative', minHeight: 78 }}>
+              <button
+                type="button"
+                aria-label={showRecordMenu ? 'Collapse record tools' : 'Expand record tools'}
+                onClick={() => setShowRecordMenu((v) => !v)}
+                title={showRecordMenu ? 'Hide record tools' : 'Show record tools'}
+                style={{
+                  width: 18,
+                  minHeight: 74,
+                  borderRadius: 6,
+                  border: '1px solid #6f8fc0',
+                  background: showRecordMenu ? '#3a5787' : '#243a5b',
+                  color: '#eef4ff',
+                  cursor: 'pointer',
+                  fontWeight: 700,
+                  padding: 0,
+                  flexShrink: 0,
+                }}
+              >
+                {showRecordMenu ? '‹' : '›'}
+              </button>
+              {showRecordMenu ? (
+                <div
+                  style={{
+                    marginLeft: 8,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    flexWrap: 'wrap',
+                    padding: '6px 8px',
+                    border: '1px solid rgba(140,170,220,0.38)',
+                    borderRadius: 8,
+                    background: 'rgba(8, 16, 30, 0.62)',
+                    backdropFilter: 'blur(10px)',
+                    WebkitBackdropFilter: 'blur(10px)',
+                    boxShadow: '0 10px 22px rgba(0,0,0,0.36)',
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setRecording((r) => !r)}
+                    style={controlButtonStyle(recording)}
+                  >
+                    Record {recording ? '(on)' : ''}
+                  </button>
+                  <span style={{ fontSize: 11, color: '#7a9cc4' }}>
+                    Recording keeps last {NEUROSIM_RECORDING_MAX_STORED_TICKS.toLocaleString()} ticks (rolling window)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!templateReplay) return;
+                      const payload: ReplayData = {
+                        meta: {
+                          ...templateReplay.meta,
+                          generated_at: new Date().toISOString(),
+                          source_csv: 'neurosim-live/recording',
+                          ticks: recordedTicks.length,
+                          scenario: 'neurosim_live_pen_a_recording',
+                          dt_sec: liveSettings.dtSec,
+                          note: `Continuous live sim; rolling capture up to ${NEUROSIM_RECORDING_MAX_STORED_TICKS} ticks; applied PEN_a last L=${appliedPenLeft} R=${appliedPenRight} Hz`,
+                        },
+                        neurons: templateReplay.neurons,
+                        ticks: recordedTicks,
+                      };
+                      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+                      const a = document.createElement('a');
+                      a.href = URL.createObjectURL(blob);
+                      a.download = `neurosim_live_pen_a_${Date.now()}.json`;
+                      a.click();
+                      URL.revokeObjectURL(a.href);
+                    }}
+                    style={{ ...controlButtonStyle(false), width: 214, justifyContent: 'center', fontVariantNumeric: 'tabular-nums' }}
+                    disabled={recordedTicks.length === 0}
+                  >
+                    Download JSON ({recordedTicks.length.toLocaleString()} ticks)
+                  </button>
+                </div>
+              ) : null}
             </div>
           </div>
-        ) : null}
-        {error ? <div style={{ color: '#f99', fontSize: 12 }}>{error}</div> : null}
+        ), document.body) : null}
+        {isNeuroSimLive ? createPortal((
+          <div
+            style={{
+              position: 'fixed',
+              top: 96,
+              right: 12,
+              zIndex: 21,
+              pointerEvents: 'auto',
+            }}
+          >
+            <button
+              type="button"
+              aria-label={showPenAMapping ? 'Hide PEN_a neuron ID mapping' : 'Show PEN_a neuron ID mapping'}
+              onClick={() => setShowPenAMapping((v) => !v)}
+              style={{
+                width: 18,
+                minHeight: 120,
+                borderRadius: 6,
+                border: '1px solid #6f8fc0',
+                background: showPenAMapping ? '#3a5787' : '#243a5b',
+                color: '#eef4ff',
+                cursor: 'pointer',
+                fontWeight: 700,
+                padding: 0,
+              }}
+              title={showPenAMapping ? 'Hide PEN_a mapping' : 'Show PEN_a mapping'}
+            >
+              {showPenAMapping ? '›' : '‹'}
+            </button>
+            {showPenAMapping ? (
+              <div
+                style={{
+                  position: 'absolute',
+                  right: 24,
+                  top: 0,
+                  maxHeight: 220,
+                  overflowY: 'auto',
+                  minWidth: 320,
+                  padding: '8px 10px',
+                  border: '1px solid #6f8fc0',
+                  borderRadius: 8,
+                  background: '#122136',
+                  color: '#d9e9ff',
+                  boxShadow: '0 8px 20px rgba(0,0,0,0.35)',
+                }}
+              >
+                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>PEN_a neuron mapping</div>
+                {penANeurons.left.length === 0 && penANeurons.right.length === 0 ? (
+                  <div style={{ fontSize: 11, color: '#f0a050' }}>Loading PEN_a list…</div>
+                ) : (
+                  <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 11 }}>
+                    <thead>
+                      <tr>
+                        <th style={{ textAlign: 'left', borderBottom: '1px solid #35527a', padding: '2px 4px' }}>Label</th>
+                        <th style={{ textAlign: 'left', borderBottom: '1px solid #35527a', padding: '2px 4px' }}>Neuron ID</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {penANeurons.left.map(({ label, id }) => (
+                        <tr key={`map-left-${id}`}>
+                          <td style={{ padding: '2px 4px', color: '#b8d4ff' }}>{label}</td>
+                          <td style={{ padding: '2px 4px', color: '#8fb5e3', fontFamily: 'monospace' }}>
+                            <span>{id}</span>
+                            <button
+                              type="button"
+                              onClick={() => void handleCopyNeuronId(id)}
+                              aria-label={copiedPenAId === id ? 'Copied neuron ID' : 'Copy neuron ID'}
+                              title={copiedPenAId === id ? 'Copied' : 'Copy neuron ID'}
+                              style={{
+                                marginLeft: 6,
+                                width: 18,
+                                height: 18,
+                                border: '1px solid #5e7daa',
+                                borderRadius: 4,
+                                background: copiedPenAId === id ? '#2f6b3f' : '#1a2b45',
+                                color: '#d9e9ff',
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                verticalAlign: 'middle',
+                                padding: 0,
+                              }}
+                            >
+                              {copiedPenAId === id ? (
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                  <path d="M20 6L9 17l-5-5" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                                </svg>
+                              ) : (
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                  <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="2" />
+                                  <path d="M5 15V6a2 2 0 0 1 2-2h9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                                </svg>
+                              )}
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                      {penANeurons.right.map(({ label, id }) => (
+                        <tr key={`map-right-${id}`}>
+                          <td style={{ padding: '2px 4px', color: '#b8d4ff' }}>{label}</td>
+                          <td style={{ padding: '2px 4px', color: '#8fb5e3', fontFamily: 'monospace' }}>
+                            <span>{id}</span>
+                            <button
+                              type="button"
+                              onClick={() => void handleCopyNeuronId(id)}
+                              aria-label={copiedPenAId === id ? 'Copied neuron ID' : 'Copy neuron ID'}
+                              title={copiedPenAId === id ? 'Copied' : 'Copy neuron ID'}
+                              style={{
+                                marginLeft: 6,
+                                width: 18,
+                                height: 18,
+                                border: '1px solid #5e7daa',
+                                borderRadius: 4,
+                                background: copiedPenAId === id ? '#2f6b3f' : '#1a2b45',
+                                color: '#d9e9ff',
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                verticalAlign: 'middle',
+                                padding: 0,
+                              }}
+                            >
+                              {copiedPenAId === id ? (
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                  <path d="M20 6L9 17l-5-5" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                                </svg>
+                              ) : (
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                  <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="2" />
+                                  <path d="M5 15V6a2 2 0 0 1 2-2h9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                                </svg>
+                              )}
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            ) : null}
+          </div>
+        ), document.body) : null}
+        {error ? <div style={{ color: '#f99', fontSize: 12, pointerEvents: 'auto' }}>{error}</div> : null}
       </div>
-      <div ref={sceneContainerRef} style={{ minHeight: 0 }} />
+      <div
+        className="viz-bottom-status"
+        title={statusTitle}
+        style={{
+          position: 'fixed',
+          left: 12,
+          right: 12,
+          bottom: 10,
+          zIndex: 19,
+          overflowX: 'auto',
+          overflowY: 'hidden',
+          whiteSpace: 'nowrap',
+          fontSize: 12,
+          lineHeight: '18px',
+          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+          color: 'rgba(228, 238, 255, 0.92)',
+          padding: '4px 8px',
+          borderRadius: 8,
+          border: '1px solid rgba(120,150,200,0.26)',
+          background: 'rgba(8, 16, 30, 0.5)',
+          backdropFilter: 'blur(8px)',
+          WebkitBackdropFilter: 'blur(8px)',
+          pointerEvents: 'auto',
+        }}
+      >
+        {statusLine}
+      </div>
+      {isNeuroSimLive && templateReplay ? (
+        <div
+          style={{
+            position: 'fixed',
+            left: 12,
+            right: 12,
+            bottom: 44,
+            zIndex: 19,
+            display: 'grid',
+            gap: 8,
+            pointerEvents: 'auto',
+          }}
+        >
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'space-between' }}>
+            <div role="tablist" aria-label="PEN_a control mode tabs" style={{ display: 'flex', gap: 8 }}>
+              <button
+                id="pena-tab-individual"
+                role="tab"
+                aria-selected={bottomControlTab === 'individual'}
+                aria-controls="pena-panel-individual"
+                type="button"
+                onClick={() => setBottomControlTab('individual')}
+                style={controlButtonStyle(bottomControlTab === 'individual')}
+              >
+                Individual L/R
+              </button>
+              <button
+                id="pena-tab-sliders"
+                role="tab"
+                aria-selected={bottomControlTab === 'sliders'}
+                aria-controls="pena-panel-sliders"
+                type="button"
+                onClick={() => setBottomControlTab('sliders')}
+                style={controlButtonStyle(bottomControlTab === 'sliders')}
+              >
+                Sliders
+              </button>
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
+              <button
+                type="button"
+                onClick={() => void applyPenAHz()}
+                disabled={applyBusy}
+                style={{
+                  ...controlButtonStyle(false),
+                  background: 'linear-gradient(145deg, rgba(44,120,255,0.9) 0%, rgba(106,72,255,0.88) 100%)',
+                  borderColor: 'rgba(158, 188, 255, 0.88)',
+                  color: '#f6faff',
+                  boxShadow: '0 0 16px rgba(88,140,255,0.5), 0 0 28px rgba(120,80,255,0.28)',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  opacity: applyBusy ? 0.75 : 1,
+                }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M5 12L10 17L19 7" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                Apply
+              </button>
+              <button
+                type="button"
+                onClick={clearAllPenAInputs}
+                style={{
+                  ...controlButtonStyle(false),
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M4 7H20" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                  <path d="M9 7V5h6v2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                  <path d="M8 10V18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                  <path d="M12 10V18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                  <path d="M16 10V18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                  <path d="M7 7L8 20h8l1-13" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                Clear all
+              </button>
+            </div>
+          </div>
+          {bottomControlTab === 'individual' ? (
+            <div
+              id="pena-panel-individual"
+              role="tabpanel"
+              aria-labelledby="pena-tab-individual"
+              style={{
+                display: 'flex',
+                gap: 10,
+                flexWrap: 'wrap',
+                alignItems: 'stretch',
+              }}
+            >
+              <div
+                style={{
+                  flex: '1 1 320px',
+                  minWidth: 280,
+                  borderRadius: 10,
+                  border: '1px solid rgba(96, 168, 255, 0.5)',
+                  background: 'linear-gradient(145deg, rgba(18,42,78,0.72) 0%, rgba(10,25,46,0.66) 100%)',
+                  backdropFilter: 'blur(10px)',
+                  WebkitBackdropFilter: 'blur(10px)',
+                  boxShadow: '0 10px 22px rgba(0,0,0,0.34)',
+                  padding: '8px 10px',
+                }}
+              >
+                <div style={{ marginBottom: 4, fontWeight: 700, fontSize: 12, color: '#9fd1ff' }}>Left (L1-L10)</div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {penANeurons.left.map(({ id, label }) => (
+                    <label key={id} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <span style={{ minWidth: 24, color: '#dbeaff' }}>{label}</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={500}
+                        placeholder={String(penALeftHz)}
+                        value={penARatesById[id] ?? ''}
+                        onChange={(e) => {
+                          const v = e.target.value === '' ? undefined : Number(e.target.value);
+                          setPenARatesById((prev) => {
+                            const next = { ...prev };
+                            if (v == null || !Number.isFinite(v)) delete next[id];
+                            else next[id] = Math.max(0, Math.min(500, v));
+                            return next;
+                          });
+                        }}
+                        style={{ width: 44, padding: '2px 4px', fontSize: 11 }}
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div
+                style={{
+                  flex: '1 1 320px',
+                  minWidth: 280,
+                  borderRadius: 10,
+                  border: '1px solid rgba(255, 136, 136, 0.5)',
+                  background: 'linear-gradient(145deg, rgba(74,28,36,0.68) 0%, rgba(40,16,22,0.63) 100%)',
+                  backdropFilter: 'blur(10px)',
+                  WebkitBackdropFilter: 'blur(10px)',
+                  boxShadow: '0 10px 22px rgba(0,0,0,0.34)',
+                  padding: '8px 10px',
+                }}
+              >
+                <div style={{ marginBottom: 4, fontWeight: 700, fontSize: 12, color: '#ffb0b0' }}>Right (R1-R10)</div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {penANeurons.right.map(({ id, label }) => (
+                    <label key={id} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <span style={{ minWidth: 24, color: '#ffe1e1' }}>{label}</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={500}
+                        placeholder={String(penARightHz)}
+                        value={penARatesById[id] ?? ''}
+                        onChange={(e) => {
+                          const v = e.target.value === '' ? undefined : Number(e.target.value);
+                          setPenARatesById((prev) => {
+                            const next = { ...prev };
+                            if (v == null || !Number.isFinite(v)) delete next[id];
+                            else next[id] = Math.max(0, Math.min(500, v));
+                            return next;
+                          });
+                        }}
+                        style={{ width: 44, padding: '2px 4px', fontSize: 11 }}
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : (
+          <div
+            id="pena-panel-sliders"
+            role="tabpanel"
+            aria-labelledby="pena-tab-sliders"
+            style={{
+              display: 'flex',
+              gap: 10,
+              flexWrap: 'wrap',
+              alignItems: 'stretch',
+            }}
+          >
+            <div
+              style={{
+                flex: '1 1 320px',
+                minWidth: 280,
+                borderRadius: 10,
+                border: '1px solid rgba(96, 168, 255, 0.5)',
+                background: 'linear-gradient(145deg, rgba(18,42,78,0.72) 0%, rgba(10,25,46,0.66) 100%)',
+                backdropFilter: 'blur(10px)',
+                WebkitBackdropFilter: 'blur(10px)',
+                boxShadow: '0 10px 22px rgba(0,0,0,0.34)',
+                padding: '8px 10px',
+              }}
+            >
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#9fd1ff', marginBottom: 6 }}>Left PEN_a (Hz)</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input
+                  type="range"
+                  min={0}
+                  max={200}
+                  value={Math.min(200, penALeftHz)}
+                  onChange={(e) => setPenALeftHz(Math.max(0, Math.min(500, Number(e.target.value) || 0)))}
+                  style={{ flex: 1 }}
+                />
+                <input
+                  type="number"
+                  min={0}
+                  max={500}
+                  value={penALeftHz}
+                  onChange={(e) => setPenALeftHz(Math.max(0, Math.min(500, Number(e.target.value) || 0)))}
+                  style={{ width: 58, padding: '3px 5px', fontSize: 12 }}
+                />
+              </div>
+              <div style={{ marginTop: 5, fontSize: 11, color: '#8dbde7' }}>Applied: {appliedPenLeft} Hz</div>
+            </div>
+            <div
+              style={{
+                flex: '1 1 320px',
+                minWidth: 280,
+                borderRadius: 10,
+                border: '1px solid rgba(255, 136, 136, 0.5)',
+                background: 'linear-gradient(145deg, rgba(74,28,36,0.68) 0%, rgba(40,16,22,0.63) 100%)',
+                backdropFilter: 'blur(10px)',
+                WebkitBackdropFilter: 'blur(10px)',
+                boxShadow: '0 10px 22px rgba(0,0,0,0.34)',
+                padding: '8px 10px',
+              }}
+            >
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#ffb0b0', marginBottom: 6 }}>Right PEN_a (Hz)</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input
+                  type="range"
+                  min={0}
+                  max={200}
+                  value={Math.min(200, penARightHz)}
+                  onChange={(e) => setPenARightHz(Math.max(0, Math.min(500, Number(e.target.value) || 0)))}
+                  style={{ flex: 1 }}
+                />
+                <input
+                  type="number"
+                  min={0}
+                  max={500}
+                  value={penARightHz}
+                  onChange={(e) => setPenARightHz(Math.max(0, Math.min(500, Number(e.target.value) || 0)))}
+                  style={{ width: 58, padding: '3px 5px', fontSize: 12 }}
+                />
+              </div>
+              <div style={{ marginTop: 5, fontSize: 11, color: '#f0aaaa' }}>Applied: {appliedPenRight} Hz</div>
+            </div>
+          </div>
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -130,7 +130,7 @@ type SceneState = {
   dispose: () => void;
 };
 
-type ViewMode = 'raw' | 'aligned' | 'compass';
+type ViewMode = 'biological' | 'compass';
 type ReplayDataset = { id: string; label: string; url: string };
 
 const INACTIVE_COLOR = new THREE.Color(0x2e3e5d);
@@ -480,7 +480,7 @@ function buildScene(
   let minZ = Infinity; let maxZ = -Infinity;
   let compassCenter: { x: number; y: number; z: number } | null = null;
   let compassBaseRadius: number | null = null;
-  const aligned = computeAlignedPoints(neurons, viewMode !== 'raw');
+  const aligned = computeAlignedPoints(neurons, viewMode !== 'biological');
   if (viewMode === 'compass') {
     const ringIndices: number[] = [];
     for (let i = 0; i < neurons.length; i += 1) {
@@ -1035,7 +1035,7 @@ function buildScene(
     0.06,
     0.03,
   );
-  bumpArrow.visible = true;
+  bumpArrow.visible = viewMode !== 'biological';
   scene.add(bumpArrow);
 
   const arrowState = {
@@ -1506,6 +1506,7 @@ export default function VisualizationPage() {
   const [showPenAMapping, setShowPenAMapping] = useState(false);
   const [copiedPenAId, setCopiedPenAId] = useState<string | null>(null);
   const [showCompassInfo, setShowCompassInfo] = useState(false);
+  const [showRecordMenu, setShowRecordMenu] = useState(true);
   const [bottomControlTab, setBottomControlTab] = useState<'individual' | 'sliders'>('individual');
   const [compassPos, setCompassPos] = useState({ x: 12, y: 14 });
   const [draggingCompass, setDraggingCompass] = useState(false);
@@ -2044,6 +2045,8 @@ export default function VisualizationPage() {
   const statusTitle = replay
     ? `replay=${selectedReplay?.id ?? 'n/a'} | scenario=${replay.meta?.scenario ?? 'n/a'} | decode=vector | neurons=${Array.isArray(replay.neurons) ? replay.neurons.length : displayNeurons.length} | rendered=${displayNeurons.length} | ticks=${replay.ticks.length} | sim=${(replay.ticks.length * getReplayDtSec(replay)).toFixed(3)}s | dt=${(getReplayDtSec(replay) * 1000).toFixed(3)}ms | epg fired=${epgUniqueFired ?? 'n/a'} | bump angle=${compassStats.bumpAngleDeg == null ? 'n/a' : `${compassStats.bumpAngleDeg.toFixed(1)}deg`} | bump strength=${compassStats.bumpStrength.toFixed(3)} | top bin=${compassStats.epgTopBinIndex}`
     : undefined;
+  const viewportW = typeof window !== 'undefined' ? window.innerWidth : 0;
+  const openCompassInfoLeftward = viewportW > 0 && (compassPos.x + 300 > viewportW);
   const applyPenAHz = async () => {
     setError(null);
     setApplyBusy(true);
@@ -2151,208 +2154,108 @@ export default function VisualizationPage() {
           }}
         >
         {isNeuroSimLive && templateReplay ? (
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', position: 'relative' }}>
-            <button
-              type="button"
-              onClick={() => setRecording((r) => !r)}
-              style={controlButtonStyle(recording)}
-            >
-              Record {recording ? '(on)' : ''}
-            </button>
-            <span style={{ fontSize: 11, color: '#7a9cc4' }}>
-              Recording keeps last {NEUROSIM_RECORDING_MAX_STORED_TICKS.toLocaleString()} ticks (rolling window).
-            </span>
-            <button
-              type="button"
-              onClick={() => {
-                if (!templateReplay) return;
-                const payload: ReplayData = {
-                  meta: {
-                    ...templateReplay.meta,
-                    generated_at: new Date().toISOString(),
-                    source_csv: 'neurosim-live/recording',
-                    ticks: recordedTicks.length,
-                    scenario: 'neurosim_live_pen_a_recording',
-                    dt_sec: liveSettings.dtSec,
-                    note: `Continuous live sim; rolling capture up to ${NEUROSIM_RECORDING_MAX_STORED_TICKS} ticks; applied PEN_a last L=${appliedPenLeft} R=${appliedPenRight} Hz`,
-                  },
-                  neurons: templateReplay.neurons,
-                  ticks: recordedTicks,
-                };
-                const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-                const a = document.createElement('a');
-                a.href = URL.createObjectURL(blob);
-                a.download = `neurosim_live_pen_a_${Date.now()}.json`;
-                a.click();
-                URL.revokeObjectURL(a.href);
-              }}
-              style={controlButtonStyle(false)}
-              disabled={recordedTicks.length === 0}
-            >
-              Download JSON ({recordedTicks.length.toLocaleString()} ticks)
-            </button>
-            <button
-              type="button"
-              aria-label={showPenAMapping ? 'Hide PEN_a neuron ID mapping' : 'Show PEN_a neuron ID mapping'}
-              onClick={() => setShowPenAMapping((v) => !v)}
-              style={{
-                position: 'absolute',
-                right: 0,
-                top: 0,
-                width: 18,
-                minHeight: 120,
-                borderRadius: 6,
-                border: '1px solid #6f8fc0',
-                background: showPenAMapping ? '#3a5787' : '#243a5b',
-                color: '#eef4ff',
-                cursor: 'pointer',
-                fontWeight: 700,
-                padding: 0,
-              }}
-              title={showPenAMapping ? 'Hide PEN_a mapping' : 'Show PEN_a mapping'}
-            >
-              {showPenAMapping ? '›' : '‹'}
-            </button>
-            {showPenAMapping ? (
-              <div
+          <div style={{ display: 'grid', gap: 8, position: 'relative' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <button
+                type="button"
+                onClick={() => setViewMode((v) => (v === 'compass' ? 'biological' : 'compass'))}
+                style={{ ...controlButtonStyle(false), display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                title="Toggle view mode"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M1.5 12S5.2 5.5 12 5.5S22.5 12 22.5 12S18.8 18.5 12 18.5S1.5 12 1.5 12Z" stroke="currentColor" strokeWidth="1.8" />
+                  <circle cx="12" cy="12" r="2.2" fill="currentColor" />
+                </svg>
+                {viewMode === 'compass' ? (
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <circle cx="12" cy="12" r="8" stroke="currentColor" strokeWidth="1.8" />
+                    <path d="M12 4V20M4 12H20" stroke="currentColor" strokeWidth="1.8" />
+                  </svg>
+                ) : (
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M7 4C10 4 10 8 13 8C16 8 16 4 19 4M7 20C10 20 10 16 13 16C16 16 16 20 19 20M7 4V20M19 4V20" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                  </svg>
+                )}
+              </button>
+              <span style={{ fontSize: 12, color: '#b6cfe9', fontWeight: 600 }}>
+                View: {viewMode === 'compass' ? 'EPG Compass' : 'Biological'}
+              </span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'flex-start', position: 'relative', minHeight: 78 }}>
+              <button
+                type="button"
+                aria-label={showRecordMenu ? 'Collapse record tools' : 'Expand record tools'}
+                onClick={() => setShowRecordMenu((v) => !v)}
+                title={showRecordMenu ? 'Hide record tools' : 'Show record tools'}
                 style={{
-                  position: 'absolute',
-                  right: 24,
-                  top: 0,
-                  maxHeight: 220,
-                  overflowY: 'auto',
-                  minWidth: 320,
-                  padding: '8px 10px',
+                  width: 18,
+                  minHeight: 74,
+                  borderRadius: 6,
                   border: '1px solid #6f8fc0',
-                  borderRadius: 8,
-                  background: '#122136',
-                  color: '#d9e9ff',
-                  zIndex: 2,
-                  boxShadow: '0 8px 20px rgba(0,0,0,0.35)',
+                  background: showRecordMenu ? '#3a5787' : '#243a5b',
+                  color: '#eef4ff',
+                  cursor: 'pointer',
+                  fontWeight: 700,
+                  padding: 0,
+                  flexShrink: 0,
                 }}
               >
-                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>PEN_a neuron mapping</div>
-                {penANeurons.left.length === 0 && penANeurons.right.length === 0 ? (
-                  <div style={{ fontSize: 11, color: '#f0a050' }}>Loading PEN_a list…</div>
-                ) : (
-                  <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 11 }}>
-                    <thead>
-                      <tr>
-                        <th style={{ textAlign: 'left', borderBottom: '1px solid #35527a', padding: '2px 4px' }}>Label</th>
-                        <th style={{ textAlign: 'left', borderBottom: '1px solid #35527a', padding: '2px 4px' }}>Neuron ID</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {penANeurons.left.map(({ label, id }) => (
-                        <tr key={`map-left-${id}`}>
-                          <td style={{ padding: '2px 4px', color: '#b8d4ff' }}>{label}</td>
-                          <td style={{ padding: '2px 4px', color: '#8fb5e3', fontFamily: 'monospace' }}>
-                            <span>{id}</span>
-                            <button
-                              type="button"
-                              onClick={async () => {
-                                try {
-                                  await navigator.clipboard.writeText(id);
-                                  setCopiedPenAId(id);
-                                  window.setTimeout(() => {
-                                    setCopiedPenAId((prev) => (prev === id ? null : prev));
-                                  }, 1200);
-                                } catch {
-                                  setError('Failed to copy neuron ID');
-                                }
-                              }}
-                              title={copiedPenAId === id ? 'Copied' : 'Copy neuron ID'}
-                              style={{
-                                marginLeft: 6,
-                                width: 18,
-                                height: 18,
-                                border: '1px solid #5e7daa',
-                                borderRadius: 4,
-                                background: copiedPenAId === id ? '#2f6b3f' : '#1a2b45',
-                                color: '#d9e9ff',
-                                cursor: 'pointer',
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                verticalAlign: 'middle',
-                                padding: 0,
-                              }}
-                            >
-                              {copiedPenAId === id ? (
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                  <path d="M20 6L9 17l-5-5" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
-                                </svg>
-                              ) : (
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                  <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="2" />
-                                  <path d="M5 15V6a2 2 0 0 1 2-2h9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                                </svg>
-                              )}
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                      {penANeurons.right.map(({ label, id }) => (
-                        <tr key={`map-right-${id}`}>
-                          <td style={{ padding: '2px 4px', color: '#b8d4ff' }}>{label}</td>
-                          <td style={{ padding: '2px 4px', color: '#8fb5e3', fontFamily: 'monospace' }}>
-                            <span>{id}</span>
-                            <button
-                              type="button"
-                              onClick={async () => {
-                                try {
-                                  await navigator.clipboard.writeText(id);
-                                  setCopiedPenAId(id);
-                                  window.setTimeout(() => {
-                                    setCopiedPenAId((prev) => (prev === id ? null : prev));
-                                  }, 1200);
-                                } catch {
-                                  setError('Failed to copy neuron ID');
-                                }
-                              }}
-                              title={copiedPenAId === id ? 'Copied' : 'Copy neuron ID'}
-                              style={{
-                                marginLeft: 6,
-                                width: 18,
-                                height: 18,
-                                border: '1px solid #5e7daa',
-                                borderRadius: 4,
-                                background: copiedPenAId === id ? '#2f6b3f' : '#1a2b45',
-                                color: '#d9e9ff',
-                                cursor: 'pointer',
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                verticalAlign: 'middle',
-                                padding: 0,
-                              }}
-                            >
-                              {copiedPenAId === id ? (
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                  <path d="M20 6L9 17l-5-5" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
-                                </svg>
-                              ) : (
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                  <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="2" />
-                                  <path d="M5 15V6a2 2 0 0 1 2-2h9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                                </svg>
-                              )}
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-            ) : null}
+                {showRecordMenu ? '‹' : '›'}
+              </button>
+              {showRecordMenu ? (
+                <div
+                  style={{
+                    marginLeft: 8,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setRecording((r) => !r)}
+                    style={controlButtonStyle(recording)}
+                  >
+                    Record {recording ? '(on)' : ''}
+                  </button>
+                  <span style={{ fontSize: 11, color: '#7a9cc4' }}>
+                    Recording keeps last {NEUROSIM_RECORDING_MAX_STORED_TICKS.toLocaleString()} ticks (rolling window)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!templateReplay) return;
+                      const payload: ReplayData = {
+                        meta: {
+                          ...templateReplay.meta,
+                          generated_at: new Date().toISOString(),
+                          source_csv: 'neurosim-live/recording',
+                          ticks: recordedTicks.length,
+                          scenario: 'neurosim_live_pen_a_recording',
+                          dt_sec: liveSettings.dtSec,
+                          note: `Continuous live sim; rolling capture up to ${NEUROSIM_RECORDING_MAX_STORED_TICKS} ticks; applied PEN_a last L=${appliedPenLeft} R=${appliedPenRight} Hz`,
+                        },
+                        neurons: templateReplay.neurons,
+                        ticks: recordedTicks,
+                      };
+                      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+                      const a = document.createElement('a');
+                      a.href = URL.createObjectURL(blob);
+                      a.download = `neurosim_live_pen_a_${Date.now()}.json`;
+                      a.click();
+                      URL.revokeObjectURL(a.href);
+                    }}
+                    style={{ ...controlButtonStyle(false), width: 214, justifyContent: 'center', fontVariantNumeric: 'tabular-nums' }}
+                    disabled={recordedTicks.length === 0}
+                  >
+                    Download JSON ({recordedTicks.length.toLocaleString()} ticks)
+                  </button>
+                </div>
+              ) : null}
+            </div>
           </div>
         ) : null}
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button type="button" onClick={() => setViewMode('raw')} style={controlButtonStyle(viewMode === 'raw')}>Raw</button>
-          <button type="button" onClick={() => setViewMode('aligned')} style={controlButtonStyle(viewMode === 'aligned')}>Aligned</button>
-          <button type="button" onClick={() => setViewMode('compass')} style={controlButtonStyle(viewMode === 'compass')}>Compass loop</button>
-        </div>
         {replay ? createPortal((
           <div
             ref={compassWidgetRef}
@@ -2608,7 +2511,7 @@ export default function VisualizationPage() {
                   />
                 );
               })}
-              {bumpTheta != null ? (
+              {viewMode !== 'biological' && bumpTheta != null ? (
                 <line
                   x1="0"
                   y1="0"
@@ -2649,8 +2552,9 @@ export default function VisualizationPage() {
                 style={{
                   position: 'absolute',
                   top: 34,
-                  right: 0,
+                  ...(openCompassInfoLeftward ? { right: 0 } : { left: 0 }),
                   width: 280,
+                  maxWidth: 'min(280px, calc(100vw - 24px))',
                   padding: '8px 10px',
                   borderRadius: 8,
                   border: '1px solid rgba(130,170,225,0.55)',
@@ -2663,6 +2567,169 @@ export default function VisualizationPage() {
               >
                 EPG compass: 16 labeled wedges using processed labels and classification side, arranged anatomically.
                 Order is fixed to match the reference slice diagram (top= L5, top-left=R5, right of L5=R4, then L6).
+              </div>
+            ) : null}
+          </div>
+        ), document.body) : null}
+        {isNeuroSimLive ? createPortal((
+          <div
+            style={{
+              position: 'fixed',
+              top: 96,
+              right: 12,
+              zIndex: 21,
+              pointerEvents: 'auto',
+            }}
+          >
+            <button
+              type="button"
+              aria-label={showPenAMapping ? 'Hide PEN_a neuron ID mapping' : 'Show PEN_a neuron ID mapping'}
+              onClick={() => setShowPenAMapping((v) => !v)}
+              style={{
+                width: 18,
+                minHeight: 120,
+                borderRadius: 6,
+                border: '1px solid #6f8fc0',
+                background: showPenAMapping ? '#3a5787' : '#243a5b',
+                color: '#eef4ff',
+                cursor: 'pointer',
+                fontWeight: 700,
+                padding: 0,
+              }}
+              title={showPenAMapping ? 'Hide PEN_a mapping' : 'Show PEN_a mapping'}
+            >
+              {showPenAMapping ? '›' : '‹'}
+            </button>
+            {showPenAMapping ? (
+              <div
+                style={{
+                  position: 'absolute',
+                  right: 24,
+                  top: 0,
+                  maxHeight: 220,
+                  overflowY: 'auto',
+                  minWidth: 320,
+                  padding: '8px 10px',
+                  border: '1px solid #6f8fc0',
+                  borderRadius: 8,
+                  background: '#122136',
+                  color: '#d9e9ff',
+                  boxShadow: '0 8px 20px rgba(0,0,0,0.35)',
+                }}
+              >
+                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>PEN_a neuron mapping</div>
+                {penANeurons.left.length === 0 && penANeurons.right.length === 0 ? (
+                  <div style={{ fontSize: 11, color: '#f0a050' }}>Loading PEN_a list…</div>
+                ) : (
+                  <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 11 }}>
+                    <thead>
+                      <tr>
+                        <th style={{ textAlign: 'left', borderBottom: '1px solid #35527a', padding: '2px 4px' }}>Label</th>
+                        <th style={{ textAlign: 'left', borderBottom: '1px solid #35527a', padding: '2px 4px' }}>Neuron ID</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {penANeurons.left.map(({ label, id }) => (
+                        <tr key={`map-left-${id}`}>
+                          <td style={{ padding: '2px 4px', color: '#b8d4ff' }}>{label}</td>
+                          <td style={{ padding: '2px 4px', color: '#8fb5e3', fontFamily: 'monospace' }}>
+                            <span>{id}</span>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                try {
+                                  await navigator.clipboard.writeText(id);
+                                  setCopiedPenAId(id);
+                                  window.setTimeout(() => {
+                                    setCopiedPenAId((prev) => (prev === id ? null : prev));
+                                  }, 1200);
+                                } catch {
+                                  setError('Failed to copy neuron ID');
+                                }
+                              }}
+                              title={copiedPenAId === id ? 'Copied' : 'Copy neuron ID'}
+                              style={{
+                                marginLeft: 6,
+                                width: 18,
+                                height: 18,
+                                border: '1px solid #5e7daa',
+                                borderRadius: 4,
+                                background: copiedPenAId === id ? '#2f6b3f' : '#1a2b45',
+                                color: '#d9e9ff',
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                verticalAlign: 'middle',
+                                padding: 0,
+                              }}
+                            >
+                              {copiedPenAId === id ? (
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                  <path d="M20 6L9 17l-5-5" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                                </svg>
+                              ) : (
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                  <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="2" />
+                                  <path d="M5 15V6a2 2 0 0 1 2-2h9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                                </svg>
+                              )}
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                      {penANeurons.right.map(({ label, id }) => (
+                        <tr key={`map-right-${id}`}>
+                          <td style={{ padding: '2px 4px', color: '#b8d4ff' }}>{label}</td>
+                          <td style={{ padding: '2px 4px', color: '#8fb5e3', fontFamily: 'monospace' }}>
+                            <span>{id}</span>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                try {
+                                  await navigator.clipboard.writeText(id);
+                                  setCopiedPenAId(id);
+                                  window.setTimeout(() => {
+                                    setCopiedPenAId((prev) => (prev === id ? null : prev));
+                                  }, 1200);
+                                } catch {
+                                  setError('Failed to copy neuron ID');
+                                }
+                              }}
+                              title={copiedPenAId === id ? 'Copied' : 'Copy neuron ID'}
+                              style={{
+                                marginLeft: 6,
+                                width: 18,
+                                height: 18,
+                                border: '1px solid #5e7daa',
+                                borderRadius: 4,
+                                background: copiedPenAId === id ? '#2f6b3f' : '#1a2b45',
+                                color: '#d9e9ff',
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                verticalAlign: 'middle',
+                                padding: 0,
+                              }}
+                            >
+                              {copiedPenAId === id ? (
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                  <path d="M20 6L9 17l-5-5" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                                </svg>
+                              ) : (
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                  <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="2" />
+                                  <path d="M5 15V6a2 2 0 0 1 2-2h9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                                </svg>
+                              )}
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
               </div>
             ) : null}
           </div>

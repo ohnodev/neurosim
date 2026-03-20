@@ -1511,10 +1511,7 @@ export default function VisualizationPage() {
   const [showCompassInfo, setShowCompassInfo] = useState(false);
   const [showRecordMenu, setShowRecordMenu] = useState(false);
   const [bottomControlTab, setBottomControlTab] = useState<'individual' | 'sliders'>('individual');
-  const [compassPos, setCompassPos] = useState({ x: 12, y: 34 });
-  const [draggingCompass, setDraggingCompass] = useState(false);
-  const compassWidgetRef = useRef<HTMLDivElement | null>(null);
-  const compassDragOffsetRef = useRef({ x: 0, y: 0 });
+  const [rightPanelTab, setRightPanelTab] = useState<'mapping' | 'compass'>('mapping');
   const notification = useNotification();
   const liveAfterTickRef = useRef(0);
   const recordingRef = useRef(false);
@@ -1945,26 +1942,6 @@ export default function VisualizationPage() {
   }, [replay, replay?.ticks.length, isNeuroSimLive]);
 
   useEffect(() => {
-    if (!draggingCompass) return;
-    const onMove = (event: PointerEvent) => {
-      const widgetW = compassWidgetRef.current?.offsetWidth ?? 170;
-      const widgetH = compassWidgetRef.current?.offsetHeight ?? 170;
-      const maxX = Math.max(0, window.innerWidth - widgetW - 8);
-      const maxY = Math.max(0, window.innerHeight - widgetH - 8);
-      const nextX = Math.min(maxX, Math.max(8, event.clientX - compassDragOffsetRef.current.x));
-      const nextY = Math.min(maxY, Math.max(8, event.clientY - compassDragOffsetRef.current.y));
-      setCompassPos({ x: nextX, y: nextY });
-    };
-    const onUp = () => setDraggingCompass(false);
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-    return () => {
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-    };
-  }, [draggingCompass]);
-
-  useEffect(() => {
     const container = sceneContainerRef.current;
     if (!container || displayNeurons.length === 0) return;
     if (sceneRef.current) {
@@ -2020,8 +1997,6 @@ export default function VisualizationPage() {
   const statusTitle = replay
     ? `replay=${selectedReplay?.id ?? 'n/a'} | scenario=${replay.meta?.scenario ?? 'n/a'} | decode=vector | neurons=${Array.isArray(replay.neurons) ? replay.neurons.length : displayNeurons.length} | rendered=${displayNeurons.length} | ticks=${replay.ticks.length} | sim=${(replay.ticks.length * getReplayDtSec(replay)).toFixed(3)}s | dt=${(getReplayDtSec(replay) * 1000).toFixed(3)}ms | epg fired=${epgUniqueFired ?? 'n/a'} | bump angle=${compassStats.bumpAngleDeg == null ? 'n/a' : `${compassStats.bumpAngleDeg.toFixed(1)}deg`} | bump strength=${compassStats.bumpStrength.toFixed(3)} | top bin=${compassStats.epgTopBinIndex}`
     : undefined;
-  const viewportW = typeof window !== 'undefined' ? window.innerWidth : 0;
-  const openCompassInfoLeftward = viewportW > 0 && (compassPos.x + 300 > viewportW);
   const applyPenAHz = async () => {
     setError(null);
     setApplyBusy(true);
@@ -2139,321 +2114,6 @@ export default function VisualizationPage() {
         <div style={{ display: 'flex', justifyContent: 'flex-end', pointerEvents: 'auto' }}>
           <CompactMenu />
         </div>
-        {replay ? createPortal((
-          <div
-            ref={compassWidgetRef}
-            style={{
-              position: 'fixed',
-              top: compassPos.y,
-              left: compassPos.x,
-              zIndex: 18,
-              display: 'inline-flex',
-              alignItems: 'center',
-              padding: 6,
-              border: '1px solid rgba(140,170,220,0.38)',
-              borderRadius: 10,
-              background: 'rgba(8, 16, 30, 0.62)',
-              backdropFilter: 'blur(10px)',
-              WebkitBackdropFilter: 'blur(10px)',
-              boxShadow: '0 10px 22px rgba(0,0,0,0.36)',
-            }}
-          >
-            <button
-              type="button"
-              aria-label="Drag EPG compass"
-              title="Drag compass"
-              onPointerDown={(event) => {
-                const rect = compassWidgetRef.current?.getBoundingClientRect();
-                const baseX = rect?.left ?? compassPos.x;
-                const baseY = rect?.top ?? compassPos.y;
-                compassDragOffsetRef.current = {
-                  x: event.clientX - baseX,
-                  y: event.clientY - baseY,
-                };
-                setDraggingCompass(true);
-              }}
-              style={{
-                position: 'absolute',
-                top: 10,
-                left: 10,
-                width: 18,
-                height: 18,
-                borderRadius: 6,
-                border: '1px solid rgba(150, 185, 235, 0.55)',
-                background: 'rgba(18, 37, 64, 0.95)',
-                color: '#d8e9ff',
-                cursor: draggingCompass ? 'grabbing' : 'grab',
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                padding: 0,
-              }}
-            >
-              <svg width="10" height="10" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
-                <circle cx="2" cy="2" r="1" />
-                <circle cx="6" cy="2" r="1" />
-                <circle cx="10" cy="2" r="1" />
-                <circle cx="2" cy="6" r="1" />
-                <circle cx="6" cy="6" r="1" />
-                <circle cx="10" cy="6" r="1" />
-                <circle cx="2" cy="10" r="1" />
-                <circle cx="6" cy="10" r="1" />
-                <circle cx="10" cy="10" r="1" />
-              </svg>
-            </button>
-            <svg
-              width="152"
-              height="152"
-              viewBox="-60 -60 120 120"
-              style={{ border: '1px solid rgba(255,255,255,0.12)', borderRadius: 8 }}
-            >
-              {/* Radial dividers: 16 bins, anatomical L/R ordering */}
-              {Array.from({ length: EPG_COMPASS_BINS + 1 }, (_, i) => {
-                const a = (i / EPG_COMPASS_BINS) * Math.PI * 2 - Math.PI / 2;
-                return (
-                  <line
-                    key={`divider-${i}`}
-                    x1="0" y1="0"
-                    x2={(Math.cos(a) * 48).toFixed(3)}
-                    y2={(Math.sin(a) * 48).toFixed(3)}
-                    stroke="rgba(255,255,255,0.25)"
-                    strokeWidth="0.8"
-                  />
-                );
-              })}
-              {Array.from({ length: EPG_COMPASS_BINS }, (_, i) => {
-                const { a0, a1 } = getWedgeParams(i, EPG_COMPASS_BINS);
-                const r0 = 23;
-                const r1 = 30;
-                const x0 = Math.cos(a0) * r0; const y0 = Math.sin(a0) * r0;
-                const x1 = Math.cos(a1) * r0; const y1 = Math.sin(a1) * r0;
-                const x2 = Math.cos(a1) * r1; const y2 = Math.sin(a1) * r1;
-                const x3 = Math.cos(a0) * r1; const y3 = Math.sin(a0) * r1;
-                return (
-                  <path
-                    key={`epg-slice-color-${i}`}
-                    d={`M ${x0} ${y0} L ${x1} ${y1} L ${x2} ${y2} L ${x3} ${y3} Z`}
-                    fill={EPG_SLICE_COLORS[i % EPG_SLICE_COLORS.length]}
-                    fillOpacity={0.45}
-                    stroke="rgba(255,255,255,0.2)"
-                    strokeWidth="0.4"
-                  />
-                );
-              })}
-              {Array.from({ length: EPG_COMPASS_BINS }, (_, i) => {
-                const { midAngle } = getWedgeParams(i, EPG_COMPASS_BINS);
-                const tr = 51;
-                const tx = Math.cos(midAngle) * tr;
-                const ty = Math.sin(midAngle) * tr;
-                return (
-                  <text
-                    key={`epg-slice-label-${i}`}
-                    x={tx.toFixed(3)}
-                    y={ty.toFixed(3)}
-                    textAnchor="middle"
-                    dominantBaseline="middle"
-                    fill="rgba(235,245,255,0.96)"
-                    fontSize="4.2"
-                    fontWeight="700"
-                  >
-                    {EPG_SLICE_ORDER_CLOCKWISE[i]}
-                  </text>
-                );
-              })}
-              <circle cx="0" cy="0" r="44" fill="none" stroke="rgba(120,200,255,0.32)" strokeWidth="1.2" />
-              <circle cx="0" cy="0" r="36" fill="none" stroke="rgba(208,140,255,0.28)" strokeWidth="1.2" />
-              <circle cx="0" cy="0" r="30" fill="none" stroke="rgba(255,79,216,0.35)" strokeWidth="1.4" />
-              <circle cx="0" cy="0" r="18" fill="none" stroke="rgba(255,170,110,0.32)" strokeWidth="1.2" />
-              {compassStats.upstreamBins.map((v, i) => {
-                const { a0, a1 } = getWedgeParams(i, compassStats.upstreamBins.length);
-                const r0 = 44;
-                const r1 = 44 + v * 10;
-                const x0 = Math.cos(a0) * r0; const y0 = Math.sin(a0) * r0;
-                const x1 = Math.cos(a1) * r0; const y1 = Math.sin(a1) * r0;
-                const x2 = Math.cos(a1) * r1; const y2 = Math.sin(a1) * r1;
-                const x3 = Math.cos(a0) * r1; const y3 = Math.sin(a0) * r1;
-                const alpha = 0.2 + v * 0.62;
-                return (
-                  <path
-                    key={`up-bin-${i}`}
-                    d={`M ${x0} ${y0} L ${x1} ${y1} L ${x2} ${y2} L ${x3} ${y3} Z`}
-                    fill={`rgba(120,200,255,${alpha.toFixed(3)})`}
-                    stroke="none"
-                  />
-                );
-              })}
-              {compassStats.delta7Bins.map((v, i) => {
-                const { a0, a1 } = getWedgeParams(i, compassStats.delta7Bins.length);
-                const r0 = 36;
-                const r1 = 36 + v * 7;
-                const x0 = Math.cos(a0) * r0; const y0 = Math.sin(a0) * r0;
-                const x1 = Math.cos(a1) * r0; const y1 = Math.sin(a1) * r0;
-                const x2 = Math.cos(a1) * r1; const y2 = Math.sin(a1) * r1;
-                const x3 = Math.cos(a0) * r1; const y3 = Math.sin(a0) * r1;
-                const alpha = 0.18 + v * 0.58;
-                return (
-                  <path
-                    key={`d7-bin-${i}`}
-                    d={`M ${x0} ${y0} L ${x1} ${y1} L ${x2} ${y2} L ${x3} ${y3} Z`}
-                    fill={`rgba(208,140,255,${alpha.toFixed(3)})`}
-                    stroke="none"
-                  />
-                );
-              })}
-              {compassStats.downstreamBins.map((v, i) => {
-                const { a0, a1 } = getWedgeParams(i, compassStats.downstreamBins.length);
-                const r0 = 18;
-                const r1 = 18 + v * 8;
-                const x0 = Math.cos(a0) * r0; const y0 = Math.sin(a0) * r0;
-                const x1 = Math.cos(a1) * r0; const y1 = Math.sin(a1) * r0;
-                const x2 = Math.cos(a1) * r1; const y2 = Math.sin(a1) * r1;
-                const x3 = Math.cos(a0) * r1; const y3 = Math.sin(a0) * r1;
-                const alpha = 0.2 + v * 0.62;
-                return (
-                  <path
-                    key={`down-bin-${i}`}
-                    d={`M ${x0} ${y0} L ${x1} ${y1} L ${x2} ${y2} L ${x3} ${y3} Z`}
-                    fill={`rgba(255,170,110,${alpha.toFixed(3)})`}
-                    stroke="none"
-                  />
-                );
-              })}
-              {Array.from({ length: EPG_COMPASS_BINS }, (_, i) => {
-                const { midAngle: a } = getWedgeParams(i, EPG_COMPASS_BINS);
-                return (
-                  <line
-                    key={`link-up-base-${i}`}
-                    x1={(Math.cos(a) * 44).toFixed(3)}
-                    y1={(Math.sin(a) * 44).toFixed(3)}
-                    x2={(Math.cos(a) * 30).toFixed(3)}
-                    y2={(Math.sin(a) * 30).toFixed(3)}
-                    stroke="rgba(120,200,255,0.35)"
-                    strokeWidth="1.25"
-                  />
-                );
-              })}
-              {compassStats.upstreamBins.map((v, i) => {
-                const { midAngle: a } = getWedgeParams(i, EPG_COMPASS_BINS);
-                return (
-                  <line
-                    key={`link-up-${i}`}
-                    x1={(Math.cos(a) * 44).toFixed(3)}
-                    y1={(Math.sin(a) * 44).toFixed(3)}
-                    x2={(Math.cos(a) * 30).toFixed(3)}
-                    y2={(Math.sin(a) * 30).toFixed(3)}
-                    stroke={`rgba(120,200,255,${(0.18 + v * 0.55).toFixed(3)})`}
-                    strokeWidth="1.6"
-                  />
-                );
-              })}
-              {compassStats.delta7Bins.map((v, i) => {
-                const { midAngle: a } = getWedgeParams(i, EPG_COMPASS_BINS);
-                return (
-                  <line
-                    key={`link-d7-${i}`}
-                    x1={(Math.cos(a) * 36).toFixed(3)}
-                    y1={(Math.sin(a) * 36).toFixed(3)}
-                    x2={(Math.cos(a) * 30).toFixed(3)}
-                    y2={(Math.sin(a) * 30).toFixed(3)}
-                    stroke={`rgba(208,140,255,${(0.16 + v * 0.52).toFixed(3)})`}
-                    strokeWidth="1.4"
-                  />
-                );
-              })}
-              {compassStats.downstreamBins.map((v, i) => {
-                const { midAngle: a } = getWedgeParams(i, EPG_COMPASS_BINS);
-                return (
-                  <line
-                    key={`link-down-${i}`}
-                    x1={(Math.cos(a) * 30).toFixed(3)}
-                    y1={(Math.sin(a) * 30).toFixed(3)}
-                    x2={(Math.cos(a) * 18).toFixed(3)}
-                    y2={(Math.sin(a) * 18).toFixed(3)}
-                    stroke={`rgba(255,170,110,${(0.18 + v * 0.55).toFixed(3)})`}
-                    strokeWidth="1.6"
-                  />
-                );
-              })}
-              <circle cx="0" cy="0" r="42" fill="none" stroke="rgba(140,120,255,0.35)" strokeWidth="2" />
-              {compassStats.epgBins.map((v, i) => {
-                const { a0, a1 } = getWedgeParams(i, compassStats.epgBins.length);
-                const r0 = 30;
-                const r1 = 30 + v * 14;
-                const x0 = Math.cos(a0) * r0; const y0 = Math.sin(a0) * r0;
-                const x1 = Math.cos(a1) * r0; const y1 = Math.sin(a1) * r0;
-                const x2 = Math.cos(a1) * r1; const y2 = Math.sin(a1) * r1;
-                const x3 = Math.cos(a0) * r1; const y3 = Math.sin(a0) * r1;
-                const alpha = 0.24 + v * 0.76;
-                return (
-                  <path
-                    key={`bin-${i}`}
-                    d={`M ${x0} ${y0} L ${x1} ${y1} L ${x2} ${y2} L ${x3} ${y3} Z`}
-                    fill={compassHeatFill(v, alpha)}
-                    stroke="rgba(255,220,160,0.55)"
-                    strokeWidth="1"
-                  />
-                );
-              })}
-              {viewMode !== 'biological' && bumpTheta != null ? (
-                <line
-                  x1="0"
-                  y1="0"
-                  x2={(Math.cos(bumpTheta * Math.PI / 180) * 48).toFixed(3)}
-                  y2={(-Math.sin(bumpTheta * Math.PI / 180) * 48).toFixed(3)}
-                  stroke="#ff4fd8"
-                  strokeWidth="2.5"
-                />
-              ) : null}
-            </svg>
-            <button
-              type="button"
-              onClick={() => setShowCompassInfo((v) => !v)}
-              title="EPG compass info"
-              aria-label="Toggle EPG compass info"
-              style={{
-                position: 'absolute',
-                top: 10,
-                right: 10,
-                width: 18,
-                height: 18,
-                borderRadius: 999,
-                border: '1px solid rgba(150, 185, 235, 0.7)',
-                background: 'rgba(18, 37, 64, 0.95)',
-                color: '#d8e9ff',
-                fontSize: 12,
-                lineHeight: '16px',
-                textAlign: 'center',
-                cursor: 'pointer',
-                padding: 0,
-                fontWeight: 700,
-              }}
-            >
-              i
-            </button>
-            {showCompassInfo ? (
-              <div
-                style={{
-                  position: 'absolute',
-                  top: 34,
-                  ...(openCompassInfoLeftward ? { right: 0 } : { left: 0 }),
-                  width: 280,
-                  maxWidth: 'min(280px, calc(100vw - 24px))',
-                  padding: '8px 10px',
-                  borderRadius: 8,
-                  border: '1px solid rgba(130,170,225,0.55)',
-                  background: 'rgba(10,20,36,0.96)',
-                  color: '#d7e8ff',
-                  fontSize: 11,
-                  lineHeight: 1.35,
-                  boxShadow: '0 8px 20px rgba(0,0,0,0.38)',
-                }}
-              >
-                EPG compass: 16 labeled wedges using processed labels and classification side, arranged anatomically.
-                Order is fixed to match the reference slice diagram (top= L5, top-left=R5, right of L5=R4, then L6).
-              </div>
-            ) : null}
-          </div>
-        ), document.body) : null}
         {isNeuroSimLive && templateReplay ? createPortal((
           <div
             style={{
@@ -2648,100 +2308,366 @@ export default function VisualizationPage() {
                   boxShadow: '0 8px 20px rgba(0,0,0,0.35)',
                 }}
               >
-                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>PEN_a neuron mapping</div>
-                {penANeurons.left.length === 0 && penANeurons.right.length === 0 ? (
-                  <div style={{ fontSize: 11, color: '#f0a050' }}>Loading PEN_a list…</div>
+                <div role="tablist" aria-label="Right drawer tabs" style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+                  <button type="button" onClick={() => setRightPanelTab('mapping')} style={controlButtonStyle(rightPanelTab === 'mapping')}>
+                    PEN Mapping
+                  </button>
+                  <button type="button" onClick={() => setRightPanelTab('compass')} style={controlButtonStyle(rightPanelTab === 'compass')}>
+                    EPG Compass
+                  </button>
+                </div>
+                {rightPanelTab === 'mapping' ? (
+                  <>
+                    <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>PEN_a neuron mapping</div>
+                    {penANeurons.left.length === 0 && penANeurons.right.length === 0 ? (
+                      <div style={{ fontSize: 11, color: '#f0a050' }}>Loading PEN_a list…</div>
+                    ) : (
+                      <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 11 }}>
+                        <thead>
+                          <tr>
+                            <th style={{ textAlign: 'left', borderBottom: '1px solid #35527a', padding: '2px 4px' }}>Label</th>
+                            <th style={{ textAlign: 'left', borderBottom: '1px solid #35527a', padding: '2px 4px' }}>Neuron ID</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {penANeurons.left.map(({ label, id }) => (
+                            <tr key={`map-left-${id}`}>
+                              <td style={{ padding: '2px 4px', color: '#b8d4ff' }}>{label}</td>
+                              <td style={{ padding: '2px 4px', color: '#8fb5e3', fontFamily: 'monospace' }}>
+                                <span>{id}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => void handleCopyNeuronId(id)}
+                                  aria-label={copiedPenAId === id ? 'Copied neuron ID' : 'Copy neuron ID'}
+                                  title={copiedPenAId === id ? 'Copied' : 'Copy neuron ID'}
+                                  style={{
+                                    marginLeft: 6,
+                                    width: 18,
+                                    height: 18,
+                                    border: '1px solid #5e7daa',
+                                    borderRadius: 4,
+                                    background: copiedPenAId === id ? '#2f6b3f' : '#1a2b45',
+                                    color: '#d9e9ff',
+                                    cursor: 'pointer',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    verticalAlign: 'middle',
+                                    padding: 0,
+                                  }}
+                                >
+                                  {copiedPenAId === id ? (
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                      <path d="M20 6L9 17l-5-5" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                                    </svg>
+                                  ) : (
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                      <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="2" />
+                                      <path d="M5 15V6a2 2 0 0 1 2-2h9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                                    </svg>
+                                  )}
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                          {penANeurons.right.map(({ label, id }) => (
+                            <tr key={`map-right-${id}`}>
+                              <td style={{ padding: '2px 4px', color: '#b8d4ff' }}>{label}</td>
+                              <td style={{ padding: '2px 4px', color: '#8fb5e3', fontFamily: 'monospace' }}>
+                                <span>{id}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => void handleCopyNeuronId(id)}
+                                  aria-label={copiedPenAId === id ? 'Copied neuron ID' : 'Copy neuron ID'}
+                                  title={copiedPenAId === id ? 'Copied' : 'Copy neuron ID'}
+                                  style={{
+                                    marginLeft: 6,
+                                    width: 18,
+                                    height: 18,
+                                    border: '1px solid #5e7daa',
+                                    borderRadius: 4,
+                                    background: copiedPenAId === id ? '#2f6b3f' : '#1a2b45',
+                                    color: '#d9e9ff',
+                                    cursor: 'pointer',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    verticalAlign: 'middle',
+                                    padding: 0,
+                                  }}
+                                >
+                                  {copiedPenAId === id ? (
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                      <path d="M20 6L9 17l-5-5" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                                    </svg>
+                                  ) : (
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                      <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="2" />
+                                      <path d="M5 15V6a2 2 0 0 1 2-2h9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                                    </svg>
+                                  )}
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </>
                 ) : (
-                  <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 11 }}>
-                    <thead>
-                      <tr>
-                        <th style={{ textAlign: 'left', borderBottom: '1px solid #35527a', padding: '2px 4px' }}>Label</th>
-                        <th style={{ textAlign: 'left', borderBottom: '1px solid #35527a', padding: '2px 4px' }}>Neuron ID</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {penANeurons.left.map(({ label, id }) => (
-                        <tr key={`map-left-${id}`}>
-                          <td style={{ padding: '2px 4px', color: '#b8d4ff' }}>{label}</td>
-                          <td style={{ padding: '2px 4px', color: '#8fb5e3', fontFamily: 'monospace' }}>
-                            <span>{id}</span>
-                            <button
-                              type="button"
-                              onClick={() => void handleCopyNeuronId(id)}
-                              aria-label={copiedPenAId === id ? 'Copied neuron ID' : 'Copy neuron ID'}
-                              title={copiedPenAId === id ? 'Copied' : 'Copy neuron ID'}
-                              style={{
-                                marginLeft: 6,
-                                width: 18,
-                                height: 18,
-                                border: '1px solid #5e7daa',
-                                borderRadius: 4,
-                                background: copiedPenAId === id ? '#2f6b3f' : '#1a2b45',
-                                color: '#d9e9ff',
-                                cursor: 'pointer',
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                verticalAlign: 'middle',
-                                padding: 0,
-                              }}
-                            >
-                              {copiedPenAId === id ? (
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                  <path d="M20 6L9 17l-5-5" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
-                                </svg>
-                              ) : (
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                  <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="2" />
-                                  <path d="M5 15V6a2 2 0 0 1 2-2h9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                                </svg>
-                              )}
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                      {penANeurons.right.map(({ label, id }) => (
-                        <tr key={`map-right-${id}`}>
-                          <td style={{ padding: '2px 4px', color: '#b8d4ff' }}>{label}</td>
-                          <td style={{ padding: '2px 4px', color: '#8fb5e3', fontFamily: 'monospace' }}>
-                            <span>{id}</span>
-                            <button
-                              type="button"
-                              onClick={() => void handleCopyNeuronId(id)}
-                              aria-label={copiedPenAId === id ? 'Copied neuron ID' : 'Copy neuron ID'}
-                              title={copiedPenAId === id ? 'Copied' : 'Copy neuron ID'}
-                              style={{
-                                marginLeft: 6,
-                                width: 18,
-                                height: 18,
-                                border: '1px solid #5e7daa',
-                                borderRadius: 4,
-                                background: copiedPenAId === id ? '#2f6b3f' : '#1a2b45',
-                                color: '#d9e9ff',
-                                cursor: 'pointer',
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                verticalAlign: 'middle',
-                                padding: 0,
-                              }}
-                            >
-                              {copiedPenAId === id ? (
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                  <path d="M20 6L9 17l-5-5" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
-                                </svg>
-                              ) : (
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                  <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="2" />
-                                  <path d="M5 15V6a2 2 0 0 1 2-2h9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                                </svg>
-                              )}
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                  <div style={{ position: 'relative', display: 'grid', placeItems: 'center' }}>
+                    <svg
+                      width="152"
+                      height="152"
+                      viewBox="-60 -60 120 120"
+                      style={{ border: '1px solid rgba(255,255,255,0.12)', borderRadius: 8 }}
+                    >
+                      {Array.from({ length: EPG_COMPASS_BINS + 1 }, (_, i) => {
+                        const a = (i / EPG_COMPASS_BINS) * Math.PI * 2 - Math.PI / 2;
+                        return (
+                          <line
+                            key={`divider-${i}`}
+                            x1="0" y1="0"
+                            x2={(Math.cos(a) * 48).toFixed(3)}
+                            y2={(Math.sin(a) * 48).toFixed(3)}
+                            stroke="rgba(255,255,255,0.25)"
+                            strokeWidth="0.8"
+                          />
+                        );
+                      })}
+                      {Array.from({ length: EPG_COMPASS_BINS }, (_, i) => {
+                        const { a0, a1 } = getWedgeParams(i, EPG_COMPASS_BINS);
+                        const r0 = 23;
+                        const r1 = 30;
+                        const x0 = Math.cos(a0) * r0; const y0 = Math.sin(a0) * r0;
+                        const x1 = Math.cos(a1) * r0; const y1 = Math.sin(a1) * r0;
+                        const x2 = Math.cos(a1) * r1; const y2 = Math.sin(a1) * r1;
+                        const x3 = Math.cos(a0) * r1; const y3 = Math.sin(a0) * r1;
+                        return (
+                          <path
+                            key={`epg-slice-color-${i}`}
+                            d={`M ${x0} ${y0} L ${x1} ${y1} L ${x2} ${y2} L ${x3} ${y3} Z`}
+                            fill={EPG_SLICE_COLORS[i % EPG_SLICE_COLORS.length]}
+                            fillOpacity={0.45}
+                            stroke="rgba(255,255,255,0.2)"
+                            strokeWidth="0.4"
+                          />
+                        );
+                      })}
+                      {Array.from({ length: EPG_COMPASS_BINS }, (_, i) => {
+                        const { midAngle } = getWedgeParams(i, EPG_COMPASS_BINS);
+                        const tr = 51;
+                        const tx = Math.cos(midAngle) * tr;
+                        const ty = Math.sin(midAngle) * tr;
+                        return (
+                          <text
+                            key={`epg-slice-label-${i}`}
+                            x={tx.toFixed(3)}
+                            y={ty.toFixed(3)}
+                            textAnchor="middle"
+                            dominantBaseline="middle"
+                            fill="rgba(235,245,255,0.96)"
+                            fontSize="4.2"
+                            fontWeight="700"
+                          >
+                            {EPG_SLICE_ORDER_CLOCKWISE[i]}
+                          </text>
+                        );
+                      })}
+                      <circle cx="0" cy="0" r="44" fill="none" stroke="rgba(120,200,255,0.32)" strokeWidth="1.2" />
+                      <circle cx="0" cy="0" r="36" fill="none" stroke="rgba(208,140,255,0.28)" strokeWidth="1.2" />
+                      <circle cx="0" cy="0" r="30" fill="none" stroke="rgba(255,79,216,0.35)" strokeWidth="1.4" />
+                      <circle cx="0" cy="0" r="18" fill="none" stroke="rgba(255,170,110,0.32)" strokeWidth="1.2" />
+                      {compassStats.upstreamBins.map((v, i) => {
+                        const { a0, a1 } = getWedgeParams(i, compassStats.upstreamBins.length);
+                        const r0 = 44;
+                        const r1 = 44 + v * 10;
+                        const x0 = Math.cos(a0) * r0; const y0 = Math.sin(a0) * r0;
+                        const x1 = Math.cos(a1) * r0; const y1 = Math.sin(a1) * r0;
+                        const x2 = Math.cos(a1) * r1; const y2 = Math.sin(a1) * r1;
+                        const x3 = Math.cos(a0) * r1; const y3 = Math.sin(a0) * r1;
+                        const alpha = 0.2 + v * 0.62;
+                        return (
+                          <path
+                            key={`up-bin-${i}`}
+                            d={`M ${x0} ${y0} L ${x1} ${y1} L ${x2} ${y2} L ${x3} ${y3} Z`}
+                            fill={`rgba(120,200,255,${alpha.toFixed(3)})`}
+                            stroke="none"
+                          />
+                        );
+                      })}
+                      {compassStats.delta7Bins.map((v, i) => {
+                        const { a0, a1 } = getWedgeParams(i, compassStats.delta7Bins.length);
+                        const r0 = 36;
+                        const r1 = 36 + v * 7;
+                        const x0 = Math.cos(a0) * r0; const y0 = Math.sin(a0) * r0;
+                        const x1 = Math.cos(a1) * r0; const y1 = Math.sin(a1) * r0;
+                        const x2 = Math.cos(a1) * r1; const y2 = Math.sin(a1) * r1;
+                        const x3 = Math.cos(a0) * r1; const y3 = Math.sin(a0) * r1;
+                        const alpha = 0.18 + v * 0.58;
+                        return (
+                          <path
+                            key={`d7-bin-${i}`}
+                            d={`M ${x0} ${y0} L ${x1} ${y1} L ${x2} ${y2} L ${x3} ${y3} Z`}
+                            fill={`rgba(208,140,255,${alpha.toFixed(3)})`}
+                            stroke="none"
+                          />
+                        );
+                      })}
+                      {compassStats.downstreamBins.map((v, i) => {
+                        const { a0, a1 } = getWedgeParams(i, compassStats.downstreamBins.length);
+                        const r0 = 18;
+                        const r1 = 18 + v * 8;
+                        const x0 = Math.cos(a0) * r0; const y0 = Math.sin(a0) * r0;
+                        const x1 = Math.cos(a1) * r0; const y1 = Math.sin(a1) * r0;
+                        const x2 = Math.cos(a1) * r1; const y2 = Math.sin(a1) * r1;
+                        const x3 = Math.cos(a0) * r1; const y3 = Math.sin(a0) * r1;
+                        const alpha = 0.2 + v * 0.62;
+                        return (
+                          <path
+                            key={`down-bin-${i}`}
+                            d={`M ${x0} ${y0} L ${x1} ${y1} L ${x2} ${y2} L ${x3} ${y3} Z`}
+                            fill={`rgba(255,170,110,${alpha.toFixed(3)})`}
+                            stroke="none"
+                          />
+                        );
+                      })}
+                      {Array.from({ length: EPG_COMPASS_BINS }, (_, i) => {
+                        const { midAngle: a } = getWedgeParams(i, EPG_COMPASS_BINS);
+                        return (
+                          <line
+                            key={`link-up-base-${i}`}
+                            x1={(Math.cos(a) * 44).toFixed(3)}
+                            y1={(Math.sin(a) * 44).toFixed(3)}
+                            x2={(Math.cos(a) * 30).toFixed(3)}
+                            y2={(Math.sin(a) * 30).toFixed(3)}
+                            stroke="rgba(120,200,255,0.35)"
+                            strokeWidth="1.25"
+                          />
+                        );
+                      })}
+                      {compassStats.upstreamBins.map((v, i) => {
+                        const { midAngle: a } = getWedgeParams(i, EPG_COMPASS_BINS);
+                        return (
+                          <line
+                            key={`link-up-${i}`}
+                            x1={(Math.cos(a) * 44).toFixed(3)}
+                            y1={(Math.sin(a) * 44).toFixed(3)}
+                            x2={(Math.cos(a) * 30).toFixed(3)}
+                            y2={(Math.sin(a) * 30).toFixed(3)}
+                            stroke={`rgba(120,200,255,${(0.18 + v * 0.55).toFixed(3)})`}
+                            strokeWidth="1.6"
+                          />
+                        );
+                      })}
+                      {compassStats.delta7Bins.map((v, i) => {
+                        const { midAngle: a } = getWedgeParams(i, EPG_COMPASS_BINS);
+                        return (
+                          <line
+                            key={`link-d7-${i}`}
+                            x1={(Math.cos(a) * 36).toFixed(3)}
+                            y1={(Math.sin(a) * 36).toFixed(3)}
+                            x2={(Math.cos(a) * 30).toFixed(3)}
+                            y2={(Math.sin(a) * 30).toFixed(3)}
+                            stroke={`rgba(208,140,255,${(0.16 + v * 0.52).toFixed(3)})`}
+                            strokeWidth="1.4"
+                          />
+                        );
+                      })}
+                      {compassStats.downstreamBins.map((v, i) => {
+                        const { midAngle: a } = getWedgeParams(i, EPG_COMPASS_BINS);
+                        return (
+                          <line
+                            key={`link-down-${i}`}
+                            x1={(Math.cos(a) * 30).toFixed(3)}
+                            y1={(Math.sin(a) * 30).toFixed(3)}
+                            x2={(Math.cos(a) * 18).toFixed(3)}
+                            y2={(Math.sin(a) * 18).toFixed(3)}
+                            stroke={`rgba(255,170,110,${(0.18 + v * 0.55).toFixed(3)})`}
+                            strokeWidth="1.6"
+                          />
+                        );
+                      })}
+                      <circle cx="0" cy="0" r="42" fill="none" stroke="rgba(140,120,255,0.35)" strokeWidth="2" />
+                      {compassStats.epgBins.map((v, i) => {
+                        const { a0, a1 } = getWedgeParams(i, compassStats.epgBins.length);
+                        const r0 = 30;
+                        const r1 = 30 + v * 14;
+                        const x0 = Math.cos(a0) * r0; const y0 = Math.sin(a0) * r0;
+                        const x1 = Math.cos(a1) * r0; const y1 = Math.sin(a1) * r0;
+                        const x2 = Math.cos(a1) * r1; const y2 = Math.sin(a1) * r1;
+                        const x3 = Math.cos(a0) * r1; const y3 = Math.sin(a0) * r1;
+                        const alpha = 0.24 + v * 0.76;
+                        return (
+                          <path
+                            key={`bin-${i}`}
+                            d={`M ${x0} ${y0} L ${x1} ${y1} L ${x2} ${y2} L ${x3} ${y3} Z`}
+                            fill={compassHeatFill(v, alpha)}
+                            stroke="rgba(255,220,160,0.55)"
+                            strokeWidth="1"
+                          />
+                        );
+                      })}
+                      {viewMode !== 'biological' && bumpTheta != null ? (
+                        <line
+                          x1="0"
+                          y1="0"
+                          x2={(Math.cos(bumpTheta * Math.PI / 180) * 48).toFixed(3)}
+                          y2={(-Math.sin(bumpTheta * Math.PI / 180) * 48).toFixed(3)}
+                          stroke="#ff4fd8"
+                          strokeWidth="2.5"
+                        />
+                      ) : null}
+                    </svg>
+                    <button
+                      type="button"
+                      onClick={() => setShowCompassInfo((v) => !v)}
+                      title="EPG compass info"
+                      aria-label="Toggle EPG compass info"
+                      style={{
+                        position: 'absolute',
+                        top: 8,
+                        right: 6,
+                        width: 18,
+                        height: 18,
+                        borderRadius: 999,
+                        border: '1px solid rgba(150, 185, 235, 0.7)',
+                        background: 'rgba(18, 37, 64, 0.95)',
+                        color: '#d8e9ff',
+                        fontSize: 12,
+                        lineHeight: '16px',
+                        textAlign: 'center',
+                        cursor: 'pointer',
+                        padding: 0,
+                        fontWeight: 700,
+                      }}
+                    >
+                      i
+                    </button>
+                    {showCompassInfo ? (
+                      <div
+                        style={{
+                          position: 'absolute',
+                          top: 34,
+                          right: 0,
+                          width: 280,
+                          maxWidth: 'min(280px, calc(100vw - 56px))',
+                          padding: '8px 10px',
+                          borderRadius: 8,
+                          border: '1px solid rgba(130,170,225,0.55)',
+                          background: 'rgba(10,20,36,0.96)',
+                          color: '#d7e8ff',
+                          fontSize: 11,
+                          lineHeight: 1.35,
+                          boxShadow: '0 8px 20px rgba(0,0,0,0.38)',
+                          zIndex: 2,
+                        }}
+                      >
+                        EPG compass: 16 labeled wedges using processed labels and classification side, arranged anatomically.
+                        Order is fixed to match the reference slice diagram (top= L5, top-left=R5, right of L5=R4, then L6).
+                      </div>
+                    ) : null}
+                  </div>
                 )}
               </div>
             ) : null}

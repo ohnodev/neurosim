@@ -166,9 +166,9 @@ const INACTIVE_EPG_COLOR = new THREE.Color(0x4d6fb6);
 const INACTIVE_UPSTREAM_COLOR = new THREE.Color(0x2b4b68);
 const INACTIVE_DOWNSTREAM_COLOR = new THREE.Color(0x5a3d2a);
 const INACTIVE_DELTA7_COLOR = new THREE.Color(0x5e2b6d);
-const INACTIVE_PEN_A_COLOR = new THREE.Color(0x4a7fa8);
+const INACTIVE_PEN_A_COLOR = new THREE.Color(0x2aa6b3);
 const ACTIVE_COLOR = new THREE.Color(0x6eff9e);
-const ACTIVE_PEN_A_COLOR = new THREE.Color(0x6fffd2);
+const ACTIVE_PEN_A_COLOR = new THREE.Color(0x00ffd0);
 const ACTIVE_RING_COLOR = new THREE.Color(0xff4fd8);
 const ACTIVE_UPSTREAM_COLOR = new THREE.Color(0x7ad7ff);
 const ACTIVE_DOWNSTREAM_COLOR = new THREE.Color(0xffb57a);
@@ -729,9 +729,16 @@ function buildScene(
       }
       const upstreamCountByBin = new Array<number>(EPG_COMPASS_BINS).fill(0);
       const downstreamCountByBin = new Array<number>(EPG_COMPASS_BINS).fill(0);
+      const penLeftIndices: number[] = [];
+      const penRightIndices: number[] = [];
       for (let i = 0; i < neurons.length; i += 1) {
         const n = neurons[i]!;
         if (n.is_epg) continue;
+        if (isPenANeuron(n)) {
+          if ((n.side ?? '').toLowerCase() === 'left') penLeftIndices.push(i);
+          else penRightIndices.push(i);
+          continue;
+        }
         const upBin = n.upstream_epg_bin_index_0_7;
         const downBin = n.downstream_epg_bin_index_0_7;
         if (upBin == null && downBin == null) continue;
@@ -756,6 +763,26 @@ function buildScene(
         aligned[i]!.x = cxCompass + Math.cos(angle) * radius;
         aligned[i]!.y = cyCompass + Math.sin(angle) * radius;
         aligned[i]!.z = czCompass + (upBin != null ? 0.02 : -0.02);
+      }
+      penLeftIndices.sort((a, b) => (neurons[a]?.root_id ?? '').localeCompare(neurons[b]?.root_id ?? ''));
+      penRightIndices.sort((a, b) => (neurons[a]?.root_id ?? '').localeCompare(neurons[b]?.root_id ?? ''));
+      const penRadius = baseRadius * 2.05;
+      // Left PEN_a on left semicircle (90deg -> 270deg), right PEN_a on right semicircle (-90deg -> 90deg).
+      for (let i = 0; i < penLeftIndices.length; i += 1) {
+        const idx = penLeftIndices[i]!;
+        const t = penLeftIndices.length <= 1 ? 0.5 : i / (penLeftIndices.length - 1);
+        const angle = (Math.PI * 0.5) + (Math.PI * t);
+        aligned[idx]!.x = cxCompass + Math.cos(angle) * penRadius;
+        aligned[idx]!.y = cyCompass + Math.sin(angle) * penRadius;
+        aligned[idx]!.z = czCompass + 0.03;
+      }
+      for (let i = 0; i < penRightIndices.length; i += 1) {
+        const idx = penRightIndices[i]!;
+        const t = penRightIndices.length <= 1 ? 0.5 : i / (penRightIndices.length - 1);
+        const angle = (-Math.PI * 0.5) + (Math.PI * t);
+        aligned[idx]!.x = cxCompass + Math.cos(angle) * penRadius;
+        aligned[idx]!.y = cyCompass + Math.sin(angle) * penRadius;
+        aligned[idx]!.z = czCompass + 0.03;
       }
     }
   }

@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import PlaybackControls from '../components/PlaybackControls';
 import CompactMenu from '../components/CompactMenu';
 import { useNotification } from '../contexts/NotificationContext';
 import { getApiBase } from '../lib/constants';
@@ -131,7 +130,6 @@ type SceneState = {
 };
 
 type ViewMode = 'raw' | 'aligned' | 'compass';
-type PlaybackSpeed = number | 'irl';
 type ReplayDataset = { id: string; label: string; url: string };
 
 const INACTIVE_COLOR = new THREE.Color(0x2e3e5d);
@@ -148,7 +146,6 @@ const ACTIVE_DELTA7_COLOR = new THREE.Color(0xd08cff);
 const EPG_HEAT_ORANGE = new THREE.Color(0xff9f43);
 const EPG_HEAT_RED = new THREE.Color(0xff3b30);
 const NO_GLOW_COLOR = new THREE.Color(0x000000);
-const PLAYBACK_BASE_MS = 80;
 /** EPG compass bins: 16 alternating L/R wedges in anatomical order from top clockwise. */
 const EPG_COMPASS_BINS = 16;
 const EPG_SLICE_ORDER_CLOCKWISE = [
@@ -1482,6 +1479,7 @@ const NEUROSIM_LIVE_DT_SEC = 0.0001;
 const NEUROSIM_LIVE_POLL_MS = 20;
 const NEUROSIM_LIVE_MAX_TICKS_PER_POLL = 3000;
 const NEUROSIM_LIVE_MAX_STORED_TICKS = 100_000;
+const NEUROSIM_RECORDING_MAX_STORED_TICKS = 300_000;
 const NEUROSIM_LIVE_MAX_BACKOFF_MS = 2000;
 
 export default function VisualizationPage() {
@@ -1490,9 +1488,7 @@ export default function VisualizationPage() {
   const [liveReplay, setLiveReplay] = useState<ReplayData | null>(null);
   const [liveTicks, setLiveTicks] = useState<ReplayTick[]>([]);
   const [recordedTicks, setRecordedTicks] = useState<ReplayTick[]>([]);
-  const [liveReplaySource, setLiveReplaySource] = useState<'live' | 'recording'>('live');
   const liveReplayTickCountRef = useRef(0);
-  const liveReplaySourceRef = useRef<'live' | 'recording'>('live');
   const liveReplayRef = useRef<ReplayData | null>(null);
   const liveEpgSeenRef = useRef<Set<string>>(new Set());
   const [liveEpgUniqueFired, setLiveEpgUniqueFired] = useState(0);
@@ -1504,24 +1500,18 @@ export default function VisualizationPage() {
   const [appliedPenLeft, setAppliedPenLeft] = useState(0);
   const [appliedPenRight, setAppliedPenRight] = useState(0);
   const [applyBusy, setApplyBusy] = useState(false);
-  const [worldRecordBusy, setWorldRecordBusy] = useState(false);
-  const [liveAutoplay, setLiveAutoplay] = useState(true);
-  const [latestLiveTickNumber, setLatestLiveTickNumber] = useState(0);
   const [penANeurons, setPenANeurons] = useState<{ left: Array<{ id: string; label: string }>; right: Array<{ id: string; label: string }> }>({ left: [], right: [] });
   const [penARatesById, setPenARatesById] = useState<Record<string, number>>({});
   const [showPenAMapping, setShowPenAMapping] = useState(false);
   const [copiedPenAId, setCopiedPenAId] = useState<string | null>(null);
   const notification = useNotification();
   const liveAfterTickRef = useRef(0);
-  const liveTickOffsetRef = useRef(0);
   const livePollFailRef = useRef(0);
   const recordingRef = useRef(false);
   useEffect(() => {
     recordingRef.current = recording;
   }, [recording]);
   const [currentTick, setCurrentTick] = useState(1);
-  const [playing, setPlaying] = useState(false);
-  const [speed, setSpeed] = useState<PlaybackSpeed>(1);
   const [viewMode, setViewMode] = useState<ViewMode>('compass');
   const selectedReplayId: string = PREFERRED_REPLAY_ID;
   const replay = useMemo(
@@ -1667,10 +1657,7 @@ export default function VisualizationPage() {
           setLiveReplay(null);
           setLiveTicks([]);
           setRecordedTicks([]);
-          liveTickOffsetRef.current = 0;
-          setLiveReplaySource('live');
           liveReplayTickCountRef.current = 0;
-          liveReplaySourceRef.current = 'live';
           liveEpgSeenRef.current = new Set();
           setLiveEpgUniqueFired(0);
         } else if (isWorldRecord) {
@@ -1718,7 +1705,6 @@ export default function VisualizationPage() {
           setLiveReplay(null);
         }
         setCurrentTick(1);
-        setPlaying(false);
       } catch (err) {
         if (!active) return;
         setFetchedReplay(null);
@@ -1727,15 +1713,11 @@ export default function VisualizationPage() {
         setLiveReplay(null);
         setLiveTicks([]);
         setRecordedTicks([]);
-        liveTickOffsetRef.current = 0;
-        setLiveReplaySource('live');
         liveReplayTickCountRef.current = 0;
-        liveReplaySourceRef.current = 'live';
         liveEpgSeenRef.current = new Set();
         setLiveEpgUniqueFired(0);
         liveAfterTickRef.current = 0;
         setCurrentTick(0);
-        setPlaying(false);
         setError((err as Error).message);
       }
     };
@@ -1746,20 +1728,18 @@ export default function VisualizationPage() {
   useEffect(() => {
     if (selectedReplayId !== 'neurosim_live' || !templateReplay) {
       liveReplayTickCountRef.current = 0;
-      liveReplaySourceRef.current = 'live';
       liveReplayRef.current = null;
       liveEpgSeenRef.current = new Set();
       setLiveEpgUniqueFired(0);
       setLiveReplay(null);
       return;
     }
-    const ticks = liveReplaySource === 'recording' ? recordedTicks : liveTicks;
-    const sourceChanged = liveReplaySourceRef.current !== liveReplaySource;
+    const ticks = liveTicks;
     const current = liveReplayRef.current;
     const replayMissing = current == null;
     const tickReset = ticks.length < liveReplayTickCountRef.current;
     const dtChanged = (current?.meta.dt_sec ?? liveSettings.dtSec) !== liveSettings.dtSec;
-    const fullRebuild = replayMissing || sourceChanged || tickReset || dtChanged;
+    const fullRebuild = replayMissing || tickReset || dtChanged;
     const epgIds: Set<string> | null =
       epgLabelMap && epgLabelMap.size > 0
         ? new Set(epgLabelMap.keys())
@@ -1854,8 +1834,7 @@ export default function VisualizationPage() {
     }
 
     liveReplayTickCountRef.current = ticks.length;
-    liveReplaySourceRef.current = liveReplaySource;
-  }, [selectedReplayId, templateReplay, liveReplaySource, liveTicks, recordedTicks, liveSettings.dtSec, epgLabelMap]);
+  }, [selectedReplayId, templateReplay, liveTicks, liveSettings.dtSec, epgLabelMap]);
 
   const isNeuroSimLive = selectedReplayId === 'neurosim_live';
   const apiBase = getApiBase();
@@ -1895,7 +1874,6 @@ export default function VisualizationPage() {
         if (cancelled) return;
         const latest = Math.max(0, Math.floor(j.latestTick ?? 0));
         liveAfterTickRef.current = latest;
-        setLatestLiveTickNumber(latest);
         setAppliedPenLeft(j.penALeftHz ?? 0);
         setAppliedPenRight(j.penARightHz ?? 0);
         setPenALeftHz(j.penALeftHz ?? 0);
@@ -1908,7 +1886,6 @@ export default function VisualizationPage() {
         if (typeof j.dtSec === 'number' && j.dtSec > 0) setLiveSettings({ dtSec: j.dtSec });
         setLiveTicks([]);
         setRecordedTicks([]);
-        liveTickOffsetRef.current = 0;
         livePollFailRef.current = 0;
       } catch (e) {
         if (!cancelled) setError((e as Error).message);
@@ -1932,16 +1909,12 @@ export default function VisualizationPage() {
           setLiveSettings({ dtSec: data.dtSec });
         }
         const batch = data.ticks ?? [];
-        const latestFromServer = data.latestTick ?? 0;
-        if (latestFromServer > 0) setLatestLiveTickNumber(latestFromServer);
         if (batch.length > 0) {
           const last = batch[batch.length - 1]!.tick;
           liveAfterTickRef.current = last;
           setLiveTicks((prev) => {
             const merged = [...prev, ...batch];
             if (merged.length > NEUROSIM_LIVE_MAX_STORED_TICKS) {
-              const trimCount = merged.length - NEUROSIM_LIVE_MAX_STORED_TICKS;
-              liveTickOffsetRef.current += trimCount;
               return merged.slice(-NEUROSIM_LIVE_MAX_STORED_TICKS);
             }
             return merged;
@@ -1949,8 +1922,8 @@ export default function VisualizationPage() {
           if (recordingRef.current) {
             setRecordedTicks((prev) => {
               const merged = [...prev, ...batch];
-              if (merged.length > NEUROSIM_LIVE_MAX_STORED_TICKS) {
-                return merged.slice(-NEUROSIM_LIVE_MAX_STORED_TICKS);
+              if (merged.length > NEUROSIM_RECORDING_MAX_STORED_TICKS) {
+                return merged.slice(-NEUROSIM_RECORDING_MAX_STORED_TICKS);
               }
               return merged;
             });
@@ -1984,9 +1957,9 @@ export default function VisualizationPage() {
   }, [isNeuroSimLive, templateReplay, apiBase]);
 
   useEffect(() => {
-    if (!replay?.ticks.length || !isNeuroSimLive || liveReplaySource !== 'live' || !liveAutoplay) return;
+    if (!replay?.ticks.length || !isNeuroSimLive) return;
     setCurrentTick(replay.ticks.length);
-  }, [replay, replay?.ticks.length, isNeuroSimLive, liveReplaySource, liveAutoplay]);
+  }, [replay, replay?.ticks.length, isNeuroSimLive]);
 
   useEffect(() => {
     const container = sceneContainerRef.current;
@@ -2034,34 +2007,6 @@ export default function VisualizationPage() {
     setCompassStats({ ...stats, ringActiveCount: ringInputActive });
   }, [replay, currentTick, ringIdSet]);
 
-  useEffect(() => {
-    if (!playing || !replay) return undefined;
-    if (speed === 'irl') {
-      const dtSec = getReplayDtSec(replay);
-      const ticksPerSecond = Math.max(1, Math.round(1 / dtSec));
-      const intervalMs = 50;
-      const ticksPerStep = Math.max(1, Math.round((ticksPerSecond * intervalMs) / 1000));
-      const timer = window.setInterval(() => {
-        setCurrentTick((prev) => Math.min(replay.ticks.length, prev + ticksPerStep));
-      }, intervalMs);
-      return () => window.clearInterval(timer);
-    }
-    const delay = Math.max(1, PLAYBACK_BASE_MS / Math.max(0.1, speed));
-    const timer = window.setInterval(() => {
-      setCurrentTick((prev) => (prev >= replay.ticks.length ? replay.ticks.length : prev + 1));
-    }, delay);
-    return () => window.clearInterval(timer);
-  }, [playing, replay, speed]);
-
-  useEffect(() => {
-    if (!replay) return;
-    if (currentTick >= replay.ticks.length) setPlaying(false);
-  }, [currentTick, replay]);
-
-  const totalTicks =
-    isNeuroSimLive && liveReplaySource === 'live' && latestLiveTickNumber > 0
-      ? Math.max(latestLiveTickNumber, replay?.ticks.length ?? 0)
-      : replay?.ticks.length ?? 1;
   const smoothedArrowAngleDeg = sceneRef.current?.arrowState?.angleCurrentDeg;
   const bumpTheta = Number.isFinite(smoothedArrowAngleDeg)
     ? (((smoothedArrowAngleDeg as number) + 360) % 360)
@@ -2267,14 +2212,6 @@ export default function VisualizationPage() {
             >
               Apply PEN_a Hz
             </button>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer' }}>
-              <input
-                type="checkbox"
-                checked={liveAutoplay}
-                onChange={(e) => setLiveAutoplay(e.target.checked)}
-              />
-              Autoplay live
-            </label>
             <button
               type="button"
               onClick={() => setRecording((r) => !r)}
@@ -2282,52 +2219,38 @@ export default function VisualizationPage() {
             >
               Record {recording ? '(on)' : ''}
             </button>
-            {recordedTicks.length > 0 ? (
-              <>
-                <button
-                  type="button"
-                  onClick={() => { setLiveReplaySource('recording'); setCurrentTick(1); setPlaying(false); }}
-                  style={controlButtonStyle(liveReplaySource === 'recording')}
-                >
-                  Replay recording ({recordedTicks.length} ticks)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setLiveReplaySource('live')}
-                  style={controlButtonStyle(liveReplaySource === 'live')}
-                >
-                  View live
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!templateReplay) return;
-                    const payload: ReplayData = {
-                      meta: {
-                        ...templateReplay.meta,
-                        generated_at: new Date().toISOString(),
-                        source_csv: 'neurosim-live/recording',
-                        ticks: recordedTicks.length,
-                        scenario: 'neurosim_live_pen_a_recording',
-                        dt_sec: liveSettings.dtSec,
-                        note: `Continuous live sim; applied PEN_a last L=${appliedPenLeft} R=${appliedPenRight} Hz`,
-                      },
-                      neurons: templateReplay.neurons,
-                      ticks: recordedTicks,
-                    };
-                    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-                    const a = document.createElement('a');
-                    a.href = URL.createObjectURL(blob);
-                    a.download = `neurosim_live_pen_a_${Date.now()}.json`;
-                    a.click();
-                    URL.revokeObjectURL(a.href);
-                  }}
-                  style={controlButtonStyle(false)}
-                >
-                  Download JSON
-                </button>
-              </>
-            ) : null}
+            <span style={{ fontSize: 11, color: '#7a9cc4' }}>
+              Recording keeps last {NEUROSIM_RECORDING_MAX_STORED_TICKS.toLocaleString()} ticks (rolling window).
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                if (!templateReplay) return;
+                const payload: ReplayData = {
+                  meta: {
+                    ...templateReplay.meta,
+                    generated_at: new Date().toISOString(),
+                    source_csv: 'neurosim-live/recording',
+                    ticks: recordedTicks.length,
+                    scenario: 'neurosim_live_pen_a_recording',
+                    dt_sec: liveSettings.dtSec,
+                    note: `Continuous live sim; rolling capture up to ${NEUROSIM_RECORDING_MAX_STORED_TICKS} ticks; applied PEN_a last L=${appliedPenLeft} R=${appliedPenRight} Hz`,
+                  },
+                  neurons: templateReplay.neurons,
+                  ticks: recordedTicks,
+                };
+                const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = `neurosim_live_pen_a_${Date.now()}.json`;
+                a.click();
+                URL.revokeObjectURL(a.href);
+              }}
+              style={controlButtonStyle(false)}
+              disabled={recordedTicks.length === 0}
+            >
+              Download JSON ({recordedTicks.length.toLocaleString()} ticks)
+            </button>
             <button
               type="button"
               aria-label={showPenAMapping ? 'Hide PEN_a neuron ID mapping' : 'Show PEN_a neuron ID mapping'}
@@ -2484,56 +2407,6 @@ export default function VisualizationPage() {
               </div>
             ) : null}
           </div>
-        ) : selectedReplayId === 'world_record' && templateReplay ? (
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 12, color: '#9ec5ff', maxWidth: 420 }}>
-              Record ~10 seconds of EPG ticks from the live world sim. Requires world sim running with at least one fly.
-            </span>
-            <button
-              type="button"
-              onClick={async () => {
-                setError(null);
-                setWorldRecordBusy(true);
-                try {
-                  const apiRoot = getApiBase();
-                  const res = await fetch(`${apiRoot}/api/world-record-ticks`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ durationSec: 10 }),
-                  });
-                  const data = (await res.json().catch(() => ({}))) as {
-                    ok?: boolean;
-                    replay?: ReplayData;
-                    ticks?: number;
-                    logPath?: string;
-                    error?: string;
-                  };
-                  if (!res.ok) throw new Error(data?.error ?? `Record failed: ${res.status}`);
-                  if (data.replay) {
-                    setFetchedReplay(data.replay);
-                    setCurrentTick(1);
-                    setPlaying(false);
-                    notification.show(
-                      `Recorded ${data.ticks ?? 0} ticks (saved to ${data.logPath ?? 'logs'})`,
-                      'success',
-                    );
-                    setTimeout(() => notification.hide(), 3000);
-                  }
-                } catch (e) {
-                  const msg = (e as Error).message;
-                  setError(msg);
-                  notification.show(msg, 'error');
-                  setTimeout(() => notification.hide(), 4000);
-                } finally {
-                  setWorldRecordBusy(false);
-                }
-              }}
-              style={controlButtonStyle(false)}
-              disabled={worldRecordBusy}
-            >
-              {worldRecordBusy ? 'Recording…' : 'Record 10s'}
-            </button>
-          </div>
         ) : null}
         <div style={{ display: 'flex', gap: 8 }}>
           <button type="button" onClick={() => setViewMode('raw')} style={controlButtonStyle(viewMode === 'raw')}>Raw</button>
@@ -2545,31 +2418,6 @@ export default function VisualizationPage() {
             Arrow smoothing: {arrowSmoothing ? 'ON' : 'OFF'}
           </button>
         </div>
-        {replay ? (
-          <PlaybackControls
-            playing={playing}
-            tick={
-              isNeuroSimLive && liveReplaySource === 'live' && liveAutoplay && currentTick === replay.ticks.length && latestLiveTickNumber > 0
-                ? latestLiveTickNumber
-                : currentTick + (isNeuroSimLive ? liveTickOffsetRef.current : 0)
-            }
-            totalTicks={totalTicks}
-            speed={speed}
-            onPlayPause={() => setPlaying((p) => !p)}
-            onPrevTick={() => setCurrentTick((t) => Math.max(1, t - 1))}
-            onNextTick={() => setCurrentTick((t) => Math.min(replay?.ticks.length ?? totalTicks, t + 1))}
-            onSeekTick={(tick) => {
-              if (isNeuroSimLive) {
-                const bufferTick = tick - liveTickOffsetRef.current;
-                const max = replay?.ticks.length ?? 0;
-                setCurrentTick(Math.max(1, Math.min(max, bufferTick)));
-              } else {
-                setCurrentTick(Math.max(1, Math.min(totalTicks, tick)));
-              }
-            }}
-            onSpeedChange={setSpeed}
-          />
-        ) : null}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <div
             style={{

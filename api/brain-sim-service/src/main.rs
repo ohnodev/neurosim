@@ -376,24 +376,54 @@ fn main() {
         .filter(|&v| v.is_finite() && v >= 0.0)
         .unwrap_or_else(|| brain_sim_service::model_constants::EPG_RECURRENCE_BOOST);
 
-    // Live visualization: extra sim thread that streams EPG ticks. Disabled by default to save resources.
-    let live_enabled = std::env::var("NEUROSIM_LIVE_ENABLED")
-        .as_ref()
-        .map(|s| s == "1" || s.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-    let continuous_live: Option<Arc<ContinuousLiveState>> = if live_enabled {
+    // Runtime mode switch to avoid mixing continuous-live and world simulation flows.
+    // Supported values:
+    // - world (default): world runtime only
+    // - continuous: continuous live runtime only
+    // - hybrid: both runtimes (legacy compatibility)
+    let brain_mode_raw = std::env::var("NEUROSIM_BRAIN_MODE")
+        .unwrap_or_else(|_| "world".to_string())
+        .to_ascii_lowercase();
+    let run_world = match brain_mode_raw.as_str() {
+        "world" => true,
+        "continuous" => false,
+        "hybrid" => true,
+        other => {
+            eprintln!(
+                "[brain-service] unknown NEUROSIM_BRAIN_MODE='{}' (expected world|continuous|hybrid); defaulting to world",
+                other
+            );
+            true
+        }
+    };
+    let run_continuous = match brain_mode_raw.as_str() {
+        "world" => false,
+        "continuous" => true,
+        "hybrid" => true,
+        _ => false,
+    };
+    eprintln!(
+        "[brain-service] runtime mode: {} (world={}, continuous={})",
+        brain_mode_raw, run_world, run_continuous
+    );
+    let continuous_live: Option<Arc<ContinuousLiveState>> = if run_continuous {
         classification_path
             .as_ref()
             .and_then(|cp| spawn_continuous_live_thread(template.clone(), cp, w_syn, epg_boost_live))
     } else {
-        eprintln!("[brain-service] continuous live disabled (set NEUROSIM_LIVE_ENABLED=1 to enable)");
+        eprintln!("[brain-service] continuous live disabled by runtime mode");
         None
     };
     let epg_id_to_bin = load_epg_id_to_bin();
-    let world_runtime = Some(spawn_world_runtime_thread(
-        template.clone(),
-        epg_id_to_bin.clone(),
-    ));
+    let world_runtime = if run_world {
+        Some(spawn_world_runtime_thread(
+            template.clone(),
+            epg_id_to_bin.clone(),
+        ))
+    } else {
+        eprintln!("[brain-service] world runtime disabled by runtime mode");
+        None
+    };
 
     for stream in listener.incoming() {
         if let Ok(mut s) = stream {

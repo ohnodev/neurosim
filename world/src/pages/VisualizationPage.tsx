@@ -2044,6 +2044,68 @@ export default function VisualizationPage() {
   const statusTitle = replay
     ? `replay=${selectedReplay?.id ?? 'n/a'} | scenario=${replay.meta?.scenario ?? 'n/a'} | decode=vector | neurons=${Array.isArray(replay.neurons) ? replay.neurons.length : displayNeurons.length} | rendered=${displayNeurons.length} | ticks=${replay.ticks.length} | sim=${(replay.ticks.length * getReplayDtSec(replay)).toFixed(3)}s | dt=${(getReplayDtSec(replay) * 1000).toFixed(3)}ms | epg fired=${epgUniqueFired ?? 'n/a'} | bump angle=${compassStats.bumpAngleDeg == null ? 'n/a' : `${compassStats.bumpAngleDeg.toFixed(1)}deg`} | bump strength=${compassStats.bumpStrength.toFixed(3)} | top bin=${compassStats.epgTopBinIndex}`
     : undefined;
+  const applyPenAHz = async () => {
+    setError(null);
+    setApplyBusy(true);
+    try {
+      const ratesById: Record<string, number> = {};
+      for (const { id } of penANeurons.left) {
+        const v = penARatesById[id];
+        ratesById[id] = typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : penALeftHz;
+      }
+      for (const { id } of penANeurons.right) {
+        const v = penARatesById[id];
+        ratesById[id] = typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : penARightHz;
+      }
+      const res = await fetch(`${apiBase}/api/neurosim-live/apply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          penALeftHz: penALeftHz,
+          penARightHz: penARightHz,
+          ratesById,
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { penALeftHz?: number; penARightHz?: number; error?: string };
+      if (!res.ok) throw new Error(data?.error ?? `apply failed: ${res.status}`);
+      const appliedL = data.penALeftHz ?? penALeftHz;
+      const appliedR = data.penARightHz ?? penARightHz;
+      setAppliedPenLeft(appliedL);
+      setAppliedPenRight(appliedR);
+      const overrides: string[] = [];
+      for (const { id, label } of penANeurons.left) {
+        const v = ratesById[id];
+        if (typeof v === 'number' && v !== appliedL) overrides.push(`${label}=${v}`);
+      }
+      for (const { id, label } of penANeurons.right) {
+        const v = ratesById[id];
+        if (typeof v === 'number' && v !== appliedR) overrides.push(`${label}=${v}`);
+      }
+      const msg =
+        overrides.length > 0
+          ? `PEN_a updated: ${overrides.join(', ')} Hz`
+          : `PEN_a applied: L=${appliedL} R=${appliedR} Hz`;
+      notification.show(msg, 'success');
+      setTimeout(() => notification.hide(), 2500);
+    } catch (e) {
+      const msg = (e as Error).message;
+      setError(msg);
+      notification.show(msg, 'error');
+      setTimeout(() => notification.hide(), 4000);
+    } finally {
+      setApplyBusy(false);
+    }
+  };
+  const clearAllPenAInputs = () => {
+    setPenALeftHz(0);
+    setPenARightHz(0);
+    const cleared: Record<string, number> = {};
+    for (const { id } of penANeurons.left) cleared[id] = 0;
+    for (const { id } of penANeurons.right) cleared[id] = 0;
+    setPenARatesById(cleared);
+    notification.show('Cleared all PEN_a inputs to 0 Hz (not applied)', 'info');
+    setTimeout(() => notification.hide(), 2200);
+  };
   const preventNumberWheelAdjust = (event: WheelEvent<HTMLElement>) => {
     const target = event.target as EventTarget | null;
     if (target instanceof HTMLInputElement && target.type === 'number' && document.activeElement === target) {
@@ -2090,68 +2152,6 @@ export default function VisualizationPage() {
         >
         {isNeuroSimLive && templateReplay ? (
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', position: 'relative' }}>
-            <span style={{ fontSize: 12, color: '#9ec5ff', maxWidth: 420 }}>
-              One continuous sim runs inside brain-service from startup (0 Hz until you apply). EPG spikes stream here; Apply updates PEN_a input on the fly.
-            </span>
-            <button
-              type="button"
-              onClick={async () => {
-                setError(null);
-                setApplyBusy(true);
-                try {
-                  const ratesById: Record<string, number> = {};
-                  for (const { id } of penANeurons.left) {
-                    const v = penARatesById[id];
-                    ratesById[id] = typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : penALeftHz;
-                  }
-                  for (const { id } of penANeurons.right) {
-                    const v = penARatesById[id];
-                    ratesById[id] = typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : penARightHz;
-                  }
-                  const res = await fetch(`${apiBase}/api/neurosim-live/apply`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      penALeftHz: penALeftHz,
-                      penARightHz: penARightHz,
-                      ratesById,
-                    }),
-                  });
-                  const data = (await res.json().catch(() => ({}))) as { penALeftHz?: number; penARightHz?: number; error?: string };
-                  if (!res.ok) throw new Error(data?.error ?? `apply failed: ${res.status}`);
-                  const appliedL = data.penALeftHz ?? penALeftHz;
-                  const appliedR = data.penARightHz ?? penARightHz;
-                  setAppliedPenLeft(appliedL);
-                  setAppliedPenRight(appliedR);
-                  const overrides: string[] = [];
-                  for (const { id, label } of penANeurons.left) {
-                    const v = ratesById[id];
-                    if (typeof v === 'number' && v !== appliedL) overrides.push(`${label}=${v}`);
-                  }
-                  for (const { id, label } of penANeurons.right) {
-                    const v = ratesById[id];
-                    if (typeof v === 'number' && v !== appliedR) overrides.push(`${label}=${v}`);
-                  }
-                  const msg =
-                    overrides.length > 0
-                      ? `PEN_a updated: ${overrides.join(', ')} Hz`
-                      : `PEN_a applied: L=${appliedL} R=${appliedR} Hz`;
-                  notification.show(msg, 'success');
-                  setTimeout(() => notification.hide(), 2500);
-                } catch (e) {
-                  const msg = (e as Error).message;
-                  setError(msg);
-                  notification.show(msg, 'error');
-                  setTimeout(() => notification.hide(), 4000);
-                } finally {
-                  setApplyBusy(false);
-                }
-              }}
-              style={controlButtonStyle(false)}
-              disabled={applyBusy}
-            >
-              Apply PEN_a Hz
-            </button>
             <button
               type="button"
               onClick={() => setRecording((r) => !r)}
@@ -2715,21 +2715,66 @@ export default function VisualizationPage() {
             pointerEvents: 'auto',
           }}
         >
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button
-              type="button"
-              onClick={() => setBottomControlTab('individual')}
-              style={controlButtonStyle(bottomControlTab === 'individual')}
-            >
-              Individual L/R
-            </button>
-            <button
-              type="button"
-              onClick={() => setBottomControlTab('sliders')}
-              style={controlButtonStyle(bottomControlTab === 'sliders')}
-            >
-              Sliders
-            </button>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                type="button"
+                onClick={() => setBottomControlTab('individual')}
+                style={controlButtonStyle(bottomControlTab === 'individual')}
+              >
+                Individual L/R
+              </button>
+              <button
+                type="button"
+                onClick={() => setBottomControlTab('sliders')}
+                style={controlButtonStyle(bottomControlTab === 'sliders')}
+              >
+                Sliders
+              </button>
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
+              <button
+                type="button"
+                onClick={() => void applyPenAHz()}
+                disabled={applyBusy}
+                style={{
+                  ...controlButtonStyle(false),
+                  background: 'linear-gradient(145deg, rgba(44,120,255,0.9) 0%, rgba(106,72,255,0.88) 100%)',
+                  borderColor: 'rgba(158, 188, 255, 0.88)',
+                  color: '#f6faff',
+                  boxShadow: '0 0 16px rgba(88,140,255,0.5), 0 0 28px rgba(120,80,255,0.28)',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  opacity: applyBusy ? 0.75 : 1,
+                }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M5 12L10 17L19 7" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                Apply
+              </button>
+              <button
+                type="button"
+                onClick={clearAllPenAInputs}
+                style={{
+                  ...controlButtonStyle(false),
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M4 7H20" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                  <path d="M9 7V5h6v2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                  <path d="M8 10V18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                  <path d="M12 10V18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                  <path d="M16 10V18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                  <path d="M7 7L8 20h8l1-13" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                Clear all
+              </button>
+            </div>
           </div>
           {bottomControlTab === 'individual' ? (
             <div

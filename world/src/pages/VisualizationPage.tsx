@@ -172,6 +172,7 @@ type SceneState = {
   tempEpgInactive: THREE.Color;
   tempEpgHot: THREE.Color;
   visibility: { epg: boolean; penA: boolean; connections: boolean };
+  connectionOpacity: number;
   dispose: () => void;
 };
 
@@ -565,6 +566,7 @@ function buildScene(
   neurons: ReplayNeuron[],
   viewMode: ViewMode,
   visibility: { epg: boolean; penA: boolean; connections: boolean },
+  connectionOpacity: number,
   penEpgConnections: PenEpgConnection[],
   penControlLabelById?: Map<string, string> | null,
   onHover?: (neuronId: string | null) => void,
@@ -1330,6 +1332,7 @@ function buildScene(
     tempEpgInactive: new THREE.Color(),
     tempEpgHot: new THREE.Color(),
     visibility: { ...visibility },
+    connectionOpacity,
     dispose: () => {},
   };
 
@@ -1338,14 +1341,21 @@ function buildScene(
     const now = performance.now() / 1000;
     state.lastFrameTime = now;
     const currentVisibility = state.visibility;
+    const currentConnectionOpacity = Math.max(0, Math.min(1, state.connectionOpacity));
     if (connectionLines) {
       connectionLines.visible = currentVisibility.connections;
+      const mat = connectionLines.material as THREE.LineBasicMaterial;
+      mat.opacity = 0.6 * currentConnectionOpacity;
     }
     if (penEpgConnectionLines) {
       penEpgConnectionLines.visible = currentVisibility.connections && currentVisibility.epg && currentVisibility.penA;
+      const mat = penEpgConnectionLines.material as THREE.LineBasicMaterial;
+      mat.opacity = 0.74 * currentConnectionOpacity;
     }
     if (penPulsePoints) {
       penPulsePoints.visible = currentVisibility.connections && currentVisibility.epg && currentVisibility.penA;
+      const mat = penPulsePoints.material as THREE.PointsMaterial;
+      mat.opacity = 0.95 * currentConnectionOpacity;
     }
     /** Compute brightness purely from replay + currentTick. No React state, no accumulation.
      * Neuron lit for SPIKE_DISPLAY_TICKS after spike; brightness = 1 - (ticks_ago / SPIKE_DISPLAY_TICKS). */
@@ -1866,6 +1876,7 @@ export default function VisualizationPage() {
   const [showCompassInfo, setShowCompassInfo] = useState(false);
   const [showLegendPopover, setShowLegendPopover] = useState(false);
   const [legendVisibility, setLegendVisibility] = useState({ epg: true, penA: true, connections: true });
+  const [connectionOpacity, setConnectionOpacity] = useState(0.74);
   const [showRecordMenu, setShowRecordMenu] = useState(false);
   const [bottomControlTab, setBottomControlTab] = useState<'individual' | 'sliders'>('individual');
   const [rightPanelTab, setRightPanelTab] = useState<'mapping' | 'compass'>('mapping');
@@ -2396,6 +2407,7 @@ export default function VisualizationPage() {
       displayNeurons,
       viewMode,
       { epg: legendVisibility.epg, penA: legendVisibility.penA, connections: legendVisibility.connections },
+      connectionOpacity,
       penEpgConnections,
       penControlLabelById,
       undefined,
@@ -2418,6 +2430,11 @@ export default function VisualizationPage() {
       connections: legendVisibility.connections,
     };
   }, [legendVisibility.epg, legendVisibility.penA, legendVisibility.connections]);
+
+  useEffect(() => {
+    if (!sceneRef.current) return;
+    sceneRef.current.connectionOpacity = connectionOpacity;
+  }, [connectionOpacity]);
 
   useEffect(() => {
     if (!sceneRef.current) return;
@@ -2714,6 +2731,21 @@ export default function VisualizationPage() {
                     />
                     Show connections
                   </label>
+                  <div style={{ marginBottom: 6 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 3 }}>
+                      <span>Connections opacity</span>
+                      <span style={{ color: '#9fc0e6' }}>{Math.round(connectionOpacity * 100)}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      step={1}
+                      value={Math.round(connectionOpacity * 100)}
+                      onChange={(e) => setConnectionOpacity(Math.max(0, Math.min(1, Number(e.target.value) / 100)))}
+                      style={{ width: '100%' }}
+                    />
+                  </div>
                   <div style={{ color: '#9fc0e6' }}>
                     {viewMode === 'compass'
                       ? 'PEN_a are placed on the outer circle (left/right split).'

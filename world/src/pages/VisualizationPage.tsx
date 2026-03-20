@@ -2012,6 +2012,12 @@ export default function VisualizationPage() {
   const bumpTheta = Number.isFinite(smoothedArrowAngleDeg)
     ? (((smoothedArrowAngleDeg as number) + 360) % 360)
     : (compassStats.bumpAngleDeg != null ? ((compassStats.bumpAngleDeg + 360) % 360) : null);
+  const statusLine = replay
+    ? `replay=${selectedReplay?.id ?? 'n/a'} | scenario=${replay.meta?.scenario ?? 'n/a'} | decode=vector | ticks=${replay.ticks.length} | sim=${(replay.ticks.length * getReplayDtSec(replay)).toFixed(3)}s | dt=${(getReplayDtSec(replay) * 1000).toFixed(3)}ms | epg fired=${epgUniqueFired ?? 'n/a'} | bump=${compassStats.bumpAngleDeg == null ? 'n/a' : `${compassStats.bumpAngleDeg.toFixed(1)}deg`} (${compassStats.bumpStrength.toFixed(2)}) | top bin=${compassStats.epgTopBinIndex}`
+    : 'Loading replay...';
+  const statusTitle = replay
+    ? `replay=${selectedReplay?.id ?? 'n/a'} | scenario=${replay.meta?.scenario ?? 'n/a'} | decode=vector | neurons=${Array.isArray(replay.neurons) ? replay.neurons.length : displayNeurons.length} | rendered=${displayNeurons.length} | ticks=${replay.ticks.length} | sim=${(replay.ticks.length * getReplayDtSec(replay)).toFixed(3)}s | dt=${(getReplayDtSec(replay) * 1000).toFixed(3)}ms | epg fired=${epgUniqueFired ?? 'n/a'} | bump angle=${compassStats.bumpAngleDeg == null ? 'n/a' : `${compassStats.bumpAngleDeg.toFixed(1)}deg`} | bump strength=${compassStats.bumpStrength.toFixed(3)} | top bin=${compassStats.epgTopBinIndex}`
+    : undefined;
 
   return (
     <div style={{ height: '100%', width: '100%', background: '#060a14', position: 'relative', overflow: 'hidden' }}>
@@ -2419,40 +2425,12 @@ export default function VisualizationPage() {
             Arrow smoothing: {arrowSmoothing ? 'ON' : 'OFF'}
           </button>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div
-            style={{
-              fontSize: 12,
-              opacity: 0.92,
-              minHeight: 18,
-              lineHeight: '18px',
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-              flex: 1,
-            }}
-            title={replay ? `replay=${selectedReplay?.id ?? 'n/a'} | scenario=${replay.meta?.scenario ?? 'n/a'} | decode=vector | neurons=${Array.isArray(replay.neurons) ? replay.neurons.length : displayNeurons.length} | rendered=${displayNeurons.length} | ticks=${replay.ticks.length} | sim=${(replay.ticks.length * getReplayDtSec(replay)).toFixed(3)}s | dt=${(getReplayDtSec(replay) * 1000).toFixed(3)}ms | epg fired=${epgUniqueFired ?? 'n/a'} | bump angle=${compassStats.bumpAngleDeg == null ? 'n/a' : `${compassStats.bumpAngleDeg.toFixed(1)}deg`} | bump strength=${compassStats.bumpStrength.toFixed(3)} | top bin=${compassStats.epgTopBinIndex}` : undefined}
-          >
-            {replay
-              ? `replay=${selectedReplay?.id ?? 'n/a'} | scenario=${replay.meta?.scenario ?? 'n/a'} | decode=vector | ticks=${replay.ticks.length} | sim=${(replay.ticks.length * getReplayDtSec(replay)).toFixed(3)}s | dt=${(getReplayDtSec(replay) * 1000).toFixed(3)}ms | epg fired=${epgUniqueFired ?? 'n/a'} | bump=${compassStats.bumpAngleDeg == null ? 'n/a' : `${compassStats.bumpAngleDeg.toFixed(1)}deg`} (${compassStats.bumpStrength.toFixed(2)}) | top bin=${compassStats.epgTopBinIndex}`
-              : 'Loading replay...'}
-          </div>
-          {replay && compassStats.bumpStrength < 0.5 ? (
-            <span
-              style={{ fontSize: 11, color: 'rgba(120,200,255,0.9)', cursor: 'help', whiteSpace: 'nowrap' }}
-              title="Weak bump? Try: (1) organic bump replay (ring drive), (2) run ≥1s, (3) full connectome, (4) match eonsystems scaling. See docs/BUMP_IMPROVEMENT_SUGGESTIONS.md"
-            >
-              Bump help
-            </span>
-          ) : null}
-        </div>
         {replay ? (
           <div
             style={{
               position: 'fixed',
-              top: 64,
-              left: 16,
+              top: 14,
+              left: 12,
               zIndex: 18,
               display: 'inline-flex',
               alignItems: 'center',
@@ -2719,6 +2697,33 @@ export default function VisualizationPage() {
         ) : null}
           {error ? <div style={{ color: '#f99', fontSize: 12 }}>{error}</div> : null}
         </div>
+      </div>
+      <div
+        className="viz-bottom-status"
+        title={statusTitle}
+        style={{
+          position: 'fixed',
+          left: 12,
+          right: 12,
+          bottom: 10,
+          zIndex: 19,
+          overflowX: 'auto',
+          overflowY: 'hidden',
+          whiteSpace: 'nowrap',
+          fontSize: 12,
+          lineHeight: '18px',
+          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+          color: 'rgba(228, 238, 255, 0.92)',
+          padding: '4px 8px',
+          borderRadius: 8,
+          border: '1px solid rgba(120,150,200,0.26)',
+          background: 'rgba(8, 16, 30, 0.5)',
+          backdropFilter: 'blur(8px)',
+          WebkitBackdropFilter: 'blur(8px)',
+          pointerEvents: 'auto',
+        }}
+      >
+        {statusLine}
       </div>
     </div>
   );

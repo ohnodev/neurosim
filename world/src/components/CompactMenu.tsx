@@ -52,11 +52,7 @@ export default function CompactMenu({ className = '' }: CompactMenuProps) {
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M4 7H20" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-          <path d="M4 12H20" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-          <path d="M4 17H20" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-        </svg>
+        <span className="compact-menu__logo" aria-hidden="true" />
       </button>
 
       {open ? (

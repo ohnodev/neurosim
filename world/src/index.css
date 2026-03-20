@@ -35,8 +35,14 @@ body::-webkit-scrollbar,
 #root::-webkit-scrollbar,
 .fly-viewer__flies-panel::-webkit-scrollbar,
 .fly-viewer__status-content::-webkit-scrollbar,
-.fly-viewer__brain-content::-webkit-scrollbar {
+.fly-viewer__brain-content::-webkit-scrollbar,
+.viz-bottom-status::-webkit-scrollbar {
   display: none;
+}
+
+.viz-bottom-status {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 
 a {

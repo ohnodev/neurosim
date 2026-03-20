@@ -326,6 +326,8 @@ const PEN_CALCIUM_DECAY_SEC = 0.11;
 const PEN_CALCIUM_GAIN = 0.45;
 const PEN_CONN_PROPAGATION_MIN_SEC = 0.002;
 const PEN_CONN_PROPAGATION_MAX_SEC = 0.009;
+const PEN_COMPASS_Z_OFFSET_BASE = 0.03;
+const PEN_COMPASS_Z_OFFSET_ALT = 0.018;
 const SCENE_BUMP_ARROW_LENGTH = 0.48;
 const COMPASS_ARROW_RADIUS = 18;
 const DELTA7_OPPOSITE_INHIBIT_WEIGHT = 0.55;
@@ -822,7 +824,8 @@ function buildScene(
         const angle = (Math.PI * 0.5) + (Math.PI * t);
         aligned[idx]!.x = cxCompass + Math.cos(angle) * penRadius;
         aligned[idx]!.y = cyCompass + Math.sin(angle) * penRadius;
-        aligned[idx]!.z = czCompass + 0.03;
+        const zAlt = i % 2 === 0 ? PEN_COMPASS_Z_OFFSET_ALT : -PEN_COMPASS_Z_OFFSET_ALT;
+        aligned[idx]!.z = czCompass + PEN_COMPASS_Z_OFFSET_BASE + zAlt;
       }
       for (let i = 0; i < penRightIndices.length; i += 1) {
         const idx = penRightIndices[i]!;
@@ -830,7 +833,8 @@ function buildScene(
         const angle = (-Math.PI * 0.5) + (Math.PI * t);
         aligned[idx]!.x = cxCompass + Math.cos(angle) * penRadius;
         aligned[idx]!.y = cyCompass + Math.sin(angle) * penRadius;
-        aligned[idx]!.z = czCompass + 0.03;
+        const zAlt = i % 2 === 0 ? PEN_COMPASS_Z_OFFSET_ALT : -PEN_COMPASS_Z_OFFSET_ALT;
+        aligned[idx]!.z = czCompass + PEN_COMPASS_Z_OFFSET_BASE + zAlt;
       }
     }
   }

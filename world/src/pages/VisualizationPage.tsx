@@ -1506,6 +1506,7 @@ export default function VisualizationPage() {
   const [showPenAMapping, setShowPenAMapping] = useState(false);
   const [copiedPenAId, setCopiedPenAId] = useState<string | null>(null);
   const [showCompassInfo, setShowCompassInfo] = useState(false);
+  const [bottomControlTab, setBottomControlTab] = useState<'individual' | 'sliders'>('individual');
   const [compassPos, setCompassPos] = useState({ x: 12, y: 14 });
   const [draggingCompass, setDraggingCompass] = useState(false);
   const compassWidgetRef = useRef<HTMLDivElement | null>(null);
@@ -2092,68 +2093,6 @@ export default function VisualizationPage() {
             <span style={{ fontSize: 12, color: '#9ec5ff', maxWidth: 420 }}>
               One continuous sim runs inside brain-service from startup (0 Hz until you apply). EPG spikes stream here; Apply updates PEN_a input on the fly.
             </span>
-            <details open style={{ fontSize: 12, color: '#b8d4ff', marginTop: 8 }}>
-              <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Per-neuron PEN_a (Hz) — override global L/R</summary>
-              <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 8 }}>
-                {penANeurons.left.length === 0 && penANeurons.right.length === 0 ? (
-                  <span style={{ color: '#f0a050' }}>Loading PEN_a list…</span>
-                ) : null}
-                <div>
-                  <div style={{ marginBottom: 4, fontWeight: 600 }}>Left (L1–L10)</div>
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    {penANeurons.left.map(({ id, label }) => (
-                      <label key={id} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                        <span style={{ minWidth: 24 }}>{label}</span>
-                        <input
-                          type="number"
-                          min={0}
-                          max={500}
-                          placeholder={String(penALeftHz)}
-                          value={penARatesById[id] ?? ''}
-                          onChange={(e) => {
-                            const v = e.target.value === '' ? undefined : Number(e.target.value);
-                            setPenARatesById((prev) => {
-                              const next = { ...prev };
-                              if (v == null || !Number.isFinite(v)) delete next[id];
-                              else next[id] = Math.max(0, Math.min(500, v));
-                              return next;
-                            });
-                          }}
-                          style={{ width: 44, padding: '2px 4px', fontSize: 11 }}
-                        />
-                      </label>
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <div style={{ marginBottom: 4, fontWeight: 600 }}>Right (R1–R10)</div>
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    {penANeurons.right.map(({ id, label }) => (
-                      <label key={id} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                        <span style={{ minWidth: 24 }}>{label}</span>
-                        <input
-                          type="number"
-                          min={0}
-                          max={500}
-                          placeholder={String(penARightHz)}
-                          value={penARatesById[id] ?? ''}
-                          onChange={(e) => {
-                            const v = e.target.value === '' ? undefined : Number(e.target.value);
-                            setPenARatesById((prev) => {
-                              const next = { ...prev };
-                              if (v == null || !Number.isFinite(v)) delete next[id];
-                              else next[id] = Math.max(0, Math.min(500, v));
-                              return next;
-                            });
-                          }}
-                          style={{ width: 44, padding: '2px 4px', fontSize: 11 }}
-                        />
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </details>
             <button
               type="button"
               onClick={async () => {
@@ -2771,82 +2710,194 @@ export default function VisualizationPage() {
             right: 12,
             bottom: 44,
             zIndex: 19,
-            display: 'flex',
-            gap: 10,
-            justifyContent: 'space-between',
-            alignItems: 'stretch',
+            display: 'grid',
+            gap: 8,
             pointerEvents: 'auto',
-            flexWrap: 'wrap',
           }}
         >
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              type="button"
+              onClick={() => setBottomControlTab('individual')}
+              style={controlButtonStyle(bottomControlTab === 'individual')}
+            >
+              Individual L/R
+            </button>
+            <button
+              type="button"
+              onClick={() => setBottomControlTab('sliders')}
+              style={controlButtonStyle(bottomControlTab === 'sliders')}
+            >
+              Sliders
+            </button>
+          </div>
+          {bottomControlTab === 'individual' ? (
+            <div
+              style={{
+                display: 'flex',
+                gap: 10,
+                flexWrap: 'wrap',
+                alignItems: 'stretch',
+              }}
+            >
+              <div
+                style={{
+                  flex: '1 1 320px',
+                  minWidth: 280,
+                  borderRadius: 10,
+                  border: '1px solid rgba(96, 168, 255, 0.5)',
+                  background: 'linear-gradient(145deg, rgba(18,42,78,0.72) 0%, rgba(10,25,46,0.66) 100%)',
+                  backdropFilter: 'blur(10px)',
+                  WebkitBackdropFilter: 'blur(10px)',
+                  boxShadow: '0 10px 22px rgba(0,0,0,0.34)',
+                  padding: '8px 10px',
+                }}
+              >
+                <div style={{ marginBottom: 4, fontWeight: 700, fontSize: 12, color: '#9fd1ff' }}>Left (L1-L10)</div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {penANeurons.left.map(({ id, label }) => (
+                    <label key={id} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <span style={{ minWidth: 24, color: '#dbeaff' }}>{label}</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={500}
+                        placeholder={String(penALeftHz)}
+                        value={penARatesById[id] ?? ''}
+                        onChange={(e) => {
+                          const v = e.target.value === '' ? undefined : Number(e.target.value);
+                          setPenARatesById((prev) => {
+                            const next = { ...prev };
+                            if (v == null || !Number.isFinite(v)) delete next[id];
+                            else next[id] = Math.max(0, Math.min(500, v));
+                            return next;
+                          });
+                        }}
+                        style={{ width: 44, padding: '2px 4px', fontSize: 11 }}
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div
+                style={{
+                  flex: '1 1 320px',
+                  minWidth: 280,
+                  borderRadius: 10,
+                  border: '1px solid rgba(255, 136, 136, 0.5)',
+                  background: 'linear-gradient(145deg, rgba(74,28,36,0.68) 0%, rgba(40,16,22,0.63) 100%)',
+                  backdropFilter: 'blur(10px)',
+                  WebkitBackdropFilter: 'blur(10px)',
+                  boxShadow: '0 10px 22px rgba(0,0,0,0.34)',
+                  padding: '8px 10px',
+                }}
+              >
+                <div style={{ marginBottom: 4, fontWeight: 700, fontSize: 12, color: '#ffb0b0' }}>Right (R1-R10)</div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {penANeurons.right.map(({ id, label }) => (
+                    <label key={id} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <span style={{ minWidth: 24, color: '#ffe1e1' }}>{label}</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={500}
+                        placeholder={String(penARightHz)}
+                        value={penARatesById[id] ?? ''}
+                        onChange={(e) => {
+                          const v = e.target.value === '' ? undefined : Number(e.target.value);
+                          setPenARatesById((prev) => {
+                            const next = { ...prev };
+                            if (v == null || !Number.isFinite(v)) delete next[id];
+                            else next[id] = Math.max(0, Math.min(500, v));
+                            return next;
+                          });
+                        }}
+                        style={{ width: 44, padding: '2px 4px', fontSize: 11 }}
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : (
           <div
             style={{
-              flex: '1 1 320px',
-              minWidth: 280,
-              borderRadius: 10,
-              border: '1px solid rgba(96, 168, 255, 0.5)',
-              background: 'linear-gradient(145deg, rgba(18,42,78,0.72) 0%, rgba(10,25,46,0.66) 100%)',
-              backdropFilter: 'blur(10px)',
-              WebkitBackdropFilter: 'blur(10px)',
-              boxShadow: '0 10px 22px rgba(0,0,0,0.34)',
-              padding: '8px 10px',
+              display: 'flex',
+              gap: 10,
+              flexWrap: 'wrap',
+              alignItems: 'stretch',
             }}
           >
-            <div style={{ fontSize: 12, fontWeight: 700, color: '#9fd1ff', marginBottom: 6 }}>Left PEN_a (Hz)</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <input
-                type="range"
-                min={0}
-                max={200}
-                value={Math.min(200, penALeftHz)}
-                onChange={(e) => setPenALeftHz(Math.max(0, Math.min(500, Number(e.target.value) || 0)))}
-                style={{ flex: 1 }}
-              />
-              <input
-                type="number"
-                min={0}
-                max={500}
-                value={penALeftHz}
-                onChange={(e) => setPenALeftHz(Math.max(0, Math.min(500, Number(e.target.value) || 0)))}
-                style={{ width: 58, padding: '3px 5px', fontSize: 12 }}
-              />
+            <div
+              style={{
+                flex: '1 1 320px',
+                minWidth: 280,
+                borderRadius: 10,
+                border: '1px solid rgba(96, 168, 255, 0.5)',
+                background: 'linear-gradient(145deg, rgba(18,42,78,0.72) 0%, rgba(10,25,46,0.66) 100%)',
+                backdropFilter: 'blur(10px)',
+                WebkitBackdropFilter: 'blur(10px)',
+                boxShadow: '0 10px 22px rgba(0,0,0,0.34)',
+                padding: '8px 10px',
+              }}
+            >
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#9fd1ff', marginBottom: 6 }}>Left PEN_a (Hz)</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input
+                  type="range"
+                  min={0}
+                  max={200}
+                  value={Math.min(200, penALeftHz)}
+                  onChange={(e) => setPenALeftHz(Math.max(0, Math.min(500, Number(e.target.value) || 0)))}
+                  style={{ flex: 1 }}
+                />
+                <input
+                  type="number"
+                  min={0}
+                  max={500}
+                  value={penALeftHz}
+                  onChange={(e) => setPenALeftHz(Math.max(0, Math.min(500, Number(e.target.value) || 0)))}
+                  style={{ width: 58, padding: '3px 5px', fontSize: 12 }}
+                />
+              </div>
+              <div style={{ marginTop: 5, fontSize: 11, color: '#8dbde7' }}>Applied: {appliedPenLeft} Hz</div>
             </div>
-            <div style={{ marginTop: 5, fontSize: 11, color: '#8dbde7' }}>Applied: {appliedPenLeft} Hz</div>
-          </div>
-          <div
-            style={{
-              flex: '1 1 320px',
-              minWidth: 280,
-              borderRadius: 10,
-              border: '1px solid rgba(255, 136, 136, 0.5)',
-              background: 'linear-gradient(145deg, rgba(74,28,36,0.68) 0%, rgba(40,16,22,0.63) 100%)',
-              backdropFilter: 'blur(10px)',
-              WebkitBackdropFilter: 'blur(10px)',
-              boxShadow: '0 10px 22px rgba(0,0,0,0.34)',
-              padding: '8px 10px',
-            }}
-          >
-            <div style={{ fontSize: 12, fontWeight: 700, color: '#ffb0b0', marginBottom: 6 }}>Right PEN_a (Hz)</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <input
-                type="range"
-                min={0}
-                max={200}
-                value={Math.min(200, penARightHz)}
-                onChange={(e) => setPenARightHz(Math.max(0, Math.min(500, Number(e.target.value) || 0)))}
-                style={{ flex: 1 }}
-              />
-              <input
-                type="number"
-                min={0}
-                max={500}
-                value={penARightHz}
-                onChange={(e) => setPenARightHz(Math.max(0, Math.min(500, Number(e.target.value) || 0)))}
-                style={{ width: 58, padding: '3px 5px', fontSize: 12 }}
-              />
+            <div
+              style={{
+                flex: '1 1 320px',
+                minWidth: 280,
+                borderRadius: 10,
+                border: '1px solid rgba(255, 136, 136, 0.5)',
+                background: 'linear-gradient(145deg, rgba(74,28,36,0.68) 0%, rgba(40,16,22,0.63) 100%)',
+                backdropFilter: 'blur(10px)',
+                WebkitBackdropFilter: 'blur(10px)',
+                boxShadow: '0 10px 22px rgba(0,0,0,0.34)',
+                padding: '8px 10px',
+              }}
+            >
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#ffb0b0', marginBottom: 6 }}>Right PEN_a (Hz)</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input
+                  type="range"
+                  min={0}
+                  max={200}
+                  value={Math.min(200, penARightHz)}
+                  onChange={(e) => setPenARightHz(Math.max(0, Math.min(500, Number(e.target.value) || 0)))}
+                  style={{ flex: 1 }}
+                />
+                <input
+                  type="number"
+                  min={0}
+                  max={500}
+                  value={penARightHz}
+                  onChange={(e) => setPenARightHz(Math.max(0, Math.min(500, Number(e.target.value) || 0)))}
+                  style={{ width: 58, padding: '3px 5px', fontSize: 12 }}
+                />
+              </div>
+              <div style={{ marginTop: 5, fontSize: 11, color: '#f0aaaa' }}>Applied: {appliedPenRight} Hz</div>
             </div>
-            <div style={{ marginTop: 5, fontSize: 11, color: '#f0aaaa' }}>Applied: {appliedPenRight} Hz</div>
           </div>
+          )}
         </div>
       ) : null}
     </div>

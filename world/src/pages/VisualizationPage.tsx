@@ -1506,6 +1506,8 @@ export default function VisualizationPage() {
   const [showPenAMapping, setShowPenAMapping] = useState(false);
   const [copiedPenAId, setCopiedPenAId] = useState<string | null>(null);
   const copyInFlightRef = useRef(false);
+  const copyTimeoutRef = useRef<number | null>(null);
+  const isMountedRef = useRef(true);
   const [showCompassInfo, setShowCompassInfo] = useState(false);
   const [showRecordMenu, setShowRecordMenu] = useState(true);
   const [bottomControlTab, setBottomControlTab] = useState<'individual' | 'sliders'>('individual');
@@ -1519,6 +1521,16 @@ export default function VisualizationPage() {
   useEffect(() => {
     liveTicksRef.current = liveTicks;
   }, [liveTicks]);
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+      copyInFlightRef.current = false;
+      if (copyTimeoutRef.current != null) {
+        window.clearTimeout(copyTimeoutRef.current);
+        copyTimeoutRef.current = null;
+      }
+    };
+  }, []);
   useEffect(() => {
     recordingRef.current = recording;
   }, [recording]);
@@ -2067,6 +2079,32 @@ export default function VisualizationPage() {
     notification.show('Cleared all PEN_a inputs to 0 Hz (not applied)', 'info');
     setTimeout(() => notification.hide(), 2200);
   };
+  const handleCopyNeuronId = async (id: string) => {
+    if (copyInFlightRef.current) return;
+    copyInFlightRef.current = true;
+    try {
+      await navigator.clipboard.writeText(id);
+      if (!isMountedRef.current) {
+        copyInFlightRef.current = false;
+        return;
+      }
+      setCopiedPenAId(id);
+      if (copyTimeoutRef.current != null) {
+        window.clearTimeout(copyTimeoutRef.current);
+      }
+      copyTimeoutRef.current = window.setTimeout(() => {
+        if (!isMountedRef.current) return;
+        setCopiedPenAId((prev) => (prev === id ? null : prev));
+        copyInFlightRef.current = false;
+        copyTimeoutRef.current = null;
+      }, 1200);
+    } catch {
+      if (isMountedRef.current) {
+        setError('Failed to copy neuron ID');
+      }
+      copyInFlightRef.current = false;
+    }
+  };
   const preventNumberWheelAdjust = (event: WheelEvent<HTMLElement>) => {
     const target = event.target as EventTarget | null;
     if (target instanceof HTMLInputElement && target.type === 'number' && document.activeElement === target) {
@@ -2611,21 +2649,7 @@ export default function VisualizationPage() {
                             <span>{id}</span>
                             <button
                               type="button"
-                              onClick={async () => {
-                                if (copyInFlightRef.current) return;
-                                copyInFlightRef.current = true;
-                                try {
-                                  await navigator.clipboard.writeText(id);
-                                  setCopiedPenAId(id);
-                                  window.setTimeout(() => {
-                                    setCopiedPenAId((prev) => (prev === id ? null : prev));
-                                    copyInFlightRef.current = false;
-                                  }, 1200);
-                                } catch {
-                                  setError('Failed to copy neuron ID');
-                                  copyInFlightRef.current = false;
-                                }
-                              }}
+                              onClick={() => void handleCopyNeuronId(id)}
                               title={copiedPenAId === id ? 'Copied' : 'Copy neuron ID'}
                               style={{
                                 marginLeft: 6,
@@ -2664,21 +2688,7 @@ export default function VisualizationPage() {
                             <span>{id}</span>
                             <button
                               type="button"
-                              onClick={async () => {
-                                if (copyInFlightRef.current) return;
-                                copyInFlightRef.current = true;
-                                try {
-                                  await navigator.clipboard.writeText(id);
-                                  setCopiedPenAId(id);
-                                  window.setTimeout(() => {
-                                    setCopiedPenAId((prev) => (prev === id ? null : prev));
-                                    copyInFlightRef.current = false;
-                                  }, 1200);
-                                } catch {
-                                  setError('Failed to copy neuron ID');
-                                  copyInFlightRef.current = false;
-                                }
-                              }}
+                              onClick={() => void handleCopyNeuronId(id)}
                               title={copiedPenAId === id ? 'Copied' : 'Copy neuron ID'}
                               style={{
                                 marginLeft: 6,
@@ -2760,8 +2770,12 @@ export default function VisualizationPage() {
           }}
         >
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'space-between' }}>
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div role="tablist" aria-label="PEN_a control mode tabs" style={{ display: 'flex', gap: 8 }}>
               <button
+                id="pena-tab-individual"
+                role="tab"
+                aria-selected={bottomControlTab === 'individual'}
+                aria-controls="pena-panel-individual"
                 type="button"
                 onClick={() => setBottomControlTab('individual')}
                 style={controlButtonStyle(bottomControlTab === 'individual')}
@@ -2769,6 +2783,10 @@ export default function VisualizationPage() {
                 Individual L/R
               </button>
               <button
+                id="pena-tab-sliders"
+                role="tab"
+                aria-selected={bottomControlTab === 'sliders'}
+                aria-controls="pena-panel-sliders"
                 type="button"
                 onClick={() => setBottomControlTab('sliders')}
                 style={controlButtonStyle(bottomControlTab === 'sliders')}
@@ -2822,6 +2840,9 @@ export default function VisualizationPage() {
           </div>
           {bottomControlTab === 'individual' ? (
             <div
+              id="pena-panel-individual"
+              role="tabpanel"
+              aria-labelledby="pena-tab-individual"
               style={{
                 display: 'flex',
                 gap: 10,
@@ -2910,6 +2931,9 @@ export default function VisualizationPage() {
             </div>
           ) : (
           <div
+            id="pena-panel-sliders"
+            role="tabpanel"
+            aria-labelledby="pena-tab-sliders"
             style={{
               display: 'flex',
               gap: 10,

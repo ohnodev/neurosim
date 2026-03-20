@@ -686,10 +686,9 @@ function buildClientPayload(
   // Preserve decayed/input-highlighted activity for GraphQL subscribers too.
   const rotatedActivityBySim: Record<string, number>[] = [];
   for (let simIndex = 0; simIndex < sims.length; simIndex += 1) {
-    const syntheticSocket = (`gql-sim-${simIndex}` as unknown) as import('ws').WebSocket;
     rotatedActivityBySim.push(
       buildRotatingActivityWindow(
-        syntheticSocket,
+        null,
         simIndex,
         allActivities[simIndex] ?? allActivities[0] ?? {},
         allInputActivities[simIndex] ?? allInputActivities[0] ?? {},
@@ -715,7 +714,7 @@ function buildClientPayload(
 }
 
 function buildRotatingActivityWindow(
-  ws: import('ws').WebSocket,
+  ws: import('ws').WebSocket | null,
   simIndex: number,
   latestActivity: Record<string, number>,
   latestInputActivity: Record<string, number>,
@@ -764,7 +763,7 @@ function buildRotatingActivityWindow(
   const activeSelected = activeNow.slice(0, limit);
   const remaining = Math.max(0, limit - activeSelected.length);
   const hasPoolOverflow = rotatingPool.length > remaining;
-  const start = hasPoolOverflow ? ((clientActivityCursor.get(ws) ?? 0) % rotatingPool.length) : 0;
+  const start = hasPoolOverflow ? (((ws ? clientActivityCursor.get(ws) : 0) ?? 0) % rotatingPool.length) : 0;
   const selected: string[] = [...activeSelected];
   for (let i = 0; i < remaining; i++) {
     if (rotatingPool.length === 0) break;
@@ -790,7 +789,7 @@ function buildRotatingActivityWindow(
     const decayed = entry.value * normalized;
     if (decayed > 0) out[id] = Math.max(CLIENT_ACTIVITY_FLOOR, decayed);
   }
-  if (hasPoolOverflow && rotatingPool.length > 0) {
+  if (ws && hasPoolOverflow && rotatingPool.length > 0) {
     clientActivityCursor.set(ws, (start + remaining) % rotatingPool.length);
   }
   return out;

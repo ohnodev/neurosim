@@ -133,9 +133,10 @@ function startSubscription(): void {
     } catch (err) {
       emit({ type: "error", error: toErrorMessage(err) });
     } finally {
-      if (currentRunId !== runId) return;
-      clearClient();
-      if (listeners.size > 0 && !disposed) scheduleRestart();
+      if (currentRunId === runId) {
+        clearClient();
+        if (listeners.size > 0 && !disposed) scheduleRestart();
+      }
     }
   })();
 }

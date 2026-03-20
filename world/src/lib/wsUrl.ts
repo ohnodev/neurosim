@@ -8,6 +8,7 @@ export function getWsUrl(): string {
   const apiBase = getApiBase();
   const url = new URL(apiBase);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  url.pathname = "/wss";
+  // Avoid overlap with legacy /ws endpoint used by the old stream.
+  url.pathname = "/graphql-ws";
   return url.toString();
 }

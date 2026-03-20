@@ -1845,7 +1845,8 @@ const { useServer } = require_('graphql-ws/use/ws') as {
   ) => { dispose: () => Promise<void> };
 };
 
-const GRAPHQL_WS_PATH = '/wss';
+const GRAPHQL_WS_PATH = '/graphql-ws';
+const LEGACY_GRAPHQL_WS_PATH = '/wss';
 const MAX_GQL_SUBSCRIPTIONS_PER_CONNECTION = 6;
 const gqlSubsPerSocket = new WeakMap<import('ws').WebSocket, number>();
 const gqlSchema = buildSchema(`
@@ -1968,7 +1969,7 @@ const httpServer = createServer(app);
 const gqlWss = new WebSocketServer({ noServer: true });
 httpServer.on('upgrade', (request, socket, head) => {
   const pathname = request.url?.split('?')[0];
-  if (pathname !== GRAPHQL_WS_PATH) return;
+  if (pathname !== GRAPHQL_WS_PATH && pathname !== LEGACY_GRAPHQL_WS_PATH) return;
   gqlWss.handleUpgrade(request, socket, head, (ws) => {
     gqlWss.emit('connection', ws, request);
   });

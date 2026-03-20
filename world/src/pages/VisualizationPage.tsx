@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { type WheelEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import CompactMenu from '../components/CompactMenu';
@@ -1505,6 +1506,10 @@ export default function VisualizationPage() {
   const [showPenAMapping, setShowPenAMapping] = useState(false);
   const [copiedPenAId, setCopiedPenAId] = useState<string | null>(null);
   const [showCompassInfo, setShowCompassInfo] = useState(false);
+  const [compassPos, setCompassPos] = useState({ x: 12, y: 14 });
+  const [draggingCompass, setDraggingCompass] = useState(false);
+  const compassWidgetRef = useRef<HTMLDivElement | null>(null);
+  const compassDragOffsetRef = useRef({ x: 0, y: 0 });
   const notification = useNotification();
   const liveAfterTickRef = useRef(0);
   const livePollFailRef = useRef(0);
@@ -1963,6 +1968,26 @@ export default function VisualizationPage() {
   }, [replay, replay?.ticks.length, isNeuroSimLive]);
 
   useEffect(() => {
+    if (!draggingCompass) return;
+    const onMove = (event: PointerEvent) => {
+      const widgetW = compassWidgetRef.current?.offsetWidth ?? 170;
+      const widgetH = compassWidgetRef.current?.offsetHeight ?? 170;
+      const maxX = Math.max(0, window.innerWidth - widgetW - 8);
+      const maxY = Math.max(0, window.innerHeight - widgetH - 8);
+      const nextX = Math.min(maxX, Math.max(8, event.clientX - compassDragOffsetRef.current.x));
+      const nextY = Math.min(maxY, Math.max(8, event.clientY - compassDragOffsetRef.current.y));
+      setCompassPos({ x: nextX, y: nextY });
+    };
+    const onUp = () => setDraggingCompass(false);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+  }, [draggingCompass]);
+
+  useEffect(() => {
     const container = sceneContainerRef.current;
     if (!container || displayNeurons.length === 0) return;
     if (sceneRef.current) {
@@ -2018,9 +2043,19 @@ export default function VisualizationPage() {
   const statusTitle = replay
     ? `replay=${selectedReplay?.id ?? 'n/a'} | scenario=${replay.meta?.scenario ?? 'n/a'} | decode=vector | neurons=${Array.isArray(replay.neurons) ? replay.neurons.length : displayNeurons.length} | rendered=${displayNeurons.length} | ticks=${replay.ticks.length} | sim=${(replay.ticks.length * getReplayDtSec(replay)).toFixed(3)}s | dt=${(getReplayDtSec(replay) * 1000).toFixed(3)}ms | epg fired=${epgUniqueFired ?? 'n/a'} | bump angle=${compassStats.bumpAngleDeg == null ? 'n/a' : `${compassStats.bumpAngleDeg.toFixed(1)}deg`} | bump strength=${compassStats.bumpStrength.toFixed(3)} | top bin=${compassStats.epgTopBinIndex}`
     : undefined;
+  const preventNumberWheelAdjust = (event: WheelEvent<HTMLElement>) => {
+    const target = event.target as EventTarget | null;
+    if (target instanceof HTMLInputElement && target.type === 'number' && document.activeElement === target) {
+      target.blur();
+      event.preventDefault();
+    }
+  };
 
   return (
-    <div style={{ height: '100%', width: '100%', background: '#060a14', position: 'relative', overflow: 'hidden' }}>
+    <div
+      onWheelCapture={preventNumberWheelAdjust}
+      style={{ height: '100%', width: '100%', background: '#060a14', position: 'relative', overflow: 'hidden' }}
+    >
       <div ref={sceneContainerRef} style={{ position: 'absolute', inset: 0 }} />
       <div
         style={{
@@ -2057,47 +2092,6 @@ export default function VisualizationPage() {
             <span style={{ fontSize: 12, color: '#9ec5ff', maxWidth: 420 }}>
               One continuous sim runs inside brain-service from startup (0 Hz until you apply). EPG spikes stream here; Apply updates PEN_a input on the fly.
             </span>
-            <span style={{ fontSize: 11, color: '#7a9cc4' }}>
-              Active input: L={appliedPenLeft} R={appliedPenRight} Hz
-            </span>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-              Left PEN_a
-              <input
-                type="range"
-                min={0}
-                max={200}
-                value={Math.min(200, penALeftHz)}
-                onChange={(e) => setPenALeftHz(Math.max(0, Math.min(500, Number(e.target.value) || 0)))}
-                style={{ width: 120 }}
-              />
-              <input
-                type="number"
-                min={0}
-                max={500}
-                value={penALeftHz}
-                onChange={(e) => setPenALeftHz(Math.max(0, Math.min(500, Number(e.target.value) || 0)))}
-                style={{ width: 48, padding: '2px 4px', fontSize: 12 }}
-              />
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-              Right PEN_a
-              <input
-                type="range"
-                min={0}
-                max={200}
-                value={Math.min(200, penARightHz)}
-                onChange={(e) => setPenARightHz(Math.max(0, Math.min(500, Number(e.target.value) || 0)))}
-                style={{ width: 120 }}
-              />
-              <input
-                type="number"
-                min={0}
-                max={500}
-                value={penARightHz}
-                onChange={(e) => setPenARightHz(Math.max(0, Math.min(500, Number(e.target.value) || 0)))}
-                style={{ width: 48, padding: '2px 4px', fontSize: 12 }}
-              />
-            </label>
             <details open style={{ fontSize: 12, color: '#b8d4ff', marginTop: 8 }}>
               <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Per-neuron PEN_a (Hz) — override global L/R</summary>
               <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 8 }}>
@@ -2425,12 +2419,13 @@ export default function VisualizationPage() {
             Arrow smoothing: {arrowSmoothing ? 'ON' : 'OFF'}
           </button>
         </div>
-        {replay ? (
+        {replay ? createPortal((
           <div
+            ref={compassWidgetRef}
             style={{
               position: 'fixed',
-              top: 14,
-              left: 12,
+              top: compassPos.y,
+              left: compassPos.x,
               zIndex: 18,
               display: 'inline-flex',
               alignItems: 'center',
@@ -2443,6 +2438,49 @@ export default function VisualizationPage() {
               boxShadow: '0 10px 22px rgba(0,0,0,0.36)',
             }}
           >
+            <button
+              type="button"
+              aria-label="Drag EPG compass"
+              title="Drag compass"
+              onPointerDown={(event) => {
+                const rect = compassWidgetRef.current?.getBoundingClientRect();
+                const baseX = rect?.left ?? compassPos.x;
+                const baseY = rect?.top ?? compassPos.y;
+                compassDragOffsetRef.current = {
+                  x: event.clientX - baseX,
+                  y: event.clientY - baseY,
+                };
+                setDraggingCompass(true);
+              }}
+              style={{
+                position: 'absolute',
+                top: 10,
+                left: 10,
+                width: 18,
+                height: 18,
+                borderRadius: 6,
+                border: '1px solid rgba(150, 185, 235, 0.55)',
+                background: 'rgba(18, 37, 64, 0.95)',
+                color: '#d8e9ff',
+                cursor: draggingCompass ? 'grabbing' : 'grab',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: 0,
+              }}
+            >
+              <svg width="10" height="10" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+                <circle cx="2" cy="2" r="1" />
+                <circle cx="6" cy="2" r="1" />
+                <circle cx="10" cy="2" r="1" />
+                <circle cx="2" cy="6" r="1" />
+                <circle cx="6" cy="6" r="1" />
+                <circle cx="10" cy="6" r="1" />
+                <circle cx="2" cy="10" r="1" />
+                <circle cx="6" cy="10" r="1" />
+                <circle cx="10" cy="10" r="1" />
+              </svg>
+            </button>
             <svg
               width="152"
               height="152"
@@ -2694,7 +2732,7 @@ export default function VisualizationPage() {
               </div>
             ) : null}
           </div>
-        ) : null}
+        ), document.body) : null}
           {error ? <div style={{ color: '#f99', fontSize: 12 }}>{error}</div> : null}
         </div>
       </div>
@@ -2725,6 +2763,92 @@ export default function VisualizationPage() {
       >
         {statusLine}
       </div>
+      {isNeuroSimLive && templateReplay ? (
+        <div
+          style={{
+            position: 'fixed',
+            left: 12,
+            right: 12,
+            bottom: 44,
+            zIndex: 19,
+            display: 'flex',
+            gap: 10,
+            justifyContent: 'space-between',
+            alignItems: 'stretch',
+            pointerEvents: 'auto',
+            flexWrap: 'wrap',
+          }}
+        >
+          <div
+            style={{
+              flex: '1 1 320px',
+              minWidth: 280,
+              borderRadius: 10,
+              border: '1px solid rgba(96, 168, 255, 0.5)',
+              background: 'linear-gradient(145deg, rgba(18,42,78,0.72) 0%, rgba(10,25,46,0.66) 100%)',
+              backdropFilter: 'blur(10px)',
+              WebkitBackdropFilter: 'blur(10px)',
+              boxShadow: '0 10px 22px rgba(0,0,0,0.34)',
+              padding: '8px 10px',
+            }}
+          >
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#9fd1ff', marginBottom: 6 }}>Left PEN_a (Hz)</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input
+                type="range"
+                min={0}
+                max={200}
+                value={Math.min(200, penALeftHz)}
+                onChange={(e) => setPenALeftHz(Math.max(0, Math.min(500, Number(e.target.value) || 0)))}
+                style={{ flex: 1 }}
+              />
+              <input
+                type="number"
+                min={0}
+                max={500}
+                value={penALeftHz}
+                onChange={(e) => setPenALeftHz(Math.max(0, Math.min(500, Number(e.target.value) || 0)))}
+                style={{ width: 58, padding: '3px 5px', fontSize: 12 }}
+              />
+            </div>
+            <div style={{ marginTop: 5, fontSize: 11, color: '#8dbde7' }}>Applied: {appliedPenLeft} Hz</div>
+          </div>
+          <div
+            style={{
+              flex: '1 1 320px',
+              minWidth: 280,
+              borderRadius: 10,
+              border: '1px solid rgba(255, 136, 136, 0.5)',
+              background: 'linear-gradient(145deg, rgba(74,28,36,0.68) 0%, rgba(40,16,22,0.63) 100%)',
+              backdropFilter: 'blur(10px)',
+              WebkitBackdropFilter: 'blur(10px)',
+              boxShadow: '0 10px 22px rgba(0,0,0,0.34)',
+              padding: '8px 10px',
+            }}
+          >
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#ffb0b0', marginBottom: 6 }}>Right PEN_a (Hz)</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input
+                type="range"
+                min={0}
+                max={200}
+                value={Math.min(200, penARightHz)}
+                onChange={(e) => setPenARightHz(Math.max(0, Math.min(500, Number(e.target.value) || 0)))}
+                style={{ flex: 1 }}
+              />
+              <input
+                type="number"
+                min={0}
+                max={500}
+                value={penARightHz}
+                onChange={(e) => setPenARightHz(Math.max(0, Math.min(500, Number(e.target.value) || 0)))}
+                style={{ width: 58, padding: '3px 5px', fontSize: 12 }}
+              />
+            </div>
+            <div style={{ marginTop: 5, fontSize: 11, color: '#f0aaaa' }}>Applied: {appliedPenRight} Hz</div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

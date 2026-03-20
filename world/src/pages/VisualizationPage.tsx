@@ -2458,8 +2458,8 @@ export default function VisualizationPage() {
           <div
             style={{
               position: 'fixed',
-              top: 96,
-              left: 12,
+              top: 'calc(env(safe-area-inset-top, 0px) + 8px)',
+              left: 8,
               zIndex: 21,
               pointerEvents: 'auto',
               display: 'grid',

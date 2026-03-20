@@ -69,10 +69,14 @@ type ApiNeuron = {
 };
 
 type PenAMetadata = {
+  mappingLabel: string;
   penLabel: string;
   hemilineage: string;
   side: string;
   hemibrainType: string;
+  x?: number;
+  y?: number;
+  z?: number;
 };
 
 function parseCsvLineAll(line: string): string[] {
@@ -133,6 +137,7 @@ type SceneState = {
   isDelta7ByIndex: boolean[];
   ringDirectionByIndex: Array<THREE.Vector2 | null>;
   epgDirectionByIndex: Array<THREE.Vector2 | null>;
+  isPenAByIndex: boolean[];
   epgBinByIndex: Array<number | null>;
   upstreamBinByIndex: Array<number | null>;
   downstreamBinByIndex: Array<number | null>;
@@ -171,7 +176,9 @@ const INACTIVE_EPG_COLOR = new THREE.Color(0x4d6fb6);
 const INACTIVE_UPSTREAM_COLOR = new THREE.Color(0x2b4b68);
 const INACTIVE_DOWNSTREAM_COLOR = new THREE.Color(0x5a3d2a);
 const INACTIVE_DELTA7_COLOR = new THREE.Color(0x5e2b6d);
+const INACTIVE_PEN_A_COLOR = new THREE.Color(0x4a7fa8);
 const ACTIVE_COLOR = new THREE.Color(0x6eff9e);
+const ACTIVE_PEN_A_COLOR = new THREE.Color(0x6fffd2);
 const ACTIVE_RING_COLOR = new THREE.Color(0xff4fd8);
 const ACTIVE_UPSTREAM_COLOR = new THREE.Color(0x7ad7ff);
 const ACTIVE_DOWNSTREAM_COLOR = new THREE.Color(0xffb57a);
@@ -222,6 +229,11 @@ function parseProcessedLabelsLine(line: string): [string, string] | null {
   if (cols.length >= 2) return [cols[0].trim(), cols[1].trim()];
   if (cols.length === 1) return [cols[0].trim(), ''];
   return null;
+}
+
+function isPenANeuron(neuron: ReplayNeuron): boolean {
+  const h = (neuron.hemibrain_type ?? neuron.cell_type ?? '').trim().toUpperCase();
+  return h.startsWith('PEN_A');
 }
 const EPG_SLICE_COLORS = [
   '#6b4cc4', '#8ea4e7', '#b4d7e7', '#7fd47f',
@@ -735,6 +747,7 @@ function buildScene(
   const isUpstreamByIndex: boolean[] = new Array(n).fill(false);
   const isDownstreamByIndex: boolean[] = new Array(n).fill(false);
   const isDelta7ByIndex: boolean[] = new Array(n).fill(false);
+  const isPenAByIndex: boolean[] = new Array(n).fill(false);
   const ringDirectionByIndex: Array<THREE.Vector2 | null> = new Array(n).fill(null);
   const epgDirectionByIndex: Array<THREE.Vector2 | null> = new Array(n).fill(null);
   const epgBinByIndex: Array<number | null> = new Array(n).fill(null);
@@ -756,6 +769,7 @@ function buildScene(
     isUpstreamByIndex[i] = Boolean(neuron.is_epg_upstream);
     isDownstreamByIndex[i] = Boolean(neuron.is_epg_downstream);
     isDelta7ByIndex[i] = Boolean(neuron.is_delta7);
+    isPenAByIndex[i] = isPenANeuron(neuron);
     if (neuron.upstream_epg_bin_index_0_7 != null) {
       const value = neuron.upstream_epg_bin_index_0_7;
       const b = Math.max(0, Math.min(EPG_COMPASS_BINS - 1, Math.round((value / 7) * (EPG_COMPASS_BINS - 1))));
@@ -804,6 +818,8 @@ function buildScene(
     }
     const c = isCompassEpgNeuron(neuron)
       ? INACTIVE_EPG_COLOR.clone().multiplyScalar(0.42)
+      : isPenANeuron(neuron)
+        ? INACTIVE_PEN_A_COLOR
       : neuron.is_epg_upstream
         ? INACTIVE_UPSTREAM_COLOR
         : neuron.is_epg_downstream
@@ -1111,6 +1127,7 @@ function buildScene(
     isUpstreamByIndex,
     isDownstreamByIndex,
     isDelta7ByIndex,
+    isPenAByIndex,
     ringDirectionByIndex,
     epgDirectionByIndex,
     epgBinByIndex,
@@ -1175,6 +1192,9 @@ function buildScene(
           tempEpgHot.copy(tempEpgInactive).lerp(EPG_HEAT_ORANGE, 0.45).lerp(EPG_HEAT_RED, t);
           tempC.copy(tempEpgInactive).lerp(tempEpgHot, t);
         }
+      } else if (state.isPenAByIndex[i]) {
+        tempC.copy(INACTIVE_PEN_A_COLOR);
+        if (t > 0) tempC.lerp(ACTIVE_PEN_A_COLOR, t);
       } else if (isUpstreamByIndex[i]) {
         tempC.copy(INACTIVE_UPSTREAM_COLOR);
         if (t > 0) tempC.lerp(ACTIVE_UPSTREAM_COLOR, t);
@@ -1545,6 +1565,7 @@ export default function VisualizationPage() {
   const [penANeurons, setPenANeurons] = useState<{ left: Array<{ id: string; label: string }>; right: Array<{ id: string; label: string }> }>({ left: [], right: [] });
   const [penARatesById, setPenARatesById] = useState<Record<string, number>>({});
   const [penAMetadataById, setPenAMetadataById] = useState<Record<string, PenAMetadata>>({});
+  const [penASpikeStrengthById, setPenASpikeStrengthById] = useState<Record<string, number>>({});
   const [showPenAMapping, setShowPenAMapping] = useState(false);
   const [copiedPenAId, setCopiedPenAId] = useState<string | null>(null);
   const copyInFlightRef = useRef(false);
@@ -1934,11 +1955,23 @@ export default function VisualizationPage() {
           const cols = parseCsvLineAll(lines[i]);
           const id = (cols[iId] ?? '').replace(/^"|"$/g, '').trim();
           if (!id) continue;
+          const toNum = (s: string | undefined) => {
+            const n = Number((s ?? '').replace(/^"|"$/g, '').trim());
+            return Number.isFinite(n) ? n : undefined;
+          };
+          const iMapLabel = header.indexOf('mapping_label');
+          const iX = header.indexOf('x');
+          const iY = header.indexOf('y');
+          const iZ = header.indexOf('z');
           next[id] = {
+            mappingLabel: (cols[iMapLabel] ?? '').replace(/^"|"$/g, '').trim(),
             penLabel: (cols[iPen] ?? '').replace(/^"|"$/g, '').trim(),
             hemilineage: (cols[iHemilineage] ?? '').replace(/^"|"$/g, '').trim(),
             side: (cols[iSide] ?? '').replace(/^"|"$/g, '').trim(),
             hemibrainType: (cols[iType] ?? '').replace(/^"|"$/g, '').trim(),
+            x: toNum(cols[iX]),
+            y: toNum(cols[iY]),
+            z: toNum(cols[iZ]),
           };
         }
         if (!cancelled) setPenAMetadataById(next);
@@ -1946,6 +1979,64 @@ export default function VisualizationPage() {
       .catch(() => {});
     return () => { cancelled = true; };
   }, [isNeuroSimLive]);
+
+  useEffect(() => {
+    if (!isNeuroSimLive) return;
+    if (!templateReplay) return;
+    const entries = Object.entries(penAMetadataById).filter(([, meta]) =>
+      typeof meta.x === 'number' && typeof meta.y === 'number' && typeof meta.z === 'number',
+    );
+    if (entries.length === 0) return;
+    setTemplateReplay((prev) => {
+      if (!prev || prev.meta?.scenario !== 'neurosim_live') return prev;
+      const existing = new Set(prev.neurons.map((n) => n.root_id));
+      const additions: ReplayNeuron[] = [];
+      for (const [id, meta] of entries) {
+        if (existing.has(id)) continue;
+        additions.push({
+          root_id: id,
+          x: meta.x as number,
+          y: meta.y as number,
+          z: meta.z as number,
+          processed_label: meta.hemibrainType || 'PEN_a',
+          is_ring: false,
+          is_epg: false,
+          side: meta.side || 'unknown',
+          hemibrain_type: meta.hemibrainType || 'PEN_a',
+          cell_type: meta.hemibrainType || 'PEN_a',
+          hemilineage: meta.hemilineage,
+        });
+      }
+      if (additions.length === 0) return prev;
+      return { ...prev, neurons: [...prev.neurons, ...additions] };
+    });
+  }, [isNeuroSimLive, templateReplay, penAMetadataById]);
+
+  useEffect(() => {
+    const ids = [...penANeurons.left.map((n) => n.id), ...penANeurons.right.map((n) => n.id)];
+    if (!replay || ids.length === 0 || replay.ticks.length === 0) {
+      setPenASpikeStrengthById({});
+      return;
+    }
+    const idSet = new Set(ids);
+    const endIdx = Math.max(0, Math.min(replay.ticks.length - 1, currentTick - 1));
+    const startIdx = Math.max(0, endIdx - 19);
+    const counts: Record<string, number> = {};
+    let maxCount = 0;
+    for (let i = startIdx; i <= endIdx; i += 1) {
+      for (const id of replay.ticks[i]?.spikes ?? []) {
+        if (!idSet.has(id)) continue;
+        const next = (counts[id] ?? 0) + 1;
+        counts[id] = next;
+        if (next > maxCount) maxCount = next;
+      }
+    }
+    const normalized: Record<string, number> = {};
+    for (const id of ids) {
+      normalized[id] = maxCount > 0 ? (counts[id] ?? 0) / maxCount : 0;
+    }
+    setPenASpikeStrengthById(normalized);
+  }, [replay, currentTick, penANeurons.left, penANeurons.right]);
 
   useEffect(() => {
     if (!isNeuroSimLive || !templateReplay) return;
@@ -2073,6 +2164,7 @@ export default function VisualizationPage() {
   const statusTitle = replay
     ? `replay=${selectedReplay?.id ?? 'n/a'} | scenario=${replay.meta?.scenario ?? 'n/a'} | decode=vector | neurons=${Array.isArray(replay.neurons) ? replay.neurons.length : displayNeurons.length} | rendered=${displayNeurons.length} | ticks=${replay.ticks.length} | sim=${(replay.ticks.length * getReplayDtSec(replay)).toFixed(3)}s | dt=${(getReplayDtSec(replay) * 1000).toFixed(3)}ms | epg fired=${epgUniqueFired ?? 'n/a'} | bump angle=${compassStats.bumpAngleDeg == null ? 'n/a' : `${compassStats.bumpAngleDeg.toFixed(1)}deg`} | bump strength=${compassStats.bumpStrength.toFixed(3)} | top bin=${compassStats.epgTopBinIndex}`
     : undefined;
+  const activePenCount = [...Object.values(penASpikeStrengthById)].filter((v) => v > 0.01).length;
   const applyPenAHz = async () => {
     setError(null);
     setApplyBusy(true);
@@ -2343,6 +2435,35 @@ export default function VisualizationPage() {
                 </div>
               ) : null}
             </div>
+            {viewMode === 'biological' ? (
+              <div
+                style={{
+                  marginTop: 2,
+                  maxWidth: 300,
+                  padding: '8px 10px',
+                  border: '1px solid rgba(126, 165, 222, 0.35)',
+                  borderRadius: 8,
+                  background: 'rgba(8, 16, 30, 0.86)',
+                  color: '#d7e8ff',
+                  fontSize: 11,
+                  lineHeight: 1.35,
+                  boxShadow: '0 8px 20px rgba(0,0,0,0.32)',
+                }}
+              >
+                <div style={{ fontWeight: 700, marginBottom: 6 }}>Biological legend</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ width: 9, height: 9, borderRadius: 999, background: '#4a7fa8', display: 'inline-block' }} />
+                  PEN_a neuron location (biological coordinates)
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ width: 9, height: 9, borderRadius: 999, background: '#6fffd2', display: 'inline-block' }} />
+                  PEN_a firing highlight (live spikes in recent ticks)
+                </div>
+                <div style={{ marginTop: 6, color: '#9fc0e6' }}>
+                  Active PEN_a: {activePenCount}/{penANeurons.left.length + penANeurons.right.length}
+                </div>
+              </div>
+            ) : null}
           </div>
         ), document.body) : null}
         {isNeuroSimLive ? createPortal((
@@ -2698,6 +2819,40 @@ export default function VisualizationPage() {
                             stroke="rgba(255,220,160,0.55)"
                             strokeWidth="1"
                           />
+                        );
+                      })}
+                      {penANeurons.left.map(({ id, label }, i, arr) => {
+                        const t = arr.length <= 1 ? 0.5 : i / (arr.length - 1);
+                        const angle = (Math.PI * 0.65) + (Math.PI * 0.7 * t);
+                        const radius = 55;
+                        const x = Math.cos(angle) * radius;
+                        const y = Math.sin(angle) * radius;
+                        const s = Math.max(0, Math.min(1, penASpikeStrengthById[id] ?? 0));
+                        const fill = `rgba(${Math.round(74 + s * 37)}, ${Math.round(127 + s * 128)}, ${Math.round(168 + s * 42)}, 0.95)`;
+                        return (
+                          <g key={`pen-left-compass-${id}`}>
+                            <circle cx={x.toFixed(3)} cy={y.toFixed(3)} r="1.9" fill={fill} stroke="rgba(220,240,255,0.75)" strokeWidth="0.45" />
+                            <text x={(x - 4.6).toFixed(3)} y={(y - 2.6).toFixed(3)} fill="rgba(210,230,255,0.94)" fontSize="2.8" fontWeight="700">
+                              {label}
+                            </text>
+                          </g>
+                        );
+                      })}
+                      {penANeurons.right.map(({ id, label }, i, arr) => {
+                        const t = arr.length <= 1 ? 0.5 : i / (arr.length - 1);
+                        const angle = (-Math.PI * 0.35) + (Math.PI * 0.7 * t);
+                        const radius = 55;
+                        const x = Math.cos(angle) * radius;
+                        const y = Math.sin(angle) * radius;
+                        const s = Math.max(0, Math.min(1, penASpikeStrengthById[id] ?? 0));
+                        const fill = `rgba(${Math.round(168 + s * 70)}, ${Math.round(112 + s * 54)}, ${Math.round(92 + s * 28)}, 0.95)`;
+                        return (
+                          <g key={`pen-right-compass-${id}`}>
+                            <circle cx={x.toFixed(3)} cy={y.toFixed(3)} r="1.9" fill={fill} stroke="rgba(255,228,210,0.75)" strokeWidth="0.45" />
+                            <text x={(x + 2.5).toFixed(3)} y={(y - 2.6).toFixed(3)} fill="rgba(255,220,205,0.94)" fontSize="2.8" fontWeight="700">
+                              {label}
+                            </text>
+                          </g>
                         );
                       })}
                       {viewMode !== 'biological' && bumpTheta != null ? (

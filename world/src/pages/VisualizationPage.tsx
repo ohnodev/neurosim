@@ -171,6 +171,7 @@ type SceneState = {
   tempG: THREE.Color;
   tempEpgInactive: THREE.Color;
   tempEpgHot: THREE.Color;
+  visibility: { epg: boolean; penA: boolean; connections: boolean };
   dispose: () => void;
 };
 
@@ -1038,7 +1039,7 @@ function buildScene(
   scene.add(glowPoints);
 
   let connectionLines: THREE.LineSegments | null = null;
-  if (viewMode === 'compass' && visibility.connections) {
+  if (viewMode === 'compass') {
     /** For each upstream/downstream, draw to the EPG neuron in the same bin that is closest (radially aligned).
      * This keeps connections "right behind" the EPG neuron instead of crossing to the opposite side. */
     const epgIndicesByBin = new Map<number, number[]>();
@@ -1101,7 +1102,7 @@ function buildScene(
   let penPulsePoints: THREE.Points | null = null;
   let penPulsePositionAttr: THREE.BufferAttribute | null = null;
   let penPulseColorAttr: THREE.BufferAttribute | null = null;
-  if (visibility.connections && visibility.epg && visibility.penA && penEpgConnections.length > 0) {
+  if (penEpgConnections.length > 0) {
     const lineVertices: number[] = [];
     const lineColors: number[] = [];
     for (const link of penEpgConnections) {
@@ -1328,6 +1329,7 @@ function buildScene(
     tempG: new THREE.Color(),
     tempEpgInactive: new THREE.Color(),
     tempEpgHot: new THREE.Color(),
+    visibility: { ...visibility },
     dispose: () => {},
   };
 
@@ -1335,6 +1337,16 @@ function buildScene(
   const animate = () => {
     const now = performance.now() / 1000;
     state.lastFrameTime = now;
+    const currentVisibility = state.visibility;
+    if (connectionLines) {
+      connectionLines.visible = currentVisibility.connections;
+    }
+    if (penEpgConnectionLines) {
+      penEpgConnectionLines.visible = currentVisibility.connections && currentVisibility.epg && currentVisibility.penA;
+    }
+    if (penPulsePoints) {
+      penPulsePoints.visible = currentVisibility.connections && currentVisibility.epg && currentVisibility.penA;
+    }
     /** Compute brightness purely from replay + currentTick. No React state, no accumulation.
      * Neuron lit for SPIKE_DISPLAY_TICKS after spike; brightness = 1 - (ticks_ago / SPIKE_DISPLAY_TICKS). */
     const replay = state.replay;
@@ -1385,7 +1397,7 @@ function buildScene(
     for (let i = 0; i < colorAttr.count; i += 1) {
       const t = brightnessByIndex[i] ?? 0;
       if (isEpgByIndex[i]) {
-        if (!visibility.epg) {
+        if (!currentVisibility.epg) {
           tempC.copy(HIDDEN_NEURON_COLOR);
         } else {
         tempEpgInactive.copy(INACTIVE_EPG_COLOR).multiplyScalar(0.42);
@@ -1397,7 +1409,7 @@ function buildScene(
         }
         }
       } else if (state.isPenAByIndex[i]) {
-        if (!visibility.penA) {
+        if (!currentVisibility.penA) {
           tempC.copy(HIDDEN_NEURON_COLOR);
         } else {
           const penHeat = Math.max(t, penHeatByIndex[i] ?? 0);
@@ -1428,7 +1440,7 @@ function buildScene(
       colorAttr.setXYZ(i, tempC.r, tempC.g, tempC.b);
       if (isEpgByIndex[i] && t > 0) {
         tempG.copy(INACTIVE_EPG_COLOR).lerp(EPG_HEAT_RED, t).multiplyScalar(0.22 + 1.1 * t * t);
-      } else if (state.isPenAByIndex[i] && visibility.penA) {
+      } else if (state.isPenAByIndex[i] && currentVisibility.penA) {
         const penHeat = Math.max(t, penHeatByIndex[i] ?? 0);
         if (penHeat > 0) {
           tempG.copy(PEN_CALCIUM_GLOW_COLOR).multiplyScalar(0.12 + 0.85 * penHeat * penHeat);
@@ -1459,7 +1471,7 @@ function buildScene(
         glowColorAttr.setXYZ(mainIdx, HOVER_HIGHLIGHT_GLOW.r, HOVER_HIGHLIGHT_GLOW.g, HOVER_HIGHLIGHT_GLOW.b);
       }
     }
-    if (penEpgLineColorAttr && penEpgLineBaseColors && penEpgRenderableLinks.length > 0) {
+    if (penEpgLineColorAttr && penEpgLineBaseColors && penEpgRenderableLinks.length > 0 && currentVisibility.connections && currentVisibility.epg && currentVisibility.penA) {
       const lineColorArray = penEpgLineColorAttr.array as Float32Array;
       lineColorArray.set(penEpgLineBaseColors);
       let activePulseCount = 0;
@@ -2396,7 +2408,16 @@ export default function VisualizationPage() {
         sceneRef.current = null;
       }
     };
-  }, [displayNeurons, viewMode, epgLabelMap, legendVisibility.epg, legendVisibility.penA, legendVisibility.connections, penEpgConnections, penControlLabelById]);
+  }, [displayNeurons, viewMode, epgLabelMap, penEpgConnections, penControlLabelById]);
+
+  useEffect(() => {
+    if (!sceneRef.current) return;
+    sceneRef.current.visibility = {
+      epg: legendVisibility.epg,
+      penA: legendVisibility.penA,
+      connections: legendVisibility.connections,
+    };
+  }, [legendVisibility.epg, legendVisibility.penA, legendVisibility.connections]);
 
   useEffect(() => {
     if (!sceneRef.current) return;

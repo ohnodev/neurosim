@@ -117,6 +117,9 @@ const HOVER_HIGHLIGHT_COLOR = new THREE.Color(0xffff88);
 const HOVER_HIGHLIGHT_GLOW = new THREE.Color(0xffdd44);
 const PEN_CONN_EXCIT_FLASH_COLOR = new THREE.Color(0x86f7ff);
 const PEN_CONN_INHIBIT_FLASH_COLOR = new THREE.Color(0xff526b);
+const PEN_CALCIUM_ACTIVE_COLOR = new THREE.Color(0x4dff9d);
+const PEN_CALCIUM_HOT_COLOR = new THREE.Color(0xb8ffd9);
+const PEN_CALCIUM_GLOW_COLOR = new THREE.Color(0x48ff9a);
 
 type SceneState = {
   scene: THREE.Scene;
@@ -183,7 +186,6 @@ const INACTIVE_DELTA7_COLOR = new THREE.Color(0x5e2b6d);
 const INACTIVE_PEN_A_COLOR = new THREE.Color(0x3c4d66);
 const HIDDEN_NEURON_COLOR = new THREE.Color(0x1a2435);
 const ACTIVE_COLOR = new THREE.Color(0x6eff9e);
-const ACTIVE_PEN_A_COLOR = new THREE.Color(0x00ff6e);
 const ACTIVE_RING_COLOR = new THREE.Color(0xff4fd8);
 const ACTIVE_UPSTREAM_COLOR = new THREE.Color(0x7ad7ff);
 const ACTIVE_DOWNSTREAM_COLOR = new THREE.Color(0xffb57a);
@@ -307,8 +309,13 @@ const EPG_GLOW_SIZE = 0.13;
 const EPG_GLOW_OPACITY = 0.52;
 const PEN_ACTIVITY_WINDOW_SEC = 0.12;
 const PEN_ACTIVITY_REF_HZ = 500;
+const PEN_CALCIUM_WINDOW_SEC = 0.35;
+const PEN_CALCIUM_DECAY_SEC = 0.11;
+const PEN_CALCIUM_GAIN = 0.45;
 const PEN_CONN_PROPAGATION_MIN_SEC = 0.002;
 const PEN_CONN_PROPAGATION_MAX_SEC = 0.009;
+const SCENE_BUMP_ARROW_LENGTH = 0.48;
+const COMPASS_ARROW_RADIUS = 18;
 const DELTA7_OPPOSITE_INHIBIT_WEIGHT = 0.55;
 const EPG_INACTIVE_BIN_PENALTY = 0.35;
 const SHOW_BIOLOGICAL_EPG_COPY = false;
@@ -1337,6 +1344,7 @@ function buildScene(
     }
     const brightnessByIndex = state.brightnessByIndex;
     brightnessByIndex.fill(0);
+    const penHeatByIndex = new Float32Array(colorAttr.count);
     const latestSpikeTickById = new Map<string, number>();
     if (replay?.ticks?.length && currentTick >= 1) {
       const startTick = Math.max(1, currentTick - SPIKE_DISPLAY_TICKS);
@@ -1351,6 +1359,25 @@ function buildScene(
           const ticksAgo = currentTick - spikeTick;
           const b = Math.max(0, 1 - ticksAgo / SPIKE_DISPLAY_TICKS);
           if (b > (brightnessByIndex[idx] ?? 0)) brightnessByIndex[idx] = b;
+        }
+      }
+      const dtSec = Math.max(0.0001, getReplayDtSec(replay));
+      const calciumWindowTicks = Math.max(1, Math.floor(PEN_CALCIUM_WINDOW_SEC / dtSec));
+      const calciumDecayTicks = Math.max(1, PEN_CALCIUM_DECAY_SEC / dtSec);
+      const calciumStartTick = Math.max(1, currentTick - calciumWindowTicks + 1);
+      for (let t = calciumStartTick; t <= currentTick; t += 1) {
+        const age = currentTick - t;
+        const decay = Math.exp(-age / calciumDecayTicks);
+        for (const id of replay.ticks[t - 1]?.spikes ?? []) {
+          const idx = idToIndex.get(id);
+          if (idx == null || !state.isPenAByIndex[idx]) continue;
+          penHeatByIndex[idx] += decay;
+        }
+      }
+      for (let i = 0; i < penHeatByIndex.length; i += 1) {
+        const v = penHeatByIndex[i];
+        if (v > 0) {
+          penHeatByIndex[i] = 1 - Math.exp(-v * PEN_CALCIUM_GAIN);
         }
       }
     }
@@ -1373,8 +1400,14 @@ function buildScene(
         if (!visibility.penA) {
           tempC.copy(HIDDEN_NEURON_COLOR);
         } else {
+          const penHeat = Math.max(t, penHeatByIndex[i] ?? 0);
           tempC.copy(INACTIVE_PEN_A_COLOR);
-          if (t > 0) tempC.lerp(ACTIVE_PEN_A_COLOR, t);
+          if (penHeat > 0) {
+            tempC.lerp(PEN_CALCIUM_ACTIVE_COLOR, penHeat);
+            if (penHeat > 0.65) {
+              tempC.lerp(PEN_CALCIUM_HOT_COLOR, (penHeat - 0.65) / 0.35);
+            }
+          }
         }
       } else if (isUpstreamByIndex[i]) {
         tempC.copy(INACTIVE_UPSTREAM_COLOR);
@@ -1393,10 +1426,17 @@ function buildScene(
         if (t > 0) tempC.lerp(ACTIVE_COLOR, t);
       }
       colorAttr.setXYZ(i, tempC.r, tempC.g, tempC.b);
-      if (t <= 0 || !isEpgByIndex[i]) {
-        tempG.copy(NO_GLOW_COLOR);
-      } else {
+      if (isEpgByIndex[i] && t > 0) {
         tempG.copy(INACTIVE_EPG_COLOR).lerp(EPG_HEAT_RED, t).multiplyScalar(0.22 + 1.1 * t * t);
+      } else if (state.isPenAByIndex[i] && visibility.penA) {
+        const penHeat = Math.max(t, penHeatByIndex[i] ?? 0);
+        if (penHeat > 0) {
+          tempG.copy(PEN_CALCIUM_GLOW_COLOR).multiplyScalar(0.12 + 0.85 * penHeat * penHeat);
+        } else {
+          tempG.copy(NO_GLOW_COLOR);
+        }
+      } else {
+        tempG.copy(NO_GLOW_COLOR);
       }
       glowColorAttr.setXYZ(i, tempG.r, tempG.g, tempG.b);
     }
@@ -1409,7 +1449,7 @@ function buildScene(
       0,
     ).normalize();
     bumpArrow.setDirection(dir3);
-    bumpArrow.setLength(0.28 + 0.52 * Math.min(1, Math.max(0.08, arrowState.strengthCurrent)), 0.07, 0.035);
+    bumpArrow.setLength(SCENE_BUMP_ARROW_LENGTH, 0.07, 0.035);
     bumpArrow.setColor(ACTIVE_RING_COLOR);
     const hoveredId = hoveredNeuronId?.current ?? null;
     if (hoveredId != null) {
@@ -3162,8 +3202,8 @@ export default function VisualizationPage() {
                         <line
                           x1="0"
                           y1="0"
-                          x2={(Math.cos(bumpTheta * Math.PI / 180) * 48).toFixed(3)}
-                          y2={(-Math.sin(bumpTheta * Math.PI / 180) * 48).toFixed(3)}
+                          x2={(Math.cos(bumpTheta * Math.PI / 180) * COMPASS_ARROW_RADIUS).toFixed(3)}
+                          y2={(-Math.sin(bumpTheta * Math.PI / 180) * COMPASS_ARROW_RADIUS).toFixed(3)}
                           stroke="#ff4fd8"
                           strokeWidth="2.5"
                         />

@@ -804,10 +804,12 @@ function startSim(): void {
       await socketClient.worldSetSources(
         currentSources.map((s) => ({ id: s.id, x: s.x ?? 0, y: s.y ?? 0, radius: s.radius ?? 1 })),
       );
+      const SOCKET_TICKS_PAGE_SIZE = 100_000;
       const ticksToRequest = Math.max(1250, worldStepsPerBatch * Math.max(1, nSims) * 2);
+      const tickPageSize = Math.min(ticksToRequest, SOCKET_TICKS_PAGE_SIZE);
       const [worldSnap, firstTicksResp] = await Promise.all([
         socketClient.worldGetSnapshot(),
-        socketClient.worldReadTicks(lastTicksAfter, ticksToRequest),
+        socketClient.worldReadTicks(lastTicksAfter, tickPageSize),
       ]);
       if (firstTicksResp.epg_index_to_bin?.length) epgIndexToBin = firstTicksResp.epg_index_to_bin;
       if (firstTicksResp.steps_per_batch) worldStepsPerBatch = firstTicksResp.steps_per_batch;
@@ -818,8 +820,8 @@ function startSim(): void {
         lastTicksAfter = Math.max(lastTicksAfter, Math.max(...batch.map((r) => r.tick)));
       }
       // Drain backlog when producer outruns a single read window.
-      while (batch.length >= ticksToRequest) {
-        const extra = await socketClient.worldReadTicks(lastTicksAfter, ticksToRequest);
+      while (batch.length >= tickPageSize) {
+        const extra = await socketClient.worldReadTicks(lastTicksAfter, tickPageSize);
         if (extra.epg_index_to_bin?.length) epgIndexToBin = extra.epg_index_to_bin;
         if (extra.steps_per_batch) worldStepsPerBatch = extra.steps_per_batch;
         batch = extra.ticks ?? [];

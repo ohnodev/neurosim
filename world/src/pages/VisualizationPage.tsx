@@ -1884,6 +1884,7 @@ export default function VisualizationPage() {
       }
       if (event.type === 'status') {
         setError(null);
+        const prevLiveAfter = liveAfterTickRef.current;
         const latest = Math.max(0, Math.floor(event.latestTick ?? 0));
         liveAfterTickRef.current = latest;
         setAppliedPenLeft(event.penALeftHz ?? 0);
@@ -1898,7 +1899,7 @@ export default function VisualizationPage() {
         if (typeof event.dtSec === 'number' && event.dtSec > 0) {
           setLiveSettings({ dtSec: event.dtSec });
         }
-        if (latest < liveAfterTickRef.current) {
+        if (latest < prevLiveAfter) {
           liveTicksRef.current = [];
           setLiveTicks([]);
           setRecordedTicks([]);

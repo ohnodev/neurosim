@@ -1,0 +1,150 @@
+.paper {
+  margin: 2.5rem auto 4rem;
+  padding: 0 1.25rem;
+  max-width: 960px;
+}
+
+.paper-header {
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 1.5rem;
+}
+
+.eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-bottom: 0.75rem;
+}
+
+.authors {
+  font-size: 1rem;
+  color: var(--muted);
+  margin-top: 0.5rem;
+}
+
+.block {
+  margin-bottom: 1.75rem;
+}
+
+.block h2 {
+  margin-bottom: 0.8rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.block h3 {
+  margin: 1.25rem 0 0.45rem;
+}
+
+.block p {
+  margin: 0.45rem 0;
+}
+
+figure {
+  margin: 1rem 0 1.4rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  padding: 0.8rem;
+}
+
+figcaption {
+  font-size: 0.9rem;
+  color: var(--muted);
+  margin-bottom: 0.6rem;
+}
+
+svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.svg-card {
+  fill: var(--paper);
+  stroke: var(--line);
+}
+
+.svg-line {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.svg-band {
+  fill: color-mix(in srgb, var(--accent) 9%, var(--paper));
+  stroke: var(--line);
+}
+
+.traj-a,
+.traj-b,
+.traj-c {
+  fill: none;
+  stroke-width: 3;
+}
+
+.traj-a {
+  stroke: #3f82ff;
+}
+.traj-b {
+  stroke: #f04e98;
+}
+.traj-c {
+  stroke: #34a06f;
+}
+
+.table-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.table-grid article {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 0.55rem;
+  padding: 0.8rem;
+}
+
+.table-grid h4 {
+  margin: 0 0 0.6rem;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+
+th,
+td {
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  padding: 0.3rem 0.25rem;
+  vertical-align: top;
+}
+
+th {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+ul,
+ol {
+  margin: 0.4rem 0 0.4rem 1.25rem;
+}
+
+.references li {
+  margin-bottom: 0.4rem;
+}
+
+.references a {
+  color: var(--link);
+}
+
+@media (max-width: 860px) {
+  .table-grid {
+    grid-template-columns: 1fr;
+  }
+}

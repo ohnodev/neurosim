@@ -2068,11 +2068,38 @@ export default function VisualizationPage() {
     : (compassStats.bumpAngleDeg != null ? ((compassStats.bumpAngleDeg + 360) % 360) : null);
 
   return (
-    <div style={{ height: '100%', display: 'grid', gridTemplateRows: 'auto 1fr', background: '#060a14', position: 'relative' }}>
-      <div style={{ position: 'absolute', top: 12, right: 12, zIndex: 15 }}>
-        <CompactMenu />
-      </div>
-      <div style={{ padding: 12, display: 'grid', gap: 10, borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+    <div style={{ height: '100%', width: '100%', background: '#060a14', position: 'relative', overflow: 'hidden' }}>
+      <div ref={sceneContainerRef} style={{ position: 'absolute', inset: 0 }} />
+      <div
+        style={{
+          position: 'absolute',
+          inset: 12,
+          zIndex: 15,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 8,
+          pointerEvents: 'none',
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'flex-end', pointerEvents: 'auto' }}>
+          <CompactMenu />
+        </div>
+        <div
+          style={{
+            pointerEvents: 'auto',
+            display: 'grid',
+            gap: 10,
+            padding: 12,
+            border: '1px solid rgba(150, 180, 240, 0.22)',
+            borderRadius: 10,
+            background: 'rgba(8, 16, 30, 0.56)',
+            boxShadow: '0 10px 26px rgba(0,0,0,0.35)',
+            backdropFilter: 'blur(12px)',
+            WebkitBackdropFilter: 'blur(12px)',
+            maxHeight: 'calc(100% - 42px)',
+            overflowY: 'auto',
+          }}
+        >
         {isNeuroSimLive && templateReplay ? (
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', position: 'relative' }}>
             <span style={{ fontSize: 12, color: '#9ec5ff', maxWidth: 420 }}>
@@ -2783,9 +2810,9 @@ export default function VisualizationPage() {
             </div>
           </div>
         ) : null}
-        {error ? <div style={{ color: '#f99', fontSize: 12 }}>{error}</div> : null}
+          {error ? <div style={{ color: '#f99', fontSize: 12 }}>{error}</div> : null}
+        </div>
       </div>
-      <div ref={sceneContainerRef} style={{ minHeight: 0 }} />
     </div>
   );
 }

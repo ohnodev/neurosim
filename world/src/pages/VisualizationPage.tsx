@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import PlaybackControls from '../components/PlaybackControls';
+import CompactMenu from '../components/CompactMenu';
 import { useNotification } from '../contexts/NotificationContext';
 import { getApiBase } from '../lib/constants';
 
@@ -210,22 +211,12 @@ const EPG_INACTIVE_BIN_PENALTY = 0.35;
 const SHOW_BIOLOGICAL_EPG_COPY = false;
 /** If a bin has this fraction of its EPG population active (in window), we point the arrow at that bin center (clear bump signal). */
 const EPG_DOMINANT_BIN_THRESHOLD = 0.8;
-const PREFERRED_REPLAY_ID = 'neurosim_rust_pen_L100_R0_B0_100k_rec3p5x_replay';
+const PREFERRED_REPLAY_ID = 'neurosim_live';
 const DEFAULT_REPLAY_DATASETS: ReplayDataset[] = [
-  {
-    id: 'neurosim_rust_pen_L100_R0_B0_100k_rec3p5x_replay',
-    label: 'Baseline replay (PEN_a L100 R0, 100k, 3.5× EPG rec)',
-    url: '/neurosim_rust_pen_L100_R0_B0_100k_rec3p5x_replay.json',
-  },
   {
     id: 'neurosim_live',
     label: 'Live — tweak PEN_a L/R Hz (3.5× EPG rec, seed 17290319, record)',
     url: 'neurosim_live',
-  },
-  {
-    id: 'world_record',
-    label: 'World record — record ~10s from live world sim (EPG ticks)',
-    url: 'world_record',
   },
 ];
 
@@ -1518,6 +1509,8 @@ export default function VisualizationPage() {
   const [latestLiveTickNumber, setLatestLiveTickNumber] = useState(0);
   const [penANeurons, setPenANeurons] = useState<{ left: Array<{ id: string; label: string }>; right: Array<{ id: string; label: string }> }>({ left: [], right: [] });
   const [penARatesById, setPenARatesById] = useState<Record<string, number>>({});
+  const [showPenAMapping, setShowPenAMapping] = useState(false);
+  const [copiedPenAId, setCopiedPenAId] = useState<string | null>(null);
   const notification = useNotification();
   const liveAfterTickRef = useRef(0);
   const liveTickOffsetRef = useRef(0);
@@ -1530,12 +1523,7 @@ export default function VisualizationPage() {
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState<PlaybackSpeed>(1);
   const [viewMode, setViewMode] = useState<ViewMode>('compass');
-  const [replayDatasets] = useState<ReplayDataset[]>(DEFAULT_REPLAY_DATASETS);
-  const [selectedReplayId, setSelectedReplayId] = useState<string>(
-    DEFAULT_REPLAY_DATASETS.find((d) => d.id === PREFERRED_REPLAY_ID)?.id
-      ?? DEFAULT_REPLAY_DATASETS[0]?.id
-      ?? '',
-  );
+  const selectedReplayId: string = PREFERRED_REPLAY_ID;
   const replay = useMemo(
     () =>
       selectedReplayId === 'neurosim_live'
@@ -1609,10 +1597,7 @@ export default function VisualizationPage() {
       return true;
     });
   }, [neurons]);
-  const selectedReplay = useMemo(
-    () => replayDatasets.find((d) => d.id === selectedReplayId) ?? replayDatasets[0],
-    [replayDatasets, selectedReplayId],
-  );
+  const selectedReplay = DEFAULT_REPLAY_DATASETS[0];
 
   useEffect(() => {
     let active = true;
@@ -2083,34 +2068,13 @@ export default function VisualizationPage() {
     : (compassStats.bumpAngleDeg != null ? ((compassStats.bumpAngleDeg + 360) % 360) : null);
 
   return (
-    <div style={{ height: '100%', display: 'grid', gridTemplateRows: 'auto 1fr', background: '#060a14' }}>
+    <div style={{ height: '100%', display: 'grid', gridTemplateRows: 'auto 1fr', background: '#060a14', position: 'relative' }}>
+      <div style={{ position: 'absolute', top: 12, right: 12, zIndex: 15 }}>
+        <CompactMenu />
+      </div>
       <div style={{ padding: 12, display: 'grid', gap: 10, borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-          <details open style={{ minWidth: 420, color: '#d8e6ff' }}>
-            <summary style={{ cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
-              Replay files
-            </summary>
-            <div style={{ marginTop: 8, display: 'grid', gap: 6 }}>
-              {replayDatasets.map((dataset) => (
-                <button
-                  key={dataset.id}
-                  type="button"
-                  onClick={() => setSelectedReplayId(dataset.id)}
-                  style={{
-                    ...controlButtonStyle(selectedReplayId === dataset.id),
-                    display: 'block',
-                    textAlign: 'left',
-                    width: '100%',
-                  }}
-                >
-                  {dataset.label}
-                </button>
-              ))}
-            </div>
-          </details>
-        </div>
         {isNeuroSimLive && templateReplay ? (
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', position: 'relative' }}>
             <span style={{ fontSize: 12, color: '#9ec5ff', maxWidth: 420 }}>
               One continuous sim runs inside brain-service from startup (0 Hz until you apply). EPG spikes stream here; Apply updates PEN_a input on the fly.
             </span>
@@ -2166,10 +2130,7 @@ export default function VisualizationPage() {
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                     {penANeurons.left.map(({ id, label }) => (
                       <label key={id} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                        <span style={{ minWidth: 24, display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
-                          <span>{label}</span>
-                          <span style={{ fontSize: 9, color: '#6a8aaa', fontWeight: 400 }}>{id}</span>
-                        </span>
+                        <span style={{ minWidth: 24 }}>{label}</span>
                         <input
                           type="number"
                           min={0}
@@ -2196,10 +2157,7 @@ export default function VisualizationPage() {
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                     {penANeurons.right.map(({ id, label }) => (
                       <label key={id} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                        <span style={{ minWidth: 24, display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
-                          <span>{label}</span>
-                          <span style={{ fontSize: 9, color: '#6a8aaa', fontWeight: 400 }}>{id}</span>
-                        </span>
+                        <span style={{ minWidth: 24 }}>{label}</span>
                         <input
                           type="number"
                           min={0}
@@ -2342,6 +2300,161 @@ export default function VisualizationPage() {
                   Download JSON
                 </button>
               </>
+            ) : null}
+            <button
+              type="button"
+              aria-label={showPenAMapping ? 'Hide PEN_a neuron ID mapping' : 'Show PEN_a neuron ID mapping'}
+              onClick={() => setShowPenAMapping((v) => !v)}
+              style={{
+                position: 'absolute',
+                right: 0,
+                top: 0,
+                width: 18,
+                minHeight: 120,
+                borderRadius: 6,
+                border: '1px solid #6f8fc0',
+                background: showPenAMapping ? '#3a5787' : '#243a5b',
+                color: '#eef4ff',
+                cursor: 'pointer',
+                fontWeight: 700,
+                padding: 0,
+              }}
+              title={showPenAMapping ? 'Hide PEN_a mapping' : 'Show PEN_a mapping'}
+            >
+              {showPenAMapping ? '›' : '‹'}
+            </button>
+            {showPenAMapping ? (
+              <div
+                style={{
+                  position: 'absolute',
+                  right: 24,
+                  top: 0,
+                  maxHeight: 220,
+                  overflowY: 'auto',
+                  minWidth: 320,
+                  padding: '8px 10px',
+                  border: '1px solid #6f8fc0',
+                  borderRadius: 8,
+                  background: '#122136',
+                  color: '#d9e9ff',
+                  zIndex: 2,
+                  boxShadow: '0 8px 20px rgba(0,0,0,0.35)',
+                }}
+              >
+                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>PEN_a neuron mapping</div>
+                {penANeurons.left.length === 0 && penANeurons.right.length === 0 ? (
+                  <div style={{ fontSize: 11, color: '#f0a050' }}>Loading PEN_a list…</div>
+                ) : (
+                  <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 11 }}>
+                    <thead>
+                      <tr>
+                        <th style={{ textAlign: 'left', borderBottom: '1px solid #35527a', padding: '2px 4px' }}>Label</th>
+                        <th style={{ textAlign: 'left', borderBottom: '1px solid #35527a', padding: '2px 4px' }}>Neuron ID</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {penANeurons.left.map(({ label, id }) => (
+                        <tr key={`map-left-${id}`}>
+                          <td style={{ padding: '2px 4px', color: '#b8d4ff' }}>{label}</td>
+                          <td style={{ padding: '2px 4px', color: '#8fb5e3', fontFamily: 'monospace' }}>
+                            <span>{id}</span>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                try {
+                                  await navigator.clipboard.writeText(id);
+                                  setCopiedPenAId(id);
+                                  window.setTimeout(() => {
+                                    setCopiedPenAId((prev) => (prev === id ? null : prev));
+                                  }, 1200);
+                                } catch {
+                                  setError('Failed to copy neuron ID');
+                                }
+                              }}
+                              title={copiedPenAId === id ? 'Copied' : 'Copy neuron ID'}
+                              style={{
+                                marginLeft: 6,
+                                width: 18,
+                                height: 18,
+                                border: '1px solid #5e7daa',
+                                borderRadius: 4,
+                                background: copiedPenAId === id ? '#2f6b3f' : '#1a2b45',
+                                color: '#d9e9ff',
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                verticalAlign: 'middle',
+                                padding: 0,
+                              }}
+                            >
+                              {copiedPenAId === id ? (
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                  <path d="M20 6L9 17l-5-5" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                                </svg>
+                              ) : (
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                  <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="2" />
+                                  <path d="M5 15V6a2 2 0 0 1 2-2h9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                                </svg>
+                              )}
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                      {penANeurons.right.map(({ label, id }) => (
+                        <tr key={`map-right-${id}`}>
+                          <td style={{ padding: '2px 4px', color: '#b8d4ff' }}>{label}</td>
+                          <td style={{ padding: '2px 4px', color: '#8fb5e3', fontFamily: 'monospace' }}>
+                            <span>{id}</span>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                try {
+                                  await navigator.clipboard.writeText(id);
+                                  setCopiedPenAId(id);
+                                  window.setTimeout(() => {
+                                    setCopiedPenAId((prev) => (prev === id ? null : prev));
+                                  }, 1200);
+                                } catch {
+                                  setError('Failed to copy neuron ID');
+                                }
+                              }}
+                              title={copiedPenAId === id ? 'Copied' : 'Copy neuron ID'}
+                              style={{
+                                marginLeft: 6,
+                                width: 18,
+                                height: 18,
+                                border: '1px solid #5e7daa',
+                                borderRadius: 4,
+                                background: copiedPenAId === id ? '#2f6b3f' : '#1a2b45',
+                                color: '#d9e9ff',
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                verticalAlign: 'middle',
+                                padding: 0,
+                              }}
+                            >
+                              {copiedPenAId === id ? (
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                  <path d="M20 6L9 17l-5-5" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                                </svg>
+                              ) : (
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                  <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="2" />
+                                  <path d="M5 15V6a2 2 0 0 1 2-2h9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                                </svg>
+                              )}
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
             ) : null}
           </div>
         ) : selectedReplayId === 'world_record' && templateReplay ? (

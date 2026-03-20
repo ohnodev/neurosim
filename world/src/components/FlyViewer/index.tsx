@@ -40,6 +40,7 @@ import { FliesPanelCurrentSlots } from './FliesPanelCurrentSlots';
 import { FliesPanelGraveyardSlots } from './FliesPanelGraveyardSlots';
 import { SidePanelToggle } from './SidePanelToggle';
 import { BrainMotorReadout } from './BrainMotorReadout';
+import CompactMenu from '../CompactMenu';
 import './FlyViewer.css';
 
 export default function FlyViewer() {
@@ -595,6 +596,7 @@ export default function FlyViewer() {
             </div>
           )}
           <div style={{ position: 'absolute', top: 12, right: 12, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, pointerEvents: 'auto' }}>
+            <CompactMenu />
             <ConnectButton devMode={devMode} onToggleDevMode={onToggleDevMode} />
             <CameraToggleSlot ref={cameraToggleSlotRef} deployed={deployed} selectedFlyIndex={selectedFlyIndex} />
             <SimStatusSlot ref={simStatusSlotRef} />

@@ -8,6 +8,6 @@ export function getWsUrl(): string {
   const apiBase = getApiBase();
   const url = new URL(apiBase);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  url.pathname = "/ws";
+  url.pathname = "/wss";
   return url.toString();
 }

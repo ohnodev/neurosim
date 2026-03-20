@@ -3,7 +3,9 @@ import express from 'express';
 import cors from 'cors';
 import { createServer } from 'http';
 import net from 'net';
+import { createRequire } from 'node:module';
 import { WebSocketServer } from 'ws';
+import { buildSchema, execute, GraphQLError, subscribe, type GraphQLError as GQLError } from 'graphql';
 import { loadConnectome } from './connectome.js';
 import * as socketClient from './brain-socket-client.js';
 import { getWorld, spawnFood, removeFood, getSources, type WorldSource } from './world.js';
@@ -563,6 +565,53 @@ const clientViewFlyIndex = new Map<import('ws').WebSocket, number>();
 /** Per-client cursor for rotating activity windows. */
 const clientActivityCursor = new Map<import('ws').WebSocket, number>();
 
+type WorldWsPayload = {
+  frames: {
+    t: number;
+    flies: RuntimeFly[];
+    bumpAngleDegs?: (number | null)[];
+    epgBinsPerSim?: (number[] | null)[];
+  }[];
+  activity: Record<string, number>;
+  activities: (Record<string, number> | undefined)[];
+  sources: WorldSource[];
+  simRunning: boolean;
+  ticks: Array<{ tick: number; fly_id: number; time_sec: number; epg: number[] }>;
+  epgSpikesByNeuronByFly: EpgSpikesByNeuronFly[];
+  epgIndexToBin: number[];
+  worldDtSec: number;
+  worldStepsPerBatch: number;
+  flyIdBySimIndex: number[];
+};
+
+let latestWorldPayload: WorldWsPayload | null = null;
+const worldPayloadListeners = new Set<(payload: WorldWsPayload) => void>();
+
+function publishWorldPayload(payload: WorldWsPayload): void {
+  latestWorldPayload = payload;
+  for (const listener of worldPayloadListeners) {
+    try {
+      listener(payload);
+    } catch {
+      /* ignore subscriber errors */
+    }
+  }
+}
+
+function subscribeWorldPayload(listener: (payload: WorldWsPayload) => void): () => void {
+  worldPayloadListeners.add(listener);
+  if (latestWorldPayload) {
+    try {
+      listener(latestWorldPayload);
+    } catch {
+      /* ignore */
+    }
+  }
+  return () => {
+    worldPayloadListeners.delete(listener);
+  };
+}
+
 function broadcast(data: unknown): void {
   const payload = JSON.stringify(data);
   for (const ws of wsClients) {
@@ -600,6 +649,7 @@ function buildClientPayload(
     epgBinsPerSim: f.epgBinsPerSim,
   }));
   const lastFrame = frames[frames.length - 1];
+  const allActivities = Array.isArray(lastFrame?.activities) ? lastFrame.activities : [];
   for (const ws of wsClients) {
     if (ws.readyState !== 1) continue;
     const viewIndex = Math.max(0, Math.min(sims.length - 1, clientViewFlyIndex.get(ws) ?? 0));
@@ -615,6 +665,7 @@ function buildClientPayload(
         JSON.stringify({
           frames: clientFrames,
           activity,
+          activities: allActivities,
           sources,
           simRunning: true,
           ticks,
@@ -629,6 +680,20 @@ function buildClientPayload(
       console.error('[ws] send error', err);
     }
   }
+
+  publishWorldPayload({
+    frames: clientFrames,
+    activity: (allActivities[0] ?? {}) as Record<string, number>,
+    activities: allActivities,
+    sources,
+    simRunning: true,
+    ticks,
+    epgSpikesByNeuronByFly,
+    epgIndexToBin,
+    worldDtSec: WORLD_SIM_DT_SEC,
+    worldStepsPerBatch,
+    flyIdBySimIndex: sims.map((s) => s.flyId),
+  });
 }
 
 function buildRotatingActivityWindow(
@@ -1754,7 +1819,174 @@ app.get('/api/deploy/graveyard', (req, res) => {
   }
 });
 
+const require_ = createRequire(import.meta.url);
+const { useServer } = require_('graphql-ws/use/ws') as {
+  useServer: (
+    options: object,
+    wss: import('ws').WebSocketServer,
+    keepAlive?: number,
+  ) => { dispose: () => Promise<void> };
+};
+
+const GRAPHQL_WS_PATH = '/wss';
+const MAX_GQL_SUBSCRIPTIONS_PER_CONNECTION = 6;
+const gqlSubsPerSocket = new WeakMap<import('ws').WebSocket, number>();
+const gqlSchema = buildSchema(`
+  type Query {
+    _empty: String
+  }
+
+  type Subscription {
+    worldSimulation(viewFlyIndex: Int): String!
+    neurosimLive(fromTick: Int, maxTicks: Int): String!
+  }
+`);
+
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+const gqlRoot = {
+  query: { _empty: () => null },
+  subscription: {
+    worldSimulation: async function* (_: unknown, args: { viewFlyIndex?: number }) {
+      const queue: WorldWsPayload[] = [];
+      let resolveNext: (() => void) | null = null;
+      const unsub = subscribeWorldPayload((payload) => {
+        queue.push(payload);
+        if (resolveNext) {
+          const wake = resolveNext;
+          resolveNext = null;
+          wake();
+        }
+      });
+      try {
+        while (true) {
+          if (queue.length === 0) {
+            await new Promise<void>((resolve) => {
+              resolveNext = resolve;
+            });
+          }
+          const payload = queue.shift();
+          if (!payload) continue;
+          const viewFlyIndex = Math.max(0, Number.isFinite(args?.viewFlyIndex) ? Math.floor(args.viewFlyIndex as number) : 0);
+          const activity = (payload.activities?.[viewFlyIndex] ?? payload.activity ?? {}) as Record<string, number>;
+          yield {
+            worldSimulation: JSON.stringify({
+              ...payload,
+              activity,
+            }),
+          };
+        }
+      } finally {
+        unsub();
+      }
+    },
+    neurosimLive: async function* (_: unknown, args: { fromTick?: number; maxTicks?: number }) {
+      const maxTicks = Math.max(1, Math.min(8000, Number(args?.maxTicks ?? 2000)));
+      let backoffMs = 120;
+      try {
+        const status = await socketClient.liveStatus();
+        let afterTick = Number.isFinite(args?.fromTick as number)
+          ? Math.max(0, Math.floor(args.fromTick as number))
+          : Math.max(0, Math.floor(status.latest_tick ?? 0));
+        yield {
+          neurosimLive: JSON.stringify({
+            type: 'status',
+            latestTick: status.latest_tick,
+            dtSec: status.dt_sec,
+            penALeftHz: status.left_hz,
+            penARightHz: status.right_hz,
+            ratesById: status.rates_by_id ?? null,
+          }),
+        };
+        while (true) {
+          try {
+            const out = await socketClient.liveReadTicks(afterTick, maxTicks);
+            const ticks = out.ticks ?? [];
+            if (ticks.length > 0) {
+              afterTick = ticks[ticks.length - 1]?.tick ?? afterTick;
+              yield {
+                neurosimLive: JSON.stringify({
+                  type: 'ticks',
+                  ticks,
+                  latestTick: out.latest_tick,
+                  dtSec: out.dt_sec,
+                }),
+              };
+              backoffMs = 80;
+            } else {
+              backoffMs = 120;
+            }
+          } catch (err) {
+            const message = (err as Error)?.message ?? 'live stream error';
+            yield {
+              neurosimLive: JSON.stringify({
+                type: 'error',
+                error: message,
+              }),
+            };
+            backoffMs = Math.min(2000, Math.round(backoffMs * 1.8));
+          }
+          await sleepMs(backoffMs);
+        }
+      } catch (err) {
+        yield {
+          neurosimLive: JSON.stringify({
+            type: 'error',
+            error: (err as Error)?.message ?? 'live stream init error',
+          }),
+        };
+      }
+    },
+  },
+};
+
 const httpServer = createServer(app);
+const gqlWss = new WebSocketServer({ noServer: true });
+httpServer.on('upgrade', (request, socket, head) => {
+  const pathname = request.url?.split('?')[0];
+  if (pathname !== GRAPHQL_WS_PATH) return;
+  gqlWss.handleUpgrade(request, socket, head, (ws) => {
+    gqlWss.emit('connection', ws, request);
+  });
+});
+gqlWss.on('connection', (ws) => {
+  ws.once('close', () => {
+    gqlSubsPerSocket.delete(ws);
+  });
+});
+useServer(
+  {
+    schema: gqlSchema,
+    roots: { query: gqlRoot.query, subscription: gqlRoot.subscription },
+    execute,
+    subscribe,
+    onSubscribe: (ctx: unknown, _id: string, _payload: unknown, args: unknown) => {
+      const socket = (ctx as { extra?: { socket?: import('ws').WebSocket } }).extra?.socket;
+      if (!socket) return args;
+      const count = gqlSubsPerSocket.get(socket) ?? 0;
+      if (count >= MAX_GQL_SUBSCRIPTIONS_PER_CONNECTION) {
+        return [new GraphQLError('Too many subscriptions per connection', { extensions: { code: 'RATE_LIMITED' } })];
+      }
+      gqlSubsPerSocket.set(socket, count + 1);
+      return args;
+    },
+    onComplete: (ctx: unknown) => {
+      const socket = (ctx as { extra?: { socket?: import('ws').WebSocket } }).extra?.socket;
+      if (!socket) return;
+      const count = gqlSubsPerSocket.get(socket) ?? 1;
+      gqlSubsPerSocket.set(socket, Math.max(0, count - 1));
+    },
+    onError: (_ctx: unknown, id: string, _payload: unknown, errors: readonly GQLError[]) => {
+      console.error('[gql-ws] subscription error:', id, errors.map((e) => e.message).join('; '));
+      return errors;
+    },
+  },
+  gqlWss,
+  25_000,
+);
+
 const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
 
 wss.on('connection', (ws) => {
@@ -1809,6 +2041,7 @@ if (process.env.VITEST !== 'true') {
     startSim();
     console.log('NeuroSim API http://localhost:' + PORT);
     console.log('WebSocket ws://localhost:' + PORT + '/ws');
+    console.log('GraphQL WS ws://localhost:' + PORT + GRAPHQL_WS_PATH);
     console.log(
       'Connectome:',
       connectome.neurons.length,

@@ -5,6 +5,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import CompactMenu from '../components/CompactMenu';
 import { useNotification } from '../contexts/NotificationContext';
 import { getApiBase } from '../lib/constants';
+import { subscribeNeuroLive, type LiveReplayTick } from '../lib/neuroLiveWsClient';
 
 type ReplayNeuron = {
   root_id: string;
@@ -1477,11 +1478,8 @@ function applyTickSpikes(
 }
 
 const NEUROSIM_LIVE_DT_SEC = 0.0001;
-const NEUROSIM_LIVE_POLL_MS = 20;
-const NEUROSIM_LIVE_MAX_TICKS_PER_POLL = 3000;
 const NEUROSIM_LIVE_MAX_STORED_TICKS = 100_000;
 const NEUROSIM_RECORDING_MAX_STORED_TICKS = 300_000;
-const NEUROSIM_LIVE_MAX_BACKOFF_MS = 2000;
 
 export default function VisualizationPage() {
   const [fetchedReplay, setFetchedReplay] = useState<ReplayData | null>(null);
@@ -1514,7 +1512,6 @@ export default function VisualizationPage() {
   const compassDragOffsetRef = useRef({ x: 0, y: 0 });
   const notification = useNotification();
   const liveAfterTickRef = useRef(0);
-  const livePollFailRef = useRef(0);
   const recordingRef = useRef(false);
   useEffect(() => {
     recordingRef.current = recording;
@@ -1861,108 +1858,59 @@ export default function VisualizationPage() {
 
   useEffect(() => {
     if (!isNeuroSimLive || !templateReplay) return;
-    let cancelled = false;
-    let timerId: number | null = null;
-    const schedule = (fn: () => void, ms: number) => {
-      if (timerId != null) clearTimeout(timerId);
-      timerId = window.setTimeout(fn, ms);
-    };
-    const init = async () => {
-      try {
-        setError(null);
-        const st = await fetch(`${apiBase}/api/neurosim-live/status`);
-        if (!st.ok) throw new Error(`live status ${st.status}`);
-        const j = (await st.json()) as {
-          latestTick?: number;
-          dtSec?: number;
-          penALeftHz?: number;
-          penARightHz?: number;
-          ratesById?: Record<string, number> | null;
-        };
-        if (cancelled) return;
-        const latest = Math.max(0, Math.floor(j.latestTick ?? 0));
+    setError(null);
+    const unsubscribe = subscribeNeuroLive((event) => {
+      if (event.type === 'error') {
+        setError(event.error);
+        return;
+      }
+      if (event.type === 'status') {
+        const latest = Math.max(0, Math.floor(event.latestTick ?? 0));
         liveAfterTickRef.current = latest;
-        setAppliedPenLeft(j.penALeftHz ?? 0);
-        setAppliedPenRight(j.penARightHz ?? 0);
-        setPenALeftHz(j.penALeftHz ?? 0);
-        setPenARightHz(j.penARightHz ?? 0);
-        if (j.ratesById && typeof j.ratesById === 'object') {
-          setPenARatesById(j.ratesById);
+        setAppliedPenLeft(event.penALeftHz ?? 0);
+        setAppliedPenRight(event.penARightHz ?? 0);
+        setPenALeftHz(event.penALeftHz ?? 0);
+        setPenARightHz(event.penARightHz ?? 0);
+        if (event.ratesById && typeof event.ratesById === 'object') {
+          setPenARatesById(event.ratesById);
         } else {
           setPenARatesById({});
         }
-        if (typeof j.dtSec === 'number' && j.dtSec > 0) setLiveSettings({ dtSec: j.dtSec });
+        if (typeof event.dtSec === 'number' && event.dtSec > 0) {
+          setLiveSettings({ dtSec: event.dtSec });
+        }
         setLiveTicks([]);
         setRecordedTicks([]);
-        livePollFailRef.current = 0;
-      } catch (e) {
-        if (!cancelled) setError((e as Error).message);
+        return;
       }
-    };
-    const poll = async () => {
-      if (cancelled) return;
-      try {
-        const after = liveAfterTickRef.current;
-        const res = await fetch(
-          `${apiBase}/api/neurosim-live/ticks?after=${after}&max=${NEUROSIM_LIVE_MAX_TICKS_PER_POLL}`,
-        );
-        if (!res.ok) throw new Error(`live ticks ${res.status}`);
-        const data = (await res.json()) as {
-          ticks?: ReplayTick[];
-          latestTick?: number;
-          dtSec?: number;
-        };
-        if (cancelled) return;
-        if (typeof data.dtSec === 'number' && data.dtSec > 0) {
-          setLiveSettings({ dtSec: data.dtSec });
+      if (typeof event.dtSec === 'number' && event.dtSec > 0) {
+        setLiveSettings({ dtSec: event.dtSec });
+      }
+      const batch = (event.ticks ?? []) as LiveReplayTick[];
+      if (batch.length === 0) return;
+      const last = batch[batch.length - 1]?.tick;
+      if (typeof last === 'number') liveAfterTickRef.current = last;
+      setLiveTicks((prev) => {
+        const merged = [...prev, ...batch as ReplayTick[]];
+        if (merged.length > NEUROSIM_LIVE_MAX_STORED_TICKS) {
+          return merged.slice(-NEUROSIM_LIVE_MAX_STORED_TICKS);
         }
-        const batch = data.ticks ?? [];
-        if (batch.length > 0) {
-          const last = batch[batch.length - 1]!.tick;
-          liveAfterTickRef.current = last;
-          setLiveTicks((prev) => {
-            const merged = [...prev, ...batch];
-            if (merged.length > NEUROSIM_LIVE_MAX_STORED_TICKS) {
-              return merged.slice(-NEUROSIM_LIVE_MAX_STORED_TICKS);
-            }
-            return merged;
-          });
-          if (recordingRef.current) {
-            setRecordedTicks((prev) => {
-              const merged = [...prev, ...batch];
-              if (merged.length > NEUROSIM_RECORDING_MAX_STORED_TICKS) {
-                return merged.slice(-NEUROSIM_RECORDING_MAX_STORED_TICKS);
-              }
-              return merged;
-            });
+        return merged;
+      });
+      if (recordingRef.current) {
+        setRecordedTicks((prev) => {
+          const merged = [...prev, ...batch as ReplayTick[]];
+          if (merged.length > NEUROSIM_RECORDING_MAX_STORED_TICKS) {
+            return merged.slice(-NEUROSIM_RECORDING_MAX_STORED_TICKS);
           }
-        }
-        livePollFailRef.current = 0;
-      } catch (err) {
-        if (!cancelled) {
-          setError((err as Error).message);
-          livePollFailRef.current += 1;
-        }
+          return merged;
+        });
       }
-      if (!cancelled) {
-        const backoff = Math.min(
-          NEUROSIM_LIVE_POLL_MS * 2 ** livePollFailRef.current,
-          NEUROSIM_LIVE_MAX_BACKOFF_MS,
-        );
-        schedule(() => void poll(), Math.max(NEUROSIM_LIVE_POLL_MS, backoff));
-      }
-    };
-    const startPolling = async () => {
-      await init();
-      if (cancelled) return;
-      schedule(() => void poll(), NEUROSIM_LIVE_POLL_MS);
-    };
-    void startPolling();
+    });
     return () => {
-      cancelled = true;
-      if (timerId != null) clearTimeout(timerId);
+      unsubscribe();
     };
-  }, [isNeuroSimLive, templateReplay, apiBase]);
+  }, [isNeuroSimLive, templateReplay]);
 
   useEffect(() => {
     if (!replay?.ticks.length || !isNeuroSimLive) return;
@@ -2119,6 +2067,7 @@ export default function VisualizationPage() {
 
   return (
     <div
+      className="neurosim-viz"
       onWheelCapture={preventNumberWheelAdjust}
       style={{ height: '100%', width: '100%', background: '#060a14', position: 'relative', overflow: 'hidden' }}
     >
@@ -2137,125 +2086,6 @@ export default function VisualizationPage() {
         <div style={{ display: 'flex', justifyContent: 'flex-end', pointerEvents: 'auto' }}>
           <CompactMenu />
         </div>
-        <div
-          style={{
-            pointerEvents: 'auto',
-            display: 'grid',
-            gap: 10,
-            padding: 12,
-            border: '1px solid rgba(150, 180, 240, 0.22)',
-            borderRadius: 10,
-            background: 'rgba(8, 16, 30, 0.56)',
-            boxShadow: '0 10px 26px rgba(0,0,0,0.35)',
-            backdropFilter: 'blur(12px)',
-            WebkitBackdropFilter: 'blur(12px)',
-            maxHeight: 'calc(100% - 42px)',
-            overflowY: 'auto',
-          }}
-        >
-        {isNeuroSimLive && templateReplay ? (
-          <div style={{ display: 'grid', gap: 8, position: 'relative' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <button
-                type="button"
-                onClick={() => setViewMode((v) => (v === 'compass' ? 'biological' : 'compass'))}
-                style={{ ...controlButtonStyle(false), display: 'inline-flex', alignItems: 'center', gap: 6 }}
-                title="Toggle view mode"
-              >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                  <path d="M1.5 12S5.2 5.5 12 5.5S22.5 12 22.5 12S18.8 18.5 12 18.5S1.5 12 1.5 12Z" stroke="currentColor" strokeWidth="1.8" />
-                  <circle cx="12" cy="12" r="2.2" fill="currentColor" />
-                </svg>
-                {viewMode === 'compass' ? (
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                    <circle cx="12" cy="12" r="8" stroke="currentColor" strokeWidth="1.8" />
-                    <path d="M12 4V20M4 12H20" stroke="currentColor" strokeWidth="1.8" />
-                  </svg>
-                ) : (
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                    <path d="M7 4C10 4 10 8 13 8C16 8 16 4 19 4M7 20C10 20 10 16 13 16C16 16 16 20 19 20M7 4V20M19 4V20" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                  </svg>
-                )}
-              </button>
-              <span style={{ fontSize: 12, color: '#b6cfe9', fontWeight: 600 }}>
-                View: {viewMode === 'compass' ? 'EPG Compass' : 'Biological'}
-              </span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'flex-start', position: 'relative', minHeight: 78 }}>
-              <button
-                type="button"
-                aria-label={showRecordMenu ? 'Collapse record tools' : 'Expand record tools'}
-                onClick={() => setShowRecordMenu((v) => !v)}
-                title={showRecordMenu ? 'Hide record tools' : 'Show record tools'}
-                style={{
-                  width: 18,
-                  minHeight: 74,
-                  borderRadius: 6,
-                  border: '1px solid #6f8fc0',
-                  background: showRecordMenu ? '#3a5787' : '#243a5b',
-                  color: '#eef4ff',
-                  cursor: 'pointer',
-                  fontWeight: 700,
-                  padding: 0,
-                  flexShrink: 0,
-                }}
-              >
-                {showRecordMenu ? '‹' : '›'}
-              </button>
-              {showRecordMenu ? (
-                <div
-                  style={{
-                    marginLeft: 8,
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    flexWrap: 'wrap',
-                  }}
-                >
-                  <button
-                    type="button"
-                    onClick={() => setRecording((r) => !r)}
-                    style={controlButtonStyle(recording)}
-                  >
-                    Record {recording ? '(on)' : ''}
-                  </button>
-                  <span style={{ fontSize: 11, color: '#7a9cc4' }}>
-                    Recording keeps last {NEUROSIM_RECORDING_MAX_STORED_TICKS.toLocaleString()} ticks (rolling window)
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!templateReplay) return;
-                      const payload: ReplayData = {
-                        meta: {
-                          ...templateReplay.meta,
-                          generated_at: new Date().toISOString(),
-                          source_csv: 'neurosim-live/recording',
-                          ticks: recordedTicks.length,
-                          scenario: 'neurosim_live_pen_a_recording',
-                          dt_sec: liveSettings.dtSec,
-                          note: `Continuous live sim; rolling capture up to ${NEUROSIM_RECORDING_MAX_STORED_TICKS} ticks; applied PEN_a last L=${appliedPenLeft} R=${appliedPenRight} Hz`,
-                        },
-                        neurons: templateReplay.neurons,
-                        ticks: recordedTicks,
-                      };
-                      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-                      const a = document.createElement('a');
-                      a.href = URL.createObjectURL(blob);
-                      a.download = `neurosim_live_pen_a_${Date.now()}.json`;
-                      a.click();
-                      URL.revokeObjectURL(a.href);
-                    }}
-                    style={{ ...controlButtonStyle(false), width: 214, justifyContent: 'center', fontVariantNumeric: 'tabular-nums' }}
-                    disabled={recordedTicks.length === 0}
-                  >
-                    Download JSON ({recordedTicks.length.toLocaleString()} ticks)
-                  </button>
-                </div>
-              ) : null}
-            </div>
-          </div>
-        ) : null}
         {replay ? createPortal((
           <div
             ref={compassWidgetRef}
@@ -2571,6 +2401,139 @@ export default function VisualizationPage() {
             ) : null}
           </div>
         ), document.body) : null}
+        {isNeuroSimLive && templateReplay ? createPortal((
+          <div
+            style={{
+              position: 'fixed',
+              top: 96,
+              left: 12,
+              zIndex: 21,
+              pointerEvents: 'auto',
+              display: 'grid',
+              gap: 8,
+            }}
+          >
+            <div
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '6px 8px',
+                border: '1px solid rgba(140,170,220,0.38)',
+                borderRadius: 8,
+                background: 'rgba(8, 16, 30, 0.62)',
+                backdropFilter: 'blur(10px)',
+                WebkitBackdropFilter: 'blur(10px)',
+                boxShadow: '0 10px 22px rgba(0,0,0,0.36)',
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setViewMode((v) => (v === 'compass' ? 'biological' : 'compass'))}
+                style={{ ...controlButtonStyle(false), display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                title="Toggle view mode"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M1.5 12S5.2 5.5 12 5.5S22.5 12 22.5 12S18.8 18.5 12 18.5S1.5 12 1.5 12Z" stroke="currentColor" strokeWidth="1.8" />
+                  <circle cx="12" cy="12" r="2.2" fill="currentColor" />
+                </svg>
+                {viewMode === 'compass' ? (
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <circle cx="12" cy="12" r="8" stroke="currentColor" strokeWidth="1.8" />
+                    <path d="M12 4V20M4 12H20" stroke="currentColor" strokeWidth="1.8" />
+                  </svg>
+                ) : (
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M7 4C10 4 10 8 13 8C16 8 16 4 19 4M7 20C10 20 10 16 13 16C16 16 16 20 19 20M7 4V20M19 4V20" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                  </svg>
+                )}
+              </button>
+              <span style={{ fontSize: 12, color: '#b6cfe9', fontWeight: 600 }}>
+                View: {viewMode === 'compass' ? 'EPG Compass' : 'Biological'}
+              </span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'flex-start', position: 'relative', minHeight: 78 }}>
+              <button
+                type="button"
+                aria-label={showRecordMenu ? 'Collapse record tools' : 'Expand record tools'}
+                onClick={() => setShowRecordMenu((v) => !v)}
+                title={showRecordMenu ? 'Hide record tools' : 'Show record tools'}
+                style={{
+                  width: 18,
+                  minHeight: 74,
+                  borderRadius: 6,
+                  border: '1px solid #6f8fc0',
+                  background: showRecordMenu ? '#3a5787' : '#243a5b',
+                  color: '#eef4ff',
+                  cursor: 'pointer',
+                  fontWeight: 700,
+                  padding: 0,
+                  flexShrink: 0,
+                }}
+              >
+                {showRecordMenu ? '‹' : '›'}
+              </button>
+              {showRecordMenu ? (
+                <div
+                  style={{
+                    marginLeft: 8,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    flexWrap: 'wrap',
+                    padding: '6px 8px',
+                    border: '1px solid rgba(140,170,220,0.38)',
+                    borderRadius: 8,
+                    background: 'rgba(8, 16, 30, 0.62)',
+                    backdropFilter: 'blur(10px)',
+                    WebkitBackdropFilter: 'blur(10px)',
+                    boxShadow: '0 10px 22px rgba(0,0,0,0.36)',
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setRecording((r) => !r)}
+                    style={controlButtonStyle(recording)}
+                  >
+                    Record {recording ? '(on)' : ''}
+                  </button>
+                  <span style={{ fontSize: 11, color: '#7a9cc4' }}>
+                    Recording keeps last {NEUROSIM_RECORDING_MAX_STORED_TICKS.toLocaleString()} ticks (rolling window)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!templateReplay) return;
+                      const payload: ReplayData = {
+                        meta: {
+                          ...templateReplay.meta,
+                          generated_at: new Date().toISOString(),
+                          source_csv: 'neurosim-live/recording',
+                          ticks: recordedTicks.length,
+                          scenario: 'neurosim_live_pen_a_recording',
+                          dt_sec: liveSettings.dtSec,
+                          note: `Continuous live sim; rolling capture up to ${NEUROSIM_RECORDING_MAX_STORED_TICKS} ticks; applied PEN_a last L=${appliedPenLeft} R=${appliedPenRight} Hz`,
+                        },
+                        neurons: templateReplay.neurons,
+                        ticks: recordedTicks,
+                      };
+                      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+                      const a = document.createElement('a');
+                      a.href = URL.createObjectURL(blob);
+                      a.download = `neurosim_live_pen_a_${Date.now()}.json`;
+                      a.click();
+                      URL.revokeObjectURL(a.href);
+                    }}
+                    style={{ ...controlButtonStyle(false), width: 214, justifyContent: 'center', fontVariantNumeric: 'tabular-nums' }}
+                    disabled={recordedTicks.length === 0}
+                  >
+                    Download JSON ({recordedTicks.length.toLocaleString()} ticks)
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ), document.body) : null}
         {isNeuroSimLive ? createPortal((
           <div
             style={{
@@ -2734,8 +2697,7 @@ export default function VisualizationPage() {
             ) : null}
           </div>
         ), document.body) : null}
-          {error ? <div style={{ color: '#f99', fontSize: 12 }}>{error}</div> : null}
-        </div>
+        {error ? <div style={{ color: '#f99', fontSize: 12, pointerEvents: 'auto' }}>{error}</div> : null}
       </div>
       <div
         className="viz-bottom-status"

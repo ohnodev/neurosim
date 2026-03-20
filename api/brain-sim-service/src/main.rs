@@ -1862,7 +1862,10 @@ fn handle(
         let gpu_enabled = {
             #[cfg(feature = "cuda")]
             {
-                brain_sim_service::gpu::try_init_device().is_some()
+                let use_cuda = std::env::var("USE_CUDA")
+                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false);
+                use_cuda && brain_sim_service::gpu::try_init_device().is_some()
             }
             #[cfg(not(feature = "cuda"))]
             {

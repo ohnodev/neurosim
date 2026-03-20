@@ -89,7 +89,8 @@ pub struct FlyStepOutput {
 }
 
 impl BrainSim {
-    fn choose_world_preset_for_fly(fly: &FlyInput, sources: &[SourceInput]) -> &'static str {
+    /// Choose 11PM/3PM/8PM preset from fly heading vs nearest source. Public for world loop.
+    pub fn choose_world_preset_for_fly(fly: &FlyInput, sources: &[SourceInput]) -> &'static str {
         let heading_deg = fly.heading.to_degrees();
         let mut target_deg = heading_deg;
         let mut nearest_d2 = f64::INFINITY;
@@ -125,6 +126,22 @@ impl BrainSim {
 
     pub fn set_rng_seed(&mut self, seed: u64) {
         self.rng_state = seed;
+    }
+
+    /// Return compact EPG spike indices (0..n_epg) for neurons that spiked this step.
+    /// Frontend can derive bump angle from these using same formula as compute_bump_and_epg_bins.
+    pub fn epg_spike_indices(&self) -> Vec<usize> {
+        self.epg_indices
+            .iter()
+            .enumerate()
+            .filter_map(|(j, &idx)| {
+                if (idx as usize) < self.spikes.len() && self.spikes[idx as usize] >= ACTIVITY_THRESHOLD {
+                    Some(j)
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     fn compute_synaptic_delay_steps(dt_sec: f64) -> usize {

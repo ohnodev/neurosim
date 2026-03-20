@@ -56,6 +56,8 @@ fn epg_side_tile_to_bin_16(side: &str, tile: u8) -> Option<u8> {
 #[derive(Deserialize)]
 struct EpgTileMapEntry {
     root_id: String,
+    #[serde(default)]
+    hemibrain_type: Option<String>,
     side: Option<String>,
     tile_index_0_7: Option<u8>,
 }
@@ -86,6 +88,11 @@ fn load_epg_id_to_bin() -> HashMap<String, u8> {
     };
     let mut out = HashMap::new();
     for e in map.entries {
+        // Keep legacy tile-map rows with missing hemibrain_type.
+        // Exclude only when hemibrain_type is explicitly present and not EPG.
+        if matches!(e.hemibrain_type.as_deref(), Some(ht) if ht != "EPG") {
+            continue;
+        }
         let (Some(side), Some(tile)) = (e.side.as_deref(), e.tile_index_0_7) else {
             continue;
         };
@@ -97,7 +104,84 @@ fn load_epg_id_to_bin() -> HashMap<String, u8> {
     out
 }
 
-/// Fill 16 EPG bins from activity_sparse and return (bump_angle_deg, normalized bins 0..1 for frontend).
+/// Build epg_index (0..n_epg) -> bin (0..15) for frontend to derive bump from compact tick data.
+fn build_epg_index_to_bin(
+    template: &connectome::ConnectomeTemplate,
+    epg_id_to_bin: &HashMap<String, u8>,
+) -> Vec<u8> {
+    let mut out = Vec::new();
+    for (i, &v) in template.is_epg.iter().enumerate() {
+        if v == 0 {
+            continue;
+        }
+        let bin = template
+            .neuron_ids
+            .get(i)
+            .and_then(|id| epg_id_to_bin.get(id).copied())
+            .filter(|&b| (b as usize) < 16)
+            .unwrap_or(u8::MAX);
+        out.push(bin);
+    }
+    out
+}
+
+/// Build epg_index (0..n_epg) -> root_id for visualization replay (convert indices to spike IDs).
+fn build_epg_index_to_root_id(template: &connectome::ConnectomeTemplate) -> Vec<String> {
+    let mut out = Vec::new();
+    for (i, &v) in template.is_epg.iter().enumerate() {
+        if v == 0 {
+            continue;
+        }
+        if let Some(id) = template.neuron_ids.get(i) {
+            out.push(id.clone());
+        }
+    }
+    out
+}
+
+/// Compute bump_angle_deg from compact epg_spike_indices (0..n_epg) using epg_index_to_bin.
+/// Frontend uses same formula; kept here for parity testing.
+#[allow(dead_code)]
+fn compute_bump_from_epg_indices(epg_spike_indices: &[usize], epg_index_to_bin: &[u8]) -> Option<f64> {
+    if epg_index_to_bin.is_empty() {
+        return None;
+    }
+    let mut bins: [f64; 16] = [0.0; 16];
+    for &idx in epg_spike_indices {
+        let bin = epg_index_to_bin.get(idx).copied().unwrap_or(255);
+        if (bin as usize) < 16 {
+            bins[bin as usize] += 1.0;
+        }
+    }
+    let bin_angle_deg = |bin: usize| 90.0 - (bin as f64) * 22.5;
+    let mut sum_cos = 0.0f64;
+    let mut sum_sin = 0.0f64;
+    for (bin, &w) in bins.iter().enumerate() {
+        if w > 0.0 {
+            let rad = bin_angle_deg(bin).to_radians();
+            sum_cos += w * rad.cos();
+            sum_sin += w * rad.sin();
+        }
+    }
+    if sum_cos.abs() < 1e-10 && sum_sin.abs() < 1e-10 {
+        None
+    } else {
+        Some(sum_sin.atan2(sum_cos).to_degrees())
+    }
+}
+
+/// Same as frontend compassEpgData: inactive bins get negative weight.
+const EPG_INACTIVE_BIN_PENALTY: f64 = 0.35;
+/// When a bin has this fraction of total activity, point arrow at that bin center.
+const EPG_DOMINANT_BIN_THRESHOLD: f64 = 0.8;
+
+/// Scene angle for bin (matches frontend sceneAngleForBin: bin 0 at top, clockwise).
+fn scene_angle_for_bin(bin: usize) -> f64 {
+    std::f64::consts::FRAC_PI_2 - (bin as f64 / 16.0) * std::f64::consts::TAU
+}
+
+/// Fill 16 EPG bins from activity_sparse and return (bump_angle_deg, normalized bins 0..1).
+/// Bump uses EXACT same algorithm as frontend computeBumpFromEpgBins (Visualization page).
 fn compute_bump_and_epg_bins(
     activity_sparse: &HashMap<String, f64>,
     epg_id_to_bin: &HashMap<String, u8>,
@@ -113,27 +197,49 @@ fn compute_bump_and_epg_bins(
             }
         }
     }
-    let bin_angle_deg = |bin: usize| 90.0 - (bin as f64) * 22.5;
-    let mut sum_cos = 0.0f64;
-    let mut sum_sin = 0.0f64;
-    for (bin, &w) in bins.iter().enumerate() {
-        if w > 0.0 {
-            let rad = bin_angle_deg(bin).to_radians();
-            sum_cos += w * rad.cos();
-            sum_sin += w * rad.sin();
-        }
+    let max_bin = bins.iter().cloned().fold(1e-12f64, f64::max);
+    for v in &mut bins {
+        *v /= max_bin;
     }
-    let bump_deg = if sum_cos.abs() < 1e-10 && sum_sin.abs() < 1e-10 {
-        None
+    // epgBinsSigned: active - inactive * penalty (same as frontend)
+    let mut signed: [f64; 16] = [0.0; 16];
+    for (i, &v) in bins.iter().enumerate() {
+        let active = v.clamp(0.0, 1.0);
+        let inactive = 1.0 - active;
+        signed[i] = active - inactive * EPG_INACTIVE_BIN_PENALTY;
+    }
+    let mut bump_x = 0.0f64;
+    let mut bump_y = 0.0f64;
+    for (i, &w) in signed.iter().enumerate() {
+        if w.abs() <= 1e-8 {
+            continue;
+        }
+        let a = scene_angle_for_bin(i);
+        bump_x += w * a.cos();
+        bump_y += w * a.sin();
+    }
+    let vector_bump_deg = if bump_x * bump_x + bump_y * bump_y > 1e-8 {
+        Some(bump_y.atan2(bump_x).to_degrees())
     } else {
-        Some(sum_sin.atan2(sum_cos).to_degrees())
+        None
     };
-    let max_bin = bins.iter().cloned().fold(0.0f64, f64::max);
-    if max_bin > 0.0 {
-        for v in &mut bins {
-            *v /= max_bin;
+    let total: f64 = bins.iter().sum();
+    let mut dominant_bin: Option<usize> = None;
+    if total > 0.0 {
+        for i in 0..16 {
+            let frac = bins[i] / total;
+            if frac >= EPG_DOMINANT_BIN_THRESHOLD {
+                if dominant_bin.map_or(true, |d| bins[i] > bins[d]) {
+                    dominant_bin = Some(i);
+                }
+            }
         }
     }
+    let bump_deg = if let Some(b) = dominant_bin {
+        Some(scene_angle_for_bin(b).to_degrees())
+    } else {
+        vector_bump_deg
+    };
     (bump_deg, bins)
 }
 
@@ -928,7 +1034,7 @@ struct ContinuousLiveState {
     dt_sec: f64,
 }
 
-const WORLD_TICK_BUFFER_CAP: usize = 120_000;
+const WORLD_TICK_BUFFER_BASE_CAP: usize = 120_000;
 
 #[derive(Deserialize)]
 struct WorldAddFlyParams {
@@ -966,7 +1072,8 @@ struct WorldTickRecord {
     tick: u64,
     fly_id: u32,
     time_sec: f64,
-    spikes: Vec<String>,
+    /// Compact: EPG neuron indices 0..n_epg that spiked. Frontend derives bump from these.
+    epg: Vec<usize>,
 }
 
 #[derive(Clone, Serialize)]
@@ -977,6 +1084,9 @@ struct WorldSnapshotFly {
     #[serde(skip_serializing_if = "Option::is_none")]
     bump_angle_deg: Option<f64>,
     epg_bins: Vec<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    eaten_food_id: Option<String>,
+    feeding_sugar_taken: f64,
     compute_ms: f64,
     kernel_ms: f64,
     recurrent_ms: f64,
@@ -992,6 +1102,9 @@ struct WorldSnapshotResp {
     flies: Vec<WorldSnapshotFly>,
 }
 
+/// Min seconds between preset (11PM/3PM/8PM) changes. Keeps heading stable.
+const WORLD_PRESET_CHANGE_INTERVAL_SEC: f64 = 2.0;
+
 struct WorldFlyRuntime {
     sim: BrainSim,
     fly: FlyInput,
@@ -1003,6 +1116,10 @@ struct WorldFlyRuntime {
     feeding_source_id: Option<String>,
     feeding_time_left_sec: f64,
     rng_state: u64,
+    /// Current stim preset (11PM/3PM/8PM). Always one of these for continuous juice.
+    current_preset: String,
+    /// Sim time when preset was last changed. Throttle changes.
+    last_preset_change_t: f64,
 }
 
 struct WorldRuntimeState {
@@ -1014,19 +1131,30 @@ struct WorldRuntimeState {
     flies: Mutex<HashMap<u32, Arc<Mutex<WorldFlyRuntime>>>>,
     snapshots: Mutex<HashMap<u32, WorldSnapshotFly>>,
     sources: Mutex<Vec<SourceInput>>,
+    food_state: Mutex<FoodState>,
+    tick_buffer_cap: usize,
     ticks: Mutex<VecDeque<WorldTickRecord>>,
+    /// epg_index (0..n_epg) -> bin (0..15) for frontend bump derivation.
+    epg_index_to_bin: Vec<u8>,
+    /// epg_index (0..n_epg) -> root_id for visualization replay (indices → spike IDs).
+    epg_index_to_root_id: Vec<String>,
 }
 
 struct WorldFlyStepResult {
     fly_id: u32,
     snapshot: WorldSnapshotFly,
-    epg_spikes: Vec<String>,
+    feeding_candidate_id: Option<String>,
+    dt_batch: f64,
+    /// Per-step ticks for this batch (steps_per_batch entries).
+    step_ticks: Vec<(u64, f64, Vec<usize>)>,
 }
 
-const WORLD_ARENA_LIMIT: f64 = 25.0;
+/// No arena boundaries — flies move freely.
 const WORLD_BASE_SPEED_UNITS_PER_SEC: f64 = 18.0;
 const WORLD_REST_DURATION_SEC: f64 = 4.0;
 const WORLD_FLY_TIME_MAX_SEC: f64 = 6.0;
+/// Fatigue decay rate when flying. 0.1 = 1/10th as fast (fly ~10× longer before rest).
+const WORLD_FATIGUE_DECAY_RATE: f64 = 0.1;
 const WORLD_FEED_DURATION_SEC: f64 = 1.2;
 const WORLD_FEED_START_RADIUS: f64 = 2.2;
 const WORLD_WANDER_INTERVAL_SEC: f64 = 10.0;
@@ -1099,7 +1227,8 @@ fn update_world_fly_kinematics(
         fly.rest_time_left = (fly.rest_time_left - dt_batch).max(0.0);
         runtime.fly_time_left_sec = (runtime.fly_time_left_sec + dt_batch * 0.75).min(WORLD_FLY_TIME_MAX_SEC);
     } else {
-        runtime.fly_time_left_sec = (runtime.fly_time_left_sec - dt_batch).max(0.0);
+        runtime.fly_time_left_sec =
+            (runtime.fly_time_left_sec - dt_batch * WORLD_FATIGUE_DECAY_RATE).max(0.0);
         if runtime.fly_time_left_sec <= 0.0 {
             fly.rest_time_left = WORLD_REST_DURATION_SEC;
         }
@@ -1114,6 +1243,9 @@ fn update_world_fly_kinematics(
                 fly.y = src.y;
                 fly.z = 0.9;
                 feeding = true;
+            } else {
+                runtime.feeding_source_id = None;
+                runtime.feeding_time_left_sec = 0.0;
             }
         }
     } else {
@@ -1165,8 +1297,8 @@ fn update_world_fly_kinematics(
             let speed = WORLD_BASE_SPEED_UNITS_PER_SEC * (0.35 + 0.65 * fatigue_scale);
             let nx = fly.x + fly.heading.cos() * speed * dt_batch;
             let ny = fly.y + fly.heading.sin() * speed * dt_batch;
-            fly.x = nx.clamp(-WORLD_ARENA_LIMIT, WORLD_ARENA_LIMIT);
-            fly.y = ny.clamp(-WORLD_ARENA_LIMIT, WORLD_ARENA_LIMIT);
+            fly.x = nx;
+            fly.y = ny;
             fly.z = (fly.z + 0.2 * dt_batch).clamp(0.35, 1.1);
         } else {
             fly.z = (fly.z - 0.4 * dt_batch).clamp(0.35, 1.1);
@@ -1185,6 +1317,7 @@ fn step_world_fly_runtime(
     runtime: &mut WorldFlyRuntime,
     dt_sec: f64,
     steps_per_batch: u32,
+    base_tick: u64,
     sources_now: &[SourceInput],
     epg_id_to_bin: &HashMap<String, u8>,
 ) -> WorldFlyStepResult {
@@ -1200,7 +1333,6 @@ fn step_world_fly_runtime(
         dead: runtime.fly.dead,
     };
     let mut last_activity_sparse: HashMap<String, f64> = HashMap::new();
-    let mut last_spike_ids: Vec<String> = Vec::new();
     let mut last_timing = brain_sim_service::sim::StepTiming {
         compute_ms: 0.0,
         kernel_ms: 0.0,
@@ -1208,10 +1340,23 @@ fn step_world_fly_runtime(
         lif_ms: 0.0,
         readout_ms: 0.0,
     };
+    // Always run juice (11PM/3PM/8PM). Throttle preset change to at most once per 2s.
+    let desired_preset = brain_sim_service::sim::BrainSim::choose_world_preset_for_fly(&fly, sources_now);
+    if desired_preset != runtime.current_preset.as_str()
+        && (runtime.last_preset_change_t <= 0.0
+            || fly.t - runtime.last_preset_change_t >= WORLD_PRESET_CHANGE_INTERVAL_SEC)
+    {
+        runtime.current_preset = desired_preset.to_string();
+        runtime.last_preset_change_t = fly.t;
+    }
+    let stim_preset = Some(runtime.current_preset.as_str());
+
+    let mut step_ticks: Vec<(u64, f64, Vec<usize>)> = Vec::with_capacity(steps_per_batch as usize);
     for step in 0..steps_per_batch {
         let is_last = step + 1 == steps_per_batch;
-        let use_stim = !runtime.rates_by_id.is_empty() || !sources_now.is_empty();
-        let (_a, activity_sparse, spike_ids, _ml, _mr, _mf, _cl, _cr, _cf, _mlm, _mrm, _mfm, timing, fly_out) =
+        // Always use stim: world preset (11PM/3PM/8PM) when no rates_by_id, else rates. Ensures continuous juice.
+        let use_stim = true;
+        let (_a, activity_sparse, _spike_ids, _ml, _mr, _mf, _cl, _cr, _cf, _mlm, _mrm, _mfm, timing, fly_out) =
             if is_last {
                 runtime.sim.step_with_options(
                     dt_sec,
@@ -1226,7 +1371,7 @@ fn step_world_fly_runtime(
                     } else {
                         Some(&runtime.rates_by_id)
                     },
-                    None,
+                    stim_preset,
                 )
             } else {
                 runtime.sim.step_fast(
@@ -1241,7 +1386,7 @@ fn step_world_fly_runtime(
                     } else {
                         Some(&runtime.rates_by_id)
                     },
-                    None,
+                    stim_preset,
                 )
             };
         fly = FlyInput {
@@ -1255,9 +1400,12 @@ fn step_world_fly_runtime(
             rest_time_left: fly_out.rest_time_left,
             dead: fly_out.dead,
         };
+        let step_tick = base_tick + step as u64 + 1;
+        let step_time = step_tick as f64 * dt_sec;
+        let epg = runtime.sim.epg_spike_indices();
+        step_ticks.push((step_tick, step_time, epg));
         if is_last {
             last_activity_sparse = activity_sparse;
-            last_spike_ids = spike_ids;
             last_timing = timing;
         }
     }
@@ -1284,6 +1432,8 @@ fn step_world_fly_runtime(
         activity_sparse: last_activity_sparse,
         bump_angle_deg,
         epg_bins: epg_bins_arr.to_vec(),
+        eaten_food_id: None,
+        feeding_sugar_taken: 0.0,
         compute_ms: last_timing.compute_ms,
         kernel_ms: last_timing.kernel_ms,
         recurrent_ms: last_timing.recurrent_ms,
@@ -1291,15 +1441,12 @@ fn step_world_fly_runtime(
         readout_ms: last_timing.readout_ms,
     };
     runtime.snapshot = snap.clone();
-    let mut epg_spikes: Vec<String> = last_spike_ids
-        .into_iter()
-        .filter(|id| epg_id_to_bin.contains_key(id))
-        .collect();
-    epg_spikes.sort();
     WorldFlyStepResult {
         fly_id,
         snapshot: snap,
-        epg_spikes,
+        feeding_candidate_id: runtime.feeding_source_id.clone(),
+        dt_batch,
+        step_ticks,
     }
 }
 
@@ -1503,6 +1650,9 @@ fn spawn_world_runtime_thread(
         .ok()
         .map(|s| s == "1" || s.eq_ignore_ascii_case("true"))
         .unwrap_or(true);
+    let world_tick_buffer_cap = WORLD_TICK_BUFFER_BASE_CAP.saturating_mul(steps_per_batch as usize);
+    let epg_index_to_bin = build_epg_index_to_bin(template.as_ref(), &epg_id_to_bin);
+    let epg_index_to_root_id = build_epg_index_to_root_id(template.as_ref());
     let state = Arc::new(WorldRuntimeState {
         next_fly_id: AtomicU32::new(0),
         tick: AtomicU64::new(0),
@@ -1512,7 +1662,11 @@ fn spawn_world_runtime_thread(
         flies: Mutex::new(HashMap::new()),
         snapshots: Mutex::new(HashMap::new()),
         sources: Mutex::new(Vec::new()),
-        ticks: Mutex::new(VecDeque::with_capacity(8192)),
+        food_state: Mutex::new(FoodState::default()),
+        tick_buffer_cap: world_tick_buffer_cap,
+        ticks: Mutex::new(VecDeque::with_capacity(world_tick_buffer_cap)),
+        epg_index_to_bin,
+        epg_index_to_root_id,
     });
     let state_thr = state.clone();
     std::thread::Builder::new()
@@ -1531,7 +1685,8 @@ fn spawn_world_runtime_thread(
                             .map(|(fly_id, runtime)| (*fly_id, Arc::clone(runtime)))
                             .collect()
                     };
-                    let step_results: Vec<WorldFlyStepResult> = if world_parallel_flies {
+                    let base_tick = state_thr.tick.load(Ordering::Relaxed);
+                    let mut step_results: Vec<WorldFlyStepResult> = if world_parallel_flies {
                         fly_handles
                             .into_par_iter()
                             .map(|(fly_id, runtime_handle)| {
@@ -1541,6 +1696,7 @@ fn spawn_world_runtime_thread(
                                     &mut runtime,
                                     dt_sec,
                                     steps_per_batch,
+                                    base_tick,
                                     &sources_now,
                                     &epg_id_to_bin,
                                 )
@@ -1556,13 +1712,53 @@ fn spawn_world_runtime_thread(
                                     &mut runtime,
                                     dt_sec,
                                     steps_per_batch,
+                                    base_tick,
                                     &sources_now,
                                     &epg_id_to_bin,
                                 )
                             })
                             .collect()
                     };
-                    let tick = state_thr.tick.load(Ordering::Relaxed) + 1;
+                    let source_lookup: HashMap<String, (f64, f64)> = sources_now
+                        .iter()
+                        .map(|s| (s.id.clone(), (s.x, s.y)))
+                        .collect();
+                    {
+                        let mut food_state = state_thr.food_state.lock().unwrap();
+                        food_state.sync(sources_now.iter().map(|s| s.id.clone()));
+                        for result in step_results.iter_mut() {
+                            let sugar_per_fly = (FEED_SUGAR_PER_SEC * result.dt_batch).max(0.0);
+                            if sugar_per_fly <= 0.0 {
+                                result.snapshot.fly.feeding = false;
+                                result.snapshot.feeding_sugar_taken = 0.0;
+                                result.snapshot.eaten_food_id = None;
+                                continue;
+                            }
+                            let Some(source_id) = result.feeding_candidate_id.clone() else {
+                                result.snapshot.feeding_sugar_taken = 0.0;
+                                result.snapshot.eaten_food_id = None;
+                                continue;
+                            };
+                            let taken = food_state.take_sugar(&source_id, sugar_per_fly);
+                            result.snapshot.fly.feeding = taken > 0.0;
+                            result.snapshot.feeding_sugar_taken = taken;
+                            result.snapshot.fly.hunger =
+                                (result.snapshot.fly.hunger + taken * HUNGER_PER_SUGAR).clamp(0.0, 100.0);
+                            result.snapshot.fly.health =
+                                (result.snapshot.fly.health + taken * HEALTH_PER_SUGAR).clamp(0.0, 100.0);
+                            if let Some((sx, sy)) = source_lookup.get(&source_id) {
+                                result.snapshot.fly.x = *sx;
+                                result.snapshot.fly.y = *sy;
+                                result.snapshot.fly.z = 0.9;
+                            }
+                            if food_state.depleted(&source_id) {
+                                result.snapshot.eaten_food_id = Some(source_id);
+                            } else {
+                                result.snapshot.eaten_food_id = None;
+                            }
+                        }
+                    }
+                    let tick = base_tick + steps_per_batch as u64;
                     {
                         let mut snapshots = state_thr.snapshots.lock().unwrap();
                         for result in &step_results {
@@ -1571,19 +1767,30 @@ fn spawn_world_runtime_thread(
                     }
                     {
                         let mut ticks = state_thr.ticks.lock().unwrap();
-                        for result in step_results {
-                            ticks.push_back(WorldTickRecord {
-                                tick,
-                                fly_id: result.fly_id,
-                                time_sec: tick as f64 * dt_sec * steps_per_batch as f64,
-                                spikes: result.epg_spikes,
-                            });
+                        let mut merged_ticks: Vec<WorldTickRecord> = Vec::new();
+                        for result in &step_results {
+                            for (step_tick, step_time, epg) in &result.step_ticks {
+                                merged_ticks.push(WorldTickRecord {
+                                    tick: *step_tick,
+                                    fly_id: result.fly_id,
+                                    time_sec: *step_time,
+                                    epg: epg.clone(),
+                                });
+                            }
                         }
-                        while ticks.len() > WORLD_TICK_BUFFER_CAP {
+                        merged_ticks.sort_unstable_by(|a, b| {
+                            a.tick
+                                .cmp(&b.tick)
+                                .then_with(|| a.fly_id.cmp(&b.fly_id))
+                        });
+                        for rec in merged_ticks {
+                            ticks.push_back(rec);
+                        }
+                        while ticks.len() > state_thr.tick_buffer_cap {
                             ticks.pop_front();
                         }
                     }
-                    state_thr.tick.fetch_add(1, Ordering::Release);
+                    state_thr.tick.store(tick, Ordering::Release);
                 }
                 if target_interval > std::time::Duration::ZERO {
                     let elapsed = batch_start.elapsed();
@@ -2425,6 +2632,8 @@ fn handle(
                 activity_sparse: HashMap::new(),
                 bump_angle_deg: None,
                 epg_bins: vec![0.0; 16],
+                eaten_food_id: None,
+                feeding_sugar_taken: 0.0,
                 compute_ms: 0.0,
                 kernel_ms: 0.0,
                 recurrent_ms: 0.0,
@@ -2444,6 +2653,8 @@ fn handle(
                     feeding_source_id: None,
                     feeding_time_left_sec: 0.0,
                     rng_state: (fly_id as u64).wrapping_mul(0x9E3779B97F4A7C15u64).wrapping_add(1),
+                    current_preset: "11PM".to_string(),
+                    last_preset_change_t: 0.0,
                 })),
             );
             world
@@ -2585,6 +2796,9 @@ fn handle(
                 "ticks": ticks,
                 "latest_tick": world.tick.load(Ordering::Acquire),
                 "dt_sec": world.dt_sec,
+                "steps_per_batch": world.steps_per_batch,
+                "epg_index_to_bin": world.epg_index_to_bin,
+                "epg_index_to_root_id": world.epg_index_to_root_id,
             }))?
         } else {
             serde_json::to_string(&ErrResp {

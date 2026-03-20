@@ -8,6 +8,21 @@ import type { WorldSource } from "../../../api/src/world";
 
 export type { FlyState };
 
+export interface WorldTick {
+  tick: number;
+  fly_id: number;
+  time_sec: number;
+  epg: number[];
+}
+
+/** Per-neuron EPG spikes: spikes[neuronIndex] = [tick1, tick2, ...]. Compact format for replay. */
+export interface EpgSpikesByNeuronFly {
+  flyId: number;
+  tickStart: number;
+  tickEnd: number;
+  spikes: number[][];
+}
+
 export interface SimPayload {
   t?: number;
   /** Multi-fly: array of fly states */
@@ -21,6 +36,14 @@ export interface SimPayload {
     bumpAngleDegs?: (number | null)[];
     epgBinsPerSim?: (number[] | null)[];
   }[];
+  /** Per-step EPG ticks for frontend bump derivation. */
+  ticks?: WorldTick[];
+  /** Per-neuron format: spikes[neuronIndex] = [tick1, tick2, ...]. Full EPG activity for replay. */
+  epgSpikesByNeuronByFly?: EpgSpikesByNeuronFly[];
+  epgIndexToBin?: number[];
+  worldDtSec?: number;
+  worldStepsPerBatch?: number;
+  flyIdBySimIndex?: number[];
   activity?: Record<string, number>;
   /** Per-fly brain activity (index = sim index) */
   activities?: (Record<string, number> | undefined)[];

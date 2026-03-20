@@ -38,9 +38,13 @@ export function spawnFood(): WorldSource | null {
   return { ...source };
 }
 
-export function removeFood(id: string): void {
+export function removeFood(id: string): boolean {
   const idx = sources.findIndex((s) => s.id === id);
-  if (idx >= 0) sources.splice(idx, 1);
+  if (idx >= 0) {
+    sources.splice(idx, 1);
+    return true;
+  }
+  return false;
 }
 
 export function getSources(): WorldSource[] {

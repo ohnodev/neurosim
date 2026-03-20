@@ -16,6 +16,134 @@ export function sceneAngleForBin(bin: number, binCount: number): number {
   return COMPASS_ROTATION_RAD - (bin / binCount) * Math.PI * 2;
 }
 
+/** Get per-neuron EPG spike counts in tick range [tickEnd - window, tickEnd]. */
+export function getEpgCountsInWindow(
+  spikes: number[][],
+  tickEnd: number,
+  window: number,
+): number[] {
+  const tickStart = Math.max(0, tickEnd - window);
+  const out = new Array(spikes.length).fill(0);
+  for (let i = 0; i < spikes.length; i++) {
+    const arr = spikes[i];
+    if (!arr?.length) continue;
+    // Binary search: first tick >= tickStart
+    let lo = 0;
+    let hi = arr.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (arr[mid]! < tickStart) lo = mid + 1;
+      else hi = mid;
+    }
+    // Binary search: first tick > tickEnd
+    let loHi = lo;
+    let hiHi = arr.length;
+    while (loHi < hiHi) {
+      const mid = (loHi + hiHi) >>> 1;
+      if (arr[mid]! <= tickEnd) loHi = mid + 1;
+      else hiHi = mid;
+    }
+    out[i] = Math.max(0, loHi - lo);
+  }
+  return out;
+}
+
+/** Legacy helper: returns indices with at least one spike in window. */
+export function getEpgIndicesInWindow(
+  spikes: number[][],
+  tickEnd: number,
+  window: number,
+): number[] {
+  const counts = getEpgCountsInWindow(spikes, tickEnd, window);
+  const out: number[] = [];
+  for (let i = 0; i < counts.length; i++) {
+    if ((counts[i] ?? 0) > 0) out.push(i);
+  }
+  return out;
+}
+
+/** Same as VisualizationPage: inactive bins get negative weight to pull arrow toward activity. */
+const EPG_INACTIVE_BIN_PENALTY = 0.35;
+/** When a bin has this fraction of total activity, point arrow at that bin center (clear bump). */
+const EPG_DOMINANT_BIN_THRESHOLD = 0.8;
+
+/** Derive bump angle (deg) from compact epg spike indices. Same formula as Rust compute_bump_and_epg_bins. */
+export function computeBumpFromEpgIndices(
+  epgSpikeIndices: number[],
+  epgIndexToBin: number[],
+): number | null {
+  if (epgIndexToBin.length === 0) return null;
+  const bins = new Array(16).fill(0);
+  for (const idx of epgSpikeIndices) {
+    const bin = epgIndexToBin[idx];
+    if (typeof bin === 'number' && bin >= 0 && bin < 16) bins[bin] += 1;
+  }
+  return computeBumpFromEpgBins(bins, bins);
+}
+
+export function computeBumpFromEpgCounts(
+  epgSpikeCounts: number[],
+  epgIndexToBin: number[],
+): number | null {
+  if (epgIndexToBin.length === 0) return null;
+  const bins = new Array(16).fill(0);
+  for (let idx = 0; idx < epgSpikeCounts.length; idx++) {
+    const count = epgSpikeCounts[idx] ?? 0;
+    if (count <= 0) continue;
+    const bin = epgIndexToBin[idx];
+    if (typeof bin === 'number' && bin >= 0 && bin < 16) bins[bin] += count;
+  }
+  return computeBumpFromEpgBins(bins, bins);
+}
+
+/**
+ * Compute bump angle from EPG bin values — exact same logic as VisualizationPage buildCompassStats.
+ * epgBinsNorm: length 16, values 0–1 (normalized for display).
+ * binCounts: raw counts per bin (for dominant-bin fallback when one bin has clear majority).
+ */
+export function computeBumpFromEpgBins(
+  epgBinsNorm: number[],
+  binCounts: number[],
+): number | null {
+  if (!epgBinsNorm?.length || epgBinsNorm.length < 16) return null;
+  const epgBinMaxForDecode = Math.max(1e-12, ...epgBinsNorm);
+  const epgBinsForDecode = epgBinsNorm.map((v) => v / epgBinMaxForDecode);
+  const epgBinsSigned = epgBinsForDecode.map((v) => {
+    const active = Math.max(0, Math.min(1, v));
+    const inactive = 1 - active;
+    return active - inactive * EPG_INACTIVE_BIN_PENALTY;
+  });
+  let bumpX = 0;
+  let bumpY = 0;
+  for (let i = 0; i < 16; i++) {
+    const w = epgBinsSigned[i] ?? 0;
+    if (Math.abs(w) <= 1e-8) continue;
+    const a = sceneAngleForBin(i, 16);
+    bumpX += w * Math.cos(a);
+    bumpY += w * Math.sin(a);
+  }
+  const vectorBumpAngleDeg =
+    bumpX * bumpX + bumpY * bumpY > 1e-8
+      ? (Math.atan2(bumpY, bumpX) * 180) / Math.PI
+      : null;
+  const totalCount = binCounts.reduce((s, c) => s + c, 0);
+  let dominantBin: number | null = null;
+  if (totalCount > 0) {
+    for (let i = 0; i < 16; i++) {
+      const frac = (binCounts[i] ?? 0) / totalCount;
+      if (frac >= EPG_DOMINANT_BIN_THRESHOLD) {
+        if (dominantBin == null || (binCounts[i] ?? 0) > (binCounts[dominantBin] ?? 0)) {
+          dominantBin = i;
+        }
+      }
+    }
+  }
+  if (dominantBin != null) {
+    return (sceneAngleForBin(dominantBin, 16) * 180) / Math.PI;
+  }
+  return vectorBumpAngleDeg;
+}
+
 export { EPG_COMPASS_BINS, EPG_SLICE_ORDER_CLOCKWISE };
 
 type ReplayNeuronMinimal = {

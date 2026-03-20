@@ -50,6 +50,8 @@ struct ConnectomeJson {
 #[derive(Deserialize)]
 struct EpgTileMapEntryJson {
     root_id: String,
+    #[serde(default)]
+    hemibrain_type: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -142,6 +144,11 @@ fn load_epg_viewer_indices(
     let mut out: Vec<u32> = parsed
         .entries
         .iter()
+        .filter(|e| {
+            // Keep legacy tile-map rows with missing hemibrain_type.
+            // Exclude only when hemibrain_type is explicitly present and not EPG.
+            !matches!(e.hemibrain_type.as_deref(), Some(ht) if ht != "EPG")
+        })
         .filter_map(|e| id_to_idx.get(&e.root_id).copied())
         .collect();
     out.sort_unstable();

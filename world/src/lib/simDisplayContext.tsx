@@ -4,12 +4,14 @@
  * static and only re-renders on user actions.
  */
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
-import type { FlyState } from './simWsClient';
+import type { FlyState, EpgSpikesByNeuronFly } from './simWsClient';
 
 export interface SimRefs {
   latestFliesRef: React.MutableRefObject<FlyState[]>;
   activityRef: React.MutableRefObject<Record<string, number>>;
   activitiesRef: React.MutableRefObject<(Record<string, number> | undefined)[]>;
+  /** Per-fly EPG spikes buffer: spikes[neuronIndex] = [tick1, tick2, ...]. For replay-style display. */
+  epgSpikesByFlyRef: React.MutableRefObject<Map<number, EpgSpikesByNeuronFly>>;
 }
 
 const SimRefsContext = createContext<SimRefs | null>(null);

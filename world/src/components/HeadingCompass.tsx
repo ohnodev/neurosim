@@ -7,9 +7,10 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { fetchCompassEpgData, type CompassEpgNeuron } from '../lib/compassEpgData';
 
+/** Same as Visualization page: smooth arrow rotation. */
 const SMOOTH_ALPHA = 0.18;
-/** Fixed arrow length — never changes (direction only). */
-const ARROW_LEN = 0.8;
+/** Arrow length — fits inside EPG ring (radius ~0.33). */
+const ARROW_LEN = 0.28;
 const ACTIVE_RING_COLOR = new THREE.Color(0xff4fd8);
 const INACTIVE_EPG_COLOR = new THREE.Color(0x4d6fb6);
 const EPG_HEAT_ORANGE = new THREE.Color(0xff9f43);
@@ -105,7 +106,7 @@ export function HeadingCompass({ bumpAngleDeg, epgBins, size }: HeadingCompassPr
     scene.background = new THREE.Color(0x1a2435);
 
     const camera = new THREE.PerspectiveCamera(55, w / h, 0.01, 100);
-    camera.position.set(0, 0, 1.25);
+    camera.position.set(0, 0, 1.0);
     camera.lookAt(0, 0, 0);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
@@ -258,7 +259,7 @@ export function HeadingCompass({ bumpAngleDeg, epgBins, size }: HeadingCompassPr
       const ad = (arrowState.angleCurrentDeg * Math.PI) / 180;
       const dir3 = new THREE.Vector3(Math.cos(ad), Math.sin(ad), 0).normalize();
       bumpArrow.setDirection(dir3);
-      bumpArrow.setLength(ARROW_LEN, 0.07, 0.035);
+      bumpArrow.setLength(ARROW_LEN, 0.04, 0.02);
       bumpArrow.setColor(ACTIVE_RING_COLOR);
 
       const maxVal = bins?.length ? Math.max(1e-8, ...bins) : 1;

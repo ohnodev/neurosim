@@ -1504,6 +1504,7 @@ export default function VisualizationPage() {
   const [penARatesById, setPenARatesById] = useState<Record<string, number>>({});
   const [showPenAMapping, setShowPenAMapping] = useState(false);
   const [copiedPenAId, setCopiedPenAId] = useState<string | null>(null);
+  const [showCompassInfo, setShowCompassInfo] = useState(false);
   const notification = useNotification();
   const liveAfterTickRef = useRef(0);
   const livePollFailRef = useRef(0);
@@ -2447,7 +2448,23 @@ export default function VisualizationPage() {
           ) : null}
         </div>
         {replay ? (
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          <div
+            style={{
+              position: 'fixed',
+              top: 64,
+              left: 16,
+              zIndex: 18,
+              display: 'inline-flex',
+              alignItems: 'center',
+              padding: 6,
+              border: '1px solid rgba(140,170,220,0.38)',
+              borderRadius: 10,
+              background: 'rgba(8, 16, 30, 0.62)',
+              backdropFilter: 'blur(10px)',
+              WebkitBackdropFilter: 'blur(10px)',
+              boxShadow: '0 10px 22px rgba(0,0,0,0.36)',
+            }}
+          >
             <svg
               width="152"
               height="152"
@@ -2652,10 +2669,52 @@ export default function VisualizationPage() {
                 />
               ) : null}
             </svg>
-            <div style={{ fontSize: 11, opacity: 0.85, maxWidth: 420 }}>
-              EPG compass: 16 labeled wedges using processed labels and classification side, arranged anatomically.
-              Order is fixed to match the reference slice diagram (top= L5, top-left=R5, right of L5=R4, then L6).
-            </div>
+            <button
+              type="button"
+              onClick={() => setShowCompassInfo((v) => !v)}
+              title="EPG compass info"
+              aria-label="Toggle EPG compass info"
+              style={{
+                position: 'absolute',
+                top: 10,
+                right: 10,
+                width: 18,
+                height: 18,
+                borderRadius: 999,
+                border: '1px solid rgba(150, 185, 235, 0.7)',
+                background: 'rgba(18, 37, 64, 0.95)',
+                color: '#d8e9ff',
+                fontSize: 12,
+                lineHeight: '16px',
+                textAlign: 'center',
+                cursor: 'pointer',
+                padding: 0,
+                fontWeight: 700,
+              }}
+            >
+              i
+            </button>
+            {showCompassInfo ? (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 34,
+                  right: 0,
+                  width: 280,
+                  padding: '8px 10px',
+                  borderRadius: 8,
+                  border: '1px solid rgba(130,170,225,0.55)',
+                  background: 'rgba(10,20,36,0.96)',
+                  color: '#d7e8ff',
+                  fontSize: 11,
+                  lineHeight: 1.35,
+                  boxShadow: '0 8px 20px rgba(0,0,0,0.38)',
+                }}
+              >
+                EPG compass: 16 labeled wedges using processed labels and classification side, arranged anatomically.
+                Order is fixed to match the reference slice diagram (top= L5, top-left=R5, right of L5=R4, then L6).
+              </div>
+            ) : null}
           </div>
         ) : null}
           {error ? <div style={{ color: '#f99', fontSize: 12 }}>{error}</div> : null}

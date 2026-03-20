@@ -2167,31 +2167,37 @@ export default function VisualizationPage() {
                 View: {viewMode === 'compass' ? 'EPG Compass' : 'Biological'}
               </span>
             </div>
-            <div style={{ display: 'flex', alignItems: 'flex-start', position: 'relative', minHeight: 78 }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', position: 'relative' }}>
               <button
                 type="button"
-                aria-label={showRecordMenu ? 'Collapse record tools' : 'Expand record tools'}
+                aria-label={showRecordMenu ? 'Hide record tools' : 'Show record tools'}
                 onClick={() => setShowRecordMenu((v) => !v)}
                 title={showRecordMenu ? 'Hide record tools' : 'Show record tools'}
                 style={{
                   width: 18,
-                  minHeight: 74,
+                  height: 18,
                   borderRadius: 6,
-                  border: '1px solid #6f8fc0',
-                  background: showRecordMenu ? '#3a5787' : '#243a5b',
-                  color: '#eef4ff',
+                  border: '1px solid rgba(150, 185, 235, 0.55)',
+                  background: showRecordMenu ? 'rgba(42, 70, 114, 0.95)' : 'rgba(18, 37, 64, 0.95)',
+                  color: '#d8e9ff',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
                   cursor: 'pointer',
-                  fontWeight: 700,
                   padding: 0,
-                  flexShrink: 0,
                 }}
               >
-                {showRecordMenu ? '‹' : '›'}
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h4l1.2-1.4A1.8 1.8 0 0 1 13.1 4h2.8A2.1 2.1 0 0 1 18 6.1V8h1a1 1 0 0 1 1 1v8.5a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 17.5V8.5Z" stroke="currentColor" strokeWidth="1.7" />
+                  <circle cx="12" cy="13" r="3.4" stroke="currentColor" strokeWidth="1.7" />
+                </svg>
               </button>
               {showRecordMenu ? (
                 <div
                   style={{
-                    marginLeft: 8,
+                    position: 'absolute',
+                    top: 24,
+                    left: 0,
                     display: 'flex',
                     flexDirection: 'column',
                     alignItems: 'stretch',
@@ -2200,10 +2206,11 @@ export default function VisualizationPage() {
                     minWidth: 250,
                     border: '1px solid rgba(140,170,220,0.38)',
                     borderRadius: 8,
-                    background: 'rgba(8, 16, 30, 0.62)',
+                    background: 'rgba(8, 16, 30, 0.88)',
                     backdropFilter: 'blur(10px)',
                     WebkitBackdropFilter: 'blur(10px)',
                     boxShadow: '0 10px 22px rgba(0,0,0,0.36)',
+                    zIndex: 3,
                   }}
                 >
                   <div

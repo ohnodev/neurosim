@@ -143,6 +143,29 @@ ol {
   color: var(--link);
 }
 
+.theme-toggle {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  width: 2.5rem;
+  height: 2.5rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 1.15rem;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--ink) 10%, transparent);
+}
+
+.theme-toggle:hover {
+  background: var(--panel);
+}
+
 @media (max-width: 860px) {
   .table-grid {
     grid-template-columns: 1fr;

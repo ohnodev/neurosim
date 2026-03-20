@@ -1,4 +1,5 @@
 import './App.css'
+import { useEffect, useState } from 'react'
 
 type NeuronMapRow = {
   neuron: string
@@ -73,15 +74,68 @@ const references = [
     text: 'Kim, S.Y. and Kim, A.J. (2026). Connectome analysis reveals brainwide visual processing in Drosophila.',
     href: 'https://www.biorxiv.org/content/10.64898/2026.02.02.700492v1.full',
   },
+  {
+    id: '6',
+    text: 'Hulse, B.K. et al. (2021). A connectome of the Drosophila central complex reveals network motifs suitable for flexible navigation and context-dependent action selection. eLife 10:e66039.',
+    href: 'https://elifesciences.org/articles/66039/figures',
+  },
+  {
+    id: '7',
+    text: 'Hulse, B.K. et al. Figure 16 asset (EPG projection reference image).',
+    href: 'https://iiif.elifesciences.org/lax:66039%2Felife-66039-fig16-v4.tif/full/1500,/0/default.jpg',
+  },
+  {
+    id: '8',
+    text: 'FlyWire Brain Dataset (FAFB v783), Kaggle dataset by leonidblokhinrs.',
+    href: 'https://www.kaggle.com/datasets/leonidblokhinrs/flywire-brain-dataset-fafb-v783/data?select=processed_labels.csv',
+  },
+  {
+    id: '9',
+    text: 'NeuroSim open-source repository (code and reproducibility assets).',
+    href: 'https://github.com/ohnodev/neurosim',
+  },
+  {
+    id: '10',
+    text: 'EonSystems fly-brain repository (Brian2/Brian2CUDA/PyTorch reference implementation).',
+    href: 'https://github.com/eonsystemspbc/fly-brain',
+  },
+  {
+    id: '11',
+    text: 'Shiu, P.K. et al. (2024). A Drosophila computational brain model reveals sensorimotor processing. Nature 634, 210-219.',
+    href: 'https://www.nature.com/articles/s41586-024-07763-9',
+  },
+  {
+    id: '12',
+    text: 'Brian2 simulator repository (clock-driven simulator for spiking neural networks).',
+    href: 'https://github.com/brian-team/brian2',
+  },
 ]
 
 function App() {
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    if (typeof window === 'undefined') {
+      return 'light'
+    }
+    const storedTheme = window.localStorage.getItem('paper-theme')
+    if (storedTheme === 'light' || storedTheme === 'dark') {
+      return storedTheme
+    }
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  })
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    window.localStorage.setItem('paper-theme', theme)
+  }, [theme])
+
+  const isDark = theme === 'dark'
+
   return (
     <main className="paper">
       <header className="paper-header">
         <p className="eyebrow">Preprint Draft v0.1</p>
         <h1>
-          Minimal Recurrence Modulation and Targeted P-E-N-A Activation Enable
+          Minimal Recurrence Modulation and Targeted PEN_a Activation Enable
           Precise Control of the Head-Direction Bump
         </h1>
         <p className="authors">NeuroSim Research Team</p>
@@ -92,20 +146,23 @@ function App() {
         <p>
           We present a full-connectome simulation study of heading dynamics in
           the fly central complex using public FlyWire-derived connectivity and a
-          Rust-optimized dynamical engine. The model operates at 0.1 ms timestep
-          resolution with calcium-state updates in physical time and explicit
-          recurrent propagation. A single targeted structural intervention,
-          tripling EPG-to-EPG recurrent weights, is sufficient to improve bump
-          retention without rewiring upstream pathways. On top of this stable
-          substrate, sparse stimulation of selected P-E-N-A neurons drives
-          reproducible bump placement at defined clock positions, and
-          two-to-three-neuron combinations provide robust transitions between
-          attractor states. These findings support a minimal-control mechanism in
-          which recurrence sets memory persistence while sparse P-E-N-A drive
-          steers heading state. The manuscript includes executable simulation
-          settings, stimulation protocols, and structured result tables to
-          support direct replication and rapid iteration toward experimental
-          predictions.
+          Rust-optimized dynamical engine that ports Brian2-style LIF spiking
+          dynamics into a production Rust/CUDA stack [10,12]. The model runs at
+          0.1 ms timestep resolution with explicit recurrent propagation; calcium
+          heatmaps are used only for activity readout and visualization, not as
+          the core state dynamics. A single targeted structural intervention,
+          tripling EPG-to-EPG recurrent weights, is sufficient to stabilize bump
+          retention without rewiring upstream pathways. On this minimal substrate,
+          sparse PEN_a stimulation provides controllable steering: a compact set
+          of eight unique neurons is sufficient to reproducibly establish three
+          discrete, stable heading setpoints (11 PM, 3 PM, 8 PM), spanning about
+          120 degrees of angular separation across transfer protocols. We further
+          observe that 1-2 neuron substitutions and stimulation-rate tuning
+          (50-100 Hz) enable intermediate angle biasing between canonical
+          setpoints. These results support a minimal-control principle in which
+          recurrence sets memory persistence while sparse PEN_a drive sets and
+          steers heading state, with executable protocols and structured result
+          tables for direct replication.
         </p>
       </section>
 
@@ -119,7 +176,10 @@ function App() {
           hypothesis: can biologically grounded timing and one minimal recurrence
           change yield both stable memory and precision control? We address this
           question in a full-connectome simulation stack that preserves measured
-          network topology while exposing reproducible control handles.
+          network topology while exposing reproducible control handles. As noted
+          in [6], "PEN_a and PEN_b neurons are indeed strikingly different in
+          their synaptic conn", which motivates the explicit separation of
+          PEN_a-targeted control from PEN_b circuitry in this draft.
         </p>
       </section>
 
@@ -129,10 +189,18 @@ function App() {
         <h3>1. Simulation framework and minimal recurrence intervention</h3>
         <p>
           The simulation is implemented in Rust and integrated with a web-facing
-          analysis UI. Dynamics are stepped at 0.1 ms resolution, and calcium
-          decay is handled in millisecond units for interpretable physiological
-          timing. We apply one targeted intervention: a 3x increase in EPG-EPG
-          recurrence. No upstream structural edits are introduced.
+          analysis UI. Dynamics are stepped at 0.1 ms resolution with an
+          explicit LIF spiking update path (Brian2-style model semantics) rather
+          than calcium-state integration [10,12]. Calcium-style heatmapping is
+          used for readout visualization only. The runtime constants follow the
+          current Rust implementation: V_rest = -52 mV, V_reset = -52 mV,
+          V_thresh = -45 mV, tau_mem = 20 ms, tau_syn = 5 ms, refractory = 2.2
+          ms, and default W_syn = 0.339. The EPG recurrence gain is configured
+          once when a simulation instance is created/loaded
+          (NEUROSIM_EPG_RECURRENCE_BOOST or per-create override) and then held
+          fixed for that run; it is not dynamically retuned during stepping.
+          Reported experiments use a targeted EPG-to-EPG recurrence increase
+          (3x condition) with no additional upstream structural edits.
         </p>
 
         <figure>
@@ -142,7 +210,7 @@ function App() {
             <rect x="270" y="30" width="220" height="48" rx="8" className="svg-card" />
             <rect x="530" y="30" width="220" height="48" rx="8" className="svg-card" />
             <text x="120" y="59" textAnchor="middle">0.1 ms tick integration</text>
-            <text x="380" y="59" textAnchor="middle">Calcium decay in ms domain</text>
+            <text x="380" y="59" textAnchor="middle">Brian2-style LIF spiking step</text>
             <text x="640" y="59" textAnchor="middle">EPG→EPG weight x3</text>
             <line x1="230" y1="54" x2="270" y2="54" className="svg-line" />
             <line x1="490" y1="54" x2="530" y2="54" className="svg-line" />
@@ -153,12 +221,14 @@ function App() {
           </svg>
         </figure>
 
-        <h3>2. Single-neuron P-E-N-A response mapping</h3>
+        <h3>2. Single-neuron PEN_a response mapping</h3>
         <p>
           Individual 100 Hz stimulation tests reveal stable preferred bump
           positions for most left and right PEN_a units, with a minority showing
           drift or weak drive. This creates a practical control atlas for
-          deterministic state setting.
+          deterministic state setting. Across these tests, PEN_b was not the main
+          driver of bump placement and was not directly stimulated in the control
+          protocols reported here.
         </p>
 
         <div className="table-grid">
@@ -237,6 +307,12 @@ function App() {
         <p>
           We identify compact command sets that consistently transfer bump
           states between attractor positions while preserving ring integrity.
+          Three stable setpoints (11 PM, 3 PM, 8 PM) are produced using eight
+          unique PEN_a neurons in total (L1, L2, L6, L3, R6, L4, L9, R1),
+          corresponding to approximately 120 degrees of controllable heading
+          rotation. Rate tuning and small substitutions then bias trajectories
+          toward intermediate positions (for example, 2 PM or 4 PM-leaning
+          states).
         </p>
         <ul>
           {transferSets.map((set) => (
@@ -253,13 +329,28 @@ function App() {
           transfer thresholds. Together these effects define practical control
           boundaries for closed-loop experiments.
         </p>
+
+        <h3>5. Runtime performance and optimization strategy</h3>
+        <p>
+          The Rust engine is optimized for real-time parallel execution with a
+          CUDA path and a spike-driven active-edge update policy. Instead of
+          scanning all synapses each step, recurrent propagation computes only
+          edges from neurons that actually spiked in that tick, reducing
+          per-step work from dense edge traversal to active-edge traversal. On
+          GPU, we compact active spikes, scatter only their outgoing CSR edges,
+          and execute delay, conductance, and LIF kernels on device in a single
+          step pipeline. In internal parity benchmarks against the EonSystems
+          fly-brain reference, this implementation achieved approximately 2.0x
+          end-to-end and approximately 2.6x compute-path speedup under matched
+          dt and run settings.
+        </p>
       </section>
 
       <section className="block">
         <h2>Discussion</h2>
         <p>
           The results support a two-part control principle: recurrence tuning
-          sets stability and sparse P-E-N-A activation sets position. This
+          sets stability and sparse PEN_a activation sets position. This
           decomposition is experimentally useful because it predicts that
           perturbing recurrent gain and perturbing sparse steering inputs should
           produce separable phenotypes in vivo. Current limitations include the
@@ -269,11 +360,12 @@ function App() {
       </section>
 
       <section className="block">
-        <h2>Resource Availability</h2>
+        <h2>Data and Code Availability</h2>
         <ul>
-          <li>Code: Rust simulation engine and analysis scripts in this repository.</li>
-          <li>Data: FlyWire-based whole-brain connectivity resources used for model construction.</li>
-          <li>Reproducibility: stimulation presets and control mappings documented in-app.</li>
+          <li>Primary connectome source data: FlyWire Brain Dataset (FAFB v783) from Kaggle [8].</li>
+          <li>Code and reproducibility assets for this project: NeuroSim repository [9].</li>
+          <li>Reference Brian2 model used for cross-checking LIF behavior: EonSystems fly-brain [10].</li>
+          <li>Core simulator lineage and semantics: Brian2 spiking simulator repository [12].</li>
         </ul>
       </section>
 
@@ -281,11 +373,43 @@ function App() {
         <h2>Methods (Draft Skeleton)</h2>
         <ol>
           <li>Connectome extraction and neuron-group definitions (EPG, PEN_a, inhibitory rings).</li>
-          <li>Simulation kernel: 0.1 ms timestep integration and calcium decay parameterization.</li>
-          <li>Recurrence protocol: EPG-EPG weights scaled by 3x.</li>
+          <li>Simulation kernel: 0.1 ms timestep Brian2-style LIF spiking integration (Rust port).</li>
+          <li>Recurrence protocol: EPG recurrence gain set at sim creation and held constant during runtime (3x condition in reported runs).</li>
           <li>Stimulation protocol: single-neuron and combinatorial PEN_a 100 Hz activation tests.</li>
+          <li>PEN_b handling: PEN_b units tracked for observability only and excluded from bump-driving stimulation.</li>
           <li>Bump tracking: peak-angle extraction, drift quantification, and transfer success scoring.</li>
         </ol>
+        <h3>EPG-to-circle mapping protocol</h3>
+        <p>
+          EPG angular mapping is implemented to match the EPG-to-PB geometry shown
+          in [6] and the Figure 16 visual reference in [7]. We load
+          <code>classification.csv</code> from <code>data/raw</code>, select rows
+          tagged as EPG/PEN classes, and preserve hemisphere labels. As a concrete
+          record from the source table, mappings include entries in the same raw
+          format as <code>PEN_a(PEN1),DM2_CX_v,left</code>. We then assign each
+          EPG neuron to its circular bin by ordering PB glomerulus identity from
+          left-to-right and right-to-left according to the Figure 16 scheme, and
+          convert bins to circle angles with fixed spacing so that each EPG slot
+          remains deterministic across simulation runs.
+        </p>
+        <ol>
+          <li>Read <code>data/raw/classification.csv</code> and parse neuron class, neuropil tag, and hemisphere.</li>
+          <li>Filter to the EPG set used by the simulator while retaining PEN_a and PEN_b labels for connectivity context.</li>
+          <li>Map PB glomerulus tags to ordered angular bins following the Figure 16 EPG layout.</li>
+          <li>Project each EPG to a circle coordinate using fixed step angles and store this as the canonical lookup table.</li>
+          <li>Keep this lookup unchanged during stimulation experiments so bump movement reflects circuit dynamics, not remapping.</li>
+        </ol>
+        <h3>Calibration against fly-brain and Nature protocol</h3>
+        <p>
+          To maintain consistency with the EonSystems modeling workflow [10] and
+          the whole-brain LIF framing in Shiu et al. [11], we tune the Rust
+          simulation at 0.1 ms timestep using sugar GRN stimulation sweeps,
+          including the 100 Hz calibration point. The target operating regime is
+          coherent MN9 recruitment near the high-response zone used in the
+          reference protocol (approximately 90% operating region at 100 Hz), and
+          we validate relative circuit behavior across matched stimulation
+          schedules after calibration.
+        </p>
       </section>
 
       <section className="block">
@@ -304,6 +428,15 @@ function App() {
           ))}
         </ol>
       </section>
+      <button
+        type="button"
+        className="theme-toggle"
+        aria-label={isDark ? 'Switch to light theme' : 'Switch to dark theme'}
+        title={isDark ? 'Switch to light theme' : 'Switch to dark theme'}
+        onClick={() => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))}
+      >
+        {isDark ? '☀' : '☾'}
+      </button>
     </main>
   )
 }

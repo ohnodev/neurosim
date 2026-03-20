@@ -1563,15 +1563,22 @@ fn run_continuous_live_loop(
     };
     let mut tick: u32 = 0;
     let mut stim: HashMap<String, f64> = HashMap::new();
+    let mut live_spike_ids = epg_ids.clone();
+    for id in &pen_left {
+        live_spike_ids.insert(id.clone());
+    }
+    for id in &pen_right {
+        live_spike_ids.insert(id.clone());
+    }
     let live_no_sleep = std::env::var("NEUROSIM_LIVE_NO_SLEEP")
         .ok()
         .map(|s| s == "1" || s.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
     let target_interval = std::time::Duration::from_secs_f64(dt.max(0.0));
     eprintln!(
-        "[brain-service] continuous live stepping (seed={}, EPG filter {} ids)",
+        "[brain-service] continuous live stepping (seed={}, EPG+PEN filter {} ids)",
         seed,
-        epg_ids.len()
+        live_spike_ids.len()
     );
     loop {
         let tick_start = Instant::now();
@@ -1641,7 +1648,7 @@ fn run_continuous_live_loop(
         }
         let mut epg_spikes: Vec<String> = spike_ids
             .into_iter()
-            .filter(|id| epg_ids.contains(id))
+            .filter(|id| live_spike_ids.contains(id))
             .collect();
         epg_spikes.sort();
         let rec = LiveTickRecord {

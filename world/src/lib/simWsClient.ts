@@ -107,7 +107,12 @@ function scheduleRestart(): void {
 function clearClient(): void {
   if (!client) return;
   try {
-    client.dispose();
+    const disposeResult = client.dispose();
+    if (disposeResult && typeof (disposeResult as Promise<void>).catch === "function") {
+      (disposeResult as Promise<void>).catch(() => {
+        /* ignore */
+      });
+    }
   } catch {
     /* ignore */
   }

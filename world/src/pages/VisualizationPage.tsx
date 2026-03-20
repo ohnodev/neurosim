@@ -58,15 +58,52 @@ type ReplayData = {
   ticks: ReplayTick[];
 };
 
-type ApiNeuron = {
-  root_id: string;
+type PenAMetadata = {
+  mappingLabel: string;
+  penLabel: string;
+  hemilineage: string;
+  side: string;
+  hemibrainType: string;
   x?: number;
   y?: number;
   z?: number;
-  role?: string;
-  side?: string;
-  cell_type?: string;
 };
+
+type PenEpgConnection = {
+  pen_id: string;
+  pen_label: string;
+  epg_id: string;
+  epg_label?: string;
+  weight: number;
+  kind: 'excitatory' | 'inhibitory' | 'unsigned_proxy';
+  rank: number;
+  strength01: number;
+  is_proxy_inhibitory?: boolean;
+};
+
+function parseCsvLineAll(line: string): string[] {
+  const out: string[] = [];
+  let cur = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        cur += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (ch === ',' && !inQuotes) {
+      out.push(cur);
+      cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  out.push(cur);
+  return out.map((v) => v.trim());
+}
 
 /** Per-tick duration in seconds. Prefer meta.dt_sec; else 1ms so 1000 ticks = 1s (replay tick time_sec is often wrong). */
 function getReplayDtSec(replay: ReplayData | null): number {
@@ -78,6 +115,12 @@ function getReplayDtSec(replay: ReplayData | null): number {
 
 const HOVER_HIGHLIGHT_COLOR = new THREE.Color(0xffff88);
 const HOVER_HIGHLIGHT_GLOW = new THREE.Color(0xffdd44);
+const PEN_CONN_EXCIT_FLASH_COLOR = new THREE.Color(0x86f7ff);
+const PEN_CONN_INHIBIT_FLASH_COLOR = new THREE.Color(0xff526b);
+const PEN_CONN_PROXY_FLASH_COLOR = new THREE.Color(0x9ec5ef);
+const PEN_CALCIUM_ACTIVE_COLOR = new THREE.Color(0x4dff9d);
+const PEN_CALCIUM_HOT_COLOR = new THREE.Color(0xb8ffd9);
+const PEN_CALCIUM_GLOW_COLOR = new THREE.Color(0x48ff9a);
 
 type SceneState = {
   scene: THREE.Scene;
@@ -102,6 +145,7 @@ type SceneState = {
   isDelta7ByIndex: boolean[];
   ringDirectionByIndex: Array<THREE.Vector2 | null>;
   epgDirectionByIndex: Array<THREE.Vector2 | null>;
+  isPenAByIndex: boolean[];
   epgBinByIndex: Array<number | null>;
   upstreamBinByIndex: Array<number | null>;
   downstreamBinByIndex: Array<number | null>;
@@ -128,6 +172,13 @@ type SceneState = {
   tempG: THREE.Color;
   tempEpgInactive: THREE.Color;
   tempEpgHot: THREE.Color;
+  visibility: { epg: boolean; penA: boolean; connections: boolean };
+  connectionOpacity: number;
+  penControlLabelById: Map<string, string>;
+  penHeatByIndex: Float32Array;
+  latestSpikeTickById: Map<string, number>;
+  lastComputedTick: number;
+  lastComputedReplay: ReplayData | null;
   dispose: () => void;
 };
 
@@ -140,6 +191,8 @@ const INACTIVE_EPG_COLOR = new THREE.Color(0x4d6fb6);
 const INACTIVE_UPSTREAM_COLOR = new THREE.Color(0x2b4b68);
 const INACTIVE_DOWNSTREAM_COLOR = new THREE.Color(0x5a3d2a);
 const INACTIVE_DELTA7_COLOR = new THREE.Color(0x5e2b6d);
+const INACTIVE_PEN_A_COLOR = new THREE.Color(0x3c4d66);
+const HIDDEN_NEURON_COLOR = new THREE.Color(0x1a2435);
 const ACTIVE_COLOR = new THREE.Color(0x6eff9e);
 const ACTIVE_RING_COLOR = new THREE.Color(0xff4fd8);
 const ACTIVE_UPSTREAM_COLOR = new THREE.Color(0x7ad7ff);
@@ -148,6 +201,7 @@ const ACTIVE_DELTA7_COLOR = new THREE.Color(0xd08cff);
 const EPG_HEAT_ORANGE = new THREE.Color(0xff9f43);
 const EPG_HEAT_RED = new THREE.Color(0xff3b30);
 const NO_GLOW_COLOR = new THREE.Color(0x000000);
+const HORIZONTAL_SCROLL_ROTATE_SPEED = 0.003;
 /** EPG compass bins: 16 alternating L/R wedges in anatomical order from top clockwise. */
 const EPG_COMPASS_BINS = 16;
 const EPG_SLICE_ORDER_CLOCKWISE = [
@@ -191,6 +245,66 @@ function parseProcessedLabelsLine(line: string): [string, string] | null {
   if (cols.length === 1) return [cols[0].trim(), ''];
   return null;
 }
+
+function isPenANeuron(neuron: ReplayNeuron): boolean {
+  const h = (neuron.hemibrain_type ?? neuron.cell_type ?? '').trim().toUpperCase();
+  return h.startsWith('PEN_A');
+}
+
+function connectionLineColor(kind: 'excitatory' | 'inhibitory' | 'unsigned_proxy', strength01: number): THREE.Color {
+  const t = Math.max(0, Math.min(1, Number.isFinite(strength01) ? strength01 : 0));
+  const weak = new THREE.Color(0x77808f);
+  const strong = kind === 'inhibitory'
+    ? new THREE.Color(0xff5b77)
+    : kind === 'unsigned_proxy'
+      ? new THREE.Color(0xa7c3e8)
+      : new THREE.Color(0x48e2ff);
+  return weak.lerp(strong, t);
+}
+
+function buildTemplateNeuronsFromStaticCsv(text: string): ReplayNeuron[] {
+  const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0);
+  if (lines.length < 2) return [];
+  const header = parseCsvLineAll(lines[0]);
+  const idx = (name: string) => header.indexOf(name);
+  const iId = idx('neuron_id');
+  const iGroup = idx('group');
+  const iProcessed = idx('processed_label');
+  const iHb = idx('hemibrain_type');
+  const iSide = idx('side');
+  const iHemi = idx('hemilineage');
+  const iX = idx('x');
+  const iY = idx('y');
+  const iZ = idx('z');
+  if (iId < 0 || iX < 0 || iY < 0 || iZ < 0) return [];
+  const out: ReplayNeuron[] = [];
+  for (let i = 1; i < lines.length; i += 1) {
+    const cols = parseCsvLineAll(lines[i]);
+    const rootId = (cols[iId] ?? '').replace(/^"|"$/g, '').trim();
+    if (!rootId) continue;
+    const x = Number((cols[iX] ?? '').replace(/^"|"$/g, '').trim());
+    const y = Number((cols[iY] ?? '').replace(/^"|"$/g, '').trim());
+    const z = Number((cols[iZ] ?? '').replace(/^"|"$/g, '').trim());
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+    const group = (cols[iGroup] ?? '').replace(/^"|"$/g, '').trim().toUpperCase();
+    const hemibrainType = (cols[iHb] ?? '').replace(/^"|"$/g, '').trim();
+    const processedLabel = (cols[iProcessed] ?? '').replace(/^"|"$/g, '').trim();
+    out.push({
+      root_id: rootId,
+      x,
+      y,
+      z,
+      processed_label: processedLabel || hemibrainType,
+      is_ring: group === 'EPG',
+      is_epg: group === 'EPG',
+      side: ((cols[iSide] ?? '').replace(/^"|"$/g, '').trim() || 'unknown'),
+      hemibrain_type: hemibrainType,
+      cell_type: hemibrainType,
+      hemilineage: (cols[iHemi] ?? '').replace(/^"|"$/g, '').trim(),
+    });
+  }
+  return out;
+}
 const EPG_SLICE_COLORS = [
   '#6b4cc4', '#8ea4e7', '#b4d7e7', '#7fd47f',
   '#d9f095', '#f1ef9a', '#f6df99', '#f6c79c',
@@ -205,6 +319,19 @@ const COMPASS_ROTATION_RAD = Math.PI / 2;
 const EPG_BUMP_WINDOW_TICKS = 5;
 const EPG_GLOW_SIZE = 0.13;
 const EPG_GLOW_OPACITY = 0.52;
+const PEN_ACTIVITY_WINDOW_SEC = 0.12;
+const PEN_ACTIVITY_REF_HZ = 500;
+const PEN_CALCIUM_WINDOW_SEC = 0.35;
+const PEN_CALCIUM_DECAY_SEC = 0.11;
+const PEN_CALCIUM_GAIN = 0.45;
+const PEN_CONN_PROPAGATION_MIN_SEC = 0.002;
+const PEN_CONN_PROPAGATION_MAX_SEC = 0.009;
+const PEN_COMPASS_Z_OFFSET_BASE = 0.03;
+const PEN_COMPASS_Z_OFFSET_ALT = 0.018;
+const PEN_COMPASS_NORMALIZED_Z_ALT = 0.12;
+const COMPASS_ARROW_RADIUS = 18;
+const COMPASS_VIEWBOX_HALF = 60;
+const SCENE_BUMP_ARROW_LENGTH = COMPASS_ARROW_RADIUS / COMPASS_VIEWBOX_HALF;
 const DELTA7_OPPOSITE_INHIBIT_WEIGHT = 0.55;
 const EPG_INACTIVE_BIN_PENALTY = 0.35;
 const SHOW_BIOLOGICAL_EPG_COPY = false;
@@ -452,6 +579,9 @@ function buildScene(
   container: HTMLDivElement,
   neurons: ReplayNeuron[],
   viewMode: ViewMode,
+  visibility: { epg: boolean; penA: boolean; connections: boolean },
+  connectionOpacity: number,
+  penEpgConnections: PenEpgConnection[],
   onHover?: (neuronId: string | null) => void,
   epgLabelMap?: Map<string, string> | null,
   replay?: ReplayData | null,
@@ -475,6 +605,14 @@ function buildScene(
   controls.dampingFactor = 0.08;
   controls.minDistance = mostlyEpg ? 0.1 : 0.3;
   controls.maxDistance = mostlyEpg ? 4 : 8;
+  const onWheelRotate = (event: globalThis.WheelEvent) => {
+    if (event.ctrlKey || event.metaKey) return;
+    if (Math.abs(event.deltaX) < 0.5) return;
+    controls.rotateLeft(event.deltaX * HORIZONTAL_SCROLL_ROTATE_SPEED);
+    controls.update();
+    event.preventDefault();
+  };
+  renderer.domElement.addEventListener('wheel', onWheelRotate, { passive: false });
 
   let minX = Infinity; let maxX = -Infinity;
   let minY = Infinity; let maxY = -Infinity;
@@ -643,9 +781,16 @@ function buildScene(
       }
       const upstreamCountByBin = new Array<number>(EPG_COMPASS_BINS).fill(0);
       const downstreamCountByBin = new Array<number>(EPG_COMPASS_BINS).fill(0);
+      const penLeftIndices: number[] = [];
+      const penRightIndices: number[] = [];
       for (let i = 0; i < neurons.length; i += 1) {
         const n = neurons[i]!;
         if (n.is_epg) continue;
+        if (isPenANeuron(n)) {
+          if ((n.side ?? '').toLowerCase() === 'left') penLeftIndices.push(i);
+          else penRightIndices.push(i);
+          continue;
+        }
         const upBin = n.upstream_epg_bin_index_0_7;
         const downBin = n.downstream_epg_bin_index_0_7;
         if (upBin == null && downBin == null) continue;
@@ -671,6 +816,28 @@ function buildScene(
         aligned[i]!.y = cyCompass + Math.sin(angle) * radius;
         aligned[i]!.z = czCompass + (upBin != null ? 0.02 : -0.02);
       }
+      penLeftIndices.sort((a, b) => (neurons[a]?.root_id ?? '').localeCompare(neurons[b]?.root_id ?? ''));
+      penRightIndices.sort((a, b) => (neurons[a]?.root_id ?? '').localeCompare(neurons[b]?.root_id ?? ''));
+      const penRadius = baseRadius * 2.05;
+      // Left PEN_a on left semicircle (90deg -> 270deg), right PEN_a on right semicircle (-90deg -> 90deg).
+      for (let i = 0; i < penLeftIndices.length; i += 1) {
+        const idx = penLeftIndices[i]!;
+        const t = penLeftIndices.length <= 1 ? 0.5 : i / (penLeftIndices.length - 1);
+        const angle = (Math.PI * 0.5) + (Math.PI * t);
+        aligned[idx]!.x = cxCompass + Math.cos(angle) * penRadius;
+        aligned[idx]!.y = cyCompass + Math.sin(angle) * penRadius;
+        const zAlt = i % 2 === 0 ? PEN_COMPASS_Z_OFFSET_ALT : -PEN_COMPASS_Z_OFFSET_ALT;
+        aligned[idx]!.z = czCompass + PEN_COMPASS_Z_OFFSET_BASE + zAlt;
+      }
+      for (let i = 0; i < penRightIndices.length; i += 1) {
+        const idx = penRightIndices[i]!;
+        const t = penRightIndices.length <= 1 ? 0.5 : i / (penRightIndices.length - 1);
+        const angle = (-Math.PI * 0.5) + (Math.PI * t);
+        aligned[idx]!.x = cxCompass + Math.cos(angle) * penRadius;
+        aligned[idx]!.y = cyCompass + Math.sin(angle) * penRadius;
+        const zAlt = i % 2 === 0 ? PEN_COMPASS_Z_OFFSET_ALT : -PEN_COMPASS_Z_OFFSET_ALT;
+        aligned[idx]!.z = czCompass + PEN_COMPASS_Z_OFFSET_BASE + zAlt;
+      }
     }
   }
   for (const p of aligned) {
@@ -695,6 +862,7 @@ function buildScene(
   const isUpstreamByIndex: boolean[] = new Array(n).fill(false);
   const isDownstreamByIndex: boolean[] = new Array(n).fill(false);
   const isDelta7ByIndex: boolean[] = new Array(n).fill(false);
+  const isPenAByIndex: boolean[] = new Array(n).fill(false);
   const ringDirectionByIndex: Array<THREE.Vector2 | null> = new Array(n).fill(null);
   const epgDirectionByIndex: Array<THREE.Vector2 | null> = new Array(n).fill(null);
   const epgBinByIndex: Array<number | null> = new Array(n).fill(null);
@@ -716,6 +884,7 @@ function buildScene(
     isUpstreamByIndex[i] = Boolean(neuron.is_epg_upstream);
     isDownstreamByIndex[i] = Boolean(neuron.is_epg_downstream);
     isDelta7ByIndex[i] = Boolean(neuron.is_delta7);
+    isPenAByIndex[i] = isPenANeuron(neuron);
     if (neuron.upstream_epg_bin_index_0_7 != null) {
       const value = neuron.upstream_epg_bin_index_0_7;
       const b = Math.max(0, Math.min(EPG_COMPASS_BINS - 1, Math.round((value / 7) * (EPG_COMPASS_BINS - 1))));
@@ -763,7 +932,9 @@ function buildScene(
       }
     }
     const c = isCompassEpgNeuron(neuron)
-      ? INACTIVE_EPG_COLOR.clone().multiplyScalar(0.42)
+      ? (visibility.epg ? INACTIVE_EPG_COLOR.clone().multiplyScalar(0.42) : HIDDEN_NEURON_COLOR)
+      : isPenANeuron(neuron)
+        ? (visibility.penA ? INACTIVE_PEN_A_COLOR : HIDDEN_NEURON_COLOR)
       : neuron.is_epg_upstream
         ? INACTIVE_UPSTREAM_COLOR
         : neuron.is_epg_downstream
@@ -779,6 +950,23 @@ function buildScene(
     glowColors[i * 3] = 0;
     glowColors[i * 3 + 1] = 0;
     glowColors[i * 3 + 2] = 0;
+  }
+  if (viewMode === 'compass') {
+    const penCompassIndices: number[] = [];
+    for (let i = 0; i < n; i += 1) {
+      if (isPenAByIndex[i]) penCompassIndices.push(i);
+    }
+    // Alternate PEN_a depth in rendered (normalized) space so rings are visibly de-planarized.
+    penCompassIndices.sort((a, b) => {
+      const aa = Math.atan2(positions[a * 3 + 1]!, positions[a * 3]!);
+      const bb = Math.atan2(positions[b * 3 + 1]!, positions[b * 3]!);
+      return aa - bb;
+    });
+    for (let k = 0; k < penCompassIndices.length; k += 1) {
+      const idx = penCompassIndices[k]!;
+      const zAlt = k % 2 === 0 ? PEN_COMPASS_NORMALIZED_Z_ALT : -PEN_COMPASS_NORMALIZED_Z_ALT;
+      positions[idx * 3 + 2] += zAlt;
+    }
   }
 
   // In compass view: add a second point cloud above the ring with EPG in their real biological (x,y,z) coordinates.
@@ -934,6 +1122,87 @@ function buildScene(
       scene.add(connectionLines);
     }
   }
+  let penEpgConnectionLines: THREE.LineSegments | null = null;
+  let penEpgLineColorAttr: THREE.BufferAttribute | null = null;
+  let penEpgLineBaseColors: Float32Array | null = null;
+  const penEpgRenderableLinks: Array<{
+    penId: string;
+    kind: 'excitatory' | 'inhibitory' | 'unsigned_proxy';
+    strength01: number;
+    from: [number, number, number];
+    to: [number, number, number];
+    colorOffset: number;
+  }> = [];
+  let penPulsePoints: THREE.Points | null = null;
+  let penPulsePositionAttr: THREE.BufferAttribute | null = null;
+  let penPulseColorAttr: THREE.BufferAttribute | null = null;
+  if (penEpgConnections.length > 0) {
+    const lineVertices: number[] = [];
+    const lineColors: number[] = [];
+    for (const link of penEpgConnections) {
+      const penIdx = idToIndex.get(link.pen_id);
+      const epgIdx = idToIndex.get(link.epg_id);
+      if (penIdx == null || epgIdx == null) continue;
+      const px = positions[penIdx * 3]!;
+      const py = positions[penIdx * 3 + 1]!;
+      const pz = positions[penIdx * 3 + 2]!;
+      const ex = positions[epgIdx * 3]!;
+      const ey = positions[epgIdx * 3 + 1]!;
+      const ez = positions[epgIdx * 3 + 2]!;
+      lineVertices.push(px, py, pz, ex, ey, ez);
+      const c = connectionLineColor(link.kind, link.strength01);
+      lineColors.push(c.r, c.g, c.b, c.r, c.g, c.b);
+      penEpgRenderableLinks.push({
+        penId: link.pen_id,
+        kind: link.kind,
+        strength01: Math.max(0, Math.min(1, link.strength01)),
+        from: [px, py, pz],
+        to: [ex, ey, ez],
+        colorOffset: (lineVertices.length / 3 - 2) * 3,
+      });
+    }
+    if (lineVertices.length >= 6) {
+      const lineGeometry = new THREE.BufferGeometry();
+      lineGeometry.setAttribute('position', new THREE.Float32BufferAttribute(lineVertices, 3));
+      lineGeometry.setAttribute('color', new THREE.Float32BufferAttribute(lineColors, 3));
+      const lineColorAttr = lineGeometry.getAttribute('color');
+      if (lineColorAttr instanceof THREE.BufferAttribute) {
+        penEpgLineColorAttr = lineColorAttr;
+        penEpgLineBaseColors = new Float32Array(lineColorAttr.array as ArrayLike<number>);
+      }
+      penEpgConnectionLines = new THREE.LineSegments(
+        lineGeometry,
+        new THREE.LineBasicMaterial({
+          vertexColors: true,
+          transparent: true,
+          opacity: 0.74,
+          depthTest: true,
+        }),
+      );
+      scene.add(penEpgConnectionLines);
+
+      const pulseGeometry = new THREE.BufferGeometry();
+      const pulsePositions = new Float32Array(penEpgRenderableLinks.length * 3);
+      const pulseColors = new Float32Array(penEpgRenderableLinks.length * 3);
+      penPulsePositionAttr = new THREE.BufferAttribute(pulsePositions, 3);
+      penPulseColorAttr = new THREE.BufferAttribute(pulseColors, 3);
+      pulseGeometry.setAttribute('position', penPulsePositionAttr);
+      pulseGeometry.setAttribute('color', penPulseColorAttr);
+      pulseGeometry.setDrawRange(0, 0);
+      const pulseMaterial = new THREE.PointsMaterial({
+        size: 0.024,
+        sizeAttenuation: true,
+        vertexColors: true,
+        transparent: true,
+        opacity: 0.95,
+        depthWrite: false,
+        depthTest: true,
+        blending: THREE.AdditiveBlending,
+      });
+      penPulsePoints = new THREE.Points(pulseGeometry, pulseMaterial);
+      scene.add(penPulsePoints);
+    }
+  }
 
   if (window.getComputedStyle(container).position === 'static') {
     container.style.position = 'relative';
@@ -962,14 +1231,23 @@ function buildScene(
     pointer.y = -(((evt.clientY - rect.top) / rect.height) * 2 - 1);
     raycaster.setFromCamera(pointer, camera);
     const hits = raycaster.intersectObject(points, false);
-    if (hits.length === 0 || hits[0]?.index == null) {
+    let pickedIndex: number | null = null;
+    for (const hit of hits) {
+      if (hit?.index == null) continue;
+      const idx = hit.index as number;
+      if (idx < 0 || idx >= n) continue;
+      if (isEpgByIndex[idx] && !state.visibility.epg) continue;
+      if (isPenAByIndex[idx] && !state.visibility.penA) continue;
+      pickedIndex = idx;
+      break;
+    }
+    if (pickedIndex == null) {
       hoveredNeuronId.current = null;
       onHover?.(null);
       hoverTooltip.style.display = 'none';
       return;
     }
-    const hit = hits[0]!;
-    const idx = hit.index as number;
+    const idx = pickedIndex;
     const neuron = neurons[idx];
     if (!neuron) {
       hoveredNeuronId.current = null;
@@ -1003,6 +1281,8 @@ function buildScene(
       const effLabel = getEffectiveEpgLabel(neuron, epgLabelMap ?? null);
       if (effLabel != null) lines.push('bin: ' + effLabel);
     } else {
+      const penControlLabel = isPenANeuron(neuron) ? state.penControlLabelById.get(neuron.root_id) : undefined;
+      if (penControlLabel) lines.push('pen_label: ' + penControlLabel);
       const clsParts: string[] = [];
       if (flow) clsParts.push('flow=' + flow);
       if (super_class) clsParts.push('super_class=' + super_class);
@@ -1071,6 +1351,7 @@ function buildScene(
     isUpstreamByIndex,
     isDownstreamByIndex,
     isDelta7ByIndex,
+    isPenAByIndex,
     ringDirectionByIndex,
     epgDirectionByIndex,
     epgBinByIndex,
@@ -1091,6 +1372,13 @@ function buildScene(
     tempG: new THREE.Color(),
     tempEpgInactive: new THREE.Color(),
     tempEpgHot: new THREE.Color(),
+    visibility: { ...visibility },
+    connectionOpacity,
+    penControlLabelById: new Map<string, string>(),
+    penHeatByIndex: new Float32Array(colorAttr.count),
+    latestSpikeTickById: new Map<string, number>(),
+    lastComputedTick: -1,
+    lastComputedReplay: null,
     dispose: () => {},
   };
 
@@ -1098,6 +1386,23 @@ function buildScene(
   const animate = () => {
     const now = performance.now() / 1000;
     state.lastFrameTime = now;
+    const currentVisibility = state.visibility;
+    const currentConnectionOpacity = Math.max(0, Math.min(1, state.connectionOpacity));
+    if (connectionLines) {
+      connectionLines.visible = currentVisibility.connections;
+      const mat = connectionLines.material as THREE.LineBasicMaterial;
+      mat.opacity = 0.6 * currentConnectionOpacity;
+    }
+    if (penEpgConnectionLines) {
+      penEpgConnectionLines.visible = currentVisibility.connections && currentVisibility.epg && currentVisibility.penA;
+      const mat = penEpgConnectionLines.material as THREE.LineBasicMaterial;
+      mat.opacity = 0.74 * currentConnectionOpacity;
+    }
+    if (penPulsePoints) {
+      penPulsePoints.visible = currentVisibility.connections && currentVisibility.epg && currentVisibility.penA;
+      const mat = penPulsePoints.material as THREE.PointsMaterial;
+      mat.opacity = 0.95 * currentConnectionOpacity;
+    }
     /** Compute brightness purely from replay + currentTick. No React state, no accumulation.
      * Neuron lit for SPIKE_DISPLAY_TICKS after spike; brightness = 1 - (ticks_ago / SPIKE_DISPLAY_TICKS). */
     const replay = state.replay;
@@ -1105,17 +1410,28 @@ function buildScene(
     if (state.brightnessByIndex.length !== colorAttr.count) {
       state.brightnessByIndex = new Float32Array(colorAttr.count);
     }
+    if (state.penHeatByIndex.length !== colorAttr.count) {
+      state.penHeatByIndex = new Float32Array(colorAttr.count);
+    }
     const brightnessByIndex = state.brightnessByIndex;
-    brightnessByIndex.fill(0);
-    if (replay?.ticks?.length && currentTick >= 1) {
+    const penHeatByIndex = state.penHeatByIndex;
+    const latestSpikeTickById = state.latestSpikeTickById;
+    const shouldRecompute =
+      state.lastComputedTick !== currentTick
+      || state.lastComputedReplay !== replay;
+    if (shouldRecompute) {
+      brightnessByIndex.fill(0);
+      penHeatByIndex.fill(0);
+      latestSpikeTickById.clear();
+    }
+    if (shouldRecompute && replay?.ticks?.length && currentTick >= 1) {
       const startTick = Math.max(1, currentTick - SPIKE_DISPLAY_TICKS);
-      const spikeTickById = new Map<string, number>();
       for (let t = currentTick; t >= startTick && t >= 1; t -= 1) {
         for (const id of replay.ticks[t - 1]?.spikes ?? []) {
-          if (!spikeTickById.has(id)) spikeTickById.set(id, t);
+          if (!latestSpikeTickById.has(id)) latestSpikeTickById.set(id, t);
         }
       }
-      for (const [id, spikeTick] of spikeTickById) {
+      for (const [id, spikeTick] of latestSpikeTickById) {
         const idx = idToIndex.get(id);
         if (idx != null && idx < colorAttr.count) {
           const ticksAgo = currentTick - spikeTick;
@@ -1123,17 +1439,58 @@ function buildScene(
           if (b > (brightnessByIndex[idx] ?? 0)) brightnessByIndex[idx] = b;
         }
       }
+      const dtSec = Math.max(0.0001, getReplayDtSec(replay));
+      const calciumWindowTicks = Math.max(1, Math.floor(PEN_CALCIUM_WINDOW_SEC / dtSec));
+      const calciumDecayTicks = Math.max(1, PEN_CALCIUM_DECAY_SEC / dtSec);
+      const calciumStartTick = Math.max(1, currentTick - calciumWindowTicks + 1);
+      for (let t = calciumStartTick; t <= currentTick; t += 1) {
+        const age = currentTick - t;
+        const decay = Math.exp(-age / calciumDecayTicks);
+        for (const id of replay.ticks[t - 1]?.spikes ?? []) {
+          const idx = idToIndex.get(id);
+          if (idx == null || !state.isPenAByIndex[idx]) continue;
+          penHeatByIndex[idx] += decay;
+        }
+      }
+      for (let i = 0; i < penHeatByIndex.length; i += 1) {
+        const v = penHeatByIndex[i];
+        if (v > 0) {
+          penHeatByIndex[i] = 1 - Math.exp(-v * PEN_CALCIUM_GAIN);
+        }
+      }
+      state.lastComputedTick = currentTick;
+      state.lastComputedReplay = replay;
+    } else if (shouldRecompute) {
+      state.lastComputedTick = currentTick;
+      state.lastComputedReplay = replay;
     }
     const { tempC, tempG, tempEpgInactive, tempEpgHot } = state;
     for (let i = 0; i < colorAttr.count; i += 1) {
       const t = brightnessByIndex[i] ?? 0;
       if (isEpgByIndex[i]) {
+        if (!currentVisibility.epg) {
+          tempC.copy(HIDDEN_NEURON_COLOR);
+        } else {
         tempEpgInactive.copy(INACTIVE_EPG_COLOR).multiplyScalar(0.42);
         if (t <= 0) {
           tempC.copy(tempEpgInactive);
         } else {
           tempEpgHot.copy(tempEpgInactive).lerp(EPG_HEAT_ORANGE, 0.45).lerp(EPG_HEAT_RED, t);
           tempC.copy(tempEpgInactive).lerp(tempEpgHot, t);
+        }
+        }
+      } else if (state.isPenAByIndex[i]) {
+        if (!currentVisibility.penA) {
+          tempC.copy(HIDDEN_NEURON_COLOR);
+        } else {
+          const penHeat = Math.max(t, penHeatByIndex[i] ?? 0);
+          tempC.copy(INACTIVE_PEN_A_COLOR);
+          if (penHeat > 0) {
+            tempC.lerp(PEN_CALCIUM_ACTIVE_COLOR, penHeat);
+            if (penHeat > 0.65) {
+              tempC.lerp(PEN_CALCIUM_HOT_COLOR, (penHeat - 0.65) / 0.35);
+            }
+          }
         }
       } else if (isUpstreamByIndex[i]) {
         tempC.copy(INACTIVE_UPSTREAM_COLOR);
@@ -1152,10 +1509,17 @@ function buildScene(
         if (t > 0) tempC.lerp(ACTIVE_COLOR, t);
       }
       colorAttr.setXYZ(i, tempC.r, tempC.g, tempC.b);
-      if (t <= 0 || !isEpgByIndex[i]) {
-        tempG.copy(NO_GLOW_COLOR);
-      } else {
+      if (isEpgByIndex[i] && t > 0) {
         tempG.copy(INACTIVE_EPG_COLOR).lerp(EPG_HEAT_RED, t).multiplyScalar(0.22 + 1.1 * t * t);
+      } else if (state.isPenAByIndex[i] && currentVisibility.penA) {
+        const penHeat = Math.max(t, penHeatByIndex[i] ?? 0);
+        if (penHeat > 0) {
+          tempG.copy(PEN_CALCIUM_GLOW_COLOR).multiplyScalar(0.12 + 0.85 * penHeat * penHeat);
+        } else {
+          tempG.copy(NO_GLOW_COLOR);
+        }
+      } else {
+        tempG.copy(NO_GLOW_COLOR);
       }
       glowColorAttr.setXYZ(i, tempG.r, tempG.g, tempG.b);
     }
@@ -1168,7 +1532,7 @@ function buildScene(
       0,
     ).normalize();
     bumpArrow.setDirection(dir3);
-    bumpArrow.setLength(0.28 + 0.52 * Math.min(1, Math.max(0.08, arrowState.strengthCurrent)), 0.07, 0.035);
+    bumpArrow.setLength(SCENE_BUMP_ARROW_LENGTH, 0.07, 0.035);
     bumpArrow.setColor(ACTIVE_RING_COLOR);
     const hoveredId = hoveredNeuronId?.current ?? null;
     if (hoveredId != null) {
@@ -1177,6 +1541,58 @@ function buildScene(
         colorAttr.setXYZ(mainIdx, HOVER_HIGHLIGHT_COLOR.r, HOVER_HIGHLIGHT_COLOR.g, HOVER_HIGHLIGHT_COLOR.b);
         glowColorAttr.setXYZ(mainIdx, HOVER_HIGHLIGHT_GLOW.r, HOVER_HIGHLIGHT_GLOW.g, HOVER_HIGHLIGHT_GLOW.b);
       }
+    }
+    if (penEpgLineColorAttr && penEpgLineBaseColors && penEpgRenderableLinks.length > 0 && currentVisibility.connections && currentVisibility.epg && currentVisibility.penA) {
+      const lineColorArray = penEpgLineColorAttr.array as Float32Array;
+      lineColorArray.set(penEpgLineBaseColors);
+      let activePulseCount = 0;
+      const dtSec = replay ? Math.max(0.0001, getReplayDtSec(replay)) : 0.001;
+      const pulsePosArray = penPulsePositionAttr?.array as Float32Array | undefined;
+      const pulseColorArray = penPulseColorAttr?.array as Float32Array | undefined;
+      for (const link of penEpgRenderableLinks) {
+        const spikeTick = latestSpikeTickById.get(link.penId);
+        if (spikeTick == null) continue;
+        const ageTicks = currentTick - spikeTick;
+        if (ageTicks < 0) continue;
+        const durationSec = PEN_CONN_PROPAGATION_MIN_SEC + (PEN_CONN_PROPAGATION_MAX_SEC - PEN_CONN_PROPAGATION_MIN_SEC) * link.strength01;
+        const durationTicks = Math.max(1, Math.floor(durationSec / dtSec));
+        if (ageTicks > durationTicks) continue;
+        const progress = Math.max(0, Math.min(1, ageTicks / durationTicks));
+        const envelope = Math.pow(1 - progress, 0.55) * (0.2 + 0.8 * link.strength01);
+        const flash = link.kind === 'inhibitory'
+          ? PEN_CONN_INHIBIT_FLASH_COLOR
+          : link.kind === 'unsigned_proxy'
+            ? PEN_CONN_PROXY_FLASH_COLOR
+            : PEN_CONN_EXCIT_FLASH_COLOR;
+        const o = link.colorOffset;
+        for (let k = 0; k < 2; k += 1) {
+          const baseIndex = o + k * 3;
+          lineColorArray[baseIndex] = penEpgLineBaseColors[baseIndex]! + (flash.r - penEpgLineBaseColors[baseIndex]!) * envelope;
+          lineColorArray[baseIndex + 1] = penEpgLineBaseColors[baseIndex + 1]! + (flash.g - penEpgLineBaseColors[baseIndex + 1]!) * envelope;
+          lineColorArray[baseIndex + 2] = penEpgLineBaseColors[baseIndex + 2]! + (flash.b - penEpgLineBaseColors[baseIndex + 2]!) * envelope;
+        }
+        if (pulsePosArray && pulseColorArray && activePulseCount < penEpgRenderableLinks.length) {
+          const px = link.from[0] + (link.to[0] - link.from[0]) * progress;
+          const py = link.from[1] + (link.to[1] - link.from[1]) * progress;
+          const pz = link.from[2] + (link.to[2] - link.from[2]) * progress;
+          const po = activePulseCount * 3;
+          pulsePosArray[po] = px;
+          pulsePosArray[po + 1] = py;
+          pulsePosArray[po + 2] = pz;
+          pulseColorArray[po] = flash.r * envelope;
+          pulseColorArray[po + 1] = flash.g * envelope;
+          pulseColorArray[po + 2] = flash.b * envelope;
+          activePulseCount += 1;
+        }
+      }
+      penEpgLineColorAttr.needsUpdate = true;
+      if (penPulsePositionAttr && penPulseColorAttr && penPulsePoints) {
+        penPulsePositionAttr.needsUpdate = true;
+        penPulseColorAttr.needsUpdate = true;
+        (penPulsePoints.geometry as THREE.BufferGeometry).setDrawRange(0, activePulseCount);
+      }
+    } else if (penPulsePoints) {
+      (penPulsePoints.geometry as THREE.BufferGeometry).setDrawRange(0, 0);
     }
     if (biologicalEpgColorAttr && biologicalEpgIndices.length > 0) {
       const { tempC, tempEpgInactive, tempEpgHot } = state;
@@ -1220,6 +1636,7 @@ function buildScene(
     cancelAnimationFrame(raf);
     resizeObserver.disconnect();
     controls.dispose();
+    renderer.domElement.removeEventListener('wheel', onWheelRotate);
     renderer.domElement.removeEventListener('pointermove', onPointerMove);
     renderer.domElement.removeEventListener('pointerleave', onPointerLeave);
     if (hoverTooltip.parentNode) {
@@ -1234,6 +1651,16 @@ function buildScene(
       scene.remove(connectionLines);
       connectionLines.geometry.dispose();
       (connectionLines.material as THREE.Material).dispose();
+    }
+    if (penEpgConnectionLines != null) {
+      scene.remove(penEpgConnectionLines);
+      penEpgConnectionLines.geometry.dispose();
+      (penEpgConnectionLines.material as THREE.Material).dispose();
+    }
+    if (penPulsePoints != null) {
+      scene.remove(penPulsePoints);
+      penPulsePoints.geometry.dispose();
+      (penPulsePoints.material as THREE.Material).dispose();
     }
     scene.remove(bumpArrow);
     scene.remove(glowPoints);
@@ -1503,18 +1930,21 @@ export default function VisualizationPage() {
   const [applyBusy, setApplyBusy] = useState(false);
   const [penANeurons, setPenANeurons] = useState<{ left: Array<{ id: string; label: string }>; right: Array<{ id: string; label: string }> }>({ left: [], right: [] });
   const [penARatesById, setPenARatesById] = useState<Record<string, number>>({});
+  const [penAMetadataById, setPenAMetadataById] = useState<Record<string, PenAMetadata>>({});
+  const [penASpikeStrengthById, setPenASpikeStrengthById] = useState<Record<string, number>>({});
+  const [penEpgConnections, setPenEpgConnections] = useState<PenEpgConnection[]>([]);
   const [showPenAMapping, setShowPenAMapping] = useState(false);
   const [copiedPenAId, setCopiedPenAId] = useState<string | null>(null);
   const copyInFlightRef = useRef(false);
   const copyTimeoutRef = useRef<number | null>(null);
   const isMountedRef = useRef(true);
   const [showCompassInfo, setShowCompassInfo] = useState(false);
-  const [showRecordMenu, setShowRecordMenu] = useState(true);
+  const [showLegendPopover, setShowLegendPopover] = useState(false);
+  const [legendVisibility, setLegendVisibility] = useState({ epg: true, penA: true, connections: true });
+  const [connectionOpacity, setConnectionOpacity] = useState(0.74);
+  const [showRecordMenu, setShowRecordMenu] = useState(false);
   const [bottomControlTab, setBottomControlTab] = useState<'individual' | 'sliders'>('individual');
-  const [compassPos, setCompassPos] = useState({ x: 12, y: 34 });
-  const [draggingCompass, setDraggingCompass] = useState(false);
-  const compassWidgetRef = useRef<HTMLDivElement | null>(null);
-  const compassDragOffsetRef = useRef({ x: 0, y: 0 });
+  const [rightPanelTab, setRightPanelTab] = useState<'mapping' | 'compass'>('mapping');
   const notification = useNotification();
   const liveAfterTickRef = useRef(0);
   const recordingRef = useRef(false);
@@ -1568,6 +1998,8 @@ export default function VisualizationPage() {
   const [error, setError] = useState<string | null>(null);
   const sceneContainerRef = useRef<HTMLDivElement | null>(null);
   const sceneRef = useRef<SceneState | null>(null);
+  const legendPopoverRef = useRef<HTMLDivElement | null>(null);
+  const legendTriggerRef = useRef<HTMLButtonElement | null>(null);
 
   const neurons = useMemo(() => {
     const base = replay?.neurons ?? [];
@@ -1610,6 +2042,15 @@ export default function VisualizationPage() {
       return true;
     });
   }, [neurons]);
+  const penControlLabelById = useMemo(() => {
+    const out = new Map<string, string>();
+    for (const { id, label } of penANeurons.left) out.set(id, label);
+    for (const { id, label } of penANeurons.right) out.set(id, label);
+    for (const [id, metadata] of Object.entries(penAMetadataById)) {
+      if (!out.has(id) && metadata.mappingLabel) out.set(id, metadata.mappingLabel);
+    }
+    return out;
+  }, [penANeurons.left, penANeurons.right, penAMetadataById]);
   const selectedReplay = DEFAULT_REPLAY_DATASETS[0];
 
   useEffect(() => {
@@ -1634,6 +2075,32 @@ export default function VisualizationPage() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    fetch('/pen_a_epg_top_connections.json?v=' + Date.now(), { cache: 'no-store' })
+      .then(async (res) => {
+        if (!res.ok) return null;
+        const parsed = (await res.json()) as { connections?: PenEpgConnection[] } | null;
+        return parsed;
+      })
+      .then((parsed) => {
+        if (cancelled) return;
+        const rows = Array.isArray(parsed?.connections) ? parsed!.connections : [];
+        const valid = rows.filter((row) =>
+          typeof row?.pen_id === 'string'
+          && typeof row?.epg_id === 'string'
+          && Number.isFinite(row?.weight)
+          && Number.isFinite(row?.strength01)
+          && (row!.strength01 >= 0 && row!.strength01 <= 1)
+          && (row?.kind === 'excitatory' || row?.kind === 'inhibitory' || row?.kind === 'unsigned_proxy'));
+        setPenEpgConnections(valid);
+      })
+      .catch(() => {
+        if (!cancelled) setPenEpgConnections([]);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
     let active = true;
     const load = async () => {
       try {
@@ -1643,28 +2110,16 @@ export default function VisualizationPage() {
         const isNeuroSimLive = selectedReplay?.id === 'neurosim_live' || datasetUrl.startsWith('/api/neurosim-replay');
         const isWorldRecord = selectedReplay?.id === 'world_record' || datasetUrl === 'world_record';
         if (isNeuroSimLive) {
-          const apiRoot = getApiBase();
-          const neuronRes = await fetch(`${apiRoot}/api/neurons?full=1&epgOnly=1`, { cache: 'no-store' });
-          if (!neuronRes.ok) throw new Error(`Failed to load live neuron template (${neuronRes.status})`);
-          const neuronPayload = (await neuronRes.json()) as { neurons?: ApiNeuron[] };
-          const templateNeurons: ReplayNeuron[] = (neuronPayload.neurons ?? []).map((n) => ({
-            root_id: n.root_id,
-            x: typeof n.x === 'number' ? n.x : 0,
-            y: typeof n.y === 'number' ? n.y : 0,
-            z: typeof n.z === 'number' ? n.z : 0,
-            processed_label: n.cell_type,
-            is_ring: true,
-            is_epg: true,
-            side: n.side ?? 'unknown',
-            hemibrain_type: n.cell_type ?? '',
-            flow: n.role,
-            cell_type: n.cell_type,
-          }));
+          const nodeRes = await fetch('/neurosim_visualization_nodes.csv?v=' + Date.now(), { cache: 'no-store' });
+          if (!nodeRes.ok) throw new Error(`Failed to load live node template (${nodeRes.status})`);
+          const nodeCsv = await nodeRes.text();
+          const templateNeurons = buildTemplateNeuronsFromStaticCsv(nodeCsv);
+          if (templateNeurons.length === 0) throw new Error('Live node template CSV is empty');
           if (!active) return;
           setTemplateReplay({
             meta: {
               generated_at: new Date().toISOString(),
-              source_csv: 'api:/api/neurons?full=1&epgOnly=1',
+              source_csv: 'public:neurosim_visualization_nodes.csv',
               ticks: 0,
               unique_fired_neurons: 0,
               ring_neuron_total: 0,
@@ -1684,28 +2139,16 @@ export default function VisualizationPage() {
           liveEpgSeenRef.current = new Set();
           setLiveEpgUniqueFired(0);
         } else if (isWorldRecord) {
-          const apiRoot = getApiBase();
-          const neuronRes = await fetch(`${apiRoot}/api/neurons?full=1&epgOnly=1`, { cache: 'no-store' });
-          if (!neuronRes.ok) throw new Error(`Failed to load neuron template (${neuronRes.status})`);
-          const neuronPayload = (await neuronRes.json()) as { neurons?: ApiNeuron[] };
-          const templateNeurons: ReplayNeuron[] = (neuronPayload.neurons ?? []).map((n) => ({
-            root_id: n.root_id,
-            x: typeof n.x === 'number' ? n.x : 0,
-            y: typeof n.y === 'number' ? n.y : 0,
-            z: typeof n.z === 'number' ? n.z : 0,
-            processed_label: n.cell_type,
-            is_ring: true,
-            is_epg: true,
-            side: n.side ?? 'unknown',
-            hemibrain_type: n.cell_type ?? '',
-            flow: n.role,
-            cell_type: n.cell_type,
-          }));
+          const nodeRes = await fetch('/neurosim_visualization_nodes.csv?v=' + Date.now(), { cache: 'no-store' });
+          if (!nodeRes.ok) throw new Error(`Failed to load node template (${nodeRes.status})`);
+          const nodeCsv = await nodeRes.text();
+          const templateNeurons = buildTemplateNeuronsFromStaticCsv(nodeCsv);
+          if (templateNeurons.length === 0) throw new Error('Node template CSV is empty');
           if (!active) return;
           setTemplateReplay({
             meta: {
               generated_at: new Date().toISOString(),
-              source_csv: 'api:/api/neurons?full=1&epgOnly=1',
+              source_csv: 'public:neurosim_visualization_nodes.csv',
               ticks: 0,
               unique_fired_neurons: 0,
               ring_neuron_total: 0,
@@ -1875,6 +2318,81 @@ export default function VisualizationPage() {
   }, [isNeuroSimLive, apiBase]);
 
   useEffect(() => {
+    if (!isNeuroSimLive) return;
+    let cancelled = false;
+    fetch('/pen_a_neuron_metadata.csv?v=' + Date.now(), { cache: 'no-store' })
+      .then((r) => (r.ok ? r.text() : ''))
+      .then((text) => {
+        if (cancelled || !text) return;
+        const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0);
+        if (lines.length < 2) return;
+        const header = parseCsvLineAll(lines[0]);
+        const iId = header.indexOf('neuron_id');
+        const iPen = header.indexOf('pen_label');
+        const iHemilineage = header.indexOf('hemilineage');
+        const iSide = header.indexOf('side');
+        const iType = header.indexOf('hemibrain_type');
+        if (iId < 0) return;
+        const next: Record<string, PenAMetadata> = {};
+        for (let i = 1; i < lines.length; i += 1) {
+          const cols = parseCsvLineAll(lines[i]);
+          const id = (cols[iId] ?? '').replace(/^"|"$/g, '').trim();
+          if (!id) continue;
+          const toNum = (s: string | undefined) => {
+            const n = Number((s ?? '').replace(/^"|"$/g, '').trim());
+            return Number.isFinite(n) ? n : undefined;
+          };
+          const iMapLabel = header.indexOf('mapping_label');
+          const iX = header.indexOf('x');
+          const iY = header.indexOf('y');
+          const iZ = header.indexOf('z');
+          next[id] = {
+            mappingLabel: (cols[iMapLabel] ?? '').replace(/^"|"$/g, '').trim(),
+            penLabel: (cols[iPen] ?? '').replace(/^"|"$/g, '').trim(),
+            hemilineage: (cols[iHemilineage] ?? '').replace(/^"|"$/g, '').trim(),
+            side: (cols[iSide] ?? '').replace(/^"|"$/g, '').trim(),
+            hemibrainType: (cols[iType] ?? '').replace(/^"|"$/g, '').trim(),
+            x: toNum(cols[iX]),
+            y: toNum(cols[iY]),
+            z: toNum(cols[iZ]),
+          };
+        }
+        if (!cancelled) setPenAMetadataById(next);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [isNeuroSimLive]);
+
+  
+
+  useEffect(() => {
+    const ids = [...penANeurons.left.map((n) => n.id), ...penANeurons.right.map((n) => n.id)];
+    if (!replay || ids.length === 0 || replay.ticks.length === 0) {
+      setPenASpikeStrengthById({});
+      return;
+    }
+    const idSet = new Set(ids);
+    const endIdx = Math.max(0, Math.min(replay.ticks.length - 1, currentTick - 1));
+    const dtSec = Math.max(0.0001, getReplayDtSec(replay));
+    const windowTicks = Math.max(120, Math.floor(PEN_ACTIVITY_WINDOW_SEC / dtSec));
+    const startIdx = Math.max(0, endIdx - windowTicks + 1);
+    const counts: Record<string, number> = {};
+    for (let i = startIdx; i <= endIdx; i += 1) {
+      for (const id of replay.ticks[i]?.spikes ?? []) {
+        if (!idSet.has(id)) continue;
+        counts[id] = (counts[id] ?? 0) + 1;
+      }
+    }
+    const ticksObserved = Math.max(1, endIdx - startIdx + 1);
+    const expectedAtRefHz = Math.max(1, ticksObserved * dtSec * PEN_ACTIVITY_REF_HZ);
+    const normalized: Record<string, number> = {};
+    for (const id of ids) {
+      normalized[id] = Math.max(0, Math.min(1, (counts[id] ?? 0) / expectedAtRefHz));
+    }
+    setPenASpikeStrengthById(normalized);
+  }, [replay, currentTick, penANeurons.left, penANeurons.right]);
+
+  useEffect(() => {
     if (!isNeuroSimLive || !templateReplay) return;
     setError(null);
     const unsubscribe = subscribeNeuroLive((event) => {
@@ -1945,45 +2463,69 @@ export default function VisualizationPage() {
   }, [replay, replay?.ticks.length, isNeuroSimLive]);
 
   useEffect(() => {
-    if (!draggingCompass) return;
-    const onMove = (event: PointerEvent) => {
-      const widgetW = compassWidgetRef.current?.offsetWidth ?? 170;
-      const widgetH = compassWidgetRef.current?.offsetHeight ?? 170;
-      const maxX = Math.max(0, window.innerWidth - widgetW - 8);
-      const maxY = Math.max(0, window.innerHeight - widgetH - 8);
-      const nextX = Math.min(maxX, Math.max(8, event.clientX - compassDragOffsetRef.current.x));
-      const nextY = Math.min(maxY, Math.max(8, event.clientY - compassDragOffsetRef.current.y));
-      setCompassPos({ x: nextX, y: nextY });
-    };
-    const onUp = () => setDraggingCompass(false);
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-    return () => {
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-    };
-  }, [draggingCompass]);
-
-  useEffect(() => {
     const container = sceneContainerRef.current;
     if (!container || displayNeurons.length === 0) return;
     if (sceneRef.current) {
       sceneRef.current.dispose();
       sceneRef.current = null;
     }
-    sceneRef.current = buildScene(container, displayNeurons, viewMode, undefined, epgLabelMap, replay ?? null);
+    sceneRef.current = buildScene(
+      container,
+      displayNeurons,
+      viewMode,
+      { epg: legendVisibility.epg, penA: legendVisibility.penA, connections: legendVisibility.connections },
+      connectionOpacity,
+      penEpgConnections,
+      undefined,
+      epgLabelMap,
+      replay ?? null,
+    );
     return () => {
       if (sceneRef.current) {
         sceneRef.current.dispose();
         sceneRef.current = null;
       }
     };
-  }, [displayNeurons, viewMode, epgLabelMap]);
+  }, [displayNeurons, viewMode, epgLabelMap, penEpgConnections]);
+
+  useEffect(() => {
+    if (!sceneRef.current) return;
+    sceneRef.current.penControlLabelById = penControlLabelById;
+  }, [penControlLabelById]);
+
+  useEffect(() => {
+    if (!sceneRef.current) return;
+    sceneRef.current.visibility = {
+      epg: legendVisibility.epg,
+      penA: legendVisibility.penA,
+      connections: legendVisibility.connections,
+    };
+  }, [legendVisibility.epg, legendVisibility.penA, legendVisibility.connections]);
+
+  useEffect(() => {
+    if (!sceneRef.current) return;
+    sceneRef.current.connectionOpacity = connectionOpacity;
+  }, [connectionOpacity]);
 
   useEffect(() => {
     if (!sceneRef.current) return;
     sceneRef.current.arrowState.smoothingEnabled = arrowSmoothing;
   }, [arrowSmoothing]);
+
+  useEffect(() => {
+    if (!showLegendPopover) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (legendPopoverRef.current?.contains(target)) return;
+      if (legendTriggerRef.current?.contains(target)) return;
+      setShowLegendPopover(false);
+    };
+    window.addEventListener('pointerdown', onPointerDown);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown);
+    };
+  }, [showLegendPopover]);
 
   useEffect(() => {
     if (!replay || !sceneRef.current) return;
@@ -2020,8 +2562,6 @@ export default function VisualizationPage() {
   const statusTitle = replay
     ? `replay=${selectedReplay?.id ?? 'n/a'} | scenario=${replay.meta?.scenario ?? 'n/a'} | decode=vector | neurons=${Array.isArray(replay.neurons) ? replay.neurons.length : displayNeurons.length} | rendered=${displayNeurons.length} | ticks=${replay.ticks.length} | sim=${(replay.ticks.length * getReplayDtSec(replay)).toFixed(3)}s | dt=${(getReplayDtSec(replay) * 1000).toFixed(3)}ms | epg fired=${epgUniqueFired ?? 'n/a'} | bump angle=${compassStats.bumpAngleDeg == null ? 'n/a' : `${compassStats.bumpAngleDeg.toFixed(1)}deg`} | bump strength=${compassStats.bumpStrength.toFixed(3)} | top bin=${compassStats.epgTopBinIndex}`
     : undefined;
-  const viewportW = typeof window !== 'undefined' ? window.innerWidth : 0;
-  const openCompassInfoLeftward = viewportW > 0 && (compassPos.x + 300 > viewportW);
   const applyPenAHz = async () => {
     setError(null);
     setApplyBusy(true);
@@ -2139,327 +2679,12 @@ export default function VisualizationPage() {
         <div style={{ display: 'flex', justifyContent: 'flex-end', pointerEvents: 'auto' }}>
           <CompactMenu />
         </div>
-        {replay ? createPortal((
-          <div
-            ref={compassWidgetRef}
-            style={{
-              position: 'fixed',
-              top: compassPos.y,
-              left: compassPos.x,
-              zIndex: 18,
-              display: 'inline-flex',
-              alignItems: 'center',
-              padding: 6,
-              border: '1px solid rgba(140,170,220,0.38)',
-              borderRadius: 10,
-              background: 'rgba(8, 16, 30, 0.62)',
-              backdropFilter: 'blur(10px)',
-              WebkitBackdropFilter: 'blur(10px)',
-              boxShadow: '0 10px 22px rgba(0,0,0,0.36)',
-            }}
-          >
-            <button
-              type="button"
-              aria-label="Drag EPG compass"
-              title="Drag compass"
-              onPointerDown={(event) => {
-                const rect = compassWidgetRef.current?.getBoundingClientRect();
-                const baseX = rect?.left ?? compassPos.x;
-                const baseY = rect?.top ?? compassPos.y;
-                compassDragOffsetRef.current = {
-                  x: event.clientX - baseX,
-                  y: event.clientY - baseY,
-                };
-                setDraggingCompass(true);
-              }}
-              style={{
-                position: 'absolute',
-                top: 10,
-                left: 10,
-                width: 18,
-                height: 18,
-                borderRadius: 6,
-                border: '1px solid rgba(150, 185, 235, 0.55)',
-                background: 'rgba(18, 37, 64, 0.95)',
-                color: '#d8e9ff',
-                cursor: draggingCompass ? 'grabbing' : 'grab',
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                padding: 0,
-              }}
-            >
-              <svg width="10" height="10" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
-                <circle cx="2" cy="2" r="1" />
-                <circle cx="6" cy="2" r="1" />
-                <circle cx="10" cy="2" r="1" />
-                <circle cx="2" cy="6" r="1" />
-                <circle cx="6" cy="6" r="1" />
-                <circle cx="10" cy="6" r="1" />
-                <circle cx="2" cy="10" r="1" />
-                <circle cx="6" cy="10" r="1" />
-                <circle cx="10" cy="10" r="1" />
-              </svg>
-            </button>
-            <svg
-              width="152"
-              height="152"
-              viewBox="-60 -60 120 120"
-              style={{ border: '1px solid rgba(255,255,255,0.12)', borderRadius: 8 }}
-            >
-              {/* Radial dividers: 16 bins, anatomical L/R ordering */}
-              {Array.from({ length: EPG_COMPASS_BINS + 1 }, (_, i) => {
-                const a = (i / EPG_COMPASS_BINS) * Math.PI * 2 - Math.PI / 2;
-                return (
-                  <line
-                    key={`divider-${i}`}
-                    x1="0" y1="0"
-                    x2={(Math.cos(a) * 48).toFixed(3)}
-                    y2={(Math.sin(a) * 48).toFixed(3)}
-                    stroke="rgba(255,255,255,0.25)"
-                    strokeWidth="0.8"
-                  />
-                );
-              })}
-              {Array.from({ length: EPG_COMPASS_BINS }, (_, i) => {
-                const { a0, a1 } = getWedgeParams(i, EPG_COMPASS_BINS);
-                const r0 = 23;
-                const r1 = 30;
-                const x0 = Math.cos(a0) * r0; const y0 = Math.sin(a0) * r0;
-                const x1 = Math.cos(a1) * r0; const y1 = Math.sin(a1) * r0;
-                const x2 = Math.cos(a1) * r1; const y2 = Math.sin(a1) * r1;
-                const x3 = Math.cos(a0) * r1; const y3 = Math.sin(a0) * r1;
-                return (
-                  <path
-                    key={`epg-slice-color-${i}`}
-                    d={`M ${x0} ${y0} L ${x1} ${y1} L ${x2} ${y2} L ${x3} ${y3} Z`}
-                    fill={EPG_SLICE_COLORS[i % EPG_SLICE_COLORS.length]}
-                    fillOpacity={0.45}
-                    stroke="rgba(255,255,255,0.2)"
-                    strokeWidth="0.4"
-                  />
-                );
-              })}
-              {Array.from({ length: EPG_COMPASS_BINS }, (_, i) => {
-                const { midAngle } = getWedgeParams(i, EPG_COMPASS_BINS);
-                const tr = 51;
-                const tx = Math.cos(midAngle) * tr;
-                const ty = Math.sin(midAngle) * tr;
-                return (
-                  <text
-                    key={`epg-slice-label-${i}`}
-                    x={tx.toFixed(3)}
-                    y={ty.toFixed(3)}
-                    textAnchor="middle"
-                    dominantBaseline="middle"
-                    fill="rgba(235,245,255,0.96)"
-                    fontSize="4.2"
-                    fontWeight="700"
-                  >
-                    {EPG_SLICE_ORDER_CLOCKWISE[i]}
-                  </text>
-                );
-              })}
-              <circle cx="0" cy="0" r="44" fill="none" stroke="rgba(120,200,255,0.32)" strokeWidth="1.2" />
-              <circle cx="0" cy="0" r="36" fill="none" stroke="rgba(208,140,255,0.28)" strokeWidth="1.2" />
-              <circle cx="0" cy="0" r="30" fill="none" stroke="rgba(255,79,216,0.35)" strokeWidth="1.4" />
-              <circle cx="0" cy="0" r="18" fill="none" stroke="rgba(255,170,110,0.32)" strokeWidth="1.2" />
-              {compassStats.upstreamBins.map((v, i) => {
-                const { a0, a1 } = getWedgeParams(i, compassStats.upstreamBins.length);
-                const r0 = 44;
-                const r1 = 44 + v * 10;
-                const x0 = Math.cos(a0) * r0; const y0 = Math.sin(a0) * r0;
-                const x1 = Math.cos(a1) * r0; const y1 = Math.sin(a1) * r0;
-                const x2 = Math.cos(a1) * r1; const y2 = Math.sin(a1) * r1;
-                const x3 = Math.cos(a0) * r1; const y3 = Math.sin(a0) * r1;
-                const alpha = 0.2 + v * 0.62;
-                return (
-                  <path
-                    key={`up-bin-${i}`}
-                    d={`M ${x0} ${y0} L ${x1} ${y1} L ${x2} ${y2} L ${x3} ${y3} Z`}
-                    fill={`rgba(120,200,255,${alpha.toFixed(3)})`}
-                    stroke="none"
-                  />
-                );
-              })}
-              {compassStats.delta7Bins.map((v, i) => {
-                const { a0, a1 } = getWedgeParams(i, compassStats.delta7Bins.length);
-                const r0 = 36;
-                const r1 = 36 + v * 7;
-                const x0 = Math.cos(a0) * r0; const y0 = Math.sin(a0) * r0;
-                const x1 = Math.cos(a1) * r0; const y1 = Math.sin(a1) * r0;
-                const x2 = Math.cos(a1) * r1; const y2 = Math.sin(a1) * r1;
-                const x3 = Math.cos(a0) * r1; const y3 = Math.sin(a0) * r1;
-                const alpha = 0.18 + v * 0.58;
-                return (
-                  <path
-                    key={`d7-bin-${i}`}
-                    d={`M ${x0} ${y0} L ${x1} ${y1} L ${x2} ${y2} L ${x3} ${y3} Z`}
-                    fill={`rgba(208,140,255,${alpha.toFixed(3)})`}
-                    stroke="none"
-                  />
-                );
-              })}
-              {compassStats.downstreamBins.map((v, i) => {
-                const { a0, a1 } = getWedgeParams(i, compassStats.downstreamBins.length);
-                const r0 = 18;
-                const r1 = 18 + v * 8;
-                const x0 = Math.cos(a0) * r0; const y0 = Math.sin(a0) * r0;
-                const x1 = Math.cos(a1) * r0; const y1 = Math.sin(a1) * r0;
-                const x2 = Math.cos(a1) * r1; const y2 = Math.sin(a1) * r1;
-                const x3 = Math.cos(a0) * r1; const y3 = Math.sin(a0) * r1;
-                const alpha = 0.2 + v * 0.62;
-                return (
-                  <path
-                    key={`down-bin-${i}`}
-                    d={`M ${x0} ${y0} L ${x1} ${y1} L ${x2} ${y2} L ${x3} ${y3} Z`}
-                    fill={`rgba(255,170,110,${alpha.toFixed(3)})`}
-                    stroke="none"
-                  />
-                );
-              })}
-              {Array.from({ length: EPG_COMPASS_BINS }, (_, i) => {
-                const { midAngle: a } = getWedgeParams(i, EPG_COMPASS_BINS);
-                return (
-                  <line
-                    key={`link-up-base-${i}`}
-                    x1={(Math.cos(a) * 44).toFixed(3)}
-                    y1={(Math.sin(a) * 44).toFixed(3)}
-                    x2={(Math.cos(a) * 30).toFixed(3)}
-                    y2={(Math.sin(a) * 30).toFixed(3)}
-                    stroke="rgba(120,200,255,0.35)"
-                    strokeWidth="1.25"
-                  />
-                );
-              })}
-              {compassStats.upstreamBins.map((v, i) => {
-                const { midAngle: a } = getWedgeParams(i, EPG_COMPASS_BINS);
-                return (
-                  <line
-                    key={`link-up-${i}`}
-                    x1={(Math.cos(a) * 44).toFixed(3)}
-                    y1={(Math.sin(a) * 44).toFixed(3)}
-                    x2={(Math.cos(a) * 30).toFixed(3)}
-                    y2={(Math.sin(a) * 30).toFixed(3)}
-                    stroke={`rgba(120,200,255,${(0.18 + v * 0.55).toFixed(3)})`}
-                    strokeWidth="1.6"
-                  />
-                );
-              })}
-              {compassStats.delta7Bins.map((v, i) => {
-                const { midAngle: a } = getWedgeParams(i, EPG_COMPASS_BINS);
-                return (
-                  <line
-                    key={`link-d7-${i}`}
-                    x1={(Math.cos(a) * 36).toFixed(3)}
-                    y1={(Math.sin(a) * 36).toFixed(3)}
-                    x2={(Math.cos(a) * 30).toFixed(3)}
-                    y2={(Math.sin(a) * 30).toFixed(3)}
-                    stroke={`rgba(208,140,255,${(0.16 + v * 0.52).toFixed(3)})`}
-                    strokeWidth="1.4"
-                  />
-                );
-              })}
-              {compassStats.downstreamBins.map((v, i) => {
-                const { midAngle: a } = getWedgeParams(i, EPG_COMPASS_BINS);
-                return (
-                  <line
-                    key={`link-down-${i}`}
-                    x1={(Math.cos(a) * 30).toFixed(3)}
-                    y1={(Math.sin(a) * 30).toFixed(3)}
-                    x2={(Math.cos(a) * 18).toFixed(3)}
-                    y2={(Math.sin(a) * 18).toFixed(3)}
-                    stroke={`rgba(255,170,110,${(0.18 + v * 0.55).toFixed(3)})`}
-                    strokeWidth="1.6"
-                  />
-                );
-              })}
-              <circle cx="0" cy="0" r="42" fill="none" stroke="rgba(140,120,255,0.35)" strokeWidth="2" />
-              {compassStats.epgBins.map((v, i) => {
-                const { a0, a1 } = getWedgeParams(i, compassStats.epgBins.length);
-                const r0 = 30;
-                const r1 = 30 + v * 14;
-                const x0 = Math.cos(a0) * r0; const y0 = Math.sin(a0) * r0;
-                const x1 = Math.cos(a1) * r0; const y1 = Math.sin(a1) * r0;
-                const x2 = Math.cos(a1) * r1; const y2 = Math.sin(a1) * r1;
-                const x3 = Math.cos(a0) * r1; const y3 = Math.sin(a0) * r1;
-                const alpha = 0.24 + v * 0.76;
-                return (
-                  <path
-                    key={`bin-${i}`}
-                    d={`M ${x0} ${y0} L ${x1} ${y1} L ${x2} ${y2} L ${x3} ${y3} Z`}
-                    fill={compassHeatFill(v, alpha)}
-                    stroke="rgba(255,220,160,0.55)"
-                    strokeWidth="1"
-                  />
-                );
-              })}
-              {viewMode !== 'biological' && bumpTheta != null ? (
-                <line
-                  x1="0"
-                  y1="0"
-                  x2={(Math.cos(bumpTheta * Math.PI / 180) * 48).toFixed(3)}
-                  y2={(-Math.sin(bumpTheta * Math.PI / 180) * 48).toFixed(3)}
-                  stroke="#ff4fd8"
-                  strokeWidth="2.5"
-                />
-              ) : null}
-            </svg>
-            <button
-              type="button"
-              onClick={() => setShowCompassInfo((v) => !v)}
-              title="EPG compass info"
-              aria-label="Toggle EPG compass info"
-              style={{
-                position: 'absolute',
-                top: 10,
-                right: 10,
-                width: 18,
-                height: 18,
-                borderRadius: 999,
-                border: '1px solid rgba(150, 185, 235, 0.7)',
-                background: 'rgba(18, 37, 64, 0.95)',
-                color: '#d8e9ff',
-                fontSize: 12,
-                lineHeight: '16px',
-                textAlign: 'center',
-                cursor: 'pointer',
-                padding: 0,
-                fontWeight: 700,
-              }}
-            >
-              i
-            </button>
-            {showCompassInfo ? (
-              <div
-                style={{
-                  position: 'absolute',
-                  top: 34,
-                  ...(openCompassInfoLeftward ? { right: 0 } : { left: 0 }),
-                  width: 280,
-                  maxWidth: 'min(280px, calc(100vw - 24px))',
-                  padding: '8px 10px',
-                  borderRadius: 8,
-                  border: '1px solid rgba(130,170,225,0.55)',
-                  background: 'rgba(10,20,36,0.96)',
-                  color: '#d7e8ff',
-                  fontSize: 11,
-                  lineHeight: 1.35,
-                  boxShadow: '0 8px 20px rgba(0,0,0,0.38)',
-                }}
-              >
-                EPG compass: 16 labeled wedges using processed labels and classification side, arranged anatomically.
-                Order is fixed to match the reference slice diagram (top= L5, top-left=R5, right of L5=R4, then L6).
-              </div>
-            ) : null}
-          </div>
-        ), document.body) : null}
         {isNeuroSimLive && templateReplay ? createPortal((
           <div
             style={{
               position: 'fixed',
-              top: 96,
-              left: 12,
+              top: 'calc(env(safe-area-inset-top, 0px) + 8px)',
+              left: 8,
               zIndex: 21,
               pointerEvents: 'auto',
               display: 'grid',
@@ -2471,6 +2696,7 @@ export default function VisualizationPage() {
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: 6,
+                position: 'relative',
               }}
             >
               <button
@@ -2506,87 +2732,203 @@ export default function VisualizationPage() {
               <span style={{ fontSize: 12, color: '#b6cfe9', fontWeight: 600 }}>
                 View: {viewMode === 'compass' ? 'EPG Compass' : 'Biological'}
               </span>
+              <button
+                ref={legendTriggerRef}
+                type="button"
+                aria-label="Toggle legend"
+                title="Toggle legend"
+                onClick={() => setShowLegendPopover((v) => !v)}
+                style={{
+                  width: 16,
+                  height: 16,
+                  borderRadius: 999,
+                  border: '1px solid rgba(150, 185, 235, 0.7)',
+                  background: 'rgba(18, 37, 64, 0.95)',
+                  color: '#d8e9ff',
+                  fontSize: 11,
+                  lineHeight: '14px',
+                  textAlign: 'center',
+                  cursor: 'pointer',
+                  padding: 0,
+                  fontWeight: 700,
+                }}
+              >
+                i
+              </button>
+              {showLegendPopover ? (
+                <div
+                  ref={legendPopoverRef}
+                  style={{
+                    position: 'absolute',
+                    top: 22,
+                    left: 0,
+                    width: 290,
+                    maxWidth: 'min(290px, calc(100vw - 24px))',
+                    padding: '8px 10px',
+                    borderRadius: 8,
+                    border: '1px solid rgba(130,170,225,0.55)',
+                    background: 'rgba(10,20,36,0.96)',
+                    color: '#d7e8ff',
+                    fontSize: 11,
+                    lineHeight: 1.35,
+                    boxShadow: '0 8px 20px rgba(0,0,0,0.38)',
+                    zIndex: 4,
+                  }}
+                >
+                  <div style={{ fontWeight: 700, marginBottom: 6 }}>
+                    {viewMode === 'compass' ? 'EPG compass legend' : 'Biological legend'}
+                  </div>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={legendVisibility.epg}
+                      onChange={(e) => setLegendVisibility((prev) => ({ ...prev, epg: e.target.checked }))}
+                    />
+                    Show EPG neurons
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={legendVisibility.penA}
+                      onChange={(e) => setLegendVisibility((prev) => ({ ...prev, penA: e.target.checked }))}
+                    />
+                    Show PEN_a neurons
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={legendVisibility.connections}
+                      onChange={(e) => setLegendVisibility((prev) => ({ ...prev, connections: e.target.checked }))}
+                    />
+                    Show connections
+                  </label>
+                  <div style={{ marginBottom: 6 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 3 }}>
+                      <span>Connections opacity</span>
+                      <span style={{ color: '#9fc0e6' }}>{Math.round(connectionOpacity * 100)}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      step={1}
+                      value={Math.round(connectionOpacity * 100)}
+                      onChange={(e) => setConnectionOpacity(Math.max(0, Math.min(1, Number(e.target.value) / 100)))}
+                      style={{ width: '100%' }}
+                    />
+                  </div>
+                  <div style={{ color: '#9fc0e6' }}>
+                    {viewMode === 'compass'
+                      ? 'PEN_a are placed on the outer circle (left/right split).'
+                      : 'PEN_a use biological positions; active spikes glow brighter.'}
+                  </div>
+                  <div style={{ color: '#9fc0e6', marginTop: 4 }}>
+                    Thin links: cyan=strong excitatory, pink=most inhibitory/weakest links.
+                  </div>
+                </div>
+              ) : null}
             </div>
-            <div style={{ display: 'flex', alignItems: 'flex-start', position: 'relative', minHeight: 78 }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', position: 'relative' }}>
               <button
                 type="button"
-                aria-label={showRecordMenu ? 'Collapse record tools' : 'Expand record tools'}
+                aria-label={showRecordMenu ? 'Hide record tools' : 'Show record tools'}
                 onClick={() => setShowRecordMenu((v) => !v)}
                 title={showRecordMenu ? 'Hide record tools' : 'Show record tools'}
                 style={{
                   width: 18,
-                  minHeight: 74,
+                  height: 18,
                   borderRadius: 6,
-                  border: '1px solid #6f8fc0',
-                  background: showRecordMenu ? '#3a5787' : '#243a5b',
-                  color: '#eef4ff',
+                  border: '1px solid rgba(150, 185, 235, 0.55)',
+                  background: showRecordMenu ? 'rgba(42, 70, 114, 0.95)' : 'rgba(18, 37, 64, 0.95)',
+                  color: '#d8e9ff',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
                   cursor: 'pointer',
-                  fontWeight: 700,
                   padding: 0,
-                  flexShrink: 0,
                 }}
               >
-                {showRecordMenu ? '‹' : '›'}
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h4l1.2-1.4A1.8 1.8 0 0 1 13.1 4h2.8A2.1 2.1 0 0 1 18 6.1V8h1a1 1 0 0 1 1 1v8.5a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 17.5V8.5Z" stroke="currentColor" strokeWidth="1.7" />
+                  <circle cx="12" cy="13" r="3.4" stroke="currentColor" strokeWidth="1.7" />
+                </svg>
               </button>
               {showRecordMenu ? (
                 <div
                   style={{
-                    marginLeft: 8,
+                    position: 'absolute',
+                    top: 24,
+                    left: 0,
                     display: 'flex',
-                    alignItems: 'center',
+                    flexDirection: 'column',
+                    alignItems: 'stretch',
                     gap: 8,
-                    flexWrap: 'wrap',
-                    padding: '6px 8px',
+                    padding: 10,
+                    minWidth: 250,
                     border: '1px solid rgba(140,170,220,0.38)',
                     borderRadius: 8,
-                    background: 'rgba(8, 16, 30, 0.62)',
+                    background: 'rgba(8, 16, 30, 0.88)',
                     backdropFilter: 'blur(10px)',
                     WebkitBackdropFilter: 'blur(10px)',
                     boxShadow: '0 10px 22px rgba(0,0,0,0.36)',
+                    zIndex: 3,
                   }}
                 >
-                  <button
-                    type="button"
-                    onClick={() => setRecording((r) => !r)}
-                    style={controlButtonStyle(recording)}
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 8,
+                      padding: 8,
+                      border: '1px solid rgba(126, 165, 222, 0.35)',
+                      borderRadius: 8,
+                      background: 'linear-gradient(180deg, rgba(19, 33, 56, 0.72) 0%, rgba(10, 21, 38, 0.82) 100%)',
+                    }}
                   >
-                    Record {recording ? '(on)' : ''}
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => setRecording((r) => !r)}
+                      style={{ ...controlButtonStyle(recording), width: '100%', justifyContent: 'center' }}
+                    >
+                      Record {recording ? '(on)' : ''}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!templateReplay) return;
+                        const payload: ReplayData = {
+                          meta: {
+                            ...templateReplay.meta,
+                            generated_at: new Date().toISOString(),
+                            source_csv: 'neurosim-live/recording',
+                            ticks: recordedTicks.length,
+                            scenario: 'neurosim_live_pen_a_recording',
+                            dt_sec: liveSettings.dtSec,
+                            note: `Continuous live sim; rolling capture up to ${NEUROSIM_RECORDING_MAX_STORED_TICKS} ticks; applied PEN_a last L=${appliedPenLeft} R=${appliedPenRight} Hz`,
+                          },
+                          neurons: templateReplay.neurons,
+                          ticks: recordedTicks,
+                        };
+                        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+                        const a = document.createElement('a');
+                        a.href = URL.createObjectURL(blob);
+                        a.download = `neurosim_live_pen_a_${Date.now()}.json`;
+                        a.click();
+                        URL.revokeObjectURL(a.href);
+                      }}
+                      style={{ ...controlButtonStyle(false), width: '100%', justifyContent: 'center', fontVariantNumeric: 'tabular-nums' }}
+                      disabled={recordedTicks.length === 0}
+                    >
+                      Download JSON ({recordedTicks.length.toLocaleString()} ticks)
+                    </button>
+                  </div>
                   <span style={{ fontSize: 11, color: '#7a9cc4' }}>
                     Recording keeps last {NEUROSIM_RECORDING_MAX_STORED_TICKS.toLocaleString()} ticks (rolling window)
                   </span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!templateReplay) return;
-                      const payload: ReplayData = {
-                        meta: {
-                          ...templateReplay.meta,
-                          generated_at: new Date().toISOString(),
-                          source_csv: 'neurosim-live/recording',
-                          ticks: recordedTicks.length,
-                          scenario: 'neurosim_live_pen_a_recording',
-                          dt_sec: liveSettings.dtSec,
-                          note: `Continuous live sim; rolling capture up to ${NEUROSIM_RECORDING_MAX_STORED_TICKS} ticks; applied PEN_a last L=${appliedPenLeft} R=${appliedPenRight} Hz`,
-                        },
-                        neurons: templateReplay.neurons,
-                        ticks: recordedTicks,
-                      };
-                      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-                      const a = document.createElement('a');
-                      a.href = URL.createObjectURL(blob);
-                      a.download = `neurosim_live_pen_a_${Date.now()}.json`;
-                      a.click();
-                      URL.revokeObjectURL(a.href);
-                    }}
-                    style={{ ...controlButtonStyle(false), width: 214, justifyContent: 'center', fontVariantNumeric: 'tabular-nums' }}
-                    disabled={recordedTicks.length === 0}
-                  >
-                    Download JSON ({recordedTicks.length.toLocaleString()} ticks)
-                  </button>
                 </div>
               ) : null}
             </div>
+            
           </div>
         ), document.body) : null}
         {isNeuroSimLive ? createPortal((
@@ -2635,100 +2977,411 @@ export default function VisualizationPage() {
                   boxShadow: '0 8px 20px rgba(0,0,0,0.35)',
                 }}
               >
-                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>PEN_a neuron mapping</div>
-                {penANeurons.left.length === 0 && penANeurons.right.length === 0 ? (
-                  <div style={{ fontSize: 11, color: '#f0a050' }}>Loading PEN_a list…</div>
+                <div role="tablist" aria-label="Right drawer tabs" style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+                  <button type="button" onClick={() => setRightPanelTab('mapping')} style={controlButtonStyle(rightPanelTab === 'mapping')}>
+                    PEN Mapping
+                  </button>
+                  <button type="button" onClick={() => setRightPanelTab('compass')} style={controlButtonStyle(rightPanelTab === 'compass')}>
+                    EPG Compass
+                  </button>
+                </div>
+                {rightPanelTab === 'mapping' ? (
+                  <>
+                    <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>PEN_a neuron mapping</div>
+                    {penANeurons.left.length === 0 && penANeurons.right.length === 0 ? (
+                      <div style={{ fontSize: 11, color: '#f0a050' }}>Loading PEN_a list…</div>
+                    ) : (
+                      <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 11 }}>
+                        <thead>
+                          <tr>
+                            <th style={{ textAlign: 'left', borderBottom: '1px solid #35527a', padding: '2px 4px' }}>Label</th>
+                            <th style={{ textAlign: 'left', borderBottom: '1px solid #35527a', padding: '2px 4px' }}>PEN</th>
+                            <th style={{ textAlign: 'left', borderBottom: '1px solid #35527a', padding: '2px 4px' }}>Hemilineage</th>
+                            <th style={{ textAlign: 'left', borderBottom: '1px solid #35527a', padding: '2px 4px' }}>Side</th>
+                            <th style={{ textAlign: 'left', borderBottom: '1px solid #35527a', padding: '2px 4px' }}>Neuron ID</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {penANeurons.left.map(({ label, id }) => (
+                            <tr key={`map-left-${id}`}>
+                              <td style={{ padding: '2px 4px', color: '#b8d4ff' }}>{label}</td>
+                              <td style={{ padding: '2px 4px', color: '#a8c4ea' }}>{penAMetadataById[id]?.penLabel || '-'}</td>
+                              <td style={{ padding: '2px 4px', color: '#9bb8de' }}>{penAMetadataById[id]?.hemilineage || '-'}</td>
+                              <td style={{ padding: '2px 4px', color: '#9bb8de' }}>{penAMetadataById[id]?.side || (label.startsWith('L') ? 'left' : 'right')}</td>
+                              <td style={{ padding: '2px 4px', color: '#8fb5e3', fontFamily: 'monospace' }}>
+                                <span>{id}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => void handleCopyNeuronId(id)}
+                                  aria-label={copiedPenAId === id ? 'Copied neuron ID' : 'Copy neuron ID'}
+                                  title={copiedPenAId === id ? 'Copied' : 'Copy neuron ID'}
+                                  style={{
+                                    marginLeft: 6,
+                                    width: 18,
+                                    height: 18,
+                                    border: '1px solid #5e7daa',
+                                    borderRadius: 4,
+                                    background: copiedPenAId === id ? '#2f6b3f' : '#1a2b45',
+                                    color: '#d9e9ff',
+                                    cursor: 'pointer',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    verticalAlign: 'middle',
+                                    padding: 0,
+                                  }}
+                                >
+                                  {copiedPenAId === id ? (
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                      <path d="M20 6L9 17l-5-5" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                                    </svg>
+                                  ) : (
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                      <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="2" />
+                                      <path d="M5 15V6a2 2 0 0 1 2-2h9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                                    </svg>
+                                  )}
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                          {penANeurons.right.map(({ label, id }) => (
+                            <tr key={`map-right-${id}`}>
+                              <td style={{ padding: '2px 4px', color: '#b8d4ff' }}>{label}</td>
+                              <td style={{ padding: '2px 4px', color: '#a8c4ea' }}>{penAMetadataById[id]?.penLabel || '-'}</td>
+                              <td style={{ padding: '2px 4px', color: '#9bb8de' }}>{penAMetadataById[id]?.hemilineage || '-'}</td>
+                              <td style={{ padding: '2px 4px', color: '#9bb8de' }}>{penAMetadataById[id]?.side || (label.startsWith('L') ? 'left' : 'right')}</td>
+                              <td style={{ padding: '2px 4px', color: '#8fb5e3', fontFamily: 'monospace' }}>
+                                <span>{id}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => void handleCopyNeuronId(id)}
+                                  aria-label={copiedPenAId === id ? 'Copied neuron ID' : 'Copy neuron ID'}
+                                  title={copiedPenAId === id ? 'Copied' : 'Copy neuron ID'}
+                                  style={{
+                                    marginLeft: 6,
+                                    width: 18,
+                                    height: 18,
+                                    border: '1px solid #5e7daa',
+                                    borderRadius: 4,
+                                    background: copiedPenAId === id ? '#2f6b3f' : '#1a2b45',
+                                    color: '#d9e9ff',
+                                    cursor: 'pointer',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    verticalAlign: 'middle',
+                                    padding: 0,
+                                  }}
+                                >
+                                  {copiedPenAId === id ? (
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                      <path d="M20 6L9 17l-5-5" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                                    </svg>
+                                  ) : (
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                      <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="2" />
+                                      <path d="M5 15V6a2 2 0 0 1 2-2h9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                                    </svg>
+                                  )}
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </>
                 ) : (
-                  <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 11 }}>
-                    <thead>
-                      <tr>
-                        <th style={{ textAlign: 'left', borderBottom: '1px solid #35527a', padding: '2px 4px' }}>Label</th>
-                        <th style={{ textAlign: 'left', borderBottom: '1px solid #35527a', padding: '2px 4px' }}>Neuron ID</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {penANeurons.left.map(({ label, id }) => (
-                        <tr key={`map-left-${id}`}>
-                          <td style={{ padding: '2px 4px', color: '#b8d4ff' }}>{label}</td>
-                          <td style={{ padding: '2px 4px', color: '#8fb5e3', fontFamily: 'monospace' }}>
-                            <span>{id}</span>
-                            <button
-                              type="button"
-                              onClick={() => void handleCopyNeuronId(id)}
-                              aria-label={copiedPenAId === id ? 'Copied neuron ID' : 'Copy neuron ID'}
-                              title={copiedPenAId === id ? 'Copied' : 'Copy neuron ID'}
-                              style={{
-                                marginLeft: 6,
-                                width: 18,
-                                height: 18,
-                                border: '1px solid #5e7daa',
-                                borderRadius: 4,
-                                background: copiedPenAId === id ? '#2f6b3f' : '#1a2b45',
-                                color: '#d9e9ff',
-                                cursor: 'pointer',
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                verticalAlign: 'middle',
-                                padding: 0,
-                              }}
-                            >
-                              {copiedPenAId === id ? (
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                  <path d="M20 6L9 17l-5-5" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
-                                </svg>
-                              ) : (
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                  <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="2" />
-                                  <path d="M5 15V6a2 2 0 0 1 2-2h9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                                </svg>
-                              )}
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                      {penANeurons.right.map(({ label, id }) => (
-                        <tr key={`map-right-${id}`}>
-                          <td style={{ padding: '2px 4px', color: '#b8d4ff' }}>{label}</td>
-                          <td style={{ padding: '2px 4px', color: '#8fb5e3', fontFamily: 'monospace' }}>
-                            <span>{id}</span>
-                            <button
-                              type="button"
-                              onClick={() => void handleCopyNeuronId(id)}
-                              aria-label={copiedPenAId === id ? 'Copied neuron ID' : 'Copy neuron ID'}
-                              title={copiedPenAId === id ? 'Copied' : 'Copy neuron ID'}
-                              style={{
-                                marginLeft: 6,
-                                width: 18,
-                                height: 18,
-                                border: '1px solid #5e7daa',
-                                borderRadius: 4,
-                                background: copiedPenAId === id ? '#2f6b3f' : '#1a2b45',
-                                color: '#d9e9ff',
-                                cursor: 'pointer',
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                verticalAlign: 'middle',
-                                padding: 0,
-                              }}
-                            >
-                              {copiedPenAId === id ? (
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                  <path d="M20 6L9 17l-5-5" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
-                                </svg>
-                              ) : (
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                  <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="2" />
-                                  <path d="M5 15V6a2 2 0 0 1 2-2h9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                                </svg>
-                              )}
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                  <div style={{ position: 'relative', display: 'grid', placeItems: 'center' }}>
+                    <svg
+                      width="152"
+                      height="152"
+                      viewBox="-60 -60 120 120"
+                      style={{ border: '1px solid rgba(255,255,255,0.12)', borderRadius: 8 }}
+                    >
+                      {Array.from({ length: EPG_COMPASS_BINS + 1 }, (_, i) => {
+                        const a = (i / EPG_COMPASS_BINS) * Math.PI * 2 - Math.PI / 2;
+                        return (
+                          <line
+                            key={`divider-${i}`}
+                            x1="0" y1="0"
+                            x2={(Math.cos(a) * 48).toFixed(3)}
+                            y2={(Math.sin(a) * 48).toFixed(3)}
+                            stroke="rgba(255,255,255,0.25)"
+                            strokeWidth="0.8"
+                          />
+                        );
+                      })}
+                      {Array.from({ length: EPG_COMPASS_BINS }, (_, i) => {
+                        const { a0, a1 } = getWedgeParams(i, EPG_COMPASS_BINS);
+                        const r0 = 23;
+                        const r1 = 30;
+                        const x0 = Math.cos(a0) * r0; const y0 = Math.sin(a0) * r0;
+                        const x1 = Math.cos(a1) * r0; const y1 = Math.sin(a1) * r0;
+                        const x2 = Math.cos(a1) * r1; const y2 = Math.sin(a1) * r1;
+                        const x3 = Math.cos(a0) * r1; const y3 = Math.sin(a0) * r1;
+                        return (
+                          <path
+                            key={`epg-slice-color-${i}`}
+                            d={`M ${x0} ${y0} L ${x1} ${y1} L ${x2} ${y2} L ${x3} ${y3} Z`}
+                            fill={EPG_SLICE_COLORS[i % EPG_SLICE_COLORS.length]}
+                            fillOpacity={0.45}
+                            stroke="rgba(255,255,255,0.2)"
+                            strokeWidth="0.4"
+                          />
+                        );
+                      })}
+                      {Array.from({ length: EPG_COMPASS_BINS }, (_, i) => {
+                        const { midAngle } = getWedgeParams(i, EPG_COMPASS_BINS);
+                        const tr = 51;
+                        const tx = Math.cos(midAngle) * tr;
+                        const ty = Math.sin(midAngle) * tr;
+                        return (
+                          <text
+                            key={`epg-slice-label-${i}`}
+                            x={tx.toFixed(3)}
+                            y={ty.toFixed(3)}
+                            textAnchor="middle"
+                            dominantBaseline="middle"
+                            fill="rgba(235,245,255,0.96)"
+                            fontSize="4.2"
+                            fontWeight="700"
+                          >
+                            {EPG_SLICE_ORDER_CLOCKWISE[i]}
+                          </text>
+                        );
+                      })}
+                      <circle cx="0" cy="0" r="44" fill="none" stroke="rgba(120,200,255,0.32)" strokeWidth="1.2" />
+                      <circle cx="0" cy="0" r="36" fill="none" stroke="rgba(208,140,255,0.28)" strokeWidth="1.2" />
+                      <circle cx="0" cy="0" r="30" fill="none" stroke="rgba(255,79,216,0.35)" strokeWidth="1.4" />
+                      <circle cx="0" cy="0" r="18" fill="none" stroke="rgba(255,170,110,0.32)" strokeWidth="1.2" />
+                      {compassStats.upstreamBins.map((v, i) => {
+                        const { a0, a1 } = getWedgeParams(i, compassStats.upstreamBins.length);
+                        const r0 = 44;
+                        const r1 = 44 + v * 10;
+                        const x0 = Math.cos(a0) * r0; const y0 = Math.sin(a0) * r0;
+                        const x1 = Math.cos(a1) * r0; const y1 = Math.sin(a1) * r0;
+                        const x2 = Math.cos(a1) * r1; const y2 = Math.sin(a1) * r1;
+                        const x3 = Math.cos(a0) * r1; const y3 = Math.sin(a0) * r1;
+                        const alpha = 0.2 + v * 0.62;
+                        return (
+                          <path
+                            key={`up-bin-${i}`}
+                            d={`M ${x0} ${y0} L ${x1} ${y1} L ${x2} ${y2} L ${x3} ${y3} Z`}
+                            fill={`rgba(120,200,255,${alpha.toFixed(3)})`}
+                            stroke="none"
+                          />
+                        );
+                      })}
+                      {compassStats.delta7Bins.map((v, i) => {
+                        const { a0, a1 } = getWedgeParams(i, compassStats.delta7Bins.length);
+                        const r0 = 36;
+                        const r1 = 36 + v * 7;
+                        const x0 = Math.cos(a0) * r0; const y0 = Math.sin(a0) * r0;
+                        const x1 = Math.cos(a1) * r0; const y1 = Math.sin(a1) * r0;
+                        const x2 = Math.cos(a1) * r1; const y2 = Math.sin(a1) * r1;
+                        const x3 = Math.cos(a0) * r1; const y3 = Math.sin(a0) * r1;
+                        const alpha = 0.18 + v * 0.58;
+                        return (
+                          <path
+                            key={`d7-bin-${i}`}
+                            d={`M ${x0} ${y0} L ${x1} ${y1} L ${x2} ${y2} L ${x3} ${y3} Z`}
+                            fill={`rgba(208,140,255,${alpha.toFixed(3)})`}
+                            stroke="none"
+                          />
+                        );
+                      })}
+                      {compassStats.downstreamBins.map((v, i) => {
+                        const { a0, a1 } = getWedgeParams(i, compassStats.downstreamBins.length);
+                        const r0 = 18;
+                        const r1 = 18 + v * 8;
+                        const x0 = Math.cos(a0) * r0; const y0 = Math.sin(a0) * r0;
+                        const x1 = Math.cos(a1) * r0; const y1 = Math.sin(a1) * r0;
+                        const x2 = Math.cos(a1) * r1; const y2 = Math.sin(a1) * r1;
+                        const x3 = Math.cos(a0) * r1; const y3 = Math.sin(a0) * r1;
+                        const alpha = 0.2 + v * 0.62;
+                        return (
+                          <path
+                            key={`down-bin-${i}`}
+                            d={`M ${x0} ${y0} L ${x1} ${y1} L ${x2} ${y2} L ${x3} ${y3} Z`}
+                            fill={`rgba(255,170,110,${alpha.toFixed(3)})`}
+                            stroke="none"
+                          />
+                        );
+                      })}
+                      {Array.from({ length: EPG_COMPASS_BINS }, (_, i) => {
+                        const { midAngle: a } = getWedgeParams(i, EPG_COMPASS_BINS);
+                        return (
+                          <line
+                            key={`link-up-base-${i}`}
+                            x1={(Math.cos(a) * 44).toFixed(3)}
+                            y1={(Math.sin(a) * 44).toFixed(3)}
+                            x2={(Math.cos(a) * 30).toFixed(3)}
+                            y2={(Math.sin(a) * 30).toFixed(3)}
+                            stroke="rgba(120,200,255,0.35)"
+                            strokeWidth="1.25"
+                          />
+                        );
+                      })}
+                      {compassStats.upstreamBins.map((v, i) => {
+                        const { midAngle: a } = getWedgeParams(i, EPG_COMPASS_BINS);
+                        return (
+                          <line
+                            key={`link-up-${i}`}
+                            x1={(Math.cos(a) * 44).toFixed(3)}
+                            y1={(Math.sin(a) * 44).toFixed(3)}
+                            x2={(Math.cos(a) * 30).toFixed(3)}
+                            y2={(Math.sin(a) * 30).toFixed(3)}
+                            stroke={`rgba(120,200,255,${(0.18 + v * 0.55).toFixed(3)})`}
+                            strokeWidth="1.6"
+                          />
+                        );
+                      })}
+                      {compassStats.delta7Bins.map((v, i) => {
+                        const { midAngle: a } = getWedgeParams(i, EPG_COMPASS_BINS);
+                        return (
+                          <line
+                            key={`link-d7-${i}`}
+                            x1={(Math.cos(a) * 36).toFixed(3)}
+                            y1={(Math.sin(a) * 36).toFixed(3)}
+                            x2={(Math.cos(a) * 30).toFixed(3)}
+                            y2={(Math.sin(a) * 30).toFixed(3)}
+                            stroke={`rgba(208,140,255,${(0.16 + v * 0.52).toFixed(3)})`}
+                            strokeWidth="1.4"
+                          />
+                        );
+                      })}
+                      {compassStats.downstreamBins.map((v, i) => {
+                        const { midAngle: a } = getWedgeParams(i, EPG_COMPASS_BINS);
+                        return (
+                          <line
+                            key={`link-down-${i}`}
+                            x1={(Math.cos(a) * 30).toFixed(3)}
+                            y1={(Math.sin(a) * 30).toFixed(3)}
+                            x2={(Math.cos(a) * 18).toFixed(3)}
+                            y2={(Math.sin(a) * 18).toFixed(3)}
+                            stroke={`rgba(255,170,110,${(0.18 + v * 0.55).toFixed(3)})`}
+                            strokeWidth="1.6"
+                          />
+                        );
+                      })}
+                      <circle cx="0" cy="0" r="42" fill="none" stroke="rgba(140,120,255,0.35)" strokeWidth="2" />
+                      {legendVisibility.epg ? compassStats.epgBins.map((v, i) => {
+                        const { a0, a1 } = getWedgeParams(i, compassStats.epgBins.length);
+                        const r0 = 30;
+                        const r1 = 30 + v * 14;
+                        const x0 = Math.cos(a0) * r0; const y0 = Math.sin(a0) * r0;
+                        const x1 = Math.cos(a1) * r0; const y1 = Math.sin(a1) * r0;
+                        const x2 = Math.cos(a1) * r1; const y2 = Math.sin(a1) * r1;
+                        const x3 = Math.cos(a0) * r1; const y3 = Math.sin(a0) * r1;
+                        const alpha = 0.24 + v * 0.76;
+                        return (
+                          <path
+                            key={`bin-${i}`}
+                            d={`M ${x0} ${y0} L ${x1} ${y1} L ${x2} ${y2} L ${x3} ${y3} Z`}
+                            fill={compassHeatFill(v, alpha)}
+                            stroke="rgba(255,220,160,0.55)"
+                            strokeWidth="1"
+                          />
+                        );
+                      }) : null}
+                      {legendVisibility.penA ? penANeurons.left.map(({ id, label }, i, arr) => {
+                        const t = arr.length <= 1 ? 0.5 : i / (arr.length - 1);
+                        const angle = (Math.PI * 0.65) + (Math.PI * 0.7 * t);
+                        const radius = 55;
+                        const x = Math.cos(angle) * radius;
+                        const y = Math.sin(angle) * radius;
+                        const s = Math.max(0, Math.min(1, penASpikeStrengthById[id] ?? 0));
+                        const isActive = s > 0.08;
+                        const fill = isActive ? 'rgba(0, 255, 110, 0.98)' : 'rgba(76, 95, 122, 0.92)';
+                        return (
+                          <g key={`pen-left-compass-${id}`}>
+                            <circle cx={x.toFixed(3)} cy={y.toFixed(3)} r={isActive ? '3.3' : '2.2'} fill={fill} stroke={isActive ? 'rgba(220,255,225,0.98)' : 'rgba(170,190,220,0.45)'} strokeWidth={isActive ? '0.9' : '0.45'} />
+                            <text x={(x - 5.2).toFixed(3)} y={(y - 3.0).toFixed(3)} fill={isActive ? 'rgba(225,255,230,1)' : 'rgba(185,205,235,0.8)'} fontSize="3.2" fontWeight="700">
+                              {label}
+                            </text>
+                          </g>
+                        );
+                      }) : null}
+                      {legendVisibility.penA ? penANeurons.right.map(({ id, label }, i, arr) => {
+                        const t = arr.length <= 1 ? 0.5 : i / (arr.length - 1);
+                        const angle = (-Math.PI * 0.35) + (Math.PI * 0.7 * t);
+                        const radius = 55;
+                        const x = Math.cos(angle) * radius;
+                        const y = Math.sin(angle) * radius;
+                        const s = Math.max(0, Math.min(1, penASpikeStrengthById[id] ?? 0));
+                        const isActive = s > 0.08;
+                        const fill = isActive ? 'rgba(0, 255, 110, 0.98)' : 'rgba(76, 95, 122, 0.92)';
+                        return (
+                          <g key={`pen-right-compass-${id}`}>
+                            <circle cx={x.toFixed(3)} cy={y.toFixed(3)} r={isActive ? '3.3' : '2.2'} fill={fill} stroke={isActive ? 'rgba(220,255,225,0.98)' : 'rgba(170,190,220,0.45)'} strokeWidth={isActive ? '0.9' : '0.45'} />
+                            <text x={(x + 2.9).toFixed(3)} y={(y - 3.0).toFixed(3)} fill={isActive ? 'rgba(225,255,230,1)' : 'rgba(185,205,235,0.8)'} fontSize="3.2" fontWeight="700">
+                              {label}
+                            </text>
+                          </g>
+                        );
+                      }) : null}
+                      {legendVisibility.epg && bumpTheta != null ? (
+                        <line
+                          x1="0"
+                          y1="0"
+                          x2={(Math.cos(bumpTheta * Math.PI / 180) * COMPASS_ARROW_RADIUS).toFixed(3)}
+                          y2={(-Math.sin(bumpTheta * Math.PI / 180) * COMPASS_ARROW_RADIUS).toFixed(3)}
+                          stroke="#ff4fd8"
+                          strokeWidth="2.5"
+                        />
+                      ) : null}
+                    </svg>
+                    <button
+                      type="button"
+                      onClick={() => setShowCompassInfo((v) => !v)}
+                      title="EPG compass info"
+                      aria-label="Toggle EPG compass info"
+                      style={{
+                        position: 'absolute',
+                        top: 8,
+                        right: 6,
+                        width: 18,
+                        height: 18,
+                        borderRadius: 999,
+                        border: '1px solid rgba(150, 185, 235, 0.7)',
+                        background: 'rgba(18, 37, 64, 0.95)',
+                        color: '#d8e9ff',
+                        fontSize: 12,
+                        lineHeight: '16px',
+                        textAlign: 'center',
+                        cursor: 'pointer',
+                        padding: 0,
+                        fontWeight: 700,
+                      }}
+                    >
+                      i
+                    </button>
+                    {showCompassInfo ? (
+                      <div
+                        style={{
+                          position: 'absolute',
+                          top: 34,
+                          right: 0,
+                          width: 280,
+                          maxWidth: 'min(280px, calc(100vw - 56px))',
+                          padding: '8px 10px',
+                          borderRadius: 8,
+                          border: '1px solid rgba(130,170,225,0.55)',
+                          background: 'rgba(10,20,36,0.96)',
+                          color: '#d7e8ff',
+                          fontSize: 11,
+                          lineHeight: 1.35,
+                          boxShadow: '0 8px 20px rgba(0,0,0,0.38)',
+                          zIndex: 2,
+                        }}
+                      >
+                        EPG compass: 16 labeled wedges using processed labels and classification side, arranged anatomically.
+                        Order is fixed to match the reference slice diagram (top= L5, top-left=R5, right of L5=R4, then L6).
+                      </div>
+                    ) : null}
+                  </div>
                 )}
               </div>
             ) : null}

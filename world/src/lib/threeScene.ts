@@ -835,7 +835,7 @@ export function initThreeScene(
 
       const visualZ = Math.max(0, z - GROUND_Z);
       inst.group.position.set(x, visualZ, y);
-      // glTF faces +Z. Scene motion heading 0=+x, π/2=+z; convert to model yaw.
+      // Current asset calibration behaves as -Z-forward in scene, so yaw uses -(heading + PI/2).
       inst.group.rotation.y = -inst.heading - Math.PI / 2;
       if (SHOW_FLY_SMELL_RADIUS_DEBUG && debugEnabled && flySmellDebugPool[i]) {
         const smell = flySmellDebugPool[i]!;

@@ -328,6 +328,7 @@ const PEN_CONN_PROPAGATION_MIN_SEC = 0.002;
 const PEN_CONN_PROPAGATION_MAX_SEC = 0.009;
 const PEN_COMPASS_Z_OFFSET_BASE = 0.03;
 const PEN_COMPASS_Z_OFFSET_ALT = 0.018;
+const PEN_COMPASS_NORMALIZED_Z_ALT = 0.06;
 const SCENE_BUMP_ARROW_LENGTH = 0.48;
 const COMPASS_ARROW_RADIUS = 18;
 const DELTA7_OPPOSITE_INHIBIT_WEIGHT = 0.55;
@@ -948,6 +949,23 @@ function buildScene(
     glowColors[i * 3] = 0;
     glowColors[i * 3 + 1] = 0;
     glowColors[i * 3 + 2] = 0;
+  }
+  if (viewMode === 'compass') {
+    const penCompassIndices: number[] = [];
+    for (let i = 0; i < n; i += 1) {
+      if (isPenAByIndex[i]) penCompassIndices.push(i);
+    }
+    // Alternate PEN_a depth in rendered (normalized) space so rings are visibly de-planarized.
+    penCompassIndices.sort((a, b) => {
+      const aa = Math.atan2(positions[a * 3 + 1]!, positions[a * 3]!);
+      const bb = Math.atan2(positions[b * 3 + 1]!, positions[b * 3]!);
+      return aa - bb;
+    });
+    for (let k = 0; k < penCompassIndices.length; k += 1) {
+      const idx = penCompassIndices[k]!;
+      const zAlt = k % 2 === 0 ? PEN_COMPASS_NORMALIZED_Z_ALT : -PEN_COMPASS_NORMALIZED_Z_ALT;
+      positions[idx * 3 + 2] += zAlt;
+    }
   }
 
   // In compass view: add a second point cloud above the ring with EPG in their real biological (x,y,z) coordinates.

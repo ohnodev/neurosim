@@ -166,9 +166,10 @@ const INACTIVE_EPG_COLOR = new THREE.Color(0x4d6fb6);
 const INACTIVE_UPSTREAM_COLOR = new THREE.Color(0x2b4b68);
 const INACTIVE_DOWNSTREAM_COLOR = new THREE.Color(0x5a3d2a);
 const INACTIVE_DELTA7_COLOR = new THREE.Color(0x5e2b6d);
-const INACTIVE_PEN_A_COLOR = new THREE.Color(0x2aa6b3);
+const INACTIVE_PEN_A_COLOR = new THREE.Color(0x3c4d66);
+const HIDDEN_NEURON_COLOR = new THREE.Color(0x1a2435);
 const ACTIVE_COLOR = new THREE.Color(0x6eff9e);
-const ACTIVE_PEN_A_COLOR = new THREE.Color(0x00ffd0);
+const ACTIVE_PEN_A_COLOR = new THREE.Color(0x00ff6e);
 const ACTIVE_RING_COLOR = new THREE.Color(0xff4fd8);
 const ACTIVE_UPSTREAM_COLOR = new THREE.Color(0x7ad7ff);
 const ACTIVE_DOWNSTREAM_COLOR = new THREE.Color(0xffb57a);
@@ -530,6 +531,7 @@ function buildScene(
   container: HTMLDivElement,
   neurons: ReplayNeuron[],
   viewMode: ViewMode,
+  visibility: { epg: boolean; penA: boolean },
   onHover?: (neuronId: string | null) => void,
   epgLabelMap?: Map<string, string> | null,
   replay?: ReplayData | null,
@@ -878,9 +880,9 @@ function buildScene(
       }
     }
     const c = isCompassEpgNeuron(neuron)
-      ? INACTIVE_EPG_COLOR.clone().multiplyScalar(0.42)
+      ? (visibility.epg ? INACTIVE_EPG_COLOR.clone().multiplyScalar(0.42) : HIDDEN_NEURON_COLOR)
       : isPenANeuron(neuron)
-        ? INACTIVE_PEN_A_COLOR
+        ? (visibility.penA ? INACTIVE_PEN_A_COLOR : HIDDEN_NEURON_COLOR)
       : neuron.is_epg_upstream
         ? INACTIVE_UPSTREAM_COLOR
         : neuron.is_epg_downstream
@@ -1246,6 +1248,9 @@ function buildScene(
     for (let i = 0; i < colorAttr.count; i += 1) {
       const t = brightnessByIndex[i] ?? 0;
       if (isEpgByIndex[i]) {
+        if (!visibility.epg) {
+          tempC.copy(HIDDEN_NEURON_COLOR);
+        } else {
         tempEpgInactive.copy(INACTIVE_EPG_COLOR).multiplyScalar(0.42);
         if (t <= 0) {
           tempC.copy(tempEpgInactive);
@@ -1253,9 +1258,14 @@ function buildScene(
           tempEpgHot.copy(tempEpgInactive).lerp(EPG_HEAT_ORANGE, 0.45).lerp(EPG_HEAT_RED, t);
           tempC.copy(tempEpgInactive).lerp(tempEpgHot, t);
         }
+        }
       } else if (state.isPenAByIndex[i]) {
-        tempC.copy(INACTIVE_PEN_A_COLOR);
-        if (t > 0) tempC.lerp(ACTIVE_PEN_A_COLOR, t);
+        if (!visibility.penA) {
+          tempC.copy(HIDDEN_NEURON_COLOR);
+        } else {
+          tempC.copy(INACTIVE_PEN_A_COLOR);
+          if (t > 0) tempC.lerp(ACTIVE_PEN_A_COLOR, t);
+        }
       } else if (isUpstreamByIndex[i]) {
         tempC.copy(INACTIVE_UPSTREAM_COLOR);
         if (t > 0) tempC.lerp(ACTIVE_UPSTREAM_COLOR, t);
@@ -1633,7 +1643,8 @@ export default function VisualizationPage() {
   const copyTimeoutRef = useRef<number | null>(null);
   const isMountedRef = useRef(true);
   const [showCompassInfo, setShowCompassInfo] = useState(false);
-  const [showBiologicalInfo, setShowBiologicalInfo] = useState(false);
+  const [showLegendPopover, setShowLegendPopover] = useState(false);
+  const [legendVisibility, setLegendVisibility] = useState({ epg: true, penA: true });
   const [showRecordMenu, setShowRecordMenu] = useState(false);
   const [bottomControlTab, setBottomControlTab] = useState<'individual' | 'sliders'>('individual');
   const [rightPanelTab, setRightPanelTab] = useState<'mapping' | 'compass'>('mapping');
@@ -1690,6 +1701,8 @@ export default function VisualizationPage() {
   const [error, setError] = useState<string | null>(null);
   const sceneContainerRef = useRef<HTMLDivElement | null>(null);
   const sceneRef = useRef<SceneState | null>(null);
+  const legendPopoverRef = useRef<HTMLDivElement | null>(null);
+  const legendTriggerRef = useRef<HTMLButtonElement | null>(null);
 
   const neurons = useMemo(() => {
     const base = replay?.neurons ?? [];
@@ -2123,19 +2136,42 @@ export default function VisualizationPage() {
       sceneRef.current.dispose();
       sceneRef.current = null;
     }
-    sceneRef.current = buildScene(container, displayNeurons, viewMode, undefined, epgLabelMap, replay ?? null);
+    sceneRef.current = buildScene(
+      container,
+      displayNeurons,
+      viewMode,
+      { epg: legendVisibility.epg, penA: legendVisibility.penA },
+      undefined,
+      epgLabelMap,
+      replay ?? null,
+    );
     return () => {
       if (sceneRef.current) {
         sceneRef.current.dispose();
         sceneRef.current = null;
       }
     };
-  }, [displayNeurons, viewMode, epgLabelMap]);
+  }, [displayNeurons, viewMode, epgLabelMap, legendVisibility.epg, legendVisibility.penA]);
 
   useEffect(() => {
     if (!sceneRef.current) return;
     sceneRef.current.arrowState.smoothingEnabled = arrowSmoothing;
   }, [arrowSmoothing]);
+
+  useEffect(() => {
+    if (!showLegendPopover) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (legendPopoverRef.current?.contains(target)) return;
+      if (legendTriggerRef.current?.contains(target)) return;
+      setShowLegendPopover(false);
+    };
+    window.addEventListener('pointerdown', onPointerDown);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown);
+    };
+  }, [showLegendPopover]);
 
   useEffect(() => {
     if (!replay || !sceneRef.current) return;
@@ -2172,7 +2208,6 @@ export default function VisualizationPage() {
   const statusTitle = replay
     ? `replay=${selectedReplay?.id ?? 'n/a'} | scenario=${replay.meta?.scenario ?? 'n/a'} | decode=vector | neurons=${Array.isArray(replay.neurons) ? replay.neurons.length : displayNeurons.length} | rendered=${displayNeurons.length} | ticks=${replay.ticks.length} | sim=${(replay.ticks.length * getReplayDtSec(replay)).toFixed(3)}s | dt=${(getReplayDtSec(replay) * 1000).toFixed(3)}ms | epg fired=${epgUniqueFired ?? 'n/a'} | bump angle=${compassStats.bumpAngleDeg == null ? 'n/a' : `${compassStats.bumpAngleDeg.toFixed(1)}deg`} | bump strength=${compassStats.bumpStrength.toFixed(3)} | top bin=${compassStats.epgTopBinIndex}`
     : undefined;
-  const activePenCount = [...Object.values(penASpikeStrengthById)].filter((v) => v > 0.01).length;
   const applyPenAHz = async () => {
     setError(null);
     setApplyBusy(true);
@@ -2343,32 +2378,32 @@ export default function VisualizationPage() {
               <span style={{ fontSize: 12, color: '#b6cfe9', fontWeight: 600 }}>
                 View: {viewMode === 'compass' ? 'EPG Compass' : 'Biological'}
               </span>
-              {viewMode === 'biological' ? (
-                <button
-                  type="button"
-                  aria-label="Biological legend info"
-                  title="Biological legend info"
-                  onClick={() => setShowBiologicalInfo((v) => !v)}
-                  style={{
-                    width: 16,
-                    height: 16,
-                    borderRadius: 999,
-                    border: '1px solid rgba(150, 185, 235, 0.7)',
-                    background: 'rgba(18, 37, 64, 0.95)',
-                    color: '#d8e9ff',
-                    fontSize: 11,
-                    lineHeight: '14px',
-                    textAlign: 'center',
-                    cursor: 'pointer',
-                    padding: 0,
-                    fontWeight: 700,
-                  }}
-                >
-                  i
-                </button>
-              ) : null}
-              {viewMode === 'biological' && showBiologicalInfo ? (
+              <button
+                ref={legendTriggerRef}
+                type="button"
+                aria-label="Toggle legend"
+                title="Toggle legend"
+                onClick={() => setShowLegendPopover((v) => !v)}
+                style={{
+                  width: 16,
+                  height: 16,
+                  borderRadius: 999,
+                  border: '1px solid rgba(150, 185, 235, 0.7)',
+                  background: 'rgba(18, 37, 64, 0.95)',
+                  color: '#d8e9ff',
+                  fontSize: 11,
+                  lineHeight: '14px',
+                  textAlign: 'center',
+                  cursor: 'pointer',
+                  padding: 0,
+                  fontWeight: 700,
+                }}
+              >
+                i
+              </button>
+              {showLegendPopover ? (
                 <div
+                  ref={legendPopoverRef}
                   style={{
                     position: 'absolute',
                     top: 22,
@@ -2386,7 +2421,30 @@ export default function VisualizationPage() {
                     zIndex: 4,
                   }}
                 >
-                  Biological view shows PEN_a locations in fly coordinates and highlights PEN_a neurons that spiked in recent live ticks.
+                  <div style={{ fontWeight: 700, marginBottom: 6 }}>
+                    {viewMode === 'compass' ? 'EPG compass legend' : 'Biological legend'}
+                  </div>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={legendVisibility.epg}
+                      onChange={(e) => setLegendVisibility((prev) => ({ ...prev, epg: e.target.checked }))}
+                    />
+                    Show EPG neurons
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={legendVisibility.penA}
+                      onChange={(e) => setLegendVisibility((prev) => ({ ...prev, penA: e.target.checked }))}
+                    />
+                    Show PEN_a neurons
+                  </label>
+                  <div style={{ color: '#9fc0e6' }}>
+                    {viewMode === 'compass'
+                      ? 'PEN_a are placed on the outer circle (left/right split).'
+                      : 'PEN_a use biological positions; active spikes glow brighter.'}
+                  </div>
                 </div>
               ) : null}
             </div>
@@ -2490,35 +2548,7 @@ export default function VisualizationPage() {
                 </div>
               ) : null}
             </div>
-            {viewMode === 'biological' ? (
-              <div
-                style={{
-                  marginTop: 2,
-                  maxWidth: 300,
-                  padding: '8px 10px',
-                  border: '1px solid rgba(126, 165, 222, 0.35)',
-                  borderRadius: 8,
-                  background: 'rgba(8, 16, 30, 0.86)',
-                  color: '#d7e8ff',
-                  fontSize: 11,
-                  lineHeight: 1.35,
-                  boxShadow: '0 8px 20px rgba(0,0,0,0.32)',
-                }}
-              >
-                <div style={{ fontWeight: 700, marginBottom: 6 }}>Biological legend</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ width: 9, height: 9, borderRadius: 999, background: '#4a7fa8', display: 'inline-block' }} />
-                  PEN_a neuron location (biological coordinates)
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ width: 9, height: 9, borderRadius: 999, background: '#6fffd2', display: 'inline-block' }} />
-                  PEN_a firing highlight (live spikes in recent ticks)
-                </div>
-                <div style={{ marginTop: 6, color: '#9fc0e6' }}>
-                  Active PEN_a: {activePenCount}/{penANeurons.left.length + penANeurons.right.length}
-                </div>
-              </div>
-            ) : null}
+            
           </div>
         ), document.body) : null}
         {isNeuroSimLive ? createPortal((
@@ -2857,7 +2887,7 @@ export default function VisualizationPage() {
                         );
                       })}
                       <circle cx="0" cy="0" r="42" fill="none" stroke="rgba(140,120,255,0.35)" strokeWidth="2" />
-                      {compassStats.epgBins.map((v, i) => {
+                      {legendVisibility.epg ? compassStats.epgBins.map((v, i) => {
                         const { a0, a1 } = getWedgeParams(i, compassStats.epgBins.length);
                         const r0 = 30;
                         const r1 = 30 + v * 14;
@@ -2875,42 +2905,44 @@ export default function VisualizationPage() {
                             strokeWidth="1"
                           />
                         );
-                      })}
-                      {penANeurons.left.map(({ id, label }, i, arr) => {
+                      }) : null}
+                      {legendVisibility.penA ? penANeurons.left.map(({ id, label }, i, arr) => {
                         const t = arr.length <= 1 ? 0.5 : i / (arr.length - 1);
                         const angle = (Math.PI * 0.65) + (Math.PI * 0.7 * t);
                         const radius = 55;
                         const x = Math.cos(angle) * radius;
                         const y = Math.sin(angle) * radius;
                         const s = Math.max(0, Math.min(1, penASpikeStrengthById[id] ?? 0));
-                        const fill = `rgba(${Math.round(74 + s * 37)}, ${Math.round(127 + s * 128)}, ${Math.round(168 + s * 42)}, 0.95)`;
+                        const isActive = s > 0.08;
+                        const fill = isActive ? 'rgba(0, 255, 110, 0.98)' : 'rgba(76, 95, 122, 0.92)';
                         return (
                           <g key={`pen-left-compass-${id}`}>
-                            <circle cx={x.toFixed(3)} cy={y.toFixed(3)} r="2.4" fill={fill} stroke="rgba(220,240,255,0.82)" strokeWidth="0.5" />
-                            <text x={(x - 5.2).toFixed(3)} y={(y - 3.0).toFixed(3)} fill="rgba(210,230,255,0.94)" fontSize="3.2" fontWeight="700">
+                            <circle cx={x.toFixed(3)} cy={y.toFixed(3)} r={isActive ? '3.3' : '2.2'} fill={fill} stroke={isActive ? 'rgba(220,255,225,0.98)' : 'rgba(170,190,220,0.45)'} strokeWidth={isActive ? '0.9' : '0.45'} />
+                            <text x={(x - 5.2).toFixed(3)} y={(y - 3.0).toFixed(3)} fill={isActive ? 'rgba(225,255,230,1)' : 'rgba(185,205,235,0.8)'} fontSize="3.2" fontWeight="700">
                               {label}
                             </text>
                           </g>
                         );
-                      })}
-                      {penANeurons.right.map(({ id, label }, i, arr) => {
+                      }) : null}
+                      {legendVisibility.penA ? penANeurons.right.map(({ id, label }, i, arr) => {
                         const t = arr.length <= 1 ? 0.5 : i / (arr.length - 1);
                         const angle = (-Math.PI * 0.35) + (Math.PI * 0.7 * t);
                         const radius = 55;
                         const x = Math.cos(angle) * radius;
                         const y = Math.sin(angle) * radius;
                         const s = Math.max(0, Math.min(1, penASpikeStrengthById[id] ?? 0));
-                        const fill = `rgba(${Math.round(168 + s * 70)}, ${Math.round(112 + s * 54)}, ${Math.round(92 + s * 28)}, 0.95)`;
+                        const isActive = s > 0.08;
+                        const fill = isActive ? 'rgba(0, 255, 110, 0.98)' : 'rgba(76, 95, 122, 0.92)';
                         return (
                           <g key={`pen-right-compass-${id}`}>
-                            <circle cx={x.toFixed(3)} cy={y.toFixed(3)} r="2.4" fill={fill} stroke="rgba(255,228,210,0.82)" strokeWidth="0.5" />
-                            <text x={(x + 2.9).toFixed(3)} y={(y - 3.0).toFixed(3)} fill="rgba(255,220,205,0.94)" fontSize="3.2" fontWeight="700">
+                            <circle cx={x.toFixed(3)} cy={y.toFixed(3)} r={isActive ? '3.3' : '2.2'} fill={fill} stroke={isActive ? 'rgba(220,255,225,0.98)' : 'rgba(170,190,220,0.45)'} strokeWidth={isActive ? '0.9' : '0.45'} />
+                            <text x={(x + 2.9).toFixed(3)} y={(y - 3.0).toFixed(3)} fill={isActive ? 'rgba(225,255,230,1)' : 'rgba(185,205,235,0.8)'} fontSize="3.2" fontWeight="700">
                               {label}
                             </text>
                           </g>
                         );
-                      })}
-                      {viewMode !== 'biological' && bumpTheta != null ? (
+                      }) : null}
+                      {legendVisibility.epg && viewMode !== 'biological' && bumpTheta != null ? (
                         <line
                           x1="0"
                           y1="0"

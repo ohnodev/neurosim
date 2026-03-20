@@ -1846,7 +1846,6 @@ const { useServer } = require_('graphql-ws/use/ws') as {
 };
 
 const GRAPHQL_WS_PATH = '/graphql-ws';
-const LEGACY_GRAPHQL_WS_PATH = '/wss';
 const MAX_GQL_SUBSCRIPTIONS_PER_CONNECTION = 6;
 const gqlSubsPerSocket = new WeakMap<import('ws').WebSocket, number>();
 const gqlSchema = buildSchema(`
@@ -1969,7 +1968,7 @@ const httpServer = createServer(app);
 const gqlWss = new WebSocketServer({ noServer: true });
 httpServer.on('upgrade', (request, socket, head) => {
   const pathname = request.url?.split('?')[0];
-  if (pathname !== GRAPHQL_WS_PATH && pathname !== LEGACY_GRAPHQL_WS_PATH) return;
+  if (pathname !== GRAPHQL_WS_PATH) return;
   gqlWss.handleUpgrade(request, socket, head, (ws) => {
     gqlWss.emit('connection', ws, request);
   });
@@ -2010,60 +2009,10 @@ useServer(
   25_000,
 );
 
-const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
-
-wss.on('connection', (ws) => {
-  wsClients.add(ws);
-  clientViewFlyIndex.set(ws, 0);
-  clientActivityCursor.set(ws, 0);
-  console.log('[ws] client connected, total=', wsClients.size);
-
-  const flies = sims.map((s) => s.state.fly);
-  const viewIndex = Math.max(0, Math.min(sims.length - 1, 0));
-  const states = sims.map((s) => s.state);
-  const activities = states.map((s) => s.activity);
-  const firstState = sims[0]?.state;
-  ws.send(JSON.stringify({
-    frames: [{ t: firstState?.t ?? 0, flies }],
-    activity: activities[viewIndex] ?? {},
-    sources: getSources(),
-    simRunning,
-    ticks: [],
-    epgIndexToBin,
-    worldDtSec: WORLD_SIM_DT_SEC,
-    worldStepsPerBatch,
-    flyIdBySimIndex: sims.map((s) => s.flyId),
-  }));
-
-  ws.on('message', (data) => {
-    try {
-      const msg = JSON.parse(data.toString());
-      if (typeof msg.viewFlyIndex === 'number') {
-        clientViewFlyIndex.set(ws, Math.max(0, msg.viewFlyIndex));
-        clientActivityCursor.set(ws, 0);
-      }
-    } catch {
-      /* ignore */
-    }
-  });
-
-  ws.on('close', () => {
-    clientActivityCursor.delete(ws);
-    clientViewFlyIndex.delete(ws);
-    wsClients.delete(ws);
-    console.log('[ws] client disconnected, total=', wsClients.size);
-  });
-
-  ws.on('error', (err) => {
-    console.error('[ws] error', err);
-  });
-});
-
 if (process.env.VITEST !== 'true') {
   httpServer.listen(PORT, () => {
     startSim();
     console.log('NeuroSim API http://localhost:' + PORT);
-    console.log('WebSocket ws://localhost:' + PORT + '/ws');
     console.log('GraphQL WS ws://localhost:' + PORT + GRAPHQL_WS_PATH);
     console.log(
       'Connectome:',

@@ -1506,7 +1506,7 @@ export default function VisualizationPage() {
   const [showCompassInfo, setShowCompassInfo] = useState(false);
   const [showRecordMenu, setShowRecordMenu] = useState(true);
   const [bottomControlTab, setBottomControlTab] = useState<'individual' | 'sliders'>('individual');
-  const [compassPos, setCompassPos] = useState({ x: 12, y: 14 });
+  const [compassPos, setCompassPos] = useState({ x: 12, y: 34 });
   const [draggingCompass, setDraggingCompass] = useState(false);
   const compassWidgetRef = useRef<HTMLDivElement | null>(null);
   const compassDragOffsetRef = useRef({ x: 0, y: 0 });
@@ -2417,20 +2417,22 @@ export default function VisualizationPage() {
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: 8,
-                padding: '6px 8px',
-                border: '1px solid rgba(140,170,220,0.38)',
-                borderRadius: 8,
-                background: 'rgba(8, 16, 30, 0.62)',
-                backdropFilter: 'blur(10px)',
-                WebkitBackdropFilter: 'blur(10px)',
-                boxShadow: '0 10px 22px rgba(0,0,0,0.36)',
+                gap: 6,
               }}
             >
               <button
                 type="button"
                 onClick={() => setViewMode((v) => (v === 'compass' ? 'biological' : 'compass'))}
-                style={{ ...controlButtonStyle(false), display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                style={{
+                  border: 'none',
+                  background: 'transparent',
+                  color: '#d7e8ff',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: 0,
+                  cursor: 'pointer',
+                }}
                 title="Toggle view mode"
               >
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">

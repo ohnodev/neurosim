@@ -1530,7 +1530,7 @@ export default function VisualizationPage() {
           : fetchedReplay,
     [selectedReplayId, liveReplay, fetchedReplay, templateReplay],
   );
-  const [arrowSmoothing, setArrowSmoothing] = useState(true);
+  const arrowSmoothing = true;
   const [epgLabelMap, setEpgLabelMap] = useState<Map<string, string> | null>(null);
   const [compassStats, setCompassStats] = useState<CompassStats>({
     epgActiveCount: 0,
@@ -2352,11 +2352,6 @@ export default function VisualizationPage() {
           <button type="button" onClick={() => setViewMode('raw')} style={controlButtonStyle(viewMode === 'raw')}>Raw</button>
           <button type="button" onClick={() => setViewMode('aligned')} style={controlButtonStyle(viewMode === 'aligned')}>Aligned</button>
           <button type="button" onClick={() => setViewMode('compass')} style={controlButtonStyle(viewMode === 'compass')}>Compass loop</button>
-        </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <button type="button" onClick={() => setArrowSmoothing((v) => !v)} style={controlButtonStyle(arrowSmoothing)}>
-            Arrow smoothing: {arrowSmoothing ? 'ON' : 'OFF'}
-          </button>
         </div>
         {replay ? createPortal((
           <div

@@ -39,7 +39,6 @@ import { DebugPanelSlot } from './DebugPanelSlot';
 import { FliesPanelCurrentSlots } from './FliesPanelCurrentSlots';
 import { FliesPanelGraveyardSlots } from './FliesPanelGraveyardSlots';
 import { SidePanelToggle } from './SidePanelToggle';
-import { BrainMotorReadout } from './BrainMotorReadout';
 import CompactMenu from '../CompactMenu';
 import './FlyViewer.css';
 
@@ -731,7 +730,7 @@ export default function FlyViewer() {
                   onClick={() => setBrainTab('activity')}
                   style={{ padding: '4px 8px', fontSize: 11 }}
                 >
-                  Brain activity
+                  {`Fly ${selectedFlyIndex + 1}`}
                 </button>
                 <button
                   type="button"
@@ -755,9 +754,6 @@ export default function FlyViewer() {
                       />
                     )}
                   </div>
-                  {brainPanelOpen && (
-                    <BrainMotorReadout motorReadoutRef={motorReadoutRef} />
-                  )}
                 </>
               )}
               {brainTab === 'compass' && brainPanelOpen && (

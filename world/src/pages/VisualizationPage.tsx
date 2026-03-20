@@ -1883,6 +1883,7 @@ export default function VisualizationPage() {
         return;
       }
       if (event.type === 'status') {
+        setError(null);
         const latest = Math.max(0, Math.floor(event.latestTick ?? 0));
         liveAfterTickRef.current = latest;
         setAppliedPenLeft(event.penALeftHz ?? 0);
@@ -1902,10 +1903,12 @@ export default function VisualizationPage() {
         return;
       }
       if (typeof event.dtSec === 'number' && event.dtSec > 0) {
+        setError(null);
         setLiveSettings({ dtSec: event.dtSec });
       }
       const batch = (event.ticks ?? []) as LiveReplayTick[];
       if (batch.length === 0) return;
+      setError(null);
       const last = batch[batch.length - 1]?.tick;
       if (typeof last === 'number') liveAfterTickRef.current = last;
       setLiveTicks((prev) => {
@@ -2650,6 +2653,7 @@ export default function VisualizationPage() {
                             <button
                               type="button"
                               onClick={() => void handleCopyNeuronId(id)}
+                              aria-label={copiedPenAId === id ? 'Copied neuron ID' : 'Copy neuron ID'}
                               title={copiedPenAId === id ? 'Copied' : 'Copy neuron ID'}
                               style={{
                                 marginLeft: 6,
@@ -2689,6 +2693,7 @@ export default function VisualizationPage() {
                             <button
                               type="button"
                               onClick={() => void handleCopyNeuronId(id)}
+                              aria-label={copiedPenAId === id ? 'Copied neuron ID' : 'Copy neuron ID'}
                               title={copiedPenAId === id ? 'Copied' : 'Copy neuron ID'}
                               style={{
                                 marginLeft: 6,

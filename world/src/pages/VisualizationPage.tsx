@@ -68,6 +68,37 @@ type ApiNeuron = {
   cell_type?: string;
 };
 
+type PenAMetadata = {
+  penLabel: string;
+  hemilineage: string;
+  side: string;
+  hemibrainType: string;
+};
+
+function parseCsvLineAll(line: string): string[] {
+  const out: string[] = [];
+  let cur = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        cur += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (ch === ',' && !inQuotes) {
+      out.push(cur);
+      cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  out.push(cur);
+  return out.map((v) => v.trim());
+}
+
 /** Per-tick duration in seconds. Prefer meta.dt_sec; else 1ms so 1000 ticks = 1s (replay tick time_sec is often wrong). */
 function getReplayDtSec(replay: ReplayData | null): number {
   if (!replay?.ticks?.length) return 0.001;
@@ -1503,6 +1534,7 @@ export default function VisualizationPage() {
   const [applyBusy, setApplyBusy] = useState(false);
   const [penANeurons, setPenANeurons] = useState<{ left: Array<{ id: string; label: string }>; right: Array<{ id: string; label: string }> }>({ left: [], right: [] });
   const [penARatesById, setPenARatesById] = useState<Record<string, number>>({});
+  const [penAMetadataById, setPenAMetadataById] = useState<Record<string, PenAMetadata>>({});
   const [showPenAMapping, setShowPenAMapping] = useState(false);
   const [copiedPenAId, setCopiedPenAId] = useState<string | null>(null);
   const copyInFlightRef = useRef(false);
@@ -1870,6 +1902,40 @@ export default function VisualizationPage() {
       .catch(() => {});
     return () => { cancelled = true; };
   }, [isNeuroSimLive, apiBase]);
+
+  useEffect(() => {
+    if (!isNeuroSimLive) return;
+    let cancelled = false;
+    fetch('/pen_a_neuron_metadata.csv?v=' + Date.now(), { cache: 'no-store' })
+      .then((r) => (r.ok ? r.text() : ''))
+      .then((text) => {
+        if (cancelled || !text) return;
+        const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0);
+        if (lines.length < 2) return;
+        const header = parseCsvLineAll(lines[0]);
+        const iId = header.indexOf('neuron_id');
+        const iPen = header.indexOf('pen_label');
+        const iHemilineage = header.indexOf('hemilineage');
+        const iSide = header.indexOf('side');
+        const iType = header.indexOf('hemibrain_type');
+        if (iId < 0) return;
+        const next: Record<string, PenAMetadata> = {};
+        for (let i = 1; i < lines.length; i += 1) {
+          const cols = parseCsvLineAll(lines[i]);
+          const id = (cols[iId] ?? '').replace(/^"|"$/g, '').trim();
+          if (!id) continue;
+          next[id] = {
+            penLabel: (cols[iPen] ?? '').replace(/^"|"$/g, '').trim(),
+            hemilineage: (cols[iHemilineage] ?? '').replace(/^"|"$/g, '').trim(),
+            side: (cols[iSide] ?? '').replace(/^"|"$/g, '').trim(),
+            hemibrainType: (cols[iType] ?? '').replace(/^"|"$/g, '').trim(),
+          };
+        }
+        if (!cancelled) setPenAMetadataById(next);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [isNeuroSimLive]);
 
   useEffect(() => {
     if (!isNeuroSimLive || !templateReplay) return;
@@ -2333,6 +2399,9 @@ export default function VisualizationPage() {
                         <thead>
                           <tr>
                             <th style={{ textAlign: 'left', borderBottom: '1px solid #35527a', padding: '2px 4px' }}>Label</th>
+                            <th style={{ textAlign: 'left', borderBottom: '1px solid #35527a', padding: '2px 4px' }}>PEN</th>
+                            <th style={{ textAlign: 'left', borderBottom: '1px solid #35527a', padding: '2px 4px' }}>Hemilineage</th>
+                            <th style={{ textAlign: 'left', borderBottom: '1px solid #35527a', padding: '2px 4px' }}>Side</th>
                             <th style={{ textAlign: 'left', borderBottom: '1px solid #35527a', padding: '2px 4px' }}>Neuron ID</th>
                           </tr>
                         </thead>
@@ -2340,6 +2409,9 @@ export default function VisualizationPage() {
                           {penANeurons.left.map(({ label, id }) => (
                             <tr key={`map-left-${id}`}>
                               <td style={{ padding: '2px 4px', color: '#b8d4ff' }}>{label}</td>
+                              <td style={{ padding: '2px 4px', color: '#a8c4ea' }}>{penAMetadataById[id]?.penLabel || '-'}</td>
+                              <td style={{ padding: '2px 4px', color: '#9bb8de' }}>{penAMetadataById[id]?.hemilineage || '-'}</td>
+                              <td style={{ padding: '2px 4px', color: '#9bb8de' }}>{penAMetadataById[id]?.side || (label.startsWith('L') ? 'left' : 'right')}</td>
                               <td style={{ padding: '2px 4px', color: '#8fb5e3', fontFamily: 'monospace' }}>
                                 <span>{id}</span>
                                 <button
@@ -2380,6 +2452,9 @@ export default function VisualizationPage() {
                           {penANeurons.right.map(({ label, id }) => (
                             <tr key={`map-right-${id}`}>
                               <td style={{ padding: '2px 4px', color: '#b8d4ff' }}>{label}</td>
+                              <td style={{ padding: '2px 4px', color: '#a8c4ea' }}>{penAMetadataById[id]?.penLabel || '-'}</td>
+                              <td style={{ padding: '2px 4px', color: '#9bb8de' }}>{penAMetadataById[id]?.hemilineage || '-'}</td>
+                              <td style={{ padding: '2px 4px', color: '#9bb8de' }}>{penAMetadataById[id]?.side || (label.startsWith('L') ? 'left' : 'right')}</td>
                               <td style={{ padding: '2px 4px', color: '#8fb5e3', fontFamily: 'monospace' }}>
                                 <span>{id}</span>
                                 <button

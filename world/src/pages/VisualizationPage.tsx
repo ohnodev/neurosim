@@ -69,6 +69,18 @@ type PenAMetadata = {
   z?: number;
 };
 
+type PenEpgConnection = {
+  pen_id: string;
+  pen_label: string;
+  epg_id: string;
+  epg_label?: string;
+  weight: number;
+  kind: 'excitatory' | 'inhibitory';
+  rank: number;
+  strength01: number;
+  is_proxy_inhibitory?: boolean;
+};
+
 function parseCsvLineAll(line: string): string[] {
   const out: string[] = [];
   let cur = '';
@@ -225,6 +237,13 @@ function parseProcessedLabelsLine(line: string): [string, string] | null {
 function isPenANeuron(neuron: ReplayNeuron): boolean {
   const h = (neuron.hemibrain_type ?? neuron.cell_type ?? '').trim().toUpperCase();
   return h.startsWith('PEN_A');
+}
+
+function connectionLineColor(kind: 'excitatory' | 'inhibitory', strength01: number): THREE.Color {
+  const t = Math.max(0, Math.min(1, Number.isFinite(strength01) ? strength01 : 0));
+  const weak = new THREE.Color(0x77808f);
+  const strong = kind === 'inhibitory' ? new THREE.Color(0xff5b77) : new THREE.Color(0x48e2ff);
+  return weak.lerp(strong, t);
 }
 
 function buildTemplateNeuronsFromStaticCsv(text: string): ReplayNeuron[] {
@@ -532,6 +551,7 @@ function buildScene(
   neurons: ReplayNeuron[],
   viewMode: ViewMode,
   visibility: { epg: boolean; penA: boolean },
+  penEpgConnections: PenEpgConnection[],
   onHover?: (neuronId: string | null) => void,
   epgLabelMap?: Map<string, string> | null,
   replay?: ReplayData | null,
@@ -1053,6 +1073,40 @@ function buildScene(
       scene.add(connectionLines);
     }
   }
+  let penEpgConnectionLines: THREE.LineSegments | null = null;
+  if (visibility.epg && visibility.penA && penEpgConnections.length > 0) {
+    const lineVertices: number[] = [];
+    const lineColors: number[] = [];
+    for (const link of penEpgConnections) {
+      const penIdx = idToIndex.get(link.pen_id);
+      const epgIdx = idToIndex.get(link.epg_id);
+      if (penIdx == null || epgIdx == null) continue;
+      const px = positions[penIdx * 3]!;
+      const py = positions[penIdx * 3 + 1]!;
+      const pz = positions[penIdx * 3 + 2]!;
+      const ex = positions[epgIdx * 3]!;
+      const ey = positions[epgIdx * 3 + 1]!;
+      const ez = positions[epgIdx * 3 + 2]!;
+      lineVertices.push(px, py, pz, ex, ey, ez);
+      const c = connectionLineColor(link.kind, link.strength01);
+      lineColors.push(c.r, c.g, c.b, c.r, c.g, c.b);
+    }
+    if (lineVertices.length >= 6) {
+      const lineGeometry = new THREE.BufferGeometry();
+      lineGeometry.setAttribute('position', new THREE.Float32BufferAttribute(lineVertices, 3));
+      lineGeometry.setAttribute('color', new THREE.Float32BufferAttribute(lineColors, 3));
+      penEpgConnectionLines = new THREE.LineSegments(
+        lineGeometry,
+        new THREE.LineBasicMaterial({
+          vertexColors: true,
+          transparent: true,
+          opacity: 0.74,
+          depthTest: true,
+        }),
+      );
+      scene.add(penEpgConnectionLines);
+    }
+  }
 
   if (window.getComputedStyle(container).position === 'static') {
     container.style.position = 'relative';
@@ -1367,6 +1421,11 @@ function buildScene(
       connectionLines.geometry.dispose();
       (connectionLines.material as THREE.Material).dispose();
     }
+    if (penEpgConnectionLines != null) {
+      scene.remove(penEpgConnectionLines);
+      penEpgConnectionLines.geometry.dispose();
+      (penEpgConnectionLines.material as THREE.Material).dispose();
+    }
     scene.remove(bumpArrow);
     scene.remove(glowPoints);
     scene.remove(points);
@@ -1637,6 +1696,7 @@ export default function VisualizationPage() {
   const [penARatesById, setPenARatesById] = useState<Record<string, number>>({});
   const [penAMetadataById, setPenAMetadataById] = useState<Record<string, PenAMetadata>>({});
   const [penASpikeStrengthById, setPenASpikeStrengthById] = useState<Record<string, number>>({});
+  const [penEpgConnections, setPenEpgConnections] = useState<PenEpgConnection[]>([]);
   const [showPenAMapping, setShowPenAMapping] = useState(false);
   const [copiedPenAId, setCopiedPenAId] = useState<string | null>(null);
   const copyInFlightRef = useRef(false);
@@ -1766,6 +1826,30 @@ export default function VisualizationPage() {
       })
       .catch(() => {});
     return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/pen_a_epg_top_connections.json?v=' + Date.now(), { cache: 'no-store' })
+      .then(async (res) => {
+        if (!res.ok) return null;
+        const parsed = (await res.json()) as { connections?: PenEpgConnection[] } | null;
+        return parsed;
+      })
+      .then((parsed) => {
+        if (cancelled) return;
+        const rows = Array.isArray(parsed?.connections) ? parsed!.connections : [];
+        const valid = rows.filter((row) =>
+          typeof row?.pen_id === 'string'
+          && typeof row?.epg_id === 'string'
+          && Number.isFinite(row?.weight)
+          && (row?.kind === 'excitatory' || row?.kind === 'inhibitory'));
+        setPenEpgConnections(valid);
+      })
+      .catch(() => {
+        if (!cancelled) setPenEpgConnections([]);
+      });
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -2141,6 +2225,7 @@ export default function VisualizationPage() {
       displayNeurons,
       viewMode,
       { epg: legendVisibility.epg, penA: legendVisibility.penA },
+      penEpgConnections,
       undefined,
       epgLabelMap,
       replay ?? null,
@@ -2151,7 +2236,7 @@ export default function VisualizationPage() {
         sceneRef.current = null;
       }
     };
-  }, [displayNeurons, viewMode, epgLabelMap, legendVisibility.epg, legendVisibility.penA]);
+  }, [displayNeurons, viewMode, epgLabelMap, legendVisibility.epg, legendVisibility.penA, penEpgConnections, replay]);
 
   useEffect(() => {
     if (!sceneRef.current) return;
@@ -2444,6 +2529,9 @@ export default function VisualizationPage() {
                     {viewMode === 'compass'
                       ? 'PEN_a are placed on the outer circle (left/right split).'
                       : 'PEN_a use biological positions; active spikes glow brighter.'}
+                  </div>
+                  <div style={{ color: '#9fc0e6', marginTop: 4 }}>
+                    Thin links: cyan=strong excitatory, pink=most inhibitory/weakest links.
                   </div>
                 </div>
               ) : null}

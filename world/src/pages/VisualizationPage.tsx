@@ -58,16 +58,6 @@ type ReplayData = {
   ticks: ReplayTick[];
 };
 
-type ApiNeuron = {
-  root_id: string;
-  x?: number;
-  y?: number;
-  z?: number;
-  role?: string;
-  side?: string;
-  cell_type?: string;
-};
-
 type PenAMetadata = {
   mappingLabel: string;
   penLabel: string;
@@ -234,6 +224,50 @@ function parseProcessedLabelsLine(line: string): [string, string] | null {
 function isPenANeuron(neuron: ReplayNeuron): boolean {
   const h = (neuron.hemibrain_type ?? neuron.cell_type ?? '').trim().toUpperCase();
   return h.startsWith('PEN_A');
+}
+
+function buildTemplateNeuronsFromStaticCsv(text: string): ReplayNeuron[] {
+  const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0);
+  if (lines.length < 2) return [];
+  const header = parseCsvLineAll(lines[0]);
+  const idx = (name: string) => header.indexOf(name);
+  const iId = idx('neuron_id');
+  const iGroup = idx('group');
+  const iProcessed = idx('processed_label');
+  const iHb = idx('hemibrain_type');
+  const iSide = idx('side');
+  const iHemi = idx('hemilineage');
+  const iX = idx('x');
+  const iY = idx('y');
+  const iZ = idx('z');
+  if (iId < 0 || iX < 0 || iY < 0 || iZ < 0) return [];
+  const out: ReplayNeuron[] = [];
+  for (let i = 1; i < lines.length; i += 1) {
+    const cols = parseCsvLineAll(lines[i]);
+    const rootId = (cols[iId] ?? '').replace(/^"|"$/g, '').trim();
+    if (!rootId) continue;
+    const x = Number((cols[iX] ?? '').replace(/^"|"$/g, '').trim());
+    const y = Number((cols[iY] ?? '').replace(/^"|"$/g, '').trim());
+    const z = Number((cols[iZ] ?? '').replace(/^"|"$/g, '').trim());
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+    const group = (cols[iGroup] ?? '').replace(/^"|"$/g, '').trim().toUpperCase();
+    const hemibrainType = (cols[iHb] ?? '').replace(/^"|"$/g, '').trim();
+    const processedLabel = (cols[iProcessed] ?? '').replace(/^"|"$/g, '').trim();
+    out.push({
+      root_id: rootId,
+      x,
+      y,
+      z,
+      processed_label: processedLabel || hemibrainType,
+      is_ring: group === 'EPG',
+      is_epg: group === 'EPG',
+      side: ((cols[iSide] ?? '').replace(/^"|"$/g, '').trim() || 'unknown'),
+      hemibrain_type: hemibrainType,
+      cell_type: hemibrainType,
+      hemilineage: (cols[iHemi] ?? '').replace(/^"|"$/g, '').trim(),
+    });
+  }
+  return out;
 }
 const EPG_SLICE_COLORS = [
   '#6b4cc4', '#8ea4e7', '#b4d7e7', '#7fd47f',
@@ -1572,6 +1606,7 @@ export default function VisualizationPage() {
   const copyTimeoutRef = useRef<number | null>(null);
   const isMountedRef = useRef(true);
   const [showCompassInfo, setShowCompassInfo] = useState(false);
+  const [showBiologicalInfo, setShowBiologicalInfo] = useState(false);
   const [showRecordMenu, setShowRecordMenu] = useState(false);
   const [bottomControlTab, setBottomControlTab] = useState<'individual' | 'sliders'>('individual');
   const [rightPanelTab, setRightPanelTab] = useState<'mapping' | 'compass'>('mapping');
@@ -1703,28 +1738,16 @@ export default function VisualizationPage() {
         const isNeuroSimLive = selectedReplay?.id === 'neurosim_live' || datasetUrl.startsWith('/api/neurosim-replay');
         const isWorldRecord = selectedReplay?.id === 'world_record' || datasetUrl === 'world_record';
         if (isNeuroSimLive) {
-          const apiRoot = getApiBase();
-          const neuronRes = await fetch(`${apiRoot}/api/neurons?full=1&epgOnly=1`, { cache: 'no-store' });
-          if (!neuronRes.ok) throw new Error(`Failed to load live neuron template (${neuronRes.status})`);
-          const neuronPayload = (await neuronRes.json()) as { neurons?: ApiNeuron[] };
-          const templateNeurons: ReplayNeuron[] = (neuronPayload.neurons ?? []).map((n) => ({
-            root_id: n.root_id,
-            x: typeof n.x === 'number' ? n.x : 0,
-            y: typeof n.y === 'number' ? n.y : 0,
-            z: typeof n.z === 'number' ? n.z : 0,
-            processed_label: n.cell_type,
-            is_ring: true,
-            is_epg: true,
-            side: n.side ?? 'unknown',
-            hemibrain_type: n.cell_type ?? '',
-            flow: n.role,
-            cell_type: n.cell_type,
-          }));
+          const nodeRes = await fetch('/neurosim_visualization_nodes.csv?v=' + Date.now(), { cache: 'no-store' });
+          if (!nodeRes.ok) throw new Error(`Failed to load live node template (${nodeRes.status})`);
+          const nodeCsv = await nodeRes.text();
+          const templateNeurons = buildTemplateNeuronsFromStaticCsv(nodeCsv);
+          if (templateNeurons.length === 0) throw new Error('Live node template CSV is empty');
           if (!active) return;
           setTemplateReplay({
             meta: {
               generated_at: new Date().toISOString(),
-              source_csv: 'api:/api/neurons?full=1&epgOnly=1',
+              source_csv: 'public:neurosim_visualization_nodes.csv',
               ticks: 0,
               unique_fired_neurons: 0,
               ring_neuron_total: 0,
@@ -1744,28 +1767,16 @@ export default function VisualizationPage() {
           liveEpgSeenRef.current = new Set();
           setLiveEpgUniqueFired(0);
         } else if (isWorldRecord) {
-          const apiRoot = getApiBase();
-          const neuronRes = await fetch(`${apiRoot}/api/neurons?full=1&epgOnly=1`, { cache: 'no-store' });
-          if (!neuronRes.ok) throw new Error(`Failed to load neuron template (${neuronRes.status})`);
-          const neuronPayload = (await neuronRes.json()) as { neurons?: ApiNeuron[] };
-          const templateNeurons: ReplayNeuron[] = (neuronPayload.neurons ?? []).map((n) => ({
-            root_id: n.root_id,
-            x: typeof n.x === 'number' ? n.x : 0,
-            y: typeof n.y === 'number' ? n.y : 0,
-            z: typeof n.z === 'number' ? n.z : 0,
-            processed_label: n.cell_type,
-            is_ring: true,
-            is_epg: true,
-            side: n.side ?? 'unknown',
-            hemibrain_type: n.cell_type ?? '',
-            flow: n.role,
-            cell_type: n.cell_type,
-          }));
+          const nodeRes = await fetch('/neurosim_visualization_nodes.csv?v=' + Date.now(), { cache: 'no-store' });
+          if (!nodeRes.ok) throw new Error(`Failed to load node template (${nodeRes.status})`);
+          const nodeCsv = await nodeRes.text();
+          const templateNeurons = buildTemplateNeuronsFromStaticCsv(nodeCsv);
+          if (templateNeurons.length === 0) throw new Error('Node template CSV is empty');
           if (!active) return;
           setTemplateReplay({
             meta: {
               generated_at: new Date().toISOString(),
-              source_csv: 'api:/api/neurons?full=1&epgOnly=1',
+              source_csv: 'public:neurosim_visualization_nodes.csv',
               ticks: 0,
               unique_fired_neurons: 0,
               ring_neuron_total: 0,
@@ -1980,37 +1991,7 @@ export default function VisualizationPage() {
     return () => { cancelled = true; };
   }, [isNeuroSimLive]);
 
-  useEffect(() => {
-    if (!isNeuroSimLive) return;
-    if (!templateReplay) return;
-    const entries = Object.entries(penAMetadataById).filter(([, meta]) =>
-      typeof meta.x === 'number' && typeof meta.y === 'number' && typeof meta.z === 'number',
-    );
-    if (entries.length === 0) return;
-    setTemplateReplay((prev) => {
-      if (!prev || prev.meta?.scenario !== 'neurosim_live') return prev;
-      const existing = new Set(prev.neurons.map((n) => n.root_id));
-      const additions: ReplayNeuron[] = [];
-      for (const [id, meta] of entries) {
-        if (existing.has(id)) continue;
-        additions.push({
-          root_id: id,
-          x: meta.x as number,
-          y: meta.y as number,
-          z: meta.z as number,
-          processed_label: meta.hemibrainType || 'PEN_a',
-          is_ring: false,
-          is_epg: false,
-          side: meta.side || 'unknown',
-          hemibrain_type: meta.hemibrainType || 'PEN_a',
-          cell_type: meta.hemibrainType || 'PEN_a',
-          hemilineage: meta.hemilineage,
-        });
-      }
-      if (additions.length === 0) return prev;
-      return { ...prev, neurons: [...prev.neurons, ...additions] };
-    });
-  }, [isNeuroSimLive, templateReplay, penAMetadataById]);
+  
 
   useEffect(() => {
     const ids = [...penANeurons.left.map((n) => n.id), ...penANeurons.right.map((n) => n.id)];
@@ -2299,6 +2280,7 @@ export default function VisualizationPage() {
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: 6,
+                position: 'relative',
               }}
             >
               <button
@@ -2334,6 +2316,52 @@ export default function VisualizationPage() {
               <span style={{ fontSize: 12, color: '#b6cfe9', fontWeight: 600 }}>
                 View: {viewMode === 'compass' ? 'EPG Compass' : 'Biological'}
               </span>
+              {viewMode === 'biological' ? (
+                <button
+                  type="button"
+                  aria-label="Biological legend info"
+                  title="Biological legend info"
+                  onClick={() => setShowBiologicalInfo((v) => !v)}
+                  style={{
+                    width: 16,
+                    height: 16,
+                    borderRadius: 999,
+                    border: '1px solid rgba(150, 185, 235, 0.7)',
+                    background: 'rgba(18, 37, 64, 0.95)',
+                    color: '#d8e9ff',
+                    fontSize: 11,
+                    lineHeight: '14px',
+                    textAlign: 'center',
+                    cursor: 'pointer',
+                    padding: 0,
+                    fontWeight: 700,
+                  }}
+                >
+                  i
+                </button>
+              ) : null}
+              {viewMode === 'biological' && showBiologicalInfo ? (
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: 22,
+                    left: 0,
+                    width: 290,
+                    maxWidth: 'min(290px, calc(100vw - 24px))',
+                    padding: '8px 10px',
+                    borderRadius: 8,
+                    border: '1px solid rgba(130,170,225,0.55)',
+                    background: 'rgba(10,20,36,0.96)',
+                    color: '#d7e8ff',
+                    fontSize: 11,
+                    lineHeight: 1.35,
+                    boxShadow: '0 8px 20px rgba(0,0,0,0.38)',
+                    zIndex: 4,
+                  }}
+                >
+                  Biological view shows PEN_a locations in fly coordinates and highlights PEN_a neurons that spiked in recent live ticks.
+                </div>
+              ) : null}
             </div>
             <div style={{ display: 'flex', alignItems: 'flex-start', position: 'relative' }}>
               <button
@@ -2831,8 +2859,8 @@ export default function VisualizationPage() {
                         const fill = `rgba(${Math.round(74 + s * 37)}, ${Math.round(127 + s * 128)}, ${Math.round(168 + s * 42)}, 0.95)`;
                         return (
                           <g key={`pen-left-compass-${id}`}>
-                            <circle cx={x.toFixed(3)} cy={y.toFixed(3)} r="1.9" fill={fill} stroke="rgba(220,240,255,0.75)" strokeWidth="0.45" />
-                            <text x={(x - 4.6).toFixed(3)} y={(y - 2.6).toFixed(3)} fill="rgba(210,230,255,0.94)" fontSize="2.8" fontWeight="700">
+                            <circle cx={x.toFixed(3)} cy={y.toFixed(3)} r="2.4" fill={fill} stroke="rgba(220,240,255,0.82)" strokeWidth="0.5" />
+                            <text x={(x - 5.2).toFixed(3)} y={(y - 3.0).toFixed(3)} fill="rgba(210,230,255,0.94)" fontSize="3.2" fontWeight="700">
                               {label}
                             </text>
                           </g>
@@ -2848,8 +2876,8 @@ export default function VisualizationPage() {
                         const fill = `rgba(${Math.round(168 + s * 70)}, ${Math.round(112 + s * 54)}, ${Math.round(92 + s * 28)}, 0.95)`;
                         return (
                           <g key={`pen-right-compass-${id}`}>
-                            <circle cx={x.toFixed(3)} cy={y.toFixed(3)} r="1.9" fill={fill} stroke="rgba(255,228,210,0.75)" strokeWidth="0.45" />
-                            <text x={(x + 2.5).toFixed(3)} y={(y - 2.6).toFixed(3)} fill="rgba(255,220,205,0.94)" fontSize="2.8" fontWeight="700">
+                            <circle cx={x.toFixed(3)} cy={y.toFixed(3)} r="2.4" fill={fill} stroke="rgba(255,228,210,0.82)" strokeWidth="0.5" />
+                            <text x={(x + 2.9).toFixed(3)} y={(y - 3.0).toFixed(3)} fill="rgba(255,220,205,0.94)" fontSize="3.2" fontWeight="700">
                               {label}
                             </text>
                           </g>

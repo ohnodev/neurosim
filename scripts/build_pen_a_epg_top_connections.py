@@ -34,15 +34,16 @@ def load_nodes() -> tuple[list[dict[str, str]], dict[str, str]]:
             if not neuron_id:
                 continue
             if group == "PEN_a":
-                label = (row.get("mapping_label") or "").strip()
+                label = (row.get("mapping_label") or "").strip().upper()
                 side = (row.get("side") or "").strip().lower()
-                if label.startswith("L") and label[1:].isdigit() and side == "left":
+                if len(label) >= 2 and label[0] in {"L", "R"} and label[1:].isdigit():
                     idx = int(label[1:])
-                    if 1 <= idx <= 10:
+                    expected_side = "left" if label[0] == "L" else "right"
+                    if 1 <= idx <= 10 and side == expected_side:
                         pen.append({"id": neuron_id, "label": label, "side": side})
             elif group == "EPG":
                 epg_labels[neuron_id] = (row.get("processed_label") or "").strip()
-    pen.sort(key=lambda item: int(item["label"][1:]))
+    pen.sort(key=lambda item: (0 if item["label"].startswith("L") else 1, int(item["label"][1:])))
     return pen, epg_labels
 
 

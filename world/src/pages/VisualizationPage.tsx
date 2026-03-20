@@ -179,6 +179,7 @@ const ACTIVE_DELTA7_COLOR = new THREE.Color(0xd08cff);
 const EPG_HEAT_ORANGE = new THREE.Color(0xff9f43);
 const EPG_HEAT_RED = new THREE.Color(0xff3b30);
 const NO_GLOW_COLOR = new THREE.Color(0x000000);
+const HORIZONTAL_SCROLL_ROTATE_SPEED = 0.003;
 /** EPG compass bins: 16 alternating L/R wedges in anatomical order from top clockwise. */
 const EPG_COMPASS_BINS = 16;
 const EPG_SLICE_ORDER_CLOCKWISE = [
@@ -506,6 +507,14 @@ function buildScene(
   controls.dampingFactor = 0.08;
   controls.minDistance = mostlyEpg ? 0.1 : 0.3;
   controls.maxDistance = mostlyEpg ? 4 : 8;
+  const onWheelRotate = (event: globalThis.WheelEvent) => {
+    if (event.ctrlKey || event.metaKey) return;
+    if (Math.abs(event.deltaX) < 0.5) return;
+    controls.rotateLeft(event.deltaX * HORIZONTAL_SCROLL_ROTATE_SPEED);
+    controls.update();
+    event.preventDefault();
+  };
+  renderer.domElement.addEventListener('wheel', onWheelRotate, { passive: false });
 
   let minX = Infinity; let maxX = -Infinity;
   let minY = Infinity; let maxY = -Infinity;
@@ -1251,6 +1260,7 @@ function buildScene(
     cancelAnimationFrame(raf);
     resizeObserver.disconnect();
     controls.dispose();
+    renderer.domElement.removeEventListener('wheel', onWheelRotate);
     renderer.domElement.removeEventListener('pointermove', onPointerMove);
     renderer.domElement.removeEventListener('pointerleave', onPointerLeave);
     if (hoverTooltip.parentNode) {

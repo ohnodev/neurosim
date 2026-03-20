@@ -357,6 +357,13 @@ function App() {
           absence of explicit synaptic noise and the need for broader protocol
           sweeps across inhibitory regimes.
         </p>
+        <p>
+          A key next research direction is transition latency optimization. The
+          current command-handoff protocol shifts the bump reliably, but faster
+          switching under abrupt input changes remains an open control problem.
+          Future work can test overlap windows, pulse-shaped stimulation, and
+          adaptive Hz ramps to reduce settle time while preserving stability.
+        </p>
       </section>
 
       <section className="block">
@@ -379,6 +386,34 @@ function App() {
           <li>PEN_b handling: PEN_b units tracked for observability only and excluded from bump-driving stimulation.</li>
           <li>Bump tracking: peak-angle extraction, drift quantification, and transfer success scoring.</li>
         </ol>
+        <h3>PEN_a mapping and directional control protocol</h3>
+        <p>
+          We first ran coarse control tests by turning all left PEN_a neurons on
+          at 50 Hz, then all right PEN_a neurons on at 50 Hz. Both conditions
+          could form a bump, but trajectories were unstable and often chaotic;
+          side-wide stimulation was not granular enough for coherent directional
+          control, and in some runs the bump settled into a difficult-to-move
+          basin. We therefore moved to single-neuron mapping.
+        </p>
+        <p>
+          Before single-neuron mapping, we calibrated the operating regime in the
+          same style as the EonSystems reference [10], using the same 8 sugar
+          GRNs and MN9 response readout. Relative to an approximately 90%
+          reference regime at 100 Hz sugar stimulation, our matched Rust run
+          reached approximately 76% in this calibration stage. We then fixed
+          EPG-to-EPG recurrence gain at 3x for reported experiments (with 2x and
+          4x explored as nearby settings) to support more persistent bump
+          retention.
+        </p>
+        <p>
+          We stimulated each individual PEN_a neuron at 100 Hz and recorded its
+          dominant bump-location affinity. Neurons with shared affinity were then
+          combined into minimal command sets, and we searched for the lowest
+          stable Hz and smallest neuron subset that maintained a consistent bump
+          at each target direction. For directional switching, prior stimulation
+          channels were zeroed and the new command set was applied, producing
+          reproducible and relatively fast heading-state transitions.
+        </p>
         <h3>EPG-to-circle mapping protocol</h3>
         <p>
           EPG angular mapping is implemented to match the EPG-to-PB geometry shown

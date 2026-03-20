@@ -75,7 +75,7 @@ type PenEpgConnection = {
   epg_id: string;
   epg_label?: string;
   weight: number;
-  kind: 'excitatory' | 'inhibitory';
+  kind: 'excitatory' | 'inhibitory' | 'unsigned_proxy';
   rank: number;
   strength01: number;
   is_proxy_inhibitory?: boolean;
@@ -117,6 +117,7 @@ const HOVER_HIGHLIGHT_COLOR = new THREE.Color(0xffff88);
 const HOVER_HIGHLIGHT_GLOW = new THREE.Color(0xffdd44);
 const PEN_CONN_EXCIT_FLASH_COLOR = new THREE.Color(0x86f7ff);
 const PEN_CONN_INHIBIT_FLASH_COLOR = new THREE.Color(0xff526b);
+const PEN_CONN_PROXY_FLASH_COLOR = new THREE.Color(0x9ec5ef);
 const PEN_CALCIUM_ACTIVE_COLOR = new THREE.Color(0x4dff9d);
 const PEN_CALCIUM_HOT_COLOR = new THREE.Color(0xb8ffd9);
 const PEN_CALCIUM_GLOW_COLOR = new THREE.Color(0x48ff9a);
@@ -173,6 +174,11 @@ type SceneState = {
   tempEpgHot: THREE.Color;
   visibility: { epg: boolean; penA: boolean; connections: boolean };
   connectionOpacity: number;
+  penControlLabelById: Map<string, string>;
+  penHeatByIndex: Float32Array;
+  latestSpikeTickById: Map<string, number>;
+  lastComputedTick: number;
+  lastComputedReplay: ReplayData | null;
   dispose: () => void;
 };
 
@@ -245,10 +251,14 @@ function isPenANeuron(neuron: ReplayNeuron): boolean {
   return h.startsWith('PEN_A');
 }
 
-function connectionLineColor(kind: 'excitatory' | 'inhibitory', strength01: number): THREE.Color {
+function connectionLineColor(kind: 'excitatory' | 'inhibitory' | 'unsigned_proxy', strength01: number): THREE.Color {
   const t = Math.max(0, Math.min(1, Number.isFinite(strength01) ? strength01 : 0));
   const weak = new THREE.Color(0x77808f);
-  const strong = kind === 'inhibitory' ? new THREE.Color(0xff5b77) : new THREE.Color(0x48e2ff);
+  const strong = kind === 'inhibitory'
+    ? new THREE.Color(0xff5b77)
+    : kind === 'unsigned_proxy'
+      ? new THREE.Color(0xa7c3e8)
+      : new THREE.Color(0x48e2ff);
   return weak.lerp(strong, t);
 }
 
@@ -568,7 +578,6 @@ function buildScene(
   visibility: { epg: boolean; penA: boolean; connections: boolean },
   connectionOpacity: number,
   penEpgConnections: PenEpgConnection[],
-  penControlLabelById?: Map<string, string> | null,
   onHover?: (neuronId: string | null) => void,
   epgLabelMap?: Map<string, string> | null,
   replay?: ReplayData | null,
@@ -1095,7 +1104,7 @@ function buildScene(
   let penEpgLineBaseColors: Float32Array | null = null;
   const penEpgRenderableLinks: Array<{
     penId: string;
-    kind: 'excitatory' | 'inhibitory';
+    kind: 'excitatory' | 'inhibitory' | 'unsigned_proxy';
     strength01: number;
     from: [number, number, number];
     to: [number, number, number];
@@ -1199,14 +1208,23 @@ function buildScene(
     pointer.y = -(((evt.clientY - rect.top) / rect.height) * 2 - 1);
     raycaster.setFromCamera(pointer, camera);
     const hits = raycaster.intersectObject(points, false);
-    if (hits.length === 0 || hits[0]?.index == null) {
+    let pickedIndex: number | null = null;
+    for (const hit of hits) {
+      if (hit?.index == null) continue;
+      const idx = hit.index as number;
+      if (idx < 0 || idx >= n) continue;
+      if (isEpgByIndex[idx] && !state.visibility.epg) continue;
+      if (isPenAByIndex[idx] && !state.visibility.penA) continue;
+      pickedIndex = idx;
+      break;
+    }
+    if (pickedIndex == null) {
       hoveredNeuronId.current = null;
       onHover?.(null);
       hoverTooltip.style.display = 'none';
       return;
     }
-    const hit = hits[0]!;
-    const idx = hit.index as number;
+    const idx = pickedIndex;
     const neuron = neurons[idx];
     if (!neuron) {
       hoveredNeuronId.current = null;
@@ -1240,7 +1258,7 @@ function buildScene(
       const effLabel = getEffectiveEpgLabel(neuron, epgLabelMap ?? null);
       if (effLabel != null) lines.push('bin: ' + effLabel);
     } else {
-      const penControlLabel = isPenANeuron(neuron) ? penControlLabelById?.get(neuron.root_id) : undefined;
+      const penControlLabel = isPenANeuron(neuron) ? state.penControlLabelById.get(neuron.root_id) : undefined;
       if (penControlLabel) lines.push('pen_label: ' + penControlLabel);
       const clsParts: string[] = [];
       if (flow) clsParts.push('flow=' + flow);
@@ -1333,6 +1351,11 @@ function buildScene(
     tempEpgHot: new THREE.Color(),
     visibility: { ...visibility },
     connectionOpacity,
+    penControlLabelById: new Map<string, string>(),
+    penHeatByIndex: new Float32Array(colorAttr.count),
+    latestSpikeTickById: new Map<string, number>(),
+    lastComputedTick: -1,
+    lastComputedReplay: null,
     dispose: () => {},
   };
 
@@ -1364,11 +1387,21 @@ function buildScene(
     if (state.brightnessByIndex.length !== colorAttr.count) {
       state.brightnessByIndex = new Float32Array(colorAttr.count);
     }
+    if (state.penHeatByIndex.length !== colorAttr.count) {
+      state.penHeatByIndex = new Float32Array(colorAttr.count);
+    }
     const brightnessByIndex = state.brightnessByIndex;
-    brightnessByIndex.fill(0);
-    const penHeatByIndex = new Float32Array(colorAttr.count);
-    const latestSpikeTickById = new Map<string, number>();
-    if (replay?.ticks?.length && currentTick >= 1) {
+    const penHeatByIndex = state.penHeatByIndex;
+    const latestSpikeTickById = state.latestSpikeTickById;
+    const shouldRecompute =
+      state.lastComputedTick !== currentTick
+      || state.lastComputedReplay !== replay;
+    if (shouldRecompute) {
+      brightnessByIndex.fill(0);
+      penHeatByIndex.fill(0);
+      latestSpikeTickById.clear();
+    }
+    if (shouldRecompute && replay?.ticks?.length && currentTick >= 1) {
       const startTick = Math.max(1, currentTick - SPIKE_DISPLAY_TICKS);
       for (let t = currentTick; t >= startTick && t >= 1; t -= 1) {
         for (const id of replay.ticks[t - 1]?.spikes ?? []) {
@@ -1402,6 +1435,11 @@ function buildScene(
           penHeatByIndex[i] = 1 - Math.exp(-v * PEN_CALCIUM_GAIN);
         }
       }
+      state.lastComputedTick = currentTick;
+      state.lastComputedReplay = replay;
+    } else if (shouldRecompute) {
+      state.lastComputedTick = currentTick;
+      state.lastComputedReplay = replay;
     }
     const { tempC, tempG, tempEpgInactive, tempEpgHot } = state;
     for (let i = 0; i < colorAttr.count; i += 1) {
@@ -1498,7 +1536,11 @@ function buildScene(
         if (ageTicks > durationTicks) continue;
         const progress = Math.max(0, Math.min(1, ageTicks / durationTicks));
         const envelope = Math.pow(1 - progress, 0.55) * (0.2 + 0.8 * link.strength01);
-        const flash = link.kind === 'inhibitory' ? PEN_CONN_INHIBIT_FLASH_COLOR : PEN_CONN_EXCIT_FLASH_COLOR;
+        const flash = link.kind === 'inhibitory'
+          ? PEN_CONN_INHIBIT_FLASH_COLOR
+          : link.kind === 'unsigned_proxy'
+            ? PEN_CONN_PROXY_FLASH_COLOR
+            : PEN_CONN_EXCIT_FLASH_COLOR;
         const o = link.colorOffset;
         for (let k = 0; k < 2; k += 1) {
           const baseIndex = o + k * 3;
@@ -2024,7 +2066,9 @@ export default function VisualizationPage() {
           typeof row?.pen_id === 'string'
           && typeof row?.epg_id === 'string'
           && Number.isFinite(row?.weight)
-          && (row?.kind === 'excitatory' || row?.kind === 'inhibitory'));
+          && Number.isFinite(row?.strength01)
+          && (row!.strength01 >= 0 && row!.strength01 <= 1)
+          && (row?.kind === 'excitatory' || row?.kind === 'inhibitory' || row?.kind === 'unsigned_proxy'));
         setPenEpgConnections(valid);
       })
       .catch(() => {
@@ -2409,7 +2453,6 @@ export default function VisualizationPage() {
       { epg: legendVisibility.epg, penA: legendVisibility.penA, connections: legendVisibility.connections },
       connectionOpacity,
       penEpgConnections,
-      penControlLabelById,
       undefined,
       epgLabelMap,
       replay ?? null,
@@ -2420,7 +2463,12 @@ export default function VisualizationPage() {
         sceneRef.current = null;
       }
     };
-  }, [displayNeurons, viewMode, epgLabelMap, penEpgConnections, penControlLabelById]);
+  }, [displayNeurons, viewMode, epgLabelMap, penEpgConnections]);
+
+  useEffect(() => {
+    if (!sceneRef.current) return;
+    sceneRef.current.penControlLabelById = penControlLabelById;
+  }, [penControlLabelById]);
 
   useEffect(() => {
     if (!sceneRef.current) return;
@@ -3251,7 +3299,7 @@ export default function VisualizationPage() {
                           </g>
                         );
                       }) : null}
-                      {legendVisibility.epg && viewMode !== 'biological' && bumpTheta != null ? (
+                      {legendVisibility.epg && bumpTheta != null ? (
                         <line
                           x1="0"
                           y1="0"

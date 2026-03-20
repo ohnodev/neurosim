@@ -116,7 +116,7 @@ def main() -> None:
                     "epg_id": epg_id,
                     "epg_label": epg_labels.get(epg_id, ""),
                     "weight": weight,
-                    "kind": "inhibitory",
+                    "kind": "unsigned_proxy" if proxy else "inhibitory",
                     "rank": rank,
                     "is_proxy_inhibitory": proxy,
                 }

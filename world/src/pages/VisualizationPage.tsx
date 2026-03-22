@@ -1311,7 +1311,7 @@ function buildScene(
       if (effLabel != null) lines.push('bin: ' + effLabel);
     } else {
       const penControlLabel = isPenANeuron(neuron) ? state.penControlLabelById.get(neuron.root_id) : undefined;
-      if (penControlLabel) lines.push('pen_label: ' + penControlLabel);
+      if (penControlLabel) lines.push('control mapping: ' + penControlLabel + ' -> PEN_a');
       const clsParts: string[] = [];
       if (flow) clsParts.push('flow=' + flow);
       if (super_class) clsParts.push('super_class=' + super_class);
@@ -2088,8 +2088,17 @@ export default function VisualizationPage() {
     for (const [id, metadata] of Object.entries(penAMetadataById)) {
       if (!out.has(id) && metadata.mappingLabel) out.set(id, metadata.mappingLabel);
     }
+    for (const link of penEpgConnections) {
+      if (!out.has(link.pen_id) && link.pen_label) out.set(link.pen_id, link.pen_label);
+    }
+    for (const link of penPenConnections) {
+      if (!out.has(link.pen_id) && link.pen_label) out.set(link.pen_id, link.pen_label);
+      if (link.target_group === 'pen_a' && !out.has(link.target_id) && link.target_label) {
+        out.set(link.target_id, link.target_label);
+      }
+    }
     return out;
-  }, [penANeurons.left, penANeurons.right, penAMetadataById]);
+  }, [penANeurons.left, penANeurons.right, penAMetadataById, penEpgConnections, penPenConnections]);
   const selectedReplay = DEFAULT_REPLAY_DATASETS[0];
 
   useEffect(() => {

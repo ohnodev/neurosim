@@ -64,9 +64,6 @@ export default function CompactMenu({ className = '' }: CompactMenuProps) {
           <Link to="/visualization" className="compact-menu__item" role="menuitem">
             Visualization
           </Link>
-          <Link to="/heading-calibration" className="compact-menu__item" role="menuitem">
-            Settings
-          </Link>
           <a
             href={GITHUB_URL}
             target="_blank"

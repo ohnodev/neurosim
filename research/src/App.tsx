@@ -326,7 +326,7 @@ function App() {
 
         <figure>
           <figcaption>
-            Figure 2. PEN_a command schedule for three setpoints (visualized on a 0-50 Hz axis; all non-target channels hard-zeroed at phase switches).
+            Figure 2. PEN_a command schedule for three setpoints (visualized on a 0-50 Hz axis; all non-target channels hard-zeroed at phase switches). Each active control neuron is set to 50 Hz, yielding aggregate phase drives of 150 Hz (11 PM), 100 Hz (3 PM), and 150 Hz (8 PM).
           </figcaption>
           <svg viewBox="0 0 760 280" role="img" aria-label="eight PEN_a stimulation lines with zeroed handoff">
             <rect x="18" y="18" width="724" height="244" rx="12" className="svg-band" />
@@ -469,6 +469,17 @@ function App() {
           switching under abrupt input changes remains an open control problem.
           Future work can test overlap windows, pulse-shaped stimulation, and
           adaptive Hz ramps to reduce settle time while preserving stability.
+        </p>
+        <p>
+          Additional improvement directions include searching for better PEN_a
+          combinations that sustain stable bumps at more discrete heading
+          setpoints beyond the current three attractor anchors, and extending the
+          perturbation analysis to PEN_b neurons to quantify whether mixed
+          PEN_a/PEN_b control can maintain stability at lower per-neuron Hz.
+          Another priority is fast-turn dynamics: deriving stimulation mechanics
+          that switch bump position at substantially higher angular rates without
+          losing the bump, better matching rapid turning behavior observed in
+          flies.
         </p>
       </section>
 

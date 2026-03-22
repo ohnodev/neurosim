@@ -2637,6 +2637,9 @@ export default function VisualizationPage() {
         epgLabelMap,
         replay ?? null,
       );
+      if (sceneRef.current) {
+        sceneRef.current.penControlLabelById = penControlLabelById;
+      }
     } catch (err) {
       console.error('[VisualizationPage] scene initialization failed', err);
       setSceneError(WEBGL_DISABLED_HINT);

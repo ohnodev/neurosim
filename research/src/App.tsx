@@ -264,6 +264,15 @@ function App() {
           driver of bump placement and was not directly stimulated in the control
           protocols reported here.
         </p>
+        <p>
+          A notable secondary observation is within-class PEN_a co-activation:
+          stimulating a single PEN_a unit can intermittently recruit additional
+          PEN_a neurons. In particular, L1 stimulation occasionally co-activated
+          R1 and, in some trials, increased activity in L8-L10. This suggests
+          that sparse steering commands propagate through structured recurrent
+          pathways inside the PEN_a/EPG control subnetwork rather than acting as
+          perfectly isolated channels.
+        </p>
 
         <div className="table-grid">
           <article>
@@ -316,24 +325,63 @@ function App() {
         </div>
 
         <figure>
-          <figcaption>Figure 2. Example bump trajectory controls from sparse combinations.</figcaption>
-          <svg viewBox="0 0 760 220" role="img" aria-label="example bump trajectory lines">
-            <rect x="20" y="20" width="720" height="180" rx="12" className="svg-band" />
-            <polyline
-              points="40,175 90,145 140,120 190,115 240,80 290,82 340,86 390,62 440,58 490,78 540,70 590,52 640,48 700,50"
-              className="traj-a"
-            />
-            <polyline
-              points="40,140 90,136 140,142 190,132 240,124 290,110 340,108 390,94 440,100 490,88 540,93 590,80 640,76 700,71"
-              className="traj-b"
-            />
-            <polyline
-              points="40,94 90,98 140,90 190,98 240,110 290,123 340,119 390,132 440,127 490,134 540,129 590,141 640,145 700,139"
-              className="traj-c"
-            />
-            <text x="56" y="40">11 PM target set</text>
-            <text x="285" y="40">3 PM transfer</text>
-            <text x="515" y="40">8 PM transfer</text>
+          <figcaption>
+            Figure 2. PEN_a command schedule for three setpoints (visualized on a 0-50 Hz axis; all non-target channels hard-zeroed at phase switches).
+          </figcaption>
+          <svg viewBox="0 0 760 280" role="img" aria-label="eight PEN_a stimulation lines with zeroed handoff">
+            <rect x="18" y="18" width="724" height="244" rx="12" className="svg-band" />
+
+            <line x1="70" y1="44" x2="70" y2="196" className="svg-axis" />
+            <line x1="70" y1="196" x2="650" y2="196" className="svg-axis" />
+
+            <line x1="70" y1="44" x2="650" y2="44" className="svg-grid" />
+            <line x1="70" y1="74" x2="650" y2="74" className="svg-grid" />
+            <line x1="70" y1="104" x2="650" y2="104" className="svg-grid" />
+            <line x1="70" y1="134" x2="650" y2="134" className="svg-grid" />
+            <line x1="70" y1="164" x2="650" y2="164" className="svg-grid" />
+            <line x1="70" y1="196" x2="650" y2="196" className="svg-grid" />
+
+            <text x="58" y="199" textAnchor="end" className="svg-sub">0</text>
+            <text x="58" y="167" textAnchor="end" className="svg-sub">10</text>
+            <text x="58" y="137" textAnchor="end" className="svg-sub">20</text>
+            <text x="58" y="107" textAnchor="end" className="svg-sub">30</text>
+            <text x="58" y="77" textAnchor="end" className="svg-sub">40</text>
+            <text x="58" y="47" textAnchor="end" className="svg-sub">50</text>
+            <text x="34" y="118" textAnchor="middle" transform="rotate(-90 34 118)" className="svg-sub">Hz</text>
+
+            <line x1="250" y1="44" x2="250" y2="196" className="svg-separator" />
+            <line x1="450" y1="44" x2="450" y2="196" className="svg-separator" />
+
+            <text x="160" y="32" textAnchor="middle" className="svg-title">11 PM command</text>
+            <text x="350" y="32" textAnchor="middle" className="svg-title">3 PM command</text>
+            <text x="550" y="32" textAnchor="middle" className="svg-title">8 PM command</text>
+
+            <polyline points="70,44 250,44 250,196 650,196" className="stim-line" style={{ stroke: '#4f8dff' }} />
+            <polyline points="70,44 250,44 250,196 650,196" className="stim-line" style={{ stroke: '#3ddc97' }} />
+            <polyline points="70,44 250,44 250,196 650,196" className="stim-line" style={{ stroke: '#f6c445' }} />
+
+            <polyline points="70,196 250,196 250,44 450,44 450,196 650,196" className="stim-line" style={{ stroke: '#e879f9' }} />
+            <polyline points="70,196 250,196 250,44 450,44 450,196 650,196" className="stim-line" style={{ stroke: '#fb7185' }} />
+
+            <polyline points="70,196 450,196 450,44 650,44" className="stim-line" style={{ stroke: '#22d3ee' }} />
+            <polyline points="70,196 450,196 450,44 650,44" className="stim-line" style={{ stroke: '#a3e635' }} />
+            <polyline points="70,196 450,196 450,44 650,44" className="stim-line" style={{ stroke: '#f97316' }} />
+
+            <text x="665" y="52" className="svg-sub">L1</text>
+            <text x="665" y="68" className="svg-sub">L2</text>
+            <text x="665" y="84" className="svg-sub">L6</text>
+            <text x="665" y="100" className="svg-sub">L3</text>
+            <text x="665" y="116" className="svg-sub">R6</text>
+            <text x="665" y="132" className="svg-sub">L4</text>
+            <text x="665" y="148" className="svg-sub">L9</text>
+            <text x="665" y="164" className="svg-sub">R1</text>
+
+            <text x="160" y="214" textAnchor="middle" className="svg-sub">L1/L2/L6 = 50 Hz</text>
+            <text x="350" y="214" textAnchor="middle" className="svg-sub">L3/R6 = 50 Hz</text>
+            <text x="550" y="214" textAnchor="middle" className="svg-sub">L4/L9/R1 = 50 Hz</text>
+            <text x="360" y="236" textAnchor="middle" className="svg-sub">
+              At each switch: previous command set {'->'} 0 Hz, new target set {'->'} 50 Hz
+            </text>
           </svg>
         </figure>
 
@@ -390,6 +438,14 @@ function App() {
           produce separable phenotypes in vivo. Current limitations include the
           absence of explicit synaptic noise and the need for broader protocol
           sweeps across inhibitory regimes.
+        </p>
+        <p>
+          The observed PEN_a-to-PEN_a co-activation (for example, intermittent
+          L1-to-R1 recruitment with L8-L10 spillover) further indicates that
+          directional control is mediated by coupled microcircuits, not purely
+          one-neuron one-angle mappings. This motivates follow-up work to
+          separate direct vs multi-hop recruitment paths and quantify how these
+          interactions affect command robustness.
         </p>
         <p>
           A key next research direction is transition latency optimization. The

@@ -74,6 +74,22 @@ svg {
   stroke-linecap: round;
 }
 
+.svg-axis {
+  stroke: var(--ink);
+  stroke-width: 1.2;
+}
+
+.svg-grid {
+  stroke: color-mix(in srgb, var(--line) 75%, transparent);
+  stroke-width: 1;
+}
+
+.svg-separator {
+  stroke: color-mix(in srgb, var(--accent) 40%, var(--line));
+  stroke-width: 1.2;
+  stroke-dasharray: 4 4;
+}
+
 .svg-band {
   fill: color-mix(in srgb, var(--accent) 9%, var(--paper));
   stroke: var(--line);
@@ -90,21 +106,11 @@ svg {
   font-size: 11.5px;
 }
 
-.traj-a,
-.traj-b,
-.traj-c {
+.stim-line {
   fill: none;
-  stroke-width: 3;
-}
-
-.traj-a {
-  stroke: #3f82ff;
-}
-.traj-b {
-  stroke: #f04e98;
-}
-.traj-c {
-  stroke: #34a06f;
+  stroke-width: 2.6;
+  stroke-linejoin: round;
+  stroke-linecap: round;
 }
 
 .table-grid {

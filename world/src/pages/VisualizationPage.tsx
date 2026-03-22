@@ -2748,13 +2748,17 @@ export default function VisualizationPage() {
                 type="button"
                 onClick={() => setViewMode((v) => (v === 'compass' ? 'biological' : 'compass'))}
                 style={{
-                  border: 'none',
-                  background: 'transparent',
+                  border: '1px solid rgba(150, 185, 235, 0.55)',
+                  borderRadius: 8,
+                  background: 'rgba(18, 37, 64, 0.92)',
                   color: '#d7e8ff',
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: 6,
-                  padding: 0,
+                  minWidth: 42,
+                  minHeight: 28,
+                  justifyContent: 'center',
+                  padding: '0 8px',
                   cursor: 'pointer',
                 }}
                 title="Toggle view mode"
@@ -2784,14 +2788,14 @@ export default function VisualizationPage() {
                 title="Toggle legend"
                 onClick={() => setShowLegendPopover((v) => !v)}
                 style={{
-                  width: 16,
-                  height: 16,
+                  width: 28,
+                  height: 28,
                   borderRadius: 999,
                   border: '1px solid rgba(150, 185, 235, 0.7)',
                   background: 'rgba(18, 37, 64, 0.95)',
                   color: '#d8e9ff',
-                  fontSize: 11,
-                  lineHeight: '14px',
+                  fontSize: 13,
+                  lineHeight: '28px',
                   textAlign: 'center',
                   cursor: 'pointer',
                   padding: 0,

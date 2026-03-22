@@ -2742,38 +2742,37 @@ export default function VisualizationPage() {
                 alignItems: 'center',
                 gap: 6,
                 position: 'relative',
+                pointerEvents: 'auto',
               }}
             >
               <button
                 type="button"
                 onClick={() => setViewMode((v) => (v === 'compass' ? 'biological' : 'compass'))}
                 style={{
-                  border: '1px solid rgba(150, 185, 235, 0.55)',
-                  borderRadius: 8,
-                  background: 'rgba(18, 37, 64, 0.92)',
+                  border: 'none',
+                  background: 'transparent',
                   color: '#d7e8ff',
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: 6,
-                  minWidth: 42,
-                  minHeight: 28,
-                  justifyContent: 'center',
-                  padding: '0 8px',
+                  minHeight: 24,
+                  padding: '4px 6px',
                   cursor: 'pointer',
+                  touchAction: 'manipulation',
                 }}
                 title="Toggle view mode"
               >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true" style={{ pointerEvents: 'none' }}>
                   <path d="M1.5 12S5.2 5.5 12 5.5S22.5 12 22.5 12S18.8 18.5 12 18.5S1.5 12 1.5 12Z" stroke="currentColor" strokeWidth="1.8" />
                   <circle cx="12" cy="12" r="2.2" fill="currentColor" />
                 </svg>
                 {viewMode === 'compass' ? (
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true" style={{ pointerEvents: 'none' }}>
                     <circle cx="12" cy="12" r="8" stroke="currentColor" strokeWidth="1.8" />
                     <path d="M12 4V20M4 12H20" stroke="currentColor" strokeWidth="1.8" />
                   </svg>
                 ) : (
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true" style={{ pointerEvents: 'none' }}>
                     <path d="M7 4C10 4 10 8 13 8C16 8 16 4 19 4M7 20C10 20 10 16 13 16C16 16 16 20 19 20M7 4V20M19 4V20" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
                   </svg>
                 )}
@@ -2790,19 +2789,34 @@ export default function VisualizationPage() {
                 style={{
                   width: 28,
                   height: 28,
-                  borderRadius: 999,
-                  border: '1px solid rgba(150, 185, 235, 0.7)',
-                  background: 'rgba(18, 37, 64, 0.95)',
+                  border: 'none',
+                  background: 'transparent',
                   color: '#d8e9ff',
-                  fontSize: 13,
-                  lineHeight: '28px',
-                  textAlign: 'center',
                   cursor: 'pointer',
                   padding: 0,
-                  fontWeight: 700,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  touchAction: 'manipulation',
                 }}
               >
-                i
+                <span
+                  style={{
+                    width: 16,
+                    height: 16,
+                    borderRadius: 999,
+                    border: '1px solid rgba(150, 185, 235, 0.7)',
+                    background: 'rgba(18, 37, 64, 0.95)',
+                    color: '#d8e9ff',
+                    fontSize: 11,
+                    lineHeight: '14px',
+                    textAlign: 'center',
+                    fontWeight: 700,
+                    pointerEvents: 'none',
+                  }}
+                >
+                  i
+                </span>
               </button>
               {showLegendPopover ? (
                 <div

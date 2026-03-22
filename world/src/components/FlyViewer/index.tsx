@@ -42,6 +42,9 @@ import { SidePanelToggle } from './SidePanelToggle';
 import CompactMenu from '../CompactMenu';
 import './FlyViewer.css';
 
+const WEBGL_UNAVAILABLE_ERROR =
+  'WebGL is unavailable in this browser context. Enable hardware acceleration or try a normal Chrome window.';
+
 export default function FlyViewer() {
   const { address } = usePrivyWallet();
   const queryClient = useQueryClient();
@@ -485,25 +488,32 @@ export default function FlyViewer() {
       selectedFlyIndexRef,
       connectedRef,
     };
-    const { dispose, updateButton } = initThreeScene(
-      container,
-      {
-        latestFliesRef,
-        interpolatedBySimRef,
-        debugStatsRef,
-        cameraModeRef,
-        followSimIndexRef,
-        sourcesRef,
-        devModeRef,
-        snapshotBufferRef,
-        targetRef: cameraTargetRef,
-      },
-      cameraToggleSlotRef.current,
-      simStatusSlotRef.current,
-      simStatusRefs,
-      debugPanelSlotRef.current
-    );
-    updateCameraButtonRef.current = updateButton;
+    let dispose = () => {};
+    try {
+      const initialized = initThreeScene(
+        container,
+        {
+          latestFliesRef,
+          interpolatedBySimRef,
+          debugStatsRef,
+          cameraModeRef,
+          followSimIndexRef,
+          sourcesRef,
+          devModeRef,
+          snapshotBufferRef,
+          targetRef: cameraTargetRef,
+        },
+        cameraToggleSlotRef.current,
+        simStatusSlotRef.current,
+        simStatusRefs,
+        debugPanelSlotRef.current
+      );
+      dispose = initialized.dispose;
+      updateCameraButtonRef.current = initialized.updateButton;
+    } catch (err) {
+      console.error('[FlyViewer] three.js initialization failed', err);
+      setError((prev) => prev ?? WEBGL_UNAVAILABLE_ERROR);
+    }
     return () => {
       updateCameraButtonRef.current = null;
       dispose();

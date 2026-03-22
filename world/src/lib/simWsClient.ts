@@ -105,9 +105,12 @@ function scheduleRestart(): void {
 }
 
 function clearClient(): void {
-  if (!client) return;
+  const activeClient = client;
+  client = null;
+  subscriptionStarted = false;
+  if (!activeClient) return;
   try {
-    const disposeResult = client.dispose();
+    const disposeResult = activeClient.dispose();
     if (disposeResult && typeof (disposeResult as Promise<void>).catch === "function") {
       (disposeResult as Promise<void>).catch(() => {
         /* ignore */
@@ -116,8 +119,6 @@ function clearClient(): void {
   } catch {
     /* ignore */
   }
-  client = null;
-  subscriptionStarted = false;
 }
 
 function toErrorMessage(err: unknown): string {

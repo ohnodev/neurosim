@@ -66,6 +66,20 @@ const ZOOM = 0.45; // Ortho extent (smaller = zoomed in)
 const ACTIVITY_DECAY_MS = 450;
 const COLOR_UPDATE_INTERVAL_MS = 50;
 
+function canUseWebGL(): boolean {
+  try {
+    const canvas = document.createElement('canvas');
+    const gl2 = canvas.getContext('webgl2', { antialias: false });
+    if (gl2) return true;
+    const gl =
+      canvas.getContext('webgl', { antialias: false }) ||
+      canvas.getContext('experimental-webgl', { antialias: false });
+    return gl != null;
+  } catch {
+    return false;
+  }
+}
+
 function computeNeuronColorValue(activityValue: number, side: string): number {
   const a = activityValue;
   if (a <= 0) return 0;
@@ -81,6 +95,10 @@ export function initBrainPoints(
   neurons: NeuronWithPosition[],
   onReady?: () => void
 ): () => void {
+  if (!canUseWebGL()) {
+    onReady?.();
+    return () => {};
+  }
   const width = Math.max(1, container.clientWidth);
   const height = Math.max(1, container.clientHeight);
 

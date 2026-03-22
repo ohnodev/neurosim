@@ -85,6 +85,7 @@ let lastError: string | null = null;
 let lastMessageTime = 0;
 let retryDelayMs = INITIAL_RETRY_MS;
 let retryTimeoutId: ReturnType<typeof setTimeout> | null = null;
+let teardownTimeoutId: ReturnType<typeof setTimeout> | null = null;
 let subscriptionRunId = 0;
 let subscriptionStarted = false;
 let disposed = false;
@@ -198,6 +199,10 @@ function restartSubscriptionForViewChange(): void {
  * @returns Unsubscribe function.
  */
 export function subscribeSim(listener: Listener): () => void {
+  if (teardownTimeoutId != null) {
+    clearTimeout(teardownTimeoutId);
+    teardownTimeoutId = null;
+  }
   listeners.add(listener);
   startSubscription();
   if (lastPayload) {
@@ -209,7 +214,12 @@ export function subscribeSim(listener: Listener): () => void {
   }
   return () => {
     listeners.delete(listener);
-    if (listeners.size === 0) clearClient();
+    if (listeners.size === 0) {
+      teardownTimeoutId = setTimeout(() => {
+        teardownTimeoutId = null;
+        if (listeners.size === 0) clearClient();
+      }, 100);
+    }
   };
 }
 
@@ -239,6 +249,10 @@ export function getLastMessageTime(): number {
 
 export function disposeSimClient(): void {
   disposed = true;
+  if (teardownTimeoutId != null) {
+    clearTimeout(teardownTimeoutId);
+    teardownTimeoutId = null;
+  }
   if (retryTimeoutId != null) {
     clearTimeout(retryTimeoutId);
     retryTimeoutId = null;

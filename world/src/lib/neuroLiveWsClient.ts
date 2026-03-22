@@ -43,15 +43,19 @@ let client: Client | null = null;
 let listeners = new Set<Listener>();
 let retryDelayMs = INITIAL_RETRY_MS;
 let retryTimeoutId: ReturnType<typeof setTimeout> | null = null;
+let teardownTimeoutId: ReturnType<typeof setTimeout> | null = null;
 let disposed = false;
 let subscriptionStarted = false;
 let runId = 0;
 let lastDeliveredTick = -1;
 
 function clearClient(): void {
-  if (!client) return;
+  const activeClient = client;
+  client = null;
+  subscriptionStarted = false;
+  if (!activeClient) return;
   try {
-    const disposeResult = client.dispose();
+    const disposeResult = activeClient.dispose();
     if (disposeResult && typeof (disposeResult as Promise<void>).catch === "function") {
       (disposeResult as Promise<void>).catch(() => {
         /* ignore */
@@ -60,8 +64,6 @@ function clearClient(): void {
   } catch {
     /* ignore */
   }
-  client = null;
-  subscriptionStarted = false;
 }
 
 function toErrorMessage(err: unknown): string {
@@ -147,16 +149,29 @@ function startSubscription(): void {
 }
 
 export function subscribeNeuroLive(listener: Listener): () => void {
+  if (teardownTimeoutId != null) {
+    clearTimeout(teardownTimeoutId);
+    teardownTimeoutId = null;
+  }
   listeners.add(listener);
   startSubscription();
   return () => {
     listeners.delete(listener);
-    if (listeners.size === 0) clearClient();
+    if (listeners.size === 0) {
+      teardownTimeoutId = setTimeout(() => {
+        teardownTimeoutId = null;
+        if (listeners.size === 0) clearClient();
+      }, 100);
+    }
   };
 }
 
 export function disposeNeuroLiveClient(): void {
   disposed = true;
+  if (teardownTimeoutId != null) {
+    clearTimeout(teardownTimeoutId);
+    teardownTimeoutId = null;
+  }
   if (retryTimeoutId != null) {
     clearTimeout(retryTimeoutId);
     retryTimeoutId = null;

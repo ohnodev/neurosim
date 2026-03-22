@@ -543,6 +543,23 @@ function createGlowTexture(): THREE.Texture {
   return texture;
 }
 
+const WEBGL_DISABLED_HINT =
+  '3D rendering is unavailable in this browser (WebGL disabled). Try Firefox or re-enable Chrome hardware acceleration.';
+
+function canUseWebGLContext(): boolean {
+  try {
+    const canvas = document.createElement('canvas');
+    const gl2 = canvas.getContext('webgl2', { antialias: false });
+    if (gl2) return true;
+    const gl =
+      canvas.getContext('webgl', { antialias: false }) ||
+      canvas.getContext('experimental-webgl', { antialias: false });
+    return gl != null;
+  } catch {
+    return false;
+  }
+}
+
 function getEffectiveEpgLabel(
   neuron: ReplayNeuron,
   processedLabelMap: Map<string, string> | null,
@@ -1996,6 +2013,7 @@ export default function VisualizationPage() {
     delta7Bins: new Array<number>(EPG_COMPASS_BINS).fill(0),
   });
   const [error, setError] = useState<string | null>(null);
+  const [sceneError, setSceneError] = useState<string | null>(null);
   const sceneContainerRef = useRef<HTMLDivElement | null>(null);
   const sceneRef = useRef<SceneState | null>(null);
   const legendPopoverRef = useRef<HTMLDivElement | null>(null);
@@ -2469,17 +2487,27 @@ export default function VisualizationPage() {
       sceneRef.current.dispose();
       sceneRef.current = null;
     }
-    sceneRef.current = buildScene(
-      container,
-      displayNeurons,
-      viewMode,
-      { epg: legendVisibility.epg, penA: legendVisibility.penA, connections: legendVisibility.connections },
-      connectionOpacity,
-      penEpgConnections,
-      undefined,
-      epgLabelMap,
-      replay ?? null,
-    );
+    if (!canUseWebGLContext()) {
+      setSceneError(WEBGL_DISABLED_HINT);
+      return;
+    }
+    setSceneError(null);
+    try {
+      sceneRef.current = buildScene(
+        container,
+        displayNeurons,
+        viewMode,
+        { epg: legendVisibility.epg, penA: legendVisibility.penA, connections: legendVisibility.connections },
+        connectionOpacity,
+        penEpgConnections,
+        undefined,
+        epgLabelMap,
+        replay ?? null,
+      );
+    } catch (err) {
+      console.error('[VisualizationPage] scene initialization failed', err);
+      setSceneError(WEBGL_DISABLED_HINT);
+    }
     return () => {
       if (sceneRef.current) {
         sceneRef.current.dispose();
@@ -2679,6 +2707,23 @@ export default function VisualizationPage() {
         <div style={{ display: 'flex', justifyContent: 'flex-end', pointerEvents: 'auto' }}>
           <CompactMenu />
         </div>
+        {sceneError ? (
+          <div
+            style={{
+              alignSelf: 'center',
+              maxWidth: 760,
+              pointerEvents: 'auto',
+              color: '#ffb4b4',
+              background: 'rgba(32, 12, 12, 0.85)',
+              border: '1px solid rgba(255, 120, 120, 0.35)',
+              borderRadius: 8,
+              padding: '8px 12px',
+              fontSize: 12,
+            }}
+          >
+            {sceneError}
+          </div>
+        ) : null}
         {isNeuroSimLive && templateReplay ? createPortal((
           <div
             style={{

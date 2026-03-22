@@ -2704,8 +2704,10 @@ export default function VisualizationPage() {
           pointerEvents: 'none',
         }}
       >
-        <div style={{ display: 'flex', justifyContent: 'flex-end', pointerEvents: 'auto' }}>
-          <CompactMenu />
+        <div style={{ display: 'flex', justifyContent: 'flex-end', pointerEvents: 'none' }}>
+          <div style={{ pointerEvents: 'auto' }}>
+            <CompactMenu />
+          </div>
         </div>
         {sceneError ? (
           <div

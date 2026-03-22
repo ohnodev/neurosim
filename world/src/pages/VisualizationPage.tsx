@@ -69,11 +69,12 @@ type PenAMetadata = {
   z?: number;
 };
 
-type PenEpgConnection = {
+type PenConnection = {
   pen_id: string;
   pen_label: string;
-  epg_id: string;
-  epg_label?: string;
+  target_id: string;
+  target_label?: string;
+  target_group: 'epg' | 'pen_a';
   weight: number;
   kind: 'excitatory' | 'inhibitory' | 'unsigned_proxy';
   rank: number;
@@ -598,7 +599,7 @@ function buildScene(
   viewMode: ViewMode,
   visibility: { epg: boolean; penA: boolean; connections: boolean },
   connectionOpacity: number,
-  penEpgConnections: PenEpgConnection[],
+  penEpgConnections: PenConnection[],
   onHover?: (neuronId: string | null) => void,
   epgLabelMap?: Map<string, string> | null,
   replay?: ReplayData | null,
@@ -1142,6 +1143,7 @@ function buildScene(
   let penEpgConnectionLines: THREE.LineSegments | null = null;
   let penEpgLineColorAttr: THREE.BufferAttribute | null = null;
   let penEpgLineBaseColors: Float32Array | null = null;
+  const hasEpgConnectionTargets = penEpgConnections.some((link) => link.target_group === 'epg');
   const penEpgRenderableLinks: Array<{
     penId: string;
     kind: 'excitatory' | 'inhibitory' | 'unsigned_proxy';
@@ -1158,14 +1160,14 @@ function buildScene(
     const lineColors: number[] = [];
     for (const link of penEpgConnections) {
       const penIdx = idToIndex.get(link.pen_id);
-      const epgIdx = idToIndex.get(link.epg_id);
-      if (penIdx == null || epgIdx == null) continue;
+      const targetIdx = idToIndex.get(link.target_id);
+      if (penIdx == null || targetIdx == null) continue;
       const px = positions[penIdx * 3]!;
       const py = positions[penIdx * 3 + 1]!;
       const pz = positions[penIdx * 3 + 2]!;
-      const ex = positions[epgIdx * 3]!;
-      const ey = positions[epgIdx * 3 + 1]!;
-      const ez = positions[epgIdx * 3 + 2]!;
+      const ex = positions[targetIdx * 3]!;
+      const ey = positions[targetIdx * 3 + 1]!;
+      const ez = positions[targetIdx * 3 + 2]!;
       lineVertices.push(px, py, pz, ex, ey, ez);
       const c = connectionLineColor(link.kind, link.strength01);
       lineColors.push(c.r, c.g, c.b, c.r, c.g, c.b);
@@ -1411,12 +1413,12 @@ function buildScene(
       mat.opacity = 0.6 * currentConnectionOpacity;
     }
     if (penEpgConnectionLines) {
-      penEpgConnectionLines.visible = currentVisibility.connections && currentVisibility.epg && currentVisibility.penA;
+      penEpgConnectionLines.visible = currentVisibility.connections && currentVisibility.penA && (!hasEpgConnectionTargets || currentVisibility.epg);
       const mat = penEpgConnectionLines.material as THREE.LineBasicMaterial;
       mat.opacity = 0.74 * currentConnectionOpacity;
     }
     if (penPulsePoints) {
-      penPulsePoints.visible = currentVisibility.connections && currentVisibility.epg && currentVisibility.penA;
+      penPulsePoints.visible = currentVisibility.connections && currentVisibility.penA && (!hasEpgConnectionTargets || currentVisibility.epg);
       const mat = penPulsePoints.material as THREE.PointsMaterial;
       mat.opacity = 0.95 * currentConnectionOpacity;
     }
@@ -1559,7 +1561,7 @@ function buildScene(
         glowColorAttr.setXYZ(mainIdx, HOVER_HIGHLIGHT_GLOW.r, HOVER_HIGHLIGHT_GLOW.g, HOVER_HIGHLIGHT_GLOW.b);
       }
     }
-    if (penEpgLineColorAttr && penEpgLineBaseColors && penEpgRenderableLinks.length > 0 && currentVisibility.connections && currentVisibility.epg && currentVisibility.penA) {
+    if (penEpgLineColorAttr && penEpgLineBaseColors && penEpgRenderableLinks.length > 0 && currentVisibility.connections && currentVisibility.penA && (!hasEpgConnectionTargets || currentVisibility.epg)) {
       const lineColorArray = penEpgLineColorAttr.array as Float32Array;
       lineColorArray.set(penEpgLineBaseColors);
       let activePulseCount = 0;
@@ -1949,7 +1951,9 @@ export default function VisualizationPage() {
   const [penARatesById, setPenARatesById] = useState<Record<string, number>>({});
   const [penAMetadataById, setPenAMetadataById] = useState<Record<string, PenAMetadata>>({});
   const [penASpikeStrengthById, setPenASpikeStrengthById] = useState<Record<string, number>>({});
-  const [penEpgConnections, setPenEpgConnections] = useState<PenEpgConnection[]>([]);
+  const [penEpgConnections, setPenEpgConnections] = useState<PenConnection[]>([]);
+  const [penPenConnections, setPenPenConnections] = useState<PenConnection[]>([]);
+  const [connectionMode, setConnectionMode] = useState<'pen_to_epg' | 'pen_to_pen'>('pen_to_epg');
   const [showPenAMapping, setShowPenAMapping] = useState(false);
   const [copiedPenAId, setCopiedPenAId] = useState<string | null>(null);
   const copyInFlightRef = useRef(false);
@@ -1965,6 +1969,10 @@ export default function VisualizationPage() {
   const notification = useNotification();
   const liveAfterTickRef = useRef(0);
   const recordingRef = useRef(false);
+  const activePenConnections = useMemo(
+    () => (connectionMode === 'pen_to_epg' ? penEpgConnections : penPenConnections),
+    [connectionMode, penEpgConnections, penPenConnections],
+  );
   useEffect(() => {
     liveTicksRef.current = liveTicks;
   }, [liveTicks]);
@@ -2097,23 +2105,75 @@ export default function VisualizationPage() {
     fetch('/pen_a_epg_top_connections.json?v=' + Date.now(), { cache: 'no-store' })
       .then(async (res) => {
         if (!res.ok) return null;
-        const parsed = (await res.json()) as { connections?: PenEpgConnection[] } | null;
+        const parsed = (await res.json()) as { connections?: Array<Record<string, unknown>> } | null;
         return parsed;
       })
       .then((parsed) => {
         if (cancelled) return;
         const rows = Array.isArray(parsed?.connections) ? parsed!.connections : [];
-        const valid = rows.filter((row) =>
-          typeof row?.pen_id === 'string'
-          && typeof row?.epg_id === 'string'
-          && Number.isFinite(row?.weight)
-          && Number.isFinite(row?.strength01)
-          && (row!.strength01 >= 0 && row!.strength01 <= 1)
-          && (row?.kind === 'excitatory' || row?.kind === 'inhibitory' || row?.kind === 'unsigned_proxy'));
+        const valid = rows
+          .filter((row) =>
+            typeof row?.pen_id === 'string'
+            && typeof row?.epg_id === 'string'
+            && Number.isFinite(row?.weight)
+            && Number.isFinite(row?.strength01)
+            && (Number(row?.strength01) >= 0 && Number(row?.strength01) <= 1)
+            && (row?.kind === 'excitatory' || row?.kind === 'inhibitory' || row?.kind === 'unsigned_proxy'))
+          .map((row) => ({
+            pen_id: row.pen_id as string,
+            pen_label: typeof row.pen_label === 'string' ? row.pen_label : '',
+            target_id: row.epg_id as string,
+            target_label: typeof row.epg_label === 'string' ? row.epg_label : '',
+            target_group: 'epg' as const,
+            weight: Number(row.weight),
+            kind: row.kind as 'excitatory' | 'inhibitory' | 'unsigned_proxy',
+            rank: Number.isFinite(Number(row.rank)) ? Number(row.rank) : 0,
+            strength01: Number(row.strength01),
+            is_proxy_inhibitory: Boolean(row.is_proxy_inhibitory),
+          }));
         setPenEpgConnections(valid);
       })
       .catch(() => {
         if (!cancelled) setPenEpgConnections([]);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/pen_a_pen_a_top_connections.json?v=' + Date.now(), { cache: 'no-store' })
+      .then(async (res) => {
+        if (!res.ok) return null;
+        const parsed = (await res.json()) as { connections?: Array<Record<string, unknown>> } | null;
+        return parsed;
+      })
+      .then((parsed) => {
+        if (cancelled) return;
+        const rows = Array.isArray(parsed?.connections) ? parsed!.connections : [];
+        const valid = rows
+          .filter((row) =>
+            typeof row?.pen_id === 'string'
+            && typeof row?.target_pen_id === 'string'
+            && Number.isFinite(row?.weight)
+            && Number.isFinite(row?.strength01)
+            && (Number(row?.strength01) >= 0 && Number(row?.strength01) <= 1)
+            && (row?.kind === 'excitatory' || row?.kind === 'inhibitory' || row?.kind === 'unsigned_proxy'))
+          .map((row) => ({
+            pen_id: row.pen_id as string,
+            pen_label: typeof row.pen_label === 'string' ? row.pen_label : '',
+            target_id: row.target_pen_id as string,
+            target_label: typeof row.target_pen_label === 'string' ? row.target_pen_label : '',
+            target_group: 'pen_a' as const,
+            weight: Number(row.weight),
+            kind: row.kind as 'excitatory' | 'inhibitory' | 'unsigned_proxy',
+            rank: Number.isFinite(Number(row.rank)) ? Number(row.rank) : 0,
+            strength01: Number(row.strength01),
+            is_proxy_inhibitory: Boolean(row.is_proxy_inhibitory),
+          }));
+        setPenPenConnections(valid);
+      })
+      .catch(() => {
+        if (!cancelled) setPenPenConnections([]);
       });
     return () => { cancelled = true; };
   }, []);
@@ -2499,7 +2559,7 @@ export default function VisualizationPage() {
         viewMode,
         { epg: legendVisibility.epg, penA: legendVisibility.penA, connections: legendVisibility.connections },
         connectionOpacity,
-        penEpgConnections,
+        activePenConnections,
         undefined,
         epgLabelMap,
         replay ?? null,
@@ -2514,7 +2574,7 @@ export default function VisualizationPage() {
         sceneRef.current = null;
       }
     };
-  }, [displayNeurons, viewMode, epgLabelMap, penEpgConnections]);
+  }, [displayNeurons, viewMode, epgLabelMap, activePenConnections]);
 
   useEffect(() => {
     if (!sceneRef.current) return;
@@ -2843,6 +2903,25 @@ export default function VisualizationPage() {
                   <div style={{ fontWeight: 700, marginBottom: 6 }}>
                     {viewMode === 'compass' ? 'EPG compass legend' : 'Biological legend'}
                   </div>
+                  <div style={{ marginBottom: 8 }}>
+                    <div style={{ color: '#9fc0e6', marginBottom: 4 }}>Connection mode</div>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button
+                        type="button"
+                        onClick={() => setConnectionMode('pen_to_epg')}
+                        style={controlButtonStyle(connectionMode === 'pen_to_epg')}
+                      >
+                        {'PEN_a -> EPG'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConnectionMode('pen_to_pen')}
+                        style={controlButtonStyle(connectionMode === 'pen_to_pen')}
+                      >
+                        {'PEN_a -> PEN_a'}
+                      </button>
+                    </div>
+                  </div>
                   <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, cursor: 'pointer' }}>
                     <input
                       type="checkbox"
@@ -2889,6 +2968,7 @@ export default function VisualizationPage() {
                   </div>
                   <div style={{ color: '#9fc0e6', marginTop: 4 }}>
                     Thin links: cyan=strong excitatory, pink=most inhibitory/weakest links.
+                    {connectionMode === 'pen_to_pen' ? ' Showing PEN_a targets only.' : ' Showing EPG targets only.'}
                   </div>
                 </div>
               ) : null}

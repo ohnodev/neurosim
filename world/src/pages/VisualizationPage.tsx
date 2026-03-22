@@ -248,7 +248,11 @@ function parseProcessedLabelsLine(line: string): [string, string] | null {
 }
 
 function isPenANeuron(neuron: ReplayNeuron): boolean {
-  const h = (neuron.hemibrain_type ?? neuron.cell_type ?? '').trim().toUpperCase();
+  const h = (neuron.hemibrain_type && neuron.hemibrain_type.trim().length > 0
+    ? neuron.hemibrain_type
+    : neuron.cell_type && neuron.cell_type.trim().length > 0
+      ? neuron.cell_type
+      : neuron.processed_label ?? '').trim().toUpperCase();
   return h.startsWith('PEN_A');
 }
 

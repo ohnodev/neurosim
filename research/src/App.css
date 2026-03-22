@@ -65,16 +65,29 @@ svg {
 .svg-card {
   fill: var(--paper);
   stroke: var(--line);
+  stroke-width: 1.2;
 }
 
 .svg-line {
   stroke: var(--accent);
   stroke-width: 2;
+  stroke-linecap: round;
 }
 
 .svg-band {
   fill: color-mix(in srgb, var(--accent) 9%, var(--paper));
   stroke: var(--line);
+}
+
+.svg-title {
+  fill: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.svg-sub {
+  fill: var(--muted);
+  font-size: 11.5px;
 }
 
 .traj-a,
@@ -137,10 +150,26 @@ ol {
 
 .references li {
   margin-bottom: 0.4rem;
+  scroll-margin-top: 1rem;
 }
 
 .references a {
   color: var(--link);
+}
+
+.citation-group {
+  white-space: nowrap;
+}
+
+.citation {
+  color: var(--link);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font-weight: 600;
+}
+
+.citation:hover {
+  color: var(--accent);
 }
 
 .theme-toggle {

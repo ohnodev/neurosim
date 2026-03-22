@@ -111,6 +111,21 @@ const references = [
   },
 ]
 
+function Cite({ ids }: { ids: string[] }) {
+  return (
+    <span className="citation-group">
+      {ids.map((id, index) => (
+        <span key={id}>
+          <a className="citation" href={`#ref-${id}`} aria-label={`Jump to reference ${id}`}>
+            [{id}]
+          </a>
+          {index < ids.length - 1 ? ', ' : ''}
+        </span>
+      ))}
+    </span>
+  )
+}
+
 function App() {
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     if (typeof window === 'undefined') {
@@ -147,7 +162,7 @@ function App() {
           We present a full-connectome simulation study of heading dynamics in
           the fly central complex using public FlyWire-derived connectivity and a
           Rust-optimized dynamical engine that ports Brian2-style LIF spiking
-          dynamics into a production Rust/CUDA stack [10,12]. The model runs at
+          dynamics into a production Rust/CUDA stack <Cite ids={['10', '12']} />. The model runs at
           0.1 ms timestep resolution with explicit recurrent propagation; calcium
           heatmaps are used only for activity readout and visualization, not as
           the core state dynamics. A single targeted structural intervention,
@@ -177,7 +192,7 @@ function App() {
           change yield both stable memory and precision control? We address this
           question in a full-connectome simulation stack that preserves measured
           network topology while exposing reproducible control handles. As noted
-          in [6], "PEN_a and PEN_b neurons are indeed strikingly different in
+          in <Cite ids={['6']} />, "PEN_a and PEN_b neurons are indeed strikingly different in
           their synaptic conn", which motivates the explicit separation of
           PEN_a-targeted control from PEN_b circuitry in this draft.
         </p>
@@ -191,7 +206,7 @@ function App() {
           The simulation is implemented in Rust and integrated with a web-facing
           analysis UI. Dynamics are stepped at 0.1 ms resolution with an
           explicit LIF spiking update path (Brian2-style model semantics) rather
-          than calcium-state integration [10,12]. Calcium-style heatmapping is
+          than calcium-state integration <Cite ids={['10', '12']} />. Calcium-style heatmapping is
           used for readout visualization only. The runtime constants follow the
           current Rust implementation: V_rest = -52 mV, V_reset = -52 mV,
           V_thresh = -45 mV, tau_mem = 20 ms, tau_syn = 5 ms, refractory = 2.2
@@ -204,19 +219,38 @@ function App() {
         </p>
 
         <figure>
-          <figcaption>Figure 1. Engine timeline and recurrence intervention.</figcaption>
-          <svg viewBox="0 0 760 170" role="img" aria-label="timeline of simulation pipeline">
-            <rect x="10" y="30" width="220" height="48" rx="8" className="svg-card" />
-            <rect x="270" y="30" width="220" height="48" rx="8" className="svg-card" />
-            <rect x="530" y="30" width="220" height="48" rx="8" className="svg-card" />
-            <text x="120" y="59" textAnchor="middle">0.1 ms tick integration</text>
-            <text x="380" y="59" textAnchor="middle">Brian2-style LIF spiking step</text>
-            <text x="640" y="59" textAnchor="middle">EPG→EPG weight x3</text>
-            <line x1="230" y1="54" x2="270" y2="54" className="svg-line" />
-            <line x1="490" y1="54" x2="530" y2="54" className="svg-line" />
-            <rect x="10" y="105" width="740" height="44" rx="8" className="svg-band" />
-            <text x="380" y="132" textAnchor="middle">
-              Full-connectome topology preserved outside targeted recurrence modulation
+          <figcaption>Figure 1. Rust simulation flow and fixed recurrence configuration.</figcaption>
+          <svg viewBox="0 0 760 210" role="img" aria-label="rust simulation load and run flow">
+            <rect x="16" y="26" width="170" height="58" rx="10" className="svg-card" />
+            <rect x="204" y="26" width="170" height="58" rx="10" className="svg-card" />
+            <rect x="392" y="26" width="170" height="58" rx="10" className="svg-card" />
+            <rect x="580" y="26" width="170" height="58" rx="10" className="svg-card" />
+
+            <text x="101" y="50" textAnchor="middle" className="svg-title">Load connectome</text>
+            <text x="101" y="68" textAnchor="middle" className="svg-sub">startup: single load</text>
+
+            <text x="289" y="50" textAnchor="middle" className="svg-title">Cache template</text>
+            <text x="289" y="68" textAnchor="middle" className="svg-sub">shared in memory</text>
+
+            <text x="477" y="50" textAnchor="middle" className="svg-title">Create sim</text>
+            <text x="477" y="68" textAnchor="middle" className="svg-sub">fixed EPG gain (3x run)</text>
+
+            <text x="665" y="50" textAnchor="middle" className="svg-title">Step loop</text>
+            <text x="665" y="68" textAnchor="middle" className="svg-sub">0.1 ms LIF updates</text>
+
+            <line x1="186" y1="55" x2="204" y2="55" className="svg-line" />
+            <line x1="374" y1="55" x2="392" y2="55" className="svg-line" />
+            <line x1="562" y1="55" x2="580" y2="55" className="svg-line" />
+
+            <rect x="16" y="108" width="734" height="78" rx="10" className="svg-band" />
+            <text x="383" y="134" textAnchor="middle" className="svg-title">
+              Runtime rule (code-accurate): no dynamic rewiring during stepping
+            </text>
+            <text x="383" y="154" textAnchor="middle" className="svg-sub">
+              Full graph stays in memory; recurrence gain remains fixed per created simulation instance
+            </text>
+            <text x="383" y="172" textAnchor="middle" className="svg-sub">
+              Reported condition uses targeted EPG-to-EPG recurrence boost with all other topology preserved
             </text>
           </svg>
         </figure>
@@ -369,10 +403,10 @@ function App() {
       <section className="block">
         <h2>Data and Code Availability</h2>
         <ul>
-          <li>Primary connectome source data: FlyWire Brain Dataset (FAFB v783) from Kaggle [8].</li>
-          <li>Code and reproducibility assets for this project: NeuroSim repository [9].</li>
-          <li>Reference Brian2 model used for cross-checking LIF behavior: EonSystems fly-brain [10].</li>
-          <li>Core simulator lineage and semantics: Brian2 spiking simulator repository [12].</li>
+          <li>Primary connectome source data: FlyWire Brain Dataset (FAFB v783) from Kaggle <Cite ids={['8']} />.</li>
+          <li>Code and reproducibility assets for this project: NeuroSim repository <Cite ids={['9']} />.</li>
+          <li>Reference Brian2 model used for cross-checking LIF behavior: EonSystems fly-brain <Cite ids={['10']} />.</li>
+          <li>Core simulator lineage and semantics: Brian2 spiking simulator repository <Cite ids={['12']} />.</li>
         </ul>
       </section>
 
@@ -397,7 +431,7 @@ function App() {
         </p>
         <p>
           Before single-neuron mapping, we calibrated the operating regime in the
-          same style as the EonSystems reference [10], using the same 8 sugar
+          same style as the EonSystems reference <Cite ids={['10']} />, using the same 8 sugar
           GRNs and MN9 response readout. Relative to an approximately 90%
           reference regime at 100 Hz sugar stimulation, our matched Rust run
           reached approximately 76% in this calibration stage. We then fixed
@@ -417,7 +451,7 @@ function App() {
         <h3>EPG-to-circle mapping protocol</h3>
         <p>
           EPG angular mapping is implemented to match the EPG-to-PB geometry shown
-          in [6] and the Figure 16 visual reference in [7]. We load
+          in <Cite ids={['6']} /> and the Figure 16 visual reference in <Cite ids={['7']} />. We load
           <code>classification.csv</code> from <code>data/raw</code>, select rows
           tagged as EPG/PEN classes, and preserve hemisphere labels. As a concrete
           record from the source table, mappings include entries in the same raw
@@ -436,8 +470,8 @@ function App() {
         </ol>
         <h3>Calibration against fly-brain and Nature protocol</h3>
         <p>
-          To maintain consistency with the EonSystems modeling workflow [10] and
-          the whole-brain LIF framing in Shiu et al. [11], we tune the Rust
+          To maintain consistency with the EonSystems modeling workflow <Cite ids={['10']} /> and
+          the whole-brain LIF framing in Shiu et al. <Cite ids={['11']} />, we tune the Rust
           simulation at 0.1 ms timestep using sugar GRN stimulation sweeps,
           including the 100 Hz calibration point. The target operating regime is
           coherent MN9 recruitment near the high-response zone used in the
@@ -451,7 +485,7 @@ function App() {
         <h2>References</h2>
         <ol className="references">
           {references.map((ref) => (
-            <li key={ref.id}>
+            <li key={ref.id} id={`ref-${ref.id}`}>
               {ref.href ? (
                 <a href={ref.href} target="_blank" rel="noreferrer">
                   {ref.text}

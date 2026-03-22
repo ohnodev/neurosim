@@ -271,7 +271,9 @@ function App() {
           R1 and, in some trials, increased activity in L8-L10. This suggests
           that sparse steering commands propagate through structured recurrent
           pathways inside the PEN_a/EPG control subnetwork rather than acting as
-          perfectly isolated channels.
+          perfectly isolated channels; however, in our current sweeps this
+          PEN_a-to-PEN_a bleed did not materially improve bump formation or
+          long-horizon bump stability.
         </p>
 
         <div className="table-grid">
@@ -459,9 +461,9 @@ function App() {
           The observed PEN_a-to-PEN_a co-activation (for example, intermittent
           L1-to-R1 recruitment with L8-L10 spillover) further indicates that
           directional control is mediated by coupled microcircuits, not purely
-          one-neuron one-angle mappings. This motivates follow-up work to
-          separate direct vs multi-hop recruitment paths and quantify how these
-          interactions affect command robustness.
+          one-neuron one-angle mappings. At present, this cross-activation
+          appears secondary to the main bump-control mechanism and does not
+          substantially increase stability versus direct PEN_a drive.
         </p>
         <p>
           A key next research direction is transition latency optimization. The

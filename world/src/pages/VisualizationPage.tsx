@@ -2697,7 +2697,7 @@ export default function VisualizationPage() {
         style={{
           position: 'absolute',
           inset: 12,
-          zIndex: 15,
+          zIndex: 30,
           display: 'flex',
           flexDirection: 'column',
           gap: 8,
@@ -2992,7 +2992,7 @@ export default function VisualizationPage() {
               onClick={() => setShowPenAMapping((v) => !v)}
               style={{
                 width: 18,
-                minHeight: 120,
+                height: 220,
                 borderRadius: 6,
                 border: '1px solid #6f8fc0',
                 background: showPenAMapping ? '#3a5787' : '#243a5b',

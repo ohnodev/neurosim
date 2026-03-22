@@ -1975,7 +1975,6 @@ export default function VisualizationPage() {
   const [connectionMode, setConnectionMode] = useState<'pen_to_epg' | 'pen_to_pen'>('pen_to_epg');
   const [showPenAMapping, setShowPenAMapping] = useState(false);
   const [copiedPenAId, setCopiedPenAId] = useState<string | null>(null);
-  const copyInFlightRef = useRef(false);
   const copyTimeoutRef = useRef<number | null>(null);
   const isMountedRef = useRef(true);
   const [showCompassInfo, setShowCompassInfo] = useState(false);
@@ -1998,7 +1997,6 @@ export default function VisualizationPage() {
   useEffect(() => {
     return () => {
       isMountedRef.current = false;
-      copyInFlightRef.current = false;
       if (copyTimeoutRef.current != null) {
         window.clearTimeout(copyTimeoutRef.current);
         copyTimeoutRef.current = null;
@@ -2789,12 +2787,25 @@ export default function VisualizationPage() {
     setTimeout(() => notification.hide(), 2200);
   };
   const handleCopyNeuronId = async (id: string) => {
-    if (copyInFlightRef.current) return;
-    copyInFlightRef.current = true;
+    const copyWithFallback = async (value: string) => {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+        return;
+      }
+      const ta = document.createElement('textarea');
+      ta.value = value;
+      ta.setAttribute('readonly', 'true');
+      ta.style.position = 'absolute';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      if (!ok) throw new Error('copy failed');
+    };
     try {
-      await navigator.clipboard.writeText(id);
+      await copyWithFallback(id);
       if (!isMountedRef.current) {
-        copyInFlightRef.current = false;
         return;
       }
       setCopiedPenAId(id);
@@ -2804,14 +2815,12 @@ export default function VisualizationPage() {
       copyTimeoutRef.current = window.setTimeout(() => {
         if (!isMountedRef.current) return;
         setCopiedPenAId((prev) => (prev === id ? null : prev));
-        copyInFlightRef.current = false;
         copyTimeoutRef.current = null;
       }, 1200);
     } catch {
       if (isMountedRef.current) {
         setError('Failed to copy neuron ID');
       }
-      copyInFlightRef.current = false;
     }
   };
   const preventNumberWheelAdjust = (event: WheelEvent<HTMLElement>) => {
@@ -3217,8 +3226,6 @@ export default function VisualizationPage() {
                           <tr>
                             <th style={{ textAlign: 'left', borderBottom: '1px solid #35527a', padding: '2px 4px' }}>Label</th>
                             <th style={{ textAlign: 'left', borderBottom: '1px solid #35527a', padding: '2px 4px' }}>PEN</th>
-                            <th style={{ textAlign: 'left', borderBottom: '1px solid #35527a', padding: '2px 4px' }}>Hemilineage</th>
-                            <th style={{ textAlign: 'left', borderBottom: '1px solid #35527a', padding: '2px 4px' }}>Side</th>
                             <th style={{ textAlign: 'left', borderBottom: '1px solid #35527a', padding: '2px 4px' }}>Neuron ID</th>
                           </tr>
                         </thead>
@@ -3227,8 +3234,6 @@ export default function VisualizationPage() {
                             <tr key={`map-left-${id}`}>
                               <td style={{ padding: '2px 4px', color: '#b8d4ff' }}>{label}</td>
                               <td style={{ padding: '2px 4px', color: '#a8c4ea' }}>{penAMetadataById[id]?.penLabel || '-'}</td>
-                              <td style={{ padding: '2px 4px', color: '#9bb8de' }}>{penAMetadataById[id]?.hemilineage || '-'}</td>
-                              <td style={{ padding: '2px 4px', color: '#9bb8de' }}>{penAMetadataById[id]?.side || (label.startsWith('L') ? 'left' : 'right')}</td>
                               <td style={{ padding: '2px 4px', color: '#8fb5e3', fontFamily: 'monospace' }}>
                                 <span>{id}</span>
                                 <button
@@ -3270,8 +3275,6 @@ export default function VisualizationPage() {
                             <tr key={`map-right-${id}`}>
                               <td style={{ padding: '2px 4px', color: '#b8d4ff' }}>{label}</td>
                               <td style={{ padding: '2px 4px', color: '#a8c4ea' }}>{penAMetadataById[id]?.penLabel || '-'}</td>
-                              <td style={{ padding: '2px 4px', color: '#9bb8de' }}>{penAMetadataById[id]?.hemilineage || '-'}</td>
-                              <td style={{ padding: '2px 4px', color: '#9bb8de' }}>{penAMetadataById[id]?.side || (label.startsWith('L') ? 'left' : 'right')}</td>
                               <td style={{ padding: '2px 4px', color: '#8fb5e3', fontFamily: 'monospace' }}>
                                 <span>{id}</span>
                                 <button

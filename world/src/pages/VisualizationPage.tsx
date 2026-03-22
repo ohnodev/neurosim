@@ -263,6 +263,13 @@ function connectionLineColor(kind: 'excitatory' | 'inhibitory' | 'unsigned_proxy
   return weak.lerp(strong, t);
 }
 
+function connectionOpacityWeight(rank: number, strength01: number): number {
+  const rankClamped = Math.max(1, Math.min(5, Number.isFinite(rank) ? Math.floor(rank) : 5));
+  const rankWeight = Math.max(0.6, 1 - (rankClamped - 1) * 0.1); // 1.0,0.9,0.8,0.7,0.6
+  const strengthWeight = 0.7 + Math.max(0, Math.min(1, Number.isFinite(strength01) ? strength01 : 0)) * 0.3;
+  return Math.max(0.35, Math.min(1, rankWeight * strengthWeight));
+}
+
 function buildTemplateNeuronsFromStaticCsv(text: string): ReplayNeuron[] {
   const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0);
   if (lines.length < 2) return [];
@@ -1148,6 +1155,7 @@ function buildScene(
     penId: string;
     kind: 'excitatory' | 'inhibitory' | 'unsigned_proxy';
     strength01: number;
+    opacityWeight: number;
     from: [number, number, number];
     to: [number, number, number];
     colorOffset: number;
@@ -1170,11 +1178,13 @@ function buildScene(
       const ez = positions[targetIdx * 3 + 2]!;
       lineVertices.push(px, py, pz, ex, ey, ez);
       const c = connectionLineColor(link.kind, link.strength01);
-      lineColors.push(c.r, c.g, c.b, c.r, c.g, c.b);
+      const opacityWeight = connectionOpacityWeight(link.rank, link.strength01);
+      lineColors.push(c.r * opacityWeight, c.g * opacityWeight, c.b * opacityWeight, c.r * opacityWeight, c.g * opacityWeight, c.b * opacityWeight);
       penEpgRenderableLinks.push({
         penId: link.pen_id,
         kind: link.kind,
         strength01: Math.max(0, Math.min(1, link.strength01)),
+        opacityWeight,
         from: [px, py, pz],
         to: [ex, ey, ez],
         colorOffset: (lineVertices.length / 3 - 2) * 3,
@@ -1583,12 +1593,15 @@ function buildScene(
           : link.kind === 'unsigned_proxy'
             ? PEN_CONN_PROXY_FLASH_COLOR
             : PEN_CONN_EXCIT_FLASH_COLOR;
+        const flashR = flash.r * link.opacityWeight;
+        const flashG = flash.g * link.opacityWeight;
+        const flashB = flash.b * link.opacityWeight;
         const o = link.colorOffset;
         for (let k = 0; k < 2; k += 1) {
           const baseIndex = o + k * 3;
-          lineColorArray[baseIndex] = penEpgLineBaseColors[baseIndex]! + (flash.r - penEpgLineBaseColors[baseIndex]!) * envelope;
-          lineColorArray[baseIndex + 1] = penEpgLineBaseColors[baseIndex + 1]! + (flash.g - penEpgLineBaseColors[baseIndex + 1]!) * envelope;
-          lineColorArray[baseIndex + 2] = penEpgLineBaseColors[baseIndex + 2]! + (flash.b - penEpgLineBaseColors[baseIndex + 2]!) * envelope;
+          lineColorArray[baseIndex] = penEpgLineBaseColors[baseIndex]! + (flashR - penEpgLineBaseColors[baseIndex]!) * envelope;
+          lineColorArray[baseIndex + 1] = penEpgLineBaseColors[baseIndex + 1]! + (flashG - penEpgLineBaseColors[baseIndex + 1]!) * envelope;
+          lineColorArray[baseIndex + 2] = penEpgLineBaseColors[baseIndex + 2]! + (flashB - penEpgLineBaseColors[baseIndex + 2]!) * envelope;
         }
         if (pulsePosArray && pulseColorArray && activePulseCount < penEpgRenderableLinks.length) {
           const px = link.from[0] + (link.to[0] - link.from[0]) * progress;

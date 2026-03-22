@@ -39,7 +39,6 @@ import { DebugPanelSlot } from './DebugPanelSlot';
 import { FliesPanelCurrentSlots } from './FliesPanelCurrentSlots';
 import { FliesPanelGraveyardSlots } from './FliesPanelGraveyardSlots';
 import { SidePanelToggle } from './SidePanelToggle';
-import CompactMenu from '../CompactMenu';
 import './FlyViewer.css';
 
 const WEBGL_UNAVAILABLE_ERROR =
@@ -605,7 +604,6 @@ export default function FlyViewer() {
             </div>
           )}
           <div style={{ position: 'absolute', top: 12, right: 12, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, pointerEvents: 'auto' }}>
-            <CompactMenu />
             <ConnectButton devMode={devMode} onToggleDevMode={onToggleDevMode} />
             <CameraToggleSlot ref={cameraToggleSlotRef} deployed={deployed} selectedFlyIndex={selectedFlyIndex} />
             <SimStatusSlot ref={simStatusSlotRef} />

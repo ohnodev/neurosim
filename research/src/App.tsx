@@ -404,6 +404,22 @@ function App() {
           ))}
         </ul>
 
+        <figure>
+          <figcaption>
+            Figure 3. Live heading-bump visualization for Position 1 command set
+            (11 PM target: L1:50, L2:50, L6:50), showing the bump-centered
+            compass state and the top strongest inhibitory PEN_a-to-EPG
+            connections in the interface panel. The visualization and connection
+            ranking workflow are reproducible from the NeuroSim repository
+            <Cite ids={['9']} />.
+          </figcaption>
+          <img
+            src="/hb-example.jpg"
+            alt="Heading bump visualization for Position 1 at 11 PM using L1 L2 L6 at 50 Hz with inhibitory connection panel visible"
+            className="paper-image"
+          />
+        </figure>
+
         <h3>4. Inhibitory regulation and failure modes</h3>
         <p>
           Ring-neuron inhibition reliably suppresses bump persistence in

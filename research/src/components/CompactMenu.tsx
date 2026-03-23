@@ -10,6 +10,7 @@ const SOCIAL_LINKS = [
 ]
 
 const MENU_LINKS = [
+  { name: 'Home', href: 'https://neurosim.fun/' },
   { name: 'World', href: 'https://neurosim.fun/' },
   { name: 'Visualization', href: 'https://neurosim.fun/visualization' },
   { name: 'Research', href: 'https://research.neurosim.fun/' },

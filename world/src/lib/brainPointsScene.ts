@@ -4,6 +4,7 @@
  */
 import * as THREE from 'three';
 import type { NeuronWithPosition } from '../../../shared/lib/brainTypes';
+import { canUseWebGL } from './webglUtils';
 
 const COLOR_SCALE: [number, string][] = [
   [0, '#070b16'],
@@ -81,6 +82,9 @@ export function initBrainPoints(
   neurons: NeuronWithPosition[],
   onReady?: () => void
 ): () => void {
+  if (!canUseWebGL()) {
+    throw new Error('WebGL unavailable: cannot initialize BrainOverlay 3D points scene.');
+  }
   const width = Math.max(1, container.clientWidth);
   const height = Math.max(1, container.clientHeight);
 

@@ -16,6 +16,7 @@ import {
   disposeLowLodFlyResources,
   type LowLodFlyProxy,
 } from './scene/lodFly';
+import { canUseWebGL } from './webglUtils';
 
 export interface InterpolationDebugStats {
   fps: number;
@@ -334,6 +335,9 @@ export function initThreeScene(
 ): { dispose: () => void; updateButton: (mode: CameraMode) => void } {
   const noop = () => {};
   if (!container) return { dispose: noop, updateButton: noop };
+  if (!canUseWebGL()) {
+    throw new Error('WebGL context is unavailable');
+  }
 
   let cameraButton: { el: HTMLButtonElement; update: (mode: CameraMode) => void } | null = null;
   let disposeStatus: (() => void) | null = null;

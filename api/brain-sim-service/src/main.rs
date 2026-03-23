@@ -1131,7 +1131,16 @@ struct WorldSnapshotResp {
     ok: bool,
     tick: u64,
     dt_sec: f64,
+    sources: Vec<WorldSnapshotSource>,
     flies: Vec<WorldSnapshotFly>,
+}
+
+#[derive(Clone, Serialize)]
+struct WorldSnapshotSource {
+    id: String,
+    x: f64,
+    y: f64,
+    radius: f64,
 }
 
 /// Min seconds between preset (11PM/3PM/8PM) changes. Keeps heading stable.
@@ -1156,6 +1165,7 @@ struct WorldFlyRuntime {
 
 struct WorldRuntimeState {
     next_fly_id: AtomicU32,
+    next_source_id: AtomicU64,
     tick: AtomicU64,
     dt_sec: f64,
     steps_per_batch: u32,
@@ -1187,6 +1197,33 @@ const WORLD_REST_DURATION_SEC: f64 = 4.0;
 const WORLD_FLY_TIME_MAX_SEC: f64 = 6.0;
 /// Fatigue decay rate when flying. 0.1 = 1/10th as fast (fly ~10× longer before rest).
 const WORLD_FATIGUE_DECAY_RATE: f64 = 0.1;
+const WORLD_MAX_FOOD_SOURCES: usize = 4;
+const WORLD_FOOD_ARENA_HALF_SIZE: f64 = 24.0;
+const WORLD_FOOD_MARGIN: f64 = 2.0;
+const WORLD_FOOD_RADIUS: f64 = 12.0;
+
+fn world_food_unit(seed: u64) -> f64 {
+    let mut x = seed.wrapping_add(0x9E3779B97F4A7C15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94D049BB133111EB);
+    x ^= x >> 31;
+    let mantissa = x >> 11; // 53 useful bits for f64 precision
+    mantissa as f64 / ((1u64 << 53) as f64)
+}
+
+fn spawn_world_food_source(source_id_num: u64) -> SourceInput {
+    let min = -WORLD_FOOD_ARENA_HALF_SIZE + WORLD_FOOD_MARGIN;
+    let max = WORLD_FOOD_ARENA_HALF_SIZE - WORLD_FOOD_MARGIN;
+    let span = (max - min).max(0.0);
+    let ux = world_food_unit(source_id_num.wrapping_mul(2).wrapping_add(1));
+    let uy = world_food_unit(source_id_num.wrapping_mul(2).wrapping_add(2));
+    SourceInput {
+        id: format!("food{}", source_id_num),
+        x: min + ux * span,
+        y: min + uy * span,
+        radius: WORLD_FOOD_RADIUS,
+    }
+}
 const WORLD_FEED_DURATION_SEC: f64 = 1.2;
 const WORLD_FEED_START_RADIUS: f64 = 2.2;
 const WORLD_WANDER_INTERVAL_SEC: f64 = 10.0;
@@ -1692,15 +1729,20 @@ fn spawn_world_runtime_thread(
     let world_tick_buffer_cap = WORLD_TICK_BUFFER_BASE_CAP.saturating_mul(steps_per_batch as usize);
     let epg_index_to_bin = build_epg_index_to_bin(template.as_ref(), &epg_id_to_bin);
     let epg_index_to_root_id = build_epg_index_to_root_id(template.as_ref());
+    let mut initial_sources = Vec::with_capacity(WORLD_MAX_FOOD_SOURCES);
+    for source_id_num in 1..=(WORLD_MAX_FOOD_SOURCES as u64) {
+        initial_sources.push(spawn_world_food_source(source_id_num));
+    }
     let state = Arc::new(WorldRuntimeState {
         next_fly_id: AtomicU32::new(0),
+        next_source_id: AtomicU64::new(WORLD_MAX_FOOD_SOURCES as u64 + 1),
         tick: AtomicU64::new(0),
         dt_sec,
         steps_per_batch,
         paused: AtomicU32::new(0),
         flies: Mutex::new(HashMap::new()),
         snapshots: Mutex::new(HashMap::new()),
-        sources: Mutex::new(Vec::new()),
+        sources: Mutex::new(initial_sources),
         food_state: Mutex::new(FoodState::default()),
         tick_buffer_cap: world_tick_buffer_cap,
         ticks: Mutex::new(VecDeque::with_capacity(world_tick_buffer_cap)),
@@ -1765,6 +1807,7 @@ fn spawn_world_runtime_thread(
                     {
                         let mut food_state = state_thr.food_state.lock().unwrap();
                         food_state.sync(sources_now.iter().map(|s| s.id.clone()));
+                        let mut depleted_source_ids: HashSet<String> = HashSet::new();
                         for result in step_results.iter_mut() {
                             let sugar_per_fly = (FEED_SUGAR_PER_SEC * result.dt_batch).max(0.0);
                             if sugar_per_fly <= 0.0 {
@@ -1791,9 +1834,19 @@ fn spawn_world_runtime_thread(
                                 result.snapshot.fly.z = 0.9;
                             }
                             if food_state.depleted(&source_id) {
+                                depleted_source_ids.insert(source_id.clone());
                                 result.snapshot.eaten_food_id = Some(source_id);
                             } else {
                                 result.snapshot.eaten_food_id = None;
+                            }
+                        }
+                        if !depleted_source_ids.is_empty() {
+                            let mut sources = state_thr.sources.lock().unwrap();
+                            sources.retain(|s| !depleted_source_ids.contains(&s.id));
+                            while sources.len() < WORLD_MAX_FOOD_SOURCES {
+                                let source_id_num =
+                                    state_thr.next_source_id.fetch_add(1, Ordering::Relaxed);
+                                sources.push(spawn_world_food_source(source_id_num));
                             }
                         }
                     }
@@ -2795,6 +2848,18 @@ fn handle(
     {
         if let Some(ref world) = world_runtime {
             let tick = world.tick.load(Ordering::Acquire);
+            let sources: Vec<WorldSnapshotSource> = world
+                .sources
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|s| WorldSnapshotSource {
+                    id: s.id.clone(),
+                    x: s.x,
+                    y: s.y,
+                    radius: s.radius,
+                })
+                .collect();
             let flies: Vec<WorldSnapshotFly> = world
                 .snapshots
                 .lock()
@@ -2806,6 +2871,7 @@ fn handle(
                 ok: true,
                 tick,
                 dt_sec: world.dt_sec,
+                sources,
                 flies,
             })?
         } else {
@@ -2813,6 +2879,7 @@ fn handle(
                 ok: false,
                 tick: 0,
                 dt_sec: 0.0001,
+                sources: Vec::new(),
                 flies: Vec::new(),
             })?
         }

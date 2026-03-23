@@ -1,0 +1,10 @@
+.pen-mapping-panel-scroll {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.pen-mapping-panel-scroll::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}

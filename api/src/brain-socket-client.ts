@@ -424,6 +424,7 @@ export interface WorldSnapshot {
   ok: boolean;
   tick: number;
   dt_sec: number;
+  sources: Array<{ id: string; x: number; y: number; radius: number }>;
   flies: WorldFlySnapshot[];
 }
 

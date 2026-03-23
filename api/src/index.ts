@@ -8,7 +8,6 @@ import { WebSocketServer } from 'ws';
 import { buildSchema, execute, GraphQLError, subscribe, type GraphQLError as GQLError } from 'graphql';
 import { loadConnectome } from './connectome.js';
 import * as socketClient from './brain-socket-client.js';
-import { getWorld, spawnFood, removeFood, getSources, type WorldSource } from './world.js';
 import {
   WORLD_SIM_DT_SEC,
 } from './world-pen-presets.js';
@@ -358,8 +357,16 @@ const GROUND_Z = 0.35;
 const INITIAL_SPREAD = 4;
 const SPAWN_JITTER_RADIUS = 1.25;
 
-let foodIntervalId: ReturnType<typeof setInterval> | null = null;
+type WorldSource = {
+  id: string;
+  type: 'food';
+  x: number;
+  y: number;
+  z: number;
+  radius: number;
+};
 let rewardFlushIntervalId: ReturnType<typeof setInterval> | null = null;
+let latestWorldSources: WorldSource[] = [];
 
 /** Simulation flies; starts empty, users deploy flies. */
 type RuntimeFly = {
@@ -642,7 +649,7 @@ function buildClientPayload(
   epgSpikesByNeuronByFly: EpgSpikesByNeuronFly[],
 ): void {
   const nowMs = Date.now();
-  const sources = getSources();
+  const sources = latestWorldSources.map((s) => ({ ...s }));
   const clientFrames = frames.map((f) => ({
     t: f.t,
     flies: f.flies,
@@ -816,14 +823,6 @@ function startSim(): void {
   droppedSimTicks = 0;
   graceSkippedTicks = 0;
   graceSkipLogged = false;
-  spawnFood();
-  foodIntervalId = setInterval(() => {
-    const f = spawnFood();
-    if (f) {
-      console.log('[world] spawned food', f.id, 'at', f.x.toFixed(1), f.y.toFixed(1));
-      broadcast({ simRunning, sources: getSources() });
-    }
-  }, 5_000);
   simIntervalId = setInterval(async () => {
     if (Date.now() < simReadyAtMs) {
       graceSkippedTicks += 1;
@@ -881,11 +880,7 @@ function startSim(): void {
           viewedSimIndexes.add(idx);
         }
       }
-      const currentSources = getSources();
       const pullStart = performance.now();
-      await socketClient.worldSetSources(
-        currentSources.map((s) => ({ id: s.id, x: s.x ?? 0, y: s.y ?? 0, radius: s.radius ?? 1 })),
-      );
       const SOCKET_TICKS_PAGE_SIZE = 100_000;
       const ticksToRequest = Math.max(1250, worldStepsPerBatch * Math.max(1, nSims) * 2);
       const tickPageSize = Math.min(ticksToRequest, SOCKET_TICKS_PAGE_SIZE);
@@ -893,6 +888,14 @@ function startSim(): void {
         socketClient.worldGetSnapshot(),
         socketClient.worldReadTicks(lastTicksAfter, tickPageSize),
       ]);
+      latestWorldSources = (worldSnap.sources ?? []).map((s) => ({
+        id: s.id,
+        type: 'food',
+        x: s.x,
+        y: s.y,
+        z: GROUND_Z,
+        radius: s.radius,
+      }));
       if (firstTicksResp.epg_index_to_bin?.length) epgIndexToBin = firstTicksResp.epg_index_to_bin;
       if (firstTicksResp.steps_per_batch) worldStepsPerBatch = firstTicksResp.steps_per_batch;
       const rawTicks: typeof firstTicksResp.ticks = [];
@@ -1002,8 +1005,6 @@ function startSim(): void {
         }
         if (state.eatenFoodIds && state.eatenFoodIds.length > 0) {
           for (const foodId of state.eatenFoodIds) {
-            const removed = removeFood(foodId);
-            if (removed) spawnFood();
             const deployment = findDeploymentBySimIndex(j);
             if (deployment) {
               recordFoodDepleted(deployment.address, deployment.slotIndex);
@@ -1127,10 +1128,6 @@ function startSim(): void {
 }
 
 function stopSim(): void {
-  if (foodIntervalId) {
-    clearInterval(foodIntervalId);
-    foodIntervalId = null;
-  }
   if (rewardFlushIntervalId) {
     clearInterval(rewardFlushIntervalId);
     rewardFlushIntervalId = null;
@@ -1593,7 +1590,10 @@ app.post('/api/neurosim-baseline/export', async (req, res) => {
   }
 });
 
-app.get('/api/world', (_, res) => res.json(getWorld()));
+app.get('/api/world', (_, res) =>
+  res.json({
+    sources: latestWorldSources.map((s) => ({ ...s })),
+  }));
 
 /** Record world sim ticks for ~durationSec, convert to visualization replay format, log and return. */
 app.post('/api/world-record-ticks', async (req, res) => {

@@ -23,7 +23,7 @@ import {
   getEpgCountsInWindow,
 } from '../../lib/compassEpgData';
 import { SimRefsProvider } from '../../lib/simDisplayContext';
-import { ConnectButton } from '../ConnectButton';
+import CompactMenu from '../CompactMenu';
 import { BuyFlyModal } from '../BuyFlyModal';
 import { initThreeScene, type InterpolationDebugStats, type CameraMode, type SimStatusRefs } from '../../lib/threeScene';
 import { usePrivyWallet } from '../../lib/usePrivyWallet';
@@ -31,7 +31,7 @@ import { RewardsTable } from '../RewardsTable';
 import { StatusPanelStatusContent } from '../StatusPanelStatusContent';
 import { DEFAULT_FLY, flyCardDataEqual, resolveEffectiveSimIndex } from '../../lib/flyViewerUtils';
 import { isMobileViewport } from '../../lib/mediaQuery';
-import { getInitialDevMode, persistDevMode } from '../../lib/devMode';
+import { getInitialDevMode } from '../../lib/devMode';
 import { CameraToggleSlot } from './CameraToggleSlot';
 import { SimStateSync } from './SimStateSync';
 import { SimStatusSlot } from './SimStatusSlot';
@@ -39,9 +39,10 @@ import { DebugPanelSlot } from './DebugPanelSlot';
 import { FliesPanelCurrentSlots } from './FliesPanelCurrentSlots';
 import { FliesPanelGraveyardSlots } from './FliesPanelGraveyardSlots';
 import { SidePanelToggle } from './SidePanelToggle';
-import { BrainMotorReadout } from './BrainMotorReadout';
-import CompactMenu from '../CompactMenu';
 import './FlyViewer.css';
+
+const WEBGL_UNAVAILABLE_ERROR =
+  'WebGL is unavailable in this browser context. Enable hardware acceleration or try a normal Chrome window.';
 
 export default function FlyViewer() {
   const { address } = usePrivyWallet();
@@ -59,7 +60,7 @@ export default function FlyViewer() {
   const [brainPanelOpen, setBrainPanelOpen] = useState(() => !isMobileViewport());
   const [bumpAngleDeg, setBumpAngleDeg] = useState<number | null>(null);
   const [epgBins, setEpgBins] = useState<number[] | null>(null);
-  const [devMode, setDevMode] = useState<boolean>(() => getInitialDevMode());
+  const [devMode] = useState<boolean>(() => getInitialDevMode());
   const [deployingSlots, setDeployingSlots] = useState<Set<number>>(new Set());
   const deployingSlotsRef = useRef<Set<number>>(new Set());
 
@@ -450,7 +451,6 @@ export default function FlyViewer() {
   const onSelectFlySlot = useCallback((slot: number) => setSelectedFlyIndex(slot), []);
   const onStatusPanelToggle = useCallback(() => setStatusPanelOpen((o) => !o), []);
   const onBrainPanelToggle = useCallback(() => setBrainPanelOpen((o) => !o), []);
-  const onToggleDevMode = useCallback(() => setDevMode((prev) => !prev), []);
 
   const getFlyCardData = useCallback((slotIndex: number) => {
     const entry = flyCardDataRef.current.get(slotIndex);
@@ -462,10 +462,6 @@ export default function FlyViewer() {
   useEffect(() => {
     sourcesRef.current = sources;
   }, [sources]);
-
-  useEffect(() => {
-    persistDevMode(devMode);
-  }, [devMode]);
 
   useEffect(() => {
     deployedRef.current = deployed;
@@ -486,25 +482,32 @@ export default function FlyViewer() {
       selectedFlyIndexRef,
       connectedRef,
     };
-    const { dispose, updateButton } = initThreeScene(
-      container,
-      {
-        latestFliesRef,
-        interpolatedBySimRef,
-        debugStatsRef,
-        cameraModeRef,
-        followSimIndexRef,
-        sourcesRef,
-        devModeRef,
-        snapshotBufferRef,
-        targetRef: cameraTargetRef,
-      },
-      cameraToggleSlotRef.current,
-      simStatusSlotRef.current,
-      simStatusRefs,
-      debugPanelSlotRef.current
-    );
-    updateCameraButtonRef.current = updateButton;
+    let dispose = () => {};
+    try {
+      const initialized = initThreeScene(
+        container,
+        {
+          latestFliesRef,
+          interpolatedBySimRef,
+          debugStatsRef,
+          cameraModeRef,
+          followSimIndexRef,
+          sourcesRef,
+          devModeRef,
+          snapshotBufferRef,
+          targetRef: cameraTargetRef,
+        },
+        cameraToggleSlotRef.current,
+        simStatusSlotRef.current,
+        simStatusRefs,
+        debugPanelSlotRef.current
+      );
+      dispose = initialized.dispose;
+      updateCameraButtonRef.current = initialized.updateButton;
+    } catch (err) {
+      console.error('[FlyViewer] three.js initialization failed', err);
+      setError((prev) => prev ?? WEBGL_UNAVAILABLE_ERROR);
+    }
     return () => {
       updateCameraButtonRef.current = null;
       dispose();
@@ -597,7 +600,6 @@ export default function FlyViewer() {
           )}
           <div style={{ position: 'absolute', top: 12, right: 12, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, pointerEvents: 'auto' }}>
             <CompactMenu />
-            <ConnectButton devMode={devMode} onToggleDevMode={onToggleDevMode} />
             <CameraToggleSlot ref={cameraToggleSlotRef} deployed={deployed} selectedFlyIndex={selectedFlyIndex} />
             <SimStatusSlot ref={simStatusSlotRef} />
           </div>
@@ -731,7 +733,7 @@ export default function FlyViewer() {
                   onClick={() => setBrainTab('activity')}
                   style={{ padding: '4px 8px', fontSize: 11 }}
                 >
-                  Brain activity
+                  {`Fly ${selectedFlyIndex + 1}`}
                 </button>
                 <button
                   type="button"
@@ -755,9 +757,6 @@ export default function FlyViewer() {
                       />
                     )}
                   </div>
-                  {brainPanelOpen && (
-                    <BrainMotorReadout motorReadoutRef={motorReadoutRef} />
-                  )}
                 </>
               )}
               {brainTab === 'compass' && brainPanelOpen && (

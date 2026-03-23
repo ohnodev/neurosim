@@ -23,7 +23,7 @@ import {
   getEpgCountsInWindow,
 } from '../../lib/compassEpgData';
 import { SimRefsProvider } from '../../lib/simDisplayContext';
-import { ConnectButton } from '../ConnectButton';
+import CompactMenu from '../CompactMenu';
 import { BuyFlyModal } from '../BuyFlyModal';
 import { initThreeScene, type InterpolationDebugStats, type CameraMode, type SimStatusRefs } from '../../lib/threeScene';
 import { usePrivyWallet } from '../../lib/usePrivyWallet';
@@ -31,7 +31,7 @@ import { RewardsTable } from '../RewardsTable';
 import { StatusPanelStatusContent } from '../StatusPanelStatusContent';
 import { DEFAULT_FLY, flyCardDataEqual, resolveEffectiveSimIndex } from '../../lib/flyViewerUtils';
 import { isMobileViewport } from '../../lib/mediaQuery';
-import { getInitialDevMode, persistDevMode } from '../../lib/devMode';
+import { getInitialDevMode } from '../../lib/devMode';
 import { CameraToggleSlot } from './CameraToggleSlot';
 import { SimStateSync } from './SimStateSync';
 import { SimStatusSlot } from './SimStatusSlot';
@@ -60,7 +60,7 @@ export default function FlyViewer() {
   const [brainPanelOpen, setBrainPanelOpen] = useState(() => !isMobileViewport());
   const [bumpAngleDeg, setBumpAngleDeg] = useState<number | null>(null);
   const [epgBins, setEpgBins] = useState<number[] | null>(null);
-  const [devMode, setDevMode] = useState<boolean>(() => getInitialDevMode());
+  const [devMode] = useState<boolean>(() => getInitialDevMode());
   const [deployingSlots, setDeployingSlots] = useState<Set<number>>(new Set());
   const deployingSlotsRef = useRef<Set<number>>(new Set());
 
@@ -451,7 +451,6 @@ export default function FlyViewer() {
   const onSelectFlySlot = useCallback((slot: number) => setSelectedFlyIndex(slot), []);
   const onStatusPanelToggle = useCallback(() => setStatusPanelOpen((o) => !o), []);
   const onBrainPanelToggle = useCallback(() => setBrainPanelOpen((o) => !o), []);
-  const onToggleDevMode = useCallback(() => setDevMode((prev) => !prev), []);
 
   const getFlyCardData = useCallback((slotIndex: number) => {
     const entry = flyCardDataRef.current.get(slotIndex);
@@ -463,10 +462,6 @@ export default function FlyViewer() {
   useEffect(() => {
     sourcesRef.current = sources;
   }, [sources]);
-
-  useEffect(() => {
-    persistDevMode(devMode);
-  }, [devMode]);
 
   useEffect(() => {
     deployedRef.current = deployed;
@@ -604,7 +599,7 @@ export default function FlyViewer() {
             </div>
           )}
           <div style={{ position: 'absolute', top: 12, right: 12, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, pointerEvents: 'auto' }}>
-            <ConnectButton devMode={devMode} onToggleDevMode={onToggleDevMode} />
+            <CompactMenu />
             <CameraToggleSlot ref={cameraToggleSlotRef} deployed={deployed} selectedFlyIndex={selectedFlyIndex} />
             <SimStatusSlot ref={simStatusSlotRef} />
           </div>

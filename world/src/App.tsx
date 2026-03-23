@@ -7,18 +7,13 @@ import './App.css'
 
 function App() {
   return (
-    <Routes>
-      <Route
-        path="/"
-        element={(
-          <OnchainProviders>
-            <FlyViewer />
-          </OnchainProviders>
-        )}
-      />
-      <Route path="/visualization" element={<NotificationProvider><VisualizationPage /></NotificationProvider>} />
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+    <OnchainProviders>
+      <Routes>
+        <Route path="/" element={<FlyViewer />} />
+        <Route path="/visualization" element={<NotificationProvider><VisualizationPage /></NotificationProvider>} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </OnchainProviders>
   )
 }
 

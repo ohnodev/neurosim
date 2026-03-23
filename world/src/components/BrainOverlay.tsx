@@ -12,9 +12,10 @@ interface BrainOverlayProps {
   embedded?: boolean;
   followSimIndexRef: React.MutableRefObject<number | undefined>;
   neurons?: NeuronWithPosition[];
+  title?: string;
 }
 
-function BrainOverlayInner({ visible = true, embedded = false, followSimIndexRef, neurons }: BrainOverlayProps) {
+function BrainOverlayInner({ visible = true, embedded = false, followSimIndexRef, neurons, title = 'Brain activity' }: BrainOverlayProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const { activityRef, activitiesRef } = useSimRefs();
   const normalizedNeurons = useMemo(() => neurons ?? [], [neurons]);
@@ -66,7 +67,7 @@ function BrainOverlayInner({ visible = true, embedded = false, followSimIndexRef
   return (
     <div className="brain-overlay" style={containerStyle}>
       <div style={{ position: 'absolute', top: 4, left: 8, fontSize: 10, color: '#888', zIndex: 1 }}>
-        Brain activity
+        {title}
       </div>
       {renderError ? (
         <div style={{ position: 'absolute', top: 24, left: 8, right: 8, fontSize: 10, color: '#c88', zIndex: 1 }}>

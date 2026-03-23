@@ -2803,20 +2803,18 @@ export default function VisualizationPage() {
       document.body.removeChild(ta);
       if (!ok) throw new Error('copy failed');
     };
+    if (!isMountedRef.current) return;
+    setCopiedPenAId(id);
+    if (copyTimeoutRef.current != null) {
+      window.clearTimeout(copyTimeoutRef.current);
+    }
+    copyTimeoutRef.current = window.setTimeout(() => {
+      if (!isMountedRef.current) return;
+      setCopiedPenAId((prev) => (prev === id ? null : prev));
+      copyTimeoutRef.current = null;
+    }, 1200);
     try {
       await copyWithFallback(id);
-      if (!isMountedRef.current) {
-        return;
-      }
-      setCopiedPenAId(id);
-      if (copyTimeoutRef.current != null) {
-        window.clearTimeout(copyTimeoutRef.current);
-      }
-      copyTimeoutRef.current = window.setTimeout(() => {
-        if (!isMountedRef.current) return;
-        setCopiedPenAId((prev) => (prev === id ? null : prev));
-        copyTimeoutRef.current = null;
-      }, 1200);
     } catch {
       if (isMountedRef.current) {
         setError('Failed to copy neuron ID');

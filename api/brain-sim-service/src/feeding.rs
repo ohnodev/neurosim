@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
-pub const FOOD_SUGAR_CAPACITY: f64 = 100.0;
+// Slightly below one ideal full feeding-cycle yield so one full cycle reliably depletes one source.
+pub const FOOD_SUGAR_CAPACITY: f64 = 99.0;
 pub const FEED_DURATION_SEC: f64 = 5.0;
 pub const FEED_SUGAR_PER_SEC: f64 = FOOD_SUGAR_CAPACITY / FEED_DURATION_SEC;
 pub const HUNGER_PER_SUGAR: f64 = 0.5;

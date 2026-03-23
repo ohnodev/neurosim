@@ -331,8 +331,6 @@ const COMPASS_ROTATION_RAD = Math.PI / 2;
 const EPG_BUMP_WINDOW_TICKS = 5;
 const EPG_GLOW_SIZE = 0.13;
 const EPG_GLOW_OPACITY = 0.52;
-const PEN_ACTIVITY_WINDOW_SEC = 0.12;
-const PEN_ACTIVITY_REF_HZ = 500;
 const PEN_CALCIUM_WINDOW_SEC = 0.35;
 const PEN_CALCIUM_DECAY_SEC = 0.11;
 const PEN_CALCIUM_GAIN = 0.45;
@@ -1969,7 +1967,6 @@ export default function VisualizationPage() {
   const [penANeurons, setPenANeurons] = useState<{ left: Array<{ id: string; label: string }>; right: Array<{ id: string; label: string }> }>({ left: [], right: [] });
   const [penARatesById, setPenARatesById] = useState<Record<string, number>>({});
   const [penAMetadataById, setPenAMetadataById] = useState<Record<string, PenAMetadata>>({});
-  const [penASpikeStrengthById, setPenASpikeStrengthById] = useState<Record<string, number>>({});
   const [penEpgConnections, setPenEpgConnections] = useState<PenConnection[]>([]);
   const [penPenConnections, setPenPenConnections] = useState<PenConnection[]>([]);
   const [connectionMode, setConnectionMode] = useState<'pen_to_epg' | 'pen_to_pen'>('pen_to_epg');
@@ -2513,33 +2510,6 @@ export default function VisualizationPage() {
   }, [isNeuroSimLive]);
 
   
-
-  useEffect(() => {
-    const ids = [...penANeurons.left.map((n) => n.id), ...penANeurons.right.map((n) => n.id)];
-    if (!replay || ids.length === 0 || replay.ticks.length === 0) {
-      setPenASpikeStrengthById({});
-      return;
-    }
-    const idSet = new Set(ids);
-    const endIdx = Math.max(0, Math.min(replay.ticks.length - 1, currentTick - 1));
-    const dtSec = Math.max(0.0001, getReplayDtSec(replay));
-    const windowTicks = Math.max(120, Math.floor(PEN_ACTIVITY_WINDOW_SEC / dtSec));
-    const startIdx = Math.max(0, endIdx - windowTicks + 1);
-    const counts: Record<string, number> = {};
-    for (let i = startIdx; i <= endIdx; i += 1) {
-      for (const id of replay.ticks[i]?.spikes ?? []) {
-        if (!idSet.has(id)) continue;
-        counts[id] = (counts[id] ?? 0) + 1;
-      }
-    }
-    const ticksObserved = Math.max(1, endIdx - startIdx + 1);
-    const expectedAtRefHz = Math.max(1, ticksObserved * dtSec * PEN_ACTIVITY_REF_HZ);
-    const normalized: Record<string, number> = {};
-    for (const id of ids) {
-      normalized[id] = Math.max(0, Math.min(1, (counts[id] ?? 0) / expectedAtRefHz));
-    }
-    setPenASpikeStrengthById(normalized);
-  }, [replay, currentTick, penANeurons.left, penANeurons.right]);
 
   useEffect(() => {
     if (!isNeuroSimLive || !templateReplay) return;
@@ -3320,7 +3290,7 @@ export default function VisualizationPage() {
                       width="152"
                       height="152"
                       viewBox="-60 -60 120 120"
-                      style={{ border: '1px solid rgba(255,255,255,0.12)', borderRadius: 8 }}
+                      style={{ border: 'none', borderRadius: 8 }}
                     >
                       {Array.from({ length: EPG_COMPASS_BINS + 1 }, (_, i) => {
                         const a = (i / EPG_COMPASS_BINS) * Math.PI * 2 - Math.PI / 2;
@@ -3506,42 +3476,6 @@ export default function VisualizationPage() {
                             stroke="rgba(255,220,160,0.55)"
                             strokeWidth="1"
                           />
-                        );
-                      }) : null}
-                      {legendVisibility.penA ? penANeurons.left.map(({ id, label }, i, arr) => {
-                        const t = arr.length <= 1 ? 0.5 : i / (arr.length - 1);
-                        const angle = (Math.PI * 0.65) + (Math.PI * 0.7 * t);
-                        const radius = 55;
-                        const x = Math.cos(angle) * radius;
-                        const y = Math.sin(angle) * radius;
-                        const s = Math.max(0, Math.min(1, penASpikeStrengthById[id] ?? 0));
-                        const isActive = s > 0.08;
-                        const fill = isActive ? 'rgba(0, 255, 110, 0.98)' : 'rgba(76, 95, 122, 0.92)';
-                        return (
-                          <g key={`pen-left-compass-${id}`}>
-                            <circle cx={x.toFixed(3)} cy={y.toFixed(3)} r={isActive ? '3.3' : '2.2'} fill={fill} stroke={isActive ? 'rgba(220,255,225,0.98)' : 'rgba(170,190,220,0.45)'} strokeWidth={isActive ? '0.9' : '0.45'} />
-                            <text x={(x - 5.2).toFixed(3)} y={(y - 3.0).toFixed(3)} fill={isActive ? 'rgba(225,255,230,1)' : 'rgba(185,205,235,0.8)'} fontSize="3.2" fontWeight="700">
-                              {label}
-                            </text>
-                          </g>
-                        );
-                      }) : null}
-                      {legendVisibility.penA ? penANeurons.right.map(({ id, label }, i, arr) => {
-                        const t = arr.length <= 1 ? 0.5 : i / (arr.length - 1);
-                        const angle = (-Math.PI * 0.35) + (Math.PI * 0.7 * t);
-                        const radius = 55;
-                        const x = Math.cos(angle) * radius;
-                        const y = Math.sin(angle) * radius;
-                        const s = Math.max(0, Math.min(1, penASpikeStrengthById[id] ?? 0));
-                        const isActive = s > 0.08;
-                        const fill = isActive ? 'rgba(0, 255, 110, 0.98)' : 'rgba(76, 95, 122, 0.92)';
-                        return (
-                          <g key={`pen-right-compass-${id}`}>
-                            <circle cx={x.toFixed(3)} cy={y.toFixed(3)} r={isActive ? '3.3' : '2.2'} fill={fill} stroke={isActive ? 'rgba(220,255,225,0.98)' : 'rgba(170,190,220,0.45)'} strokeWidth={isActive ? '0.9' : '0.45'} />
-                            <text x={(x + 2.9).toFixed(3)} y={(y - 3.0).toFixed(3)} fill={isActive ? 'rgba(225,255,230,1)' : 'rgba(185,205,235,0.8)'} fontSize="3.2" fontWeight="700">
-                              {label}
-                            </text>
-                          </g>
                         );
                       }) : null}
                       {legendVisibility.epg && bumpTheta != null ? (

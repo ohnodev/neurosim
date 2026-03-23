@@ -16,6 +16,7 @@ import {
   disposeLowLodFlyResources,
   type LowLodFlyProxy,
 } from './scene/lodFly';
+import { canUseWebGL } from './webglUtils';
 
 export interface InterpolationDebugStats {
   fps: number;
@@ -334,19 +335,6 @@ export function initThreeScene(
 ): { dispose: () => void; updateButton: (mode: CameraMode) => void } {
   const noop = () => {};
   if (!container) return { dispose: noop, updateButton: noop };
-  const canUseWebGL = (): boolean => {
-    try {
-      const canvas = document.createElement('canvas');
-      const gl2 = canvas.getContext('webgl2', { antialias: false });
-      if (gl2) return true;
-      const gl =
-        canvas.getContext('webgl', { antialias: false }) ||
-        canvas.getContext('experimental-webgl', { antialias: false });
-      return gl != null;
-    } catch {
-      return false;
-    }
-  };
   if (!canUseWebGL()) {
     throw new Error('WebGL context is unavailable');
   }

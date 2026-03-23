@@ -6,6 +6,8 @@ import CompactMenu from '../components/CompactMenu';
 import { useNotification } from '../contexts/NotificationContext';
 import { getApiBase } from '../lib/constants';
 import { subscribeNeuroLive, type LiveReplayTick } from '../lib/neuroLiveWsClient';
+import { buildPenControlLabelMap } from '../lib/penControlLabels';
+import { canUseWebGL } from '../lib/webglUtils';
 import './VisualizationPage.css';
 
 type ReplayNeuron = {
@@ -556,20 +558,6 @@ function createGlowTexture(): THREE.Texture {
 
 const WEBGL_DISABLED_HINT =
   '3D rendering is unavailable in this browser (WebGL disabled). Try Firefox or re-enable Chrome hardware acceleration.';
-
-function canUseWebGLContext(): boolean {
-  try {
-    const canvas = document.createElement('canvas');
-    const gl2 = canvas.getContext('webgl2', { antialias: false });
-    if (gl2) return true;
-    const gl =
-      canvas.getContext('webgl', { antialias: false }) ||
-      canvas.getContext('experimental-webgl', { antialias: false });
-    return gl != null;
-  } catch {
-    return false;
-  }
-}
 
 function getEffectiveEpgLabel(
   neuron: ReplayNeuron,
@@ -2083,69 +2071,15 @@ export default function VisualizationPage() {
       return true;
     });
   }, [neurons]);
-  const penControlLabelById = useMemo(() => {
-    const out = new Map<string, string>();
-    for (const { id, label } of penANeurons.left) {
-      const key = String(id ?? '').trim();
-      if (key) out.set(key, label);
-    }
-    for (const { id, label } of penANeurons.right) {
-      const key = String(id ?? '').trim();
-      if (key) out.set(key, label);
-    }
-    for (const [id, metadata] of Object.entries(penAMetadataById)) {
-      if (!out.has(id) && metadata.mappingLabel) out.set(id, metadata.mappingLabel);
-    }
-    for (const link of penEpgConnections) {
-      const sourceId = String(link.pen_id ?? '').trim();
-      if (sourceId && !out.has(sourceId) && link.pen_label) out.set(sourceId, link.pen_label);
-    }
-    for (const link of penPenConnections) {
-      const sourceId = String(link.pen_id ?? '').trim();
-      const targetId = String(link.target_id ?? '').trim();
-      if (sourceId && !out.has(sourceId) && link.pen_label) out.set(sourceId, link.pen_label);
-      if (link.target_group === 'pen_a' && targetId && !out.has(targetId) && link.target_label) {
-        out.set(targetId, link.target_label);
-      }
-    }
-    const refsBySide: { left: Array<{ x: number; y: number; z: number; label: string }>; right: Array<{ x: number; y: number; z: number; label: string }> } = {
-      left: [],
-      right: [],
-    };
-    for (const [id, label] of out) {
-      const meta = penAMetadataById[id];
-      if (!meta || !Number.isFinite(meta.x) || !Number.isFinite(meta.y) || !Number.isFinite(meta.z)) continue;
-      const sideRaw = (meta.side ?? '').toLowerCase();
-      const side = sideRaw.startsWith('r') ? 'right' : 'left';
-      refsBySide[side].push({ x: Number(meta.x), y: Number(meta.y), z: Number(meta.z), label });
-    }
-    if (replay?.neurons?.length) {
-      for (const neuron of replay.neurons) {
-        if (!isPenANeuron(neuron)) continue;
-        const neuronId = String(neuron.root_id ?? '').trim();
-        if (!neuronId || out.has(neuronId)) continue;
-        if (!Number.isFinite(neuron.x) || !Number.isFinite(neuron.y) || !Number.isFinite(neuron.z)) continue;
-        const sideRaw = (neuron.side ?? '').toLowerCase();
-        const preferred = sideRaw.startsWith('r') ? refsBySide.right : refsBySide.left;
-        const candidates = preferred.length > 0 ? preferred : [...refsBySide.left, ...refsBySide.right];
-        if (candidates.length === 0) continue;
-        let best = candidates[0];
-        let bestDist = Number.POSITIVE_INFINITY;
-        for (const c of candidates) {
-          const dx = neuron.x - c.x;
-          const dy = neuron.y - c.y;
-          const dz = neuron.z - c.z;
-          const d2 = dx * dx + dy * dy + dz * dz;
-          if (d2 < bestDist) {
-            bestDist = d2;
-            best = c;
-          }
-        }
-        out.set(neuronId, best.label);
-      }
-    }
-    return out;
-  }, [penANeurons.left, penANeurons.right, penAMetadataById, penEpgConnections, penPenConnections, replay?.neurons]);
+  const penControlLabelById = useMemo(() => buildPenControlLabelMap({
+    leftPenNeurons: penANeurons.left,
+    rightPenNeurons: penANeurons.right,
+    penMetadataById: penAMetadataById,
+    penEpgConnections,
+    penPenConnections,
+    replayNeurons: replay?.neurons,
+    isPenANeuron,
+  }), [penANeurons.left, penANeurons.right, penAMetadataById, penEpgConnections, penPenConnections, replay?.neurons]);
   const selectedReplay = DEFAULT_REPLAY_DATASETS[0];
 
   useEffect(() => {
@@ -2589,7 +2523,7 @@ export default function VisualizationPage() {
       sceneRef.current.dispose();
       sceneRef.current = null;
     }
-    if (!canUseWebGLContext()) {
+    if (!canUseWebGL()) {
       setSceneError(WEBGL_DISABLED_HINT);
       return;
     }
@@ -2774,20 +2708,25 @@ export default function VisualizationPage() {
       document.body.removeChild(ta);
       if (!ok) throw new Error('copy failed');
     };
-    if (!isMountedRef.current) return;
-    setCopiedPenAId(id);
-    if (copyTimeoutRef.current != null) {
-      window.clearTimeout(copyTimeoutRef.current);
-    }
-    copyTimeoutRef.current = window.setTimeout(() => {
-      if (!isMountedRef.current) return;
-      setCopiedPenAId((prev) => (prev === id ? null : prev));
-      copyTimeoutRef.current = null;
-    }, 1200);
     try {
       await copyWithFallback(id);
+      if (!isMountedRef.current) return;
+      setCopiedPenAId(id);
+      if (copyTimeoutRef.current != null) {
+        window.clearTimeout(copyTimeoutRef.current);
+      }
+      copyTimeoutRef.current = window.setTimeout(() => {
+        if (!isMountedRef.current) return;
+        setCopiedPenAId((prev) => (prev === id ? null : prev));
+        copyTimeoutRef.current = null;
+      }, 1200);
     } catch {
+      if (copyTimeoutRef.current != null) {
+        window.clearTimeout(copyTimeoutRef.current);
+        copyTimeoutRef.current = null;
+      }
       if (isMountedRef.current) {
+        setCopiedPenAId((prev) => (prev === id ? null : prev));
         setError('Failed to copy neuron ID');
       }
     }

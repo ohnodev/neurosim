@@ -6,6 +6,7 @@ import CompactMenu from '../components/CompactMenu';
 import { useNotification } from '../contexts/NotificationContext';
 import { getApiBase } from '../lib/constants';
 import { subscribeNeuroLive, type LiveReplayTick } from '../lib/neuroLiveWsClient';
+import './VisualizationPage.css';
 
 type ReplayNeuron = {
   root_id: string;
@@ -3160,6 +3161,7 @@ export default function VisualizationPage() {
             </button>
             {showPenAMapping ? (
               <div
+                className="pen-mapping-panel-scroll"
                 style={{
                   position: 'absolute',
                   right: 24,

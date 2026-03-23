@@ -388,16 +388,16 @@ function App() {
             <text x="350" y="32" textAnchor="middle" className="svg-title">3 PM command</text>
             <text x="550" y="32" textAnchor="middle" className="svg-title">8 PM command</text>
 
-            <polyline points="70,44 250,44 250,196 650,196" className="stim-line" style={{ stroke: '#4f8dff' }} />
+            <polyline points="70,44 250,44 250,196 650,196" className="stim-line" style={{ stroke: '#4f8dff' }} transform="translate(0,-3)" />
             <polyline points="70,44 250,44 250,196 650,196" className="stim-line" style={{ stroke: '#3ddc97' }} />
-            <polyline points="70,44 250,44 250,196 650,196" className="stim-line" style={{ stroke: '#f6c445' }} />
+            <polyline points="70,44 250,44 250,196 650,196" className="stim-line" style={{ stroke: '#f6c445' }} transform="translate(0,3)" />
 
-            <polyline points="70,196 250,196 250,44 450,44 450,196 650,196" className="stim-line" style={{ stroke: '#e879f9' }} />
-            <polyline points="70,196 250,196 250,44 450,44 450,196 650,196" className="stim-line" style={{ stroke: '#fb7185' }} />
+            <polyline points="70,196 250,196 250,44 450,44 450,196 650,196" className="stim-line" style={{ stroke: '#e879f9' }} transform="translate(0,-2)" />
+            <polyline points="70,196 250,196 250,44 450,44 450,196 650,196" className="stim-line" style={{ stroke: '#fb7185' }} transform="translate(0,2)" />
 
-            <polyline points="70,196 450,196 450,44 650,44" className="stim-line" style={{ stroke: '#22d3ee' }} />
+            <polyline points="70,196 450,196 450,44 650,44" className="stim-line" style={{ stroke: '#22d3ee' }} transform="translate(0,-3)" />
             <polyline points="70,196 450,196 450,44 650,44" className="stim-line" style={{ stroke: '#a3e635' }} />
-            <polyline points="70,196 450,196 450,44 650,44" className="stim-line" style={{ stroke: '#f97316' }} />
+            <polyline points="70,196 450,196 450,44 650,44" className="stim-line" style={{ stroke: '#f97316' }} transform="translate(0,3)" />
 
             <text x="665" y="52" className="svg-sub">L1</text>
             <text x="665" y="68" className="svg-sub">L2</text>

@@ -97,24 +97,24 @@
 
 .map-ring {
   fill: none;
-  stroke: color-mix(in srgb, var(--accent) 45%, var(--line));
+  stroke: color-mix(in sRGB, var(--accent) 45%, var(--line));
   stroke-width: 2;
 }
 
 .map-ring-inner {
   fill: none;
-  stroke: color-mix(in srgb, var(--line) 80%, transparent);
+  stroke: color-mix(in sRGB, var(--line) 80%, transparent);
   stroke-width: 1.2;
 }
 
 .map-node-left {
-  fill: color-mix(in srgb, #3ddc97 70%, var(--paper));
-  stroke: color-mix(in srgb, #3ddc97 30%, #0000);
+  fill: color-mix(in sRGB, #3ddc97 70%, var(--paper));
+  stroke: color-mix(in sRGB, #3ddc97 30%, #0000);
 }
 
 .map-node-right {
-  fill: color-mix(in srgb, #4f8dff 70%, var(--paper));
-  stroke: color-mix(in srgb, #4f8dff 30%, #0000);
+  fill: color-mix(in sRGB, #4f8dff 70%, var(--paper));
+  stroke: color-mix(in sRGB, #4f8dff 30%, #0000);
 }
 
 .map-node-text {
@@ -124,18 +124,18 @@
 }
 
 .svg-grid {
-  stroke: color-mix(in srgb, var(--line) 75%, transparent);
+  stroke: color-mix(in sRGB, var(--line) 75%, transparent);
   stroke-width: 1;
 }
 
 .svg-separator {
-  stroke: color-mix(in srgb, var(--accent) 40%, var(--line));
+  stroke: color-mix(in sRGB, var(--accent) 40%, var(--line));
   stroke-width: 1.2;
   stroke-dasharray: 4 4;
 }
 
 .svg-band {
-  fill: color-mix(in srgb, var(--accent) 9%, var(--paper));
+  fill: color-mix(in sRGB, var(--accent) 9%, var(--paper));
   stroke: var(--line);
 }
 
@@ -238,7 +238,7 @@
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  box-shadow: 0 4px 12px color-mix(in srgb, var(--ink) 10%, transparent);
+  box-shadow: 0 4px 12px color-mix(in sRGB, var(--ink) 10%, transparent);
 }
 
 .theme-toggle:hover {
@@ -248,7 +248,7 @@
 .theme-toggle:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 24%, transparent);
+  box-shadow: 0 0 0 4px color-mix(in sRGB, var(--accent) 24%, transparent);
 }
 
 @media (max-width: 860px) {

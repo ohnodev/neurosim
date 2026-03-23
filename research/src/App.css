@@ -4,6 +4,13 @@
   max-width: 960px;
 }
 
+.paper-menu {
+  position: fixed;
+  top: 0.85rem;
+  right: 0.85rem;
+  z-index: 1300;
+}
+
 .paper-header {
   padding-bottom: 1.5rem;
   border-bottom: 1px solid var(--line);

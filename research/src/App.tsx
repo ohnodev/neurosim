@@ -1,5 +1,6 @@
 import './App.css'
 import { useEffect, useState } from 'react'
+import CompactMenu from './components/CompactMenu'
 
 type NeuronMapRow = {
   neuron: string
@@ -162,6 +163,9 @@ function App() {
 
   return (
     <main className="paper">
+      <div className="paper-menu">
+        <CompactMenu />
+      </div>
       <header className="paper-header">
         <p className="eyebrow">Preprint Draft v0.1</p>
         <h1>

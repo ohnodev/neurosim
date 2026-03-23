@@ -59,7 +59,7 @@
   min-width: 190px;
   max-width: 240px;
   padding: 8px;
-  border-radius: 10px;
+  border-radius: 6px;
   border: 1px solid rgba(100, 100, 140, 0.4);
   background: linear-gradient(145deg, rgba(18, 27, 45, 0.98) 0%, rgba(12, 18, 30, 0.98) 100%);
   box-shadow: 0 14px 30px rgba(0, 0, 0, 0.45);

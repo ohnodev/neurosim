@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import './CompactMenu.css';
 
 const GITHUB_URL = 'https://github.com/ohnodev/neurosim';
+const RESEARCH_URL = 'https://research.neurosim.fun';
 
 const SOCIAL_LINKS = [
   { name: 'X', href: 'https://x.com/i/communities/2031850986466078872' },
@@ -64,6 +65,15 @@ export default function CompactMenu({ className = '' }: CompactMenuProps) {
           <Link to="/visualization" className="compact-menu__item" role="menuitem">
             Visualization
           </Link>
+          <a
+            href={RESEARCH_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="compact-menu__item"
+            role="menuitem"
+          >
+            Research
+          </a>
           <a
             href={GITHUB_URL}
             target="_blank"

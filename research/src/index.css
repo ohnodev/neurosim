@@ -8,7 +8,7 @@
   --accent: #325dff;
   --link: #274fdb;
   --heading: #111827;
-  font-family: 'Charter', 'Iowan Old Style', 'Palatino Linotype', serif;
+  font-family: Charter, 'Iowan Old Style', 'Palatino Linotype', serif;
   line-height: 1.58;
   font-weight: 400;
   color: var(--ink);
@@ -39,14 +39,6 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--ink);
-  -ms-overflow-style: none;
-  scrollbar-width: none;
-}
-
-body::-webkit-scrollbar {
-  width: 0;
-  height: 0;
-  display: none;
 }
 
 #root {

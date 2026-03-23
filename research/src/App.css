@@ -49,7 +49,7 @@
   margin: 0.45rem 0;
 }
 
-figure {
+.paper figure {
   margin: 1rem 0 1.4rem;
   background: var(--panel);
   border: 1px solid var(--line);
@@ -57,13 +57,13 @@ figure {
   padding: 0.8rem;
 }
 
-figcaption {
+.paper figcaption {
   font-size: 0.9rem;
   color: var(--muted);
   margin-bottom: 0.6rem;
 }
 
-.paper-image {
+.paper .paper-image {
   width: 100%;
   height: auto;
   display: block;
@@ -72,7 +72,7 @@ figcaption {
   background: var(--paper);
 }
 
-svg {
+.paper svg {
   width: 100%;
   height: auto;
   display: block;
@@ -174,27 +174,27 @@ svg {
   margin: 0 0 0.6rem;
 }
 
-table {
+.paper table {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.92rem;
 }
 
-th,
-td {
+.paper th,
+.paper td {
   text-align: left;
   border-bottom: 1px solid var(--line);
   padding: 0.3rem 0.25rem;
   vertical-align: top;
 }
 
-th {
+.paper th {
   color: var(--muted);
   font-weight: 600;
 }
 
-ul,
-ol {
+.paper ul,
+.paper ol {
   margin: 0.4rem 0 0.4rem 1.25rem;
 }
 
@@ -243,6 +243,12 @@ ol {
 
 .theme-toggle:hover {
   background: var(--panel);
+}
+
+.theme-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 24%, transparent);
 }
 
 @media (max-width: 860px) {

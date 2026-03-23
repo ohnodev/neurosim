@@ -31,10 +31,14 @@ export default function CompactMenu({ className = '' }: CompactMenuProps) {
     const onDocMouseDown = (event: MouseEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) {
         setOpen(false)
+        setSocialsOpen(false)
       }
     }
     const onEsc = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false)
+      if (event.key === 'Escape') {
+        setOpen(false)
+        setSocialsOpen(false)
+      }
     }
     document.addEventListener('mousedown', onDocMouseDown)
     document.addEventListener('keydown', onEsc)
@@ -51,13 +55,20 @@ export default function CompactMenu({ className = '' }: CompactMenuProps) {
         className="compact-menu__trigger"
         aria-label={open ? 'Close menu' : 'Open menu'}
         aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          if (open) {
+            setOpen(false)
+            setSocialsOpen(false)
+            return
+          }
+          setOpen(true)
+        }}
       >
         <span className="compact-menu__logo" aria-hidden="true" />
       </button>
 
       {open ? (
-        <div className="compact-menu__panel" role="menu" aria-label="Navigation menu">
+        <nav className="compact-menu__panel" aria-label="Navigation menu">
           <div className="compact-menu__section-label">Navigation</div>
           {MENU_LINKS.map((item) => (
             <a
@@ -66,7 +77,6 @@ export default function CompactMenu({ className = '' }: CompactMenuProps) {
               target={item.external ? '_blank' : undefined}
               rel={item.external ? 'noopener noreferrer' : undefined}
               className="compact-menu__item"
-              role="menuitem"
             >
               {item.name}
             </a>
@@ -76,7 +86,6 @@ export default function CompactMenu({ className = '' }: CompactMenuProps) {
             className="compact-menu__item compact-menu__item--toggle"
             onClick={() => setSocialsOpen((v) => !v)}
             aria-expanded={socialsOpen}
-            role="menuitem"
           >
             <span>Socials</span>
             <span className={`compact-menu__arrow ${socialsOpen ? 'open' : ''}`}>▼</span>
@@ -90,14 +99,13 @@ export default function CompactMenu({ className = '' }: CompactMenuProps) {
                   target="_blank"
                   rel="noopener noreferrer"
                   className="compact-menu__item compact-menu__item--sub"
-                  role="menuitem"
                 >
                   {link.name}
                 </a>
               ))}
             </div>
           ) : null}
-        </div>
+        </nav>
       ) : null}
     </div>
   )

@@ -9,6 +9,12 @@ type NeuronMapRow = {
   note?: string
 }
 
+interface Reference {
+  id: string
+  text: string
+  href?: string
+}
+
 const leftPenA: NeuronMapRow[] = [
   { neuron: 'L1', protocol: '100 Hz', observedPeak: '11 PM' },
   { neuron: 'L2', protocol: '100 Hz', observedPeak: '11 PM' },
@@ -53,7 +59,7 @@ const transferSets = [
   },
 ]
 
-const references = [
+const references: Reference[] = [
   {
     id: '1',
     text: 'Turner-Evans, D.B. et al. (2017). The neuroanatomical ultrastructure and function of a biological ring attractor.',
@@ -443,6 +449,7 @@ function App() {
             src="/hb-example.jpg"
             alt="Heading bump visualization for Position 1 at 11 PM using L1 L2 L6 at 50 Hz with inhibitory connection panel visible"
             className="paper-image"
+            loading="lazy"
           />
         </figure>
 
@@ -461,6 +468,7 @@ function App() {
             src="/neurosim-biological-view.jpg"
             alt="Biological view showing PEN_a and EPG network activity whose decoded compass bump corresponds to 11 PM"
             className="paper-image"
+            loading="lazy"
           />
         </figure>
 
@@ -617,7 +625,7 @@ function App() {
         </ol>
         <figure>
           <figcaption>
-            Figure 4. Code-accurate EPG-to-circle bin mapping used by the simulator and visualization path. The 16-bin clockwise ring follows the exact order in code
+            Figure 5. Code-accurate EPG-to-circle bin mapping used by the simulator and visualization path. The 16-bin clockwise ring follows the exact order in code
             (<code>L5, R4, L6, R3, L7, R2, L8, R1, L1, R8, L2, R7, L3, R6, L4, R5</code>), with bin angle defined by
             <code>sceneAngleForBin(bin) = pi/2 - (bin/16) * 2pi</code>.
           </figcaption>
@@ -692,7 +700,7 @@ function App() {
           {references.map((ref) => (
             <li key={ref.id} id={`ref-${ref.id}`}>
               {ref.href ? (
-                <a href={ref.href} target="_blank" rel="noreferrer">
+                <a href={ref.href} target="_blank" rel="noreferrer noopener">
                   {ref.text}
                 </a>
               ) : (

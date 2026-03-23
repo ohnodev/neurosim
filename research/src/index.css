@@ -39,6 +39,14 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--ink);
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+body::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
 }
 
 #root {

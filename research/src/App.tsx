@@ -109,6 +109,21 @@ const references = [
     text: 'Brian2 simulator repository (clock-driven simulator for spiking neural networks).',
     href: 'https://github.com/brian-team/brian2',
   },
+  {
+    id: '13',
+    text: 'Stimberg, M. et al. (2019). Brian2GeNN: accelerating spiking neural network simulations with graphics hardware. Scientific Reports.',
+    href: 'https://preview-www.nature.com/articles/s41598-019-54957-7',
+  },
+  {
+    id: '14',
+    text: 'Alevi, D. et al. (2022). Brian2CUDA: Flexible and Efficient Simulation of Spiking Neural Network Models on GPUs.',
+    href: 'https://www.frontiersin.org/articles/10.3389/fninf.2022.883700/pdf',
+  },
+  {
+    id: '15',
+    text: 'Shajkofci, A. et al. (2023). Distributed Compressed Sparse Row Format for Spiking Neural Network Simulation, Serialization, and Interoperability.',
+    href: 'https://arxiv.org/abs/2304.05587',
+  },
 ]
 
 function Cite({ ids }: { ids: string[] }) {
@@ -422,6 +437,24 @@ function App() {
           />
         </figure>
 
+        <figure>
+          <figcaption>
+            Figure 4. Biological graph view of PEN_a and EPG activity for the
+            same Position 1 command regime. In this raw anatomical layout, local
+            structure is visually complex and not immediately interpretable as a
+            compass direction; however, after applying the EPG bin mapping and
+            decode pipeline, the corresponding heading-bump state resolves to the
+            11 PM setpoint. This illustrates why explicit geometric decoding is
+            necessary even when the underlying biological activity is correctly
+            represented.
+          </figcaption>
+          <img
+            src="/neurosim-biological-view.jpg"
+            alt="Biological view showing PEN_a and EPG network activity whose decoded compass bump corresponds to 11 PM"
+            className="paper-image"
+          />
+        </figure>
+
         <h3>4. Inhibitory regulation and failure modes</h3>
         <p>
           Ring-neuron inhibition reliably suppresses bump persistence in
@@ -439,10 +472,16 @@ function App() {
           per-step work from dense edge traversal to active-edge traversal. On
           GPU, we compact active spikes, scatter only their outgoing CSR edges,
           and execute delay, conductance, and LIF kernels on device in a single
-          step pipeline. In internal parity benchmarks against the EonSystems
-          fly-brain reference, this implementation achieved approximately 2.0x
+          step pipeline. This optimization direction follows established
+          GPU-accelerated sparse SNN literature (for example, Brian2GeNN,
+          Brian2CUDA, and CSR-oriented sparse simulation frameworks)
+          <Cite ids={['13', '14', '15']} />, and is not presented here as a
+          first-in-field contribution. In our internal parity benchmark against
+          the EonSystems fly-brain reference, we measured approximately 2.0x
           end-to-end and approximately 2.6x compute-path speedup under matched
-          dt and run settings.
+          dt and run settings. In practice, these gains were sufficient to enable
+          interactive near-real-time simulation and faster iteration on
+          connectome edits, stimulation schedules, and control sweeps.
         </p>
       </section>
 
@@ -553,6 +592,61 @@ function App() {
           <li>Project each EPG to a circle coordinate using fixed step angles and store this as the canonical lookup table.</li>
           <li>Keep this lookup unchanged during stimulation experiments so bump movement reflects circuit dynamics, not remapping.</li>
         </ol>
+        <figure>
+          <figcaption>
+            Figure 4. Code-accurate EPG-to-circle bin mapping used by the simulator and visualization path. The 16-bin clockwise ring follows the exact order in code
+            (<code>L5, R4, L6, R3, L7, R2, L8, R1, L1, R8, L2, R7, L3, R6, L4, R5</code>), with bin angle defined by
+            <code>sceneAngleForBin(bin) = pi/2 - (bin/16) * 2pi</code>.
+          </figcaption>
+          <svg viewBox="0 0 760 360" role="img" aria-label="EPG bin mapping ring and mapping rules">
+            <rect x="18" y="18" width="724" height="324" rx="12" className="svg-band" />
+
+            <circle cx="248" cy="180" r="106" className="map-ring" />
+            <circle cx="248" cy="180" r="73" className="map-ring-inner" />
+
+            <line x1="248" y1="180" x2="248" y2="74" className="svg-separator" />
+            <line x1="248" y1="180" x2="346" y2="142" className="svg-separator" />
+            <line x1="248" y1="180" x2="354" y2="180" className="svg-separator" />
+            <line x1="248" y1="180" x2="346" y2="218" className="svg-separator" />
+            <line x1="248" y1="180" x2="248" y2="286" className="svg-separator" />
+            <line x1="248" y1="180" x2="150" y2="218" className="svg-separator" />
+            <line x1="248" y1="180" x2="142" y2="180" className="svg-separator" />
+            <line x1="248" y1="180" x2="150" y2="142" className="svg-separator" />
+
+            <text x="248" y="50" textAnchor="middle" className="svg-title">EPG compass bins (16)</text>
+            <text x="248" y="67" textAnchor="middle" className="svg-sub">clockwise, bin 0 at top</text>
+
+            <circle cx="248" cy="74" r="10" className="map-node-left" /><text x="248" y="78" textAnchor="middle" className="map-node-text">L5</text><text x="248" y="95" textAnchor="middle" className="svg-sub">b0</text>
+            <circle cx="288" cy="82" r="10" className="map-node-right" /><text x="288" y="86" textAnchor="middle" className="map-node-text">R4</text><text x="288" y="103" textAnchor="middle" className="svg-sub">b1</text>
+            <circle cx="322" cy="106" r="10" className="map-node-left" /><text x="322" y="110" textAnchor="middle" className="map-node-text">L6</text><text x="322" y="127" textAnchor="middle" className="svg-sub">b2</text>
+            <circle cx="346" cy="140" r="10" className="map-node-right" /><text x="346" y="144" textAnchor="middle" className="map-node-text">R3</text><text x="346" y="161" textAnchor="middle" className="svg-sub">b3</text>
+            <circle cx="354" cy="180" r="10" className="map-node-left" /><text x="354" y="184" textAnchor="middle" className="map-node-text">L7</text><text x="354" y="201" textAnchor="middle" className="svg-sub">b4</text>
+            <circle cx="346" cy="220" r="10" className="map-node-right" /><text x="346" y="224" textAnchor="middle" className="map-node-text">R2</text><text x="346" y="241" textAnchor="middle" className="svg-sub">b5</text>
+            <circle cx="322" cy="254" r="10" className="map-node-left" /><text x="322" y="258" textAnchor="middle" className="map-node-text">L8</text><text x="322" y="275" textAnchor="middle" className="svg-sub">b6</text>
+            <circle cx="288" cy="278" r="10" className="map-node-right" /><text x="288" y="282" textAnchor="middle" className="map-node-text">R1</text><text x="288" y="299" textAnchor="middle" className="svg-sub">b7</text>
+            <circle cx="248" cy="286" r="10" className="map-node-left" /><text x="248" y="290" textAnchor="middle" className="map-node-text">L1</text><text x="248" y="307" textAnchor="middle" className="svg-sub">b8</text>
+            <circle cx="208" cy="278" r="10" className="map-node-right" /><text x="208" y="282" textAnchor="middle" className="map-node-text">R8</text><text x="208" y="299" textAnchor="middle" className="svg-sub">b9</text>
+            <circle cx="174" cy="254" r="10" className="map-node-left" /><text x="174" y="258" textAnchor="middle" className="map-node-text">L2</text><text x="174" y="275" textAnchor="middle" className="svg-sub">b10</text>
+            <circle cx="150" cy="220" r="10" className="map-node-right" /><text x="150" y="224" textAnchor="middle" className="map-node-text">R7</text><text x="150" y="241" textAnchor="middle" className="svg-sub">b11</text>
+            <circle cx="142" cy="180" r="10" className="map-node-left" /><text x="142" y="184" textAnchor="middle" className="map-node-text">L3</text><text x="142" y="201" textAnchor="middle" className="svg-sub">b12</text>
+            <circle cx="150" cy="140" r="10" className="map-node-right" /><text x="150" y="144" textAnchor="middle" className="map-node-text">R6</text><text x="150" y="161" textAnchor="middle" className="svg-sub">b13</text>
+            <circle cx="174" cy="106" r="10" className="map-node-left" /><text x="174" y="110" textAnchor="middle" className="map-node-text">L4</text><text x="174" y="127" textAnchor="middle" className="svg-sub">b14</text>
+            <circle cx="208" cy="82" r="10" className="map-node-right" /><text x="208" y="86" textAnchor="middle" className="map-node-text">R5</text><text x="208" y="103" textAnchor="middle" className="svg-sub">b15</text>
+
+            <rect x="404" y="54" width="314" height="118" rx="10" className="svg-card" />
+            <text x="418" y="76" className="svg-title">Mapping logic used in code</text>
+            <text x="418" y="98" className="svg-sub">1) Read EPG side + tile_index_0_7 from map/data</text>
+            <text x="418" y="116" className="svg-sub">2) Build label: left {'->'} L(tile+1), right {'->'} R(tile+1)</text>
+            <text x="418" y="134" className="svg-sub">3) Convert label to bin via fixed 16-label clockwise order</text>
+            <text x="418" y="152" className="svg-sub">4) Place neuron on circle at bin-centered angle</text>
+
+            <rect x="404" y="190" width="314" height="118" rx="10" className="svg-card" />
+            <text x="418" y="212" className="svg-title">Control labels vs EPG bins</text>
+            <text x="418" y="234" className="svg-sub">PEN_a controls (L1-L10, R1-R10) are stimulation channels.</text>
+            <text x="418" y="252" className="svg-sub">EPG compass bins are the 16 ring labels shown on the left.</text>
+            <text x="418" y="270" className="svg-sub">We report bump angle from EPG bin activity, not PEN index.</text>
+          </svg>
+        </figure>
         <h3>Calibration against fly-brain and Nature protocol</h3>
         <p>
           To maintain consistency with the EonSystems modeling workflow <Cite ids={['10']} /> and

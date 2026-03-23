@@ -535,15 +535,29 @@ function App() {
       </section>
 
       <section className="block">
-        <h2>Methods (Draft Skeleton)</h2>
-        <ol>
-          <li>Connectome extraction and neuron-group definitions (EPG, PEN_a, inhibitory rings).</li>
-          <li>Simulation kernel: 0.1 ms timestep Brian2-style LIF spiking integration (Rust port).</li>
-          <li>Recurrence protocol: EPG recurrence gain set at sim creation and held constant during runtime (3x condition in reported runs).</li>
-          <li>Stimulation protocol: single-neuron and combinatorial PEN_a 100 Hz activation tests.</li>
-          <li>PEN_b handling: PEN_b units tracked for observability only and excluded from bump-driving stimulation.</li>
-          <li>Bump tracking: peak-angle extraction, drift quantification, and transfer success scoring.</li>
-        </ol>
+        <h2>Methods</h2>
+        <p>
+          We run a full-connectome simulation workflow in Rust with Brian2-style
+          LIF dynamics at 0.1 ms timestep resolution. The connectome is loaded
+          once into memory, then simulation instances are created from this shared
+          template. For reported heading-bump experiments, recurrence is configured
+          once per simulation with a fixed EPG-to-EPG gain increase (3x condition)
+          and held constant during stepping.
+        </p>
+        <p>
+          The calibration stage follows the EonSystems reference procedure
+          <Cite ids={['10']} />: matched sugar-GRN stimulation and MN9 readout are
+          used to align operating regime before directional control tests. After
+          calibration, stimulation is restricted to PEN_a channels, while heading
+          bump decoding is computed from EPG activity bins only. PEN_b neurons are
+          retained for observability/context but are not used as bump-driving
+          stimulation inputs in the main control protocols.
+        </p>
+        <p>
+          All protocols in this manuscript (single-neuron sweeps, combinatorial
+          transfer sets, decode mapping, and figure-generation paths) are
+          reproducible from the NeuroSim repository <Cite ids={['9']} />.
+        </p>
         <h3>PEN_a mapping and directional control protocol</h3>
         <p>
           We first ran coarse control tests by turning all left PEN_a neurons on
@@ -612,6 +626,8 @@ function App() {
             <line x1="248" y1="180" x2="150" y2="218" className="svg-separator" />
             <line x1="248" y1="180" x2="142" y2="180" className="svg-separator" />
             <line x1="248" y1="180" x2="150" y2="142" className="svg-separator" />
+            <line x1="248" y1="180" x2="174" y2="106" className="svg-separator" />
+            <line x1="248" y1="180" x2="322" y2="254" className="svg-separator" />
 
             <text x="248" y="50" textAnchor="middle" className="svg-title">EPG compass bins (16)</text>
             <text x="248" y="67" textAnchor="middle" className="svg-sub">clockwise, bin 0 at top</text>
@@ -640,11 +656,12 @@ function App() {
             <text x="418" y="134" className="svg-sub">3) Convert label to bin via fixed 16-label clockwise order</text>
             <text x="418" y="152" className="svg-sub">4) Place neuron on circle at bin-centered angle</text>
 
-            <rect x="404" y="190" width="314" height="118" rx="10" className="svg-card" />
+            <rect x="404" y="190" width="314" height="124" rx="10" className="svg-card" />
             <text x="418" y="212" className="svg-title">Control labels vs EPG bins</text>
-            <text x="418" y="234" className="svg-sub">PEN_a controls (L1-L10, R1-R10) are stimulation channels.</text>
-            <text x="418" y="252" className="svg-sub">EPG compass bins are the 16 ring labels shown on the left.</text>
-            <text x="418" y="270" className="svg-sub">We report bump angle from EPG bin activity, not PEN index.</text>
+            <text x="418" y="232" className="svg-sub">PEN_a controls (L1-L10, R1-R10) are stimulation channels.</text>
+            <text x="418" y="248" className="svg-sub">EPG compass bins are the 16 ring labels shown on the left.</text>
+            <text x="418" y="264" className="svg-sub">We report bump angle from EPG bin activity,</text>
+            <text x="418" y="280" className="svg-sub">not PEN index.</text>
           </svg>
         </figure>
         <h3>Calibration against fly-brain and Nature protocol</h3>

@@ -209,7 +209,12 @@ function App() {
           network topology while exposing reproducible control handles. As noted
           in <Cite ids={['6']} />, "PEN_a and PEN_b neurons are indeed strikingly different in
           their synaptic conn", which motivates the explicit separation of
-          PEN_a-targeted control from PEN_b circuitry in this draft.
+          PEN_a-targeted control from PEN_b circuitry in this draft. We further
+          find that coarse biological side splits (all-left PEN_a drive versus
+          all-right PEN_a drive) are insufficient for reliable control. Effective
+          steering requires testing specific individual and mixed left/right
+          PEN_a combinations. Because there are only 10 PEN_a channels per side,
+          this combinatorial mapping remains tractable and experimentally useful.
         </p>
       </section>
 

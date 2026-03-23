@@ -47,6 +47,7 @@ export function buildPenControlLabelMap<TReplayNeuron extends PenControlReplayNe
   isPenANeuron,
 }: BuildPenControlLabelMapArgs<TReplayNeuron>): Map<string, string> {
   const out = new Map<string, string>();
+  const normalizedPenMetadataById: Record<string, PenControlMetadata> = {};
 
   for (const { id, label } of leftPenNeurons) {
     const key = String(id ?? '').trim();
@@ -57,7 +58,10 @@ export function buildPenControlLabelMap<TReplayNeuron extends PenControlReplayNe
     if (key) out.set(key, label);
   }
   for (const [id, metadata] of Object.entries(penMetadataById)) {
-    if (!out.has(id) && metadata.mappingLabel) out.set(id, metadata.mappingLabel);
+    const normalizedId = String(id ?? '').trim();
+    if (!normalizedId) continue;
+    normalizedPenMetadataById[normalizedId] = metadata;
+    if (!out.has(normalizedId) && metadata.mappingLabel) out.set(normalizedId, metadata.mappingLabel);
   }
   for (const link of penEpgConnections) {
     const sourceId = String(link.pen_id ?? '').trim();
@@ -77,7 +81,7 @@ export function buildPenControlLabelMap<TReplayNeuron extends PenControlReplayNe
     right: [],
   };
   for (const [id, label] of out) {
-    const meta = penMetadataById[id];
+    const meta = normalizedPenMetadataById[id];
     if (!meta || !Number.isFinite(meta.x) || !Number.isFinite(meta.y) || !Number.isFinite(meta.z)) continue;
     const sideRaw = (meta.side ?? '').toLowerCase();
     const side = sideRaw.startsWith('r') ? 'right' : 'left';

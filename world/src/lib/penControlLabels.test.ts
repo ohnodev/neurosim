@@ -1,10 +1,5 @@
+import { describe, expect, it } from 'vitest';
 import { buildPenControlLabelMap } from './penControlLabels';
-
-function assert(condition: boolean, message: string): void {
-  if (!condition) {
-    throw new Error(message);
-  }
-}
 
 function runBuildPenControlLabelMapTests(): void {
   const replayNeurons = [
@@ -27,17 +22,19 @@ function runBuildPenControlLabelMapTests(): void {
     isPenANeuron: (n) => n.kind === 'pen',
   });
 
-  assert(labels.get('left-1') === 'L1', 'should use left control labels');
-  assert(labels.get('right-1') === 'R1', 'should use right control labels');
-  assert(labels.get('meta-only') === 'L2', 'should use metadata mapping labels');
-  assert(labels.get('epg-only') === 'R2', 'should include labels from PEN->EPG connection rows');
-  assert(labels.get('pen-only') === 'L3', 'should include source labels from PEN->PEN rows');
-  assert(labels.get('target-only') === 'R3', 'should include target labels from PEN->PEN rows');
-  assert(labels.get('unknown-left') === 'L1', 'should nearest-neighbor fallback by side (left)');
-  assert(labels.get('unknown-right') === 'R1', 'should nearest-neighbor fallback by side (right)');
+  expect(labels.get('left-1')).toBe('L1');
+  expect(labels.get('right-1')).toBe('R1');
+  expect(labels.get('meta-only')).toBe('L2');
+  expect(labels.get('epg-only')).toBe('R2');
+  expect(labels.get('pen-only')).toBe('L3');
+  expect(labels.get('target-only')).toBe('R3');
+  expect(labels.get('unknown-left')).toBe('L1');
+  expect(labels.get('unknown-right')).toBe('R1');
 }
 
-if (import.meta.env.MODE === 'test') {
-  runBuildPenControlLabelMapTests();
-}
+describe('pen control label map', () => {
+  it('builds correctly from all sources and fallback', () => {
+    runBuildPenControlLabelMapTests();
+  });
+});
 

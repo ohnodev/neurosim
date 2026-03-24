@@ -1,0 +1,73 @@
+:root {
+  --bg: #f7f8fb;
+  --paper: #ffffff;
+  --panel: #fcfcff;
+  --ink: #1a2433;
+  --muted: #5d6b7b;
+  --line: #d9dfeb;
+  --accent: #325dff;
+  --link: #274fdb;
+  --heading: #111827;
+  font-family: Charter, 'Iowan Old Style', 'Palatino Linotype', serif;
+  line-height: 1.58;
+  font-weight: 400;
+  color: var(--ink);
+  background-color: var(--bg);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+:root[data-theme='dark'] {
+  --bg: #0f1219;
+  --paper: #141a24;
+  --panel: #192232;
+  --ink: #e5edf9;
+  --muted: #9fb0c7;
+  --line: #29364d;
+  --accent: #86a7ff;
+  --link: #9cb8ff;
+  --heading: #f4f7ff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+#root {
+  min-height: 100vh;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: 'Avenir Next', 'Segoe UI', sans-serif;
+  color: var(--heading);
+  line-height: 1.25;
+  margin: 0;
+}
+
+h1 {
+  font-size: clamp(1.65rem, 3vw, 2.45rem);
+  margin-bottom: 0.55rem;
+}
+
+h2 {
+  font-size: clamp(1.2rem, 2.1vw, 1.55rem);
+}
+
+h3 {
+  font-size: 1.05rem;
+}
+
+p {
+  font-size: 1.02rem;
+}

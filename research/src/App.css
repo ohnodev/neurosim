@@ -1,0 +1,258 @@
+.paper {
+  margin: 2.5rem auto 4rem;
+  padding: 0 1.25rem;
+  max-width: 960px;
+}
+
+.paper-menu {
+  position: fixed;
+  top: 0.85rem;
+  right: 0.85rem;
+  z-index: 1300;
+}
+
+.paper-header {
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 1.5rem;
+}
+
+.eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-bottom: 0.75rem;
+}
+
+.authors {
+  font-size: 1rem;
+  color: var(--muted);
+  margin-top: 0.5rem;
+}
+
+.block {
+  margin-bottom: 1.75rem;
+}
+
+.block h2 {
+  margin-bottom: 0.8rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.block h3 {
+  margin: 1.25rem 0 0.45rem;
+}
+
+.block p {
+  margin: 0.45rem 0;
+}
+
+.paper figure {
+  margin: 1rem 0 1.4rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  padding: 0.8rem;
+}
+
+.paper figcaption {
+  font-size: 0.9rem;
+  color: var(--muted);
+  margin-bottom: 0.6rem;
+}
+
+.paper .paper-image {
+  width: 100%;
+  height: auto;
+  display: block;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--paper);
+}
+
+.paper svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.svg-card {
+  fill: var(--paper);
+  stroke: var(--line);
+  stroke-width: 1.2;
+}
+
+.svg-line {
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.svg-axis {
+  stroke: var(--ink);
+  stroke-width: 1.2;
+}
+
+.map-ring {
+  fill: none;
+  stroke: color-mix(in sRGB, var(--accent) 45%, var(--line));
+  stroke-width: 2;
+}
+
+.map-ring-inner {
+  fill: none;
+  stroke: color-mix(in sRGB, var(--line) 80%, transparent);
+  stroke-width: 1.2;
+}
+
+.map-node-left {
+  fill: color-mix(in sRGB, #3ddc97 70%, var(--paper));
+  stroke: color-mix(in sRGB, #3ddc97 30%, #0000);
+}
+
+.map-node-right {
+  fill: color-mix(in sRGB, #4f8dff 70%, var(--paper));
+  stroke: color-mix(in sRGB, #4f8dff 30%, #0000);
+}
+
+.map-node-text {
+  fill: #0b1220;
+  font-size: 9.5px;
+  font-weight: 700;
+}
+
+.svg-grid {
+  stroke: color-mix(in sRGB, var(--line) 75%, transparent);
+  stroke-width: 1;
+}
+
+.svg-separator {
+  stroke: color-mix(in sRGB, var(--accent) 40%, var(--line));
+  stroke-width: 1.2;
+  stroke-dasharray: 4 4;
+}
+
+.svg-band {
+  fill: color-mix(in sRGB, var(--accent) 9%, var(--paper));
+  stroke: var(--line);
+}
+
+.svg-title {
+  fill: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.svg-sub {
+  fill: var(--muted);
+  font-size: 11.5px;
+}
+
+.stim-line {
+  fill: none;
+  stroke-width: 2.6;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.table-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.table-grid article {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 0.55rem;
+  padding: 0.8rem;
+}
+
+.table-grid h4 {
+  margin: 0 0 0.6rem;
+}
+
+.paper table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+
+.paper th,
+.paper td {
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  padding: 0.3rem 0.25rem;
+  vertical-align: top;
+}
+
+.paper th {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.paper ul,
+.paper ol {
+  margin: 0.4rem 0 0.4rem 1.25rem;
+}
+
+.references li {
+  margin-bottom: 0.4rem;
+  scroll-margin-top: 1rem;
+}
+
+.references a {
+  color: var(--link);
+}
+
+.citation-group {
+  white-space: nowrap;
+}
+
+.citation {
+  color: var(--link);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font-weight: 600;
+}
+
+.citation:hover {
+  color: var(--accent);
+}
+
+.theme-toggle {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  width: 2.5rem;
+  height: 2.5rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 1.15rem;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 4px 12px color-mix(in sRGB, var(--ink) 10%, transparent);
+}
+
+.theme-toggle:hover {
+  background: var(--panel);
+}
+
+.theme-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 4px color-mix(in sRGB, var(--accent) 24%, transparent);
+}
+
+@media (max-width: 860px) {
+  .table-grid {
+    grid-template-columns: 1fr;
+  }
+}

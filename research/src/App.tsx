@@ -153,19 +153,35 @@ function App() {
     if (typeof window === 'undefined') {
       return 'light'
     }
-    const storedTheme = window.localStorage.getItem('paper-theme')
-    if (storedTheme === 'light' || storedTheme === 'dark') {
-      return storedTheme
+    try {
+      const storedTheme = window.localStorage.getItem('paper-theme')
+      if (storedTheme === 'light' || storedTheme === 'dark') {
+        return storedTheme
+      }
+    } catch {
+      return 'light'
     }
-    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+    if (typeof window.matchMedia === 'function') {
+      return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+    }
+    return 'light'
   })
 
   useEffect(() => {
-    document.documentElement.dataset.theme = theme
-    window.localStorage.setItem('paper-theme', theme)
+    if (typeof document !== 'undefined' && document.documentElement) {
+      document.documentElement.dataset.theme = theme
+    }
+    if (typeof window !== 'undefined') {
+      try {
+        window.localStorage.setItem('paper-theme', theme)
+      } catch {
+        // Ignore storage write failures; theme still applies for current session.
+      }
+    }
   }, [theme])
 
   const isDark = theme === 'dark'
+  const assetUrl = (filename: string) => `${import.meta.env.BASE_URL}${filename}`
 
   return (
     <main className="paper">
@@ -217,8 +233,8 @@ function App() {
           change yield both stable memory and precision control? We address this
           question in a full-connectome simulation stack that preserves measured
           network topology while exposing reproducible control handles. As noted
-          in <Cite ids={['6']} />, "PEN_a and PEN_b neurons are indeed strikingly different in
-          their synaptic conn", which motivates the explicit separation of
+          in <Cite ids={['6']} />, PEN_a and PEN_b neurons are indeed strikingly different in
+          their synaptic connectivity, which motivates the explicit separation of
           PEN_a-targeted control from PEN_b circuitry in this draft. We further
           find that coarse biological side splits (all-left PEN_a drive versus
           all-right PEN_a drive) are insufficient for reliable control. Effective
@@ -310,6 +326,7 @@ function App() {
           <article>
             <h4>Left PEN_a stimulation map</h4>
             <table>
+              <caption>Left PEN_a stimulation map</caption>
               <thead>
                 <tr>
                   <th>Neuron</th>
@@ -334,6 +351,7 @@ function App() {
           <article>
             <h4>Right PEN_a stimulation map</h4>
             <table>
+              <caption>Right PEN_a stimulation map</caption>
               <thead>
                 <tr>
                   <th>Neuron</th>
@@ -446,7 +464,7 @@ function App() {
             <Cite ids={['9']} />.
           </figcaption>
           <img
-            src="/hb-example.jpg"
+            src={assetUrl('hb-example.jpg')}
             alt="Heading bump visualization for Position 1 at 11 PM using L1 L2 L6 at 50 Hz with inhibitory connection panel visible"
             className="paper-image"
             loading="lazy"
@@ -465,7 +483,7 @@ function App() {
             represented.
           </figcaption>
           <img
-            src="/neurosim-biological-view.jpg"
+            src={assetUrl('neurosim-biological-view.jpg')}
             alt="Biological view showing PEN_a and EPG network activity whose decoded compass bump corresponds to 11 PM"
             className="paper-image"
             loading="lazy"

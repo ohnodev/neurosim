@@ -1198,7 +1198,8 @@ const WORLD_FLY_TIME_MAX_SEC: f64 = 6.0;
 /// Fatigue decay rate when flying. 0.1 = 1/10th as fast (fly ~10× longer before rest).
 const WORLD_FATIGUE_DECAY_RATE: f64 = 0.1;
 const WORLD_MAX_FOOD_SOURCES: usize = 4;
-const WORLD_FOOD_ARENA_HALF_SIZE: f64 = 24.0;
+// Keep food spawn spread aligned with the world ground plane (500x500 in Three.js).
+const WORLD_FOOD_ARENA_HALF_SIZE: f64 = 250.0;
 const WORLD_FOOD_MARGIN: f64 = 2.0;
 const WORLD_FOOD_RADIUS: f64 = 12.0;
 
@@ -1212,8 +1213,10 @@ fn world_food_unit(seed: u64) -> f64 {
 }
 
 fn spawn_world_food_source(source_id_num: u64) -> SourceInput {
-    let min = -WORLD_FOOD_ARENA_HALF_SIZE + WORLD_FOOD_MARGIN;
-    let max = WORLD_FOOD_ARENA_HALF_SIZE - WORLD_FOOD_MARGIN;
+    // Keep food centers fully inside the plane by insetting by source radius + margin.
+    let center_inset = WORLD_FOOD_MARGIN + WORLD_FOOD_RADIUS;
+    let min = -WORLD_FOOD_ARENA_HALF_SIZE + center_inset;
+    let max = WORLD_FOOD_ARENA_HALF_SIZE - center_inset;
     let span = (max - min).max(0.0);
     let ux = world_food_unit(source_id_num.wrapping_mul(2).wrapping_add(1));
     let uy = world_food_unit(source_id_num.wrapping_mul(2).wrapping_add(2));

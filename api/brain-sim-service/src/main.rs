@@ -1213,8 +1213,10 @@ fn world_food_unit(seed: u64) -> f64 {
 }
 
 fn spawn_world_food_source(source_id_num: u64) -> SourceInput {
-    let min = -WORLD_FOOD_ARENA_HALF_SIZE + WORLD_FOOD_MARGIN;
-    let max = WORLD_FOOD_ARENA_HALF_SIZE - WORLD_FOOD_MARGIN;
+    // Keep food centers fully inside the plane by insetting by source radius + margin.
+    let center_inset = WORLD_FOOD_MARGIN + WORLD_FOOD_RADIUS;
+    let min = -WORLD_FOOD_ARENA_HALF_SIZE + center_inset;
+    let max = WORLD_FOOD_ARENA_HALF_SIZE - center_inset;
     let span = (max - min).max(0.0);
     let ux = world_food_unit(source_id_num.wrapping_mul(2).wrapping_add(1));
     let uy = world_food_unit(source_id_num.wrapping_mul(2).wrapping_add(2));

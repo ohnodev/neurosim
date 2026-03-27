@@ -579,6 +579,8 @@ export default function FlyViewer() {
     [deployMutation]
   );
 
+  const viewingLabel = `Fly ${selectedFlyIndex + 1} viewing`;
+
   return (
     <SimRefsProvider value={simRefs}>
       <SimStateSync
@@ -743,7 +745,7 @@ export default function FlyViewer() {
                 >
                   Heading compass
                 </button>
-                <div style={{ color: '#888', fontSize: 11, marginLeft: 'auto' }}>Fly {selectedFlyIndex + 1} viewing</div>
+                <div style={{ color: '#888', fontSize: 11, marginLeft: 'auto' }}>{viewingLabel}</div>
               </div>
               {brainTab === 'activity' && (
                 <>
@@ -753,7 +755,7 @@ export default function FlyViewer() {
                         followSimIndexRef={followSimIndexRef}
                         visible={connected}
                         neurons={neuronsData?.neurons}
-                        title={`Fly ${selectedFlyIndex + 1} viewing`}
+                        title={viewingLabel}
                         embedded
                       />
                     )}

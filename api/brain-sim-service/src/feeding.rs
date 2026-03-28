@@ -24,19 +24,25 @@ impl FoodState {
         }
     }
 
-    pub fn take_sugar(&mut self, source_id: &str, requested: f64) -> f64 {
+    pub fn take_sugar_with_depletion(&mut self, source_id: &str, requested: f64) -> (f64, bool) {
         if requested <= 0.0 {
-            return 0.0;
+            return (0.0, false);
         }
         let Some(remaining) = self.sugar_by_id.get_mut(source_id) else {
-            return 0.0;
+            return (0.0, false);
         };
         if *remaining <= 0.0 {
-            return 0.0;
+            return (0.0, false);
         }
+        let was_positive = *remaining > 0.0;
         let taken = requested.min(*remaining);
         *remaining -= taken;
-        taken
+        let just_depleted = was_positive && *remaining <= 0.0;
+        (taken, just_depleted)
+    }
+
+    pub fn take_sugar(&mut self, source_id: &str, requested: f64) -> f64 {
+        self.take_sugar_with_depletion(source_id, requested).0
     }
 
     pub fn depleted(&self, source_id: &str) -> bool {

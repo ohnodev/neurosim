@@ -1020,7 +1020,7 @@ fn apply_feeding_tick(
             item.feeding_sugar_taken = 0.0;
             continue;
         };
-        let taken = food_state.take_sugar(&source_id, sugar_per_fly);
+        let (taken, just_depleted) = food_state.take_sugar_with_depletion(&source_id, sugar_per_fly);
         item.fly.feeding = taken > 0.0;
         item.feeding_sugar_taken = taken;
         item.fly.hunger = (item.fly.hunger + taken * HUNGER_PER_SUGAR).clamp(0.0, 100.0);
@@ -1030,8 +1030,10 @@ fn apply_feeding_tick(
             item.fly.y = *sy;
             item.fly.z = 0.9;
         }
-        if food_state.depleted(&source_id) {
+        if just_depleted {
             item.eaten_food_id = Some(source_id);
+        } else {
+            item.eaten_food_id = None;
         }
     }
 }
@@ -1067,6 +1069,7 @@ struct ContinuousLiveState {
 }
 
 const WORLD_TICK_BUFFER_BASE_CAP: usize = 120_000;
+const WORLD_DEPLETION_EVENT_BUFFER_CAP: usize = 4096;
 
 #[derive(Deserialize)]
 struct WorldAddFlyParams {
@@ -1099,6 +1102,12 @@ struct WorldReadTicksParams {
     max_ticks: usize,
 }
 
+#[derive(Deserialize)]
+struct WorldGetSnapshotParams {
+    #[serde(default)]
+    after_depletion_event_id: u64,
+}
+
 #[derive(Clone, Serialize)]
 struct WorldTickRecord {
     tick: u64,
@@ -1106,6 +1115,14 @@ struct WorldTickRecord {
     time_sec: f64,
     /// Compact: EPG neuron indices 0..n_epg that spiked. Frontend derives bump from these.
     epg: Vec<usize>,
+}
+
+#[derive(Clone, Serialize)]
+struct WorldFoodDepletionEvent {
+    event_id: u64,
+    tick: u64,
+    fly_id: u32,
+    source_id: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -1133,6 +1150,7 @@ struct WorldSnapshotResp {
     dt_sec: f64,
     sources: Vec<WorldSnapshotSource>,
     flies: Vec<WorldSnapshotFly>,
+    depletion_events: Vec<WorldFoodDepletionEvent>,
 }
 
 #[derive(Clone, Serialize)]
@@ -1176,6 +1194,9 @@ struct WorldRuntimeState {
     food_state: Mutex<FoodState>,
     tick_buffer_cap: usize,
     ticks: Mutex<VecDeque<WorldTickRecord>>,
+    depletion_event_buffer_cap: usize,
+    depletion_events: Mutex<VecDeque<WorldFoodDepletionEvent>>,
+    next_depletion_event_id: AtomicU64,
     /// epg_index (0..n_epg) -> bin (0..15) for frontend bump derivation.
     epg_index_to_bin: Vec<u8>,
     /// epg_index (0..n_epg) -> root_id for visualization replay (indices → spike IDs).
@@ -1749,6 +1770,9 @@ fn spawn_world_runtime_thread(
         food_state: Mutex::new(FoodState::default()),
         tick_buffer_cap: world_tick_buffer_cap,
         ticks: Mutex::new(VecDeque::with_capacity(world_tick_buffer_cap)),
+        depletion_event_buffer_cap: WORLD_DEPLETION_EVENT_BUFFER_CAP,
+        depletion_events: Mutex::new(VecDeque::with_capacity(WORLD_DEPLETION_EVENT_BUFFER_CAP)),
+        next_depletion_event_id: AtomicU64::new(1),
         epg_index_to_bin,
         epg_index_to_root_id,
     });
@@ -1811,6 +1835,7 @@ fn spawn_world_runtime_thread(
                         let mut food_state = state_thr.food_state.lock().unwrap();
                         food_state.sync(sources_now.iter().map(|s| s.id.clone()));
                         let mut depleted_source_ids: HashSet<String> = HashSet::new();
+                        let mut depletion_events_batch: Vec<(u32, String)> = Vec::new();
                         for result in step_results.iter_mut() {
                             let sugar_per_fly = (FEED_SUGAR_PER_SEC * result.dt_batch).max(0.0);
                             if sugar_per_fly <= 0.0 {
@@ -1824,7 +1849,8 @@ fn spawn_world_runtime_thread(
                                 result.snapshot.eaten_food_id = None;
                                 continue;
                             };
-                            let taken = food_state.take_sugar(&source_id, sugar_per_fly);
+                            let (taken, just_depleted) =
+                                food_state.take_sugar_with_depletion(&source_id, sugar_per_fly);
                             result.snapshot.fly.feeding = taken > 0.0;
                             result.snapshot.feeding_sugar_taken = taken;
                             result.snapshot.fly.hunger =
@@ -1836,9 +1862,10 @@ fn spawn_world_runtime_thread(
                                 result.snapshot.fly.y = *sy;
                                 result.snapshot.fly.z = 0.9;
                             }
-                            if food_state.depleted(&source_id) {
+                            if just_depleted {
                                 depleted_source_ids.insert(source_id.clone());
-                                result.snapshot.eaten_food_id = Some(source_id);
+                                result.snapshot.eaten_food_id = Some(source_id.clone());
+                                depletion_events_batch.push((result.fly_id, source_id));
                             } else {
                                 result.snapshot.eaten_food_id = None;
                             }
@@ -1850,6 +1877,23 @@ fn spawn_world_runtime_thread(
                                 let source_id_num =
                                     state_thr.next_source_id.fetch_add(1, Ordering::Relaxed);
                                 sources.push(spawn_world_food_source(source_id_num));
+                            }
+                        }
+                        if !depletion_events_batch.is_empty() {
+                            let tick = base_tick + steps_per_batch as u64;
+                            let mut events = state_thr.depletion_events.lock().unwrap();
+                            for (fly_id, source_id) in depletion_events_batch {
+                                let event_id =
+                                    state_thr.next_depletion_event_id.fetch_add(1, Ordering::Relaxed);
+                                events.push_back(WorldFoodDepletionEvent {
+                                    event_id,
+                                    tick,
+                                    fly_id,
+                                    source_id,
+                                });
+                            }
+                            while events.len() > state_thr.depletion_event_buffer_cap {
+                                events.pop_front();
                             }
                         }
                     }
@@ -2850,6 +2894,12 @@ fn handle(
     } else if line.contains("\"method\":\"world_get_snapshot\"") || line.contains("\"method\": \"world_get_snapshot\"")
     {
         if let Some(ref world) = world_runtime {
+            let v: serde_json::Value = serde_json::from_str(line)?;
+            let p: WorldGetSnapshotParams = serde_json::from_value(
+                v.get("params")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!({})),
+            )?;
             let tick = world.tick.load(Ordering::Acquire);
             let sources: Vec<WorldSnapshotSource> = world
                 .sources
@@ -2870,12 +2920,25 @@ fn handle(
                 .values()
                 .cloned()
                 .collect();
+            let mut depletion_events: Vec<WorldFoodDepletionEvent> = {
+                let buf = world.depletion_events.lock().unwrap();
+                let mut out = Vec::new();
+                for rec in buf.iter().rev() {
+                    if rec.event_id <= p.after_depletion_event_id {
+                        break;
+                    }
+                    out.push(rec.clone());
+                }
+                out
+            };
+            depletion_events.reverse();
             serde_json::to_string(&WorldSnapshotResp {
                 ok: true,
                 tick,
                 dt_sec: world.dt_sec,
                 sources,
                 flies,
+                depletion_events,
             })?
         } else {
             serde_json::to_string(&WorldSnapshotResp {
@@ -2884,6 +2947,7 @@ fn handle(
                 dt_sec: 0.0001,
                 sources: Vec::new(),
                 flies: Vec::new(),
+                depletion_events: Vec::new(),
             })?
         }
     } else if line.contains("\"method\":\"world_read_ticks\"")

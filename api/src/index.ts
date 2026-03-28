@@ -563,6 +563,7 @@ let simReadyAtMs = 0;
 let graceSkippedTicks = 0;
 let graceSkipLogged = false;
 let lastTicksAfter = 0;
+let lastDepletionEventId = 0;
 let epgIndexToBin: number[] = [];
 let worldStepsPerBatch = 1250;
 
@@ -843,6 +844,10 @@ function startSim(): void {
       const schedulerLagMs = Math.max(0, Math.round(loopStart - nextBatchDueAt));
       nextBatchDueAt = loopStart + BATCH_MS;
       const nSims = sims.length;
+      const simIndexByFlyId = new Map<number, number>();
+      for (let i = 0; i < nSims; i += 1) {
+        simIndexByFlyId.set(sims[i]!.flyId, i);
+      }
       let stepMs = 0;
       let jsMs = 0;
       let maxStepMs = 0;
@@ -885,7 +890,7 @@ function startSim(): void {
       const ticksToRequest = Math.max(1250, worldStepsPerBatch * Math.max(1, nSims) * 2);
       const tickPageSize = Math.min(ticksToRequest, SOCKET_TICKS_PAGE_SIZE);
       const [worldSnap, firstTicksResp] = await Promise.all([
-        socketClient.worldGetSnapshot(),
+        socketClient.worldGetSnapshot(lastDepletionEventId),
         socketClient.worldReadTicks(lastTicksAfter, tickPageSize),
       ]);
       latestWorldSources = (worldSnap.sources ?? []).map((s) => ({
@@ -950,6 +955,17 @@ function startSim(): void {
       const pullMs = performance.now() - pullStart;
       const byFlyId = new Map<number, socketClient.WorldFlySnapshot>();
       for (const item of worldSnap.flies ?? []) byFlyId.set(item.fly_id, item);
+      for (const event of worldSnap.depletion_events ?? []) {
+        if ((event.event_id ?? 0) > lastDepletionEventId) {
+          lastDepletionEventId = event.event_id;
+        }
+        const simIndex = simIndexByFlyId.get(event.fly_id);
+        if (simIndex == null) continue;
+        const deployment = findDeploymentBySimIndex(simIndex);
+        if (!deployment) continue;
+        recordFoodDepleted(deployment.address, deployment.slotIndex);
+        console.log('[world] fly', simIndex, 'depleted food', event.source_id, 'event', event.event_id, 'tick', event.tick);
+      }
       const states: RuntimeSimState[] = sims.map((sim, idx) => {
         const snap = byFlyId.get(sim.flyId);
         if (!snap) return sim.state;
@@ -1002,15 +1018,6 @@ function startSim(): void {
           }
           if (gt.rustMs > maxStepMs) maxStepMs = gt.rustMs;
           if (gt.jsMs > maxJsMs) maxJsMs = gt.jsMs;
-        }
-        if (state.eatenFoodIds && state.eatenFoodIds.length > 0) {
-          for (const foodId of state.eatenFoodIds) {
-            const deployment = findDeploymentBySimIndex(j);
-            if (deployment) {
-              recordFoodDepleted(deployment.address, deployment.slotIndex);
-            }
-            console.log('[world] fly', j, 'ate food', foodId);
-          }
         }
         if ((state.feedingSugarTaken ?? 0) > 0) {
           const deployment = findDeploymentBySimIndex(j);

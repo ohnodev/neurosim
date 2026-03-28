@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
-// Slightly below one ideal full feeding-cycle yield so one full cycle reliably depletes one source.
+// Tune sugar so one max world feeding lock window can deplete one source.
 pub const FOOD_SUGAR_CAPACITY: f64 = 99.0;
-pub const FEED_DURATION_SEC: f64 = 5.0;
+pub const FEED_DURATION_SEC: f64 = 1.2;
 pub const FEED_SUGAR_PER_SEC: f64 = FOOD_SUGAR_CAPACITY / FEED_DURATION_SEC;
 pub const HUNGER_PER_SUGAR: f64 = 0.5;
 pub const HEALTH_PER_SUGAR: f64 = 0.5;
@@ -28,10 +28,9 @@ impl FoodState {
         if requested <= 0.0 {
             return 0.0;
         }
-        let remaining = self
-            .sugar_by_id
-            .entry(source_id.to_string())
-            .or_insert(FOOD_SUGAR_CAPACITY);
+        let Some(remaining) = self.sugar_by_id.get_mut(source_id) else {
+            return 0.0;
+        };
         if *remaining <= 0.0 {
             return 0.0;
         }

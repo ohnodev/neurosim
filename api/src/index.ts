@@ -367,6 +367,7 @@ type WorldSource = {
 };
 let rewardFlushIntervalId: ReturnType<typeof setInterval> | null = null;
 let latestWorldSources: WorldSource[] = [];
+const processedDepletedFoodIds = new Set<string>();
 
 /** Simulation flies; starts empty, users deploy flies. */
 type RuntimeFly = {
@@ -1005,6 +1006,8 @@ function startSim(): void {
         }
         if (state.eatenFoodIds && state.eatenFoodIds.length > 0) {
           for (const foodId of state.eatenFoodIds) {
+            if (processedDepletedFoodIds.has(foodId)) continue;
+            processedDepletedFoodIds.add(foodId);
             const deployment = findDeploymentBySimIndex(j);
             if (deployment) {
               recordFoodDepleted(deployment.address, deployment.slotIndex);

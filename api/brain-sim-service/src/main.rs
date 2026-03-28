@@ -3,7 +3,7 @@
 use std::time::Instant;
 use brain_sim_service::connectome;
 use brain_sim_service::feeding::{
-    FoodState, FEED_SUGAR_PER_SEC, HEALTH_PER_SUGAR, HUNGER_PER_SUGAR,
+    FoodState, FEED_DURATION_SEC, FEED_SUGAR_PER_SEC, HEALTH_PER_SUGAR, HUNGER_PER_SUGAR,
 };
 use brain_sim_service::sim::{BrainSim, FlyInput, SourceInput};
 use rayon::prelude::*;
@@ -1227,7 +1227,7 @@ fn spawn_world_food_source(source_id_num: u64) -> SourceInput {
         radius: WORLD_FOOD_RADIUS,
     }
 }
-const WORLD_FEED_DURATION_SEC: f64 = 1.2;
+const WORLD_FEED_DURATION_SEC: f64 = FEED_DURATION_SEC;
 const WORLD_FEED_START_RADIUS: f64 = 2.2;
 const WORLD_WANDER_INTERVAL_SEC: f64 = 10.0;
 const WORLD_HUNGER_DECAY_PER_SEC: f64 = 1.2;

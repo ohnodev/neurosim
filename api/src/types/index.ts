@@ -34,4 +34,6 @@ export interface RewardState {
   inFlight?: Record<string, string>;
   distributed: DistributedEntry[];
   neuroflyStats: NeuroFlyStats[];
+  /** Durable depletion event cursor keyed by runtime epoch. */
+  depletionCursorByRuntimeEpoch?: Record<string, number>;
 }

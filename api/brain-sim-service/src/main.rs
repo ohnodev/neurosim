@@ -1,6 +1,6 @@
 //! Brain sim service - Unix socket server.
 //! Loads connectome once at startup; create allocates sims from the in-memory template.
-use std::time::Instant;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use brain_sim_service::connectome;
 use brain_sim_service::feeding::{
     FoodState, FEED_DURATION_SEC, FEED_SUGAR_PER_SEC, HEALTH_PER_SUGAR, HUNGER_PER_SUGAR,
@@ -1148,6 +1148,8 @@ struct WorldSnapshotResp {
     ok: bool,
     tick: u64,
     dt_sec: f64,
+    runtime_epoch: u64,
+    latest_depletion_event_id: u64,
     sources: Vec<WorldSnapshotSource>,
     flies: Vec<WorldSnapshotFly>,
     depletion_events: Vec<WorldFoodDepletionEvent>,
@@ -1184,6 +1186,7 @@ struct WorldFlyRuntime {
 }
 
 struct WorldRuntimeState {
+    runtime_epoch: u64,
     next_fly_id: AtomicU32,
     next_source_id: AtomicU64,
     tick: AtomicU64,
@@ -1760,7 +1763,13 @@ fn spawn_world_runtime_thread(
     for source_id_num in 1..=(WORLD_MAX_FOOD_SOURCES as u64) {
         initial_sources.push(spawn_world_food_source(source_id_num));
     }
+    let runtime_epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or_else(|_| 0)
+        ^ (std::process::id() as u64);
     let state = Arc::new(WorldRuntimeState {
+        runtime_epoch,
         next_fly_id: AtomicU32::new(0),
         next_source_id: AtomicU64::new(WORLD_MAX_FOOD_SOURCES as u64 + 1),
         tick: AtomicU64::new(0),
@@ -1786,9 +1795,30 @@ fn spawn_world_runtime_thread(
         .spawn(move || {
             let target_interval =
                 std::time::Duration::from_secs_f64((dt_sec * steps_per_batch as f64).max(0.0));
+            let profile_every_sec = std::env::var("NEUROSIM_WORLD_LOOP_PROFILE_SEC")
+                .ok()
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(5);
+            let mut profile_window_start = Instant::now();
+            let mut profile_batches: u64 = 0;
+            let mut profile_active_batches: u64 = 0;
+            let mut profile_fly_sum: u64 = 0;
+            let mut profile_elapsed_ms_sum = 0.0f64;
+            let mut profile_phase_step_ms_sum = 0.0f64;
+            let mut profile_phase_feed_ms_sum = 0.0f64;
+            let mut profile_phase_commit_ms_sum = 0.0f64;
+            let mut profile_overrun_batches: u64 = 0;
+            let mut profile_overrun_ms_sum = 0.0f64;
+            let mut profile_max_elapsed_ms = 0.0f64;
+            let target_interval_ms = target_interval.as_secs_f64() * 1000.0;
             loop {
                 let batch_start = Instant::now();
+                let mut phase_step_ms = 0.0f64;
+                let mut phase_feed_ms = 0.0f64;
+                let mut phase_commit_ms = 0.0f64;
+                let mut fly_count_this_batch: usize = 0;
                 if state_thr.paused.load(Ordering::Relaxed) == 0 {
+                    let t_step_start = Instant::now();
                     let sources_now = state_thr.sources.lock().unwrap().clone();
                     let fly_handles: Vec<(u32, Arc<Mutex<WorldFlyRuntime>>)> = {
                         let flies = state_thr.flies.lock().unwrap();
@@ -1831,10 +1861,13 @@ fn spawn_world_runtime_thread(
                             })
                             .collect()
                     };
+                    fly_count_this_batch = step_results.len();
+                    phase_step_ms = t_step_start.elapsed().as_secs_f64() * 1000.0;
                     let source_lookup: HashMap<String, (f64, f64)> = sources_now
                         .iter()
                         .map(|s| (s.id.clone(), (s.x, s.y)))
                         .collect();
+                    let t_feed_start = Instant::now();
                     {
                         let mut food_state = state_thr.food_state.lock().unwrap();
                         food_state.sync(sources_now.iter().map(|s| s.id.clone()));
@@ -1915,7 +1948,9 @@ fn spawn_world_runtime_thread(
                             }
                         }
                     }
+                    phase_feed_ms = t_feed_start.elapsed().as_secs_f64() * 1000.0;
                     let tick = base_tick + steps_per_batch as u64;
+                    let t_commit_start = Instant::now();
                     {
                         let mut snapshots = state_thr.snapshots.lock().unwrap();
                         for result in &step_results {
@@ -1947,7 +1982,86 @@ fn spawn_world_runtime_thread(
                             ticks.pop_front();
                         }
                     }
+                    phase_commit_ms = t_commit_start.elapsed().as_secs_f64() * 1000.0;
                     state_thr.tick.store(tick, Ordering::Release);
+                }
+                let elapsed_ms = batch_start.elapsed().as_secs_f64() * 1000.0;
+                profile_batches += 1;
+                profile_elapsed_ms_sum += elapsed_ms;
+                if elapsed_ms > profile_max_elapsed_ms {
+                    profile_max_elapsed_ms = elapsed_ms;
+                }
+                if fly_count_this_batch > 0 {
+                    profile_active_batches += 1;
+                    profile_fly_sum += fly_count_this_batch as u64;
+                    profile_phase_step_ms_sum += phase_step_ms;
+                    profile_phase_feed_ms_sum += phase_feed_ms;
+                    profile_phase_commit_ms_sum += phase_commit_ms;
+                }
+                if elapsed_ms > target_interval_ms {
+                    profile_overrun_batches += 1;
+                    profile_overrun_ms_sum += elapsed_ms - target_interval_ms;
+                }
+                if profile_every_sec > 0
+                    && profile_window_start.elapsed() >= Duration::from_secs(profile_every_sec)
+                {
+                    let avg_batch_ms = if profile_batches > 0 {
+                        profile_elapsed_ms_sum / profile_batches as f64
+                    } else {
+                        0.0
+                    };
+                    let avg_flies = if profile_active_batches > 0 {
+                        profile_fly_sum as f64 / profile_active_batches as f64
+                    } else {
+                        0.0
+                    };
+                    let avg_step_ms = if profile_active_batches > 0 {
+                        profile_phase_step_ms_sum / profile_active_batches as f64
+                    } else {
+                        0.0
+                    };
+                    let avg_feed_ms = if profile_active_batches > 0 {
+                        profile_phase_feed_ms_sum / profile_active_batches as f64
+                    } else {
+                        0.0
+                    };
+                    let avg_commit_ms = if profile_active_batches > 0 {
+                        profile_phase_commit_ms_sum / profile_active_batches as f64
+                    } else {
+                        0.0
+                    };
+                    let overrun_pct = if profile_batches > 0 {
+                        (profile_overrun_batches as f64 * 100.0) / profile_batches as f64
+                    } else {
+                        0.0
+                    };
+                    eprintln!(
+                        "[brain-service][world-loop] profile window={}s batches={} active_batches={} avg_flies={:.2} target_ms={:.3} avg_batch_ms={:.3} max_batch_ms={:.3} avg_phase_step_ms={:.3} avg_phase_feed_ms={:.3} avg_phase_commit_ms={:.3} overrun_batches={} overrun_pct={:.1}% overrun_ms_total={:.3}",
+                        profile_every_sec,
+                        profile_batches,
+                        profile_active_batches,
+                        avg_flies,
+                        target_interval_ms,
+                        avg_batch_ms,
+                        profile_max_elapsed_ms,
+                        avg_step_ms,
+                        avg_feed_ms,
+                        avg_commit_ms,
+                        profile_overrun_batches,
+                        overrun_pct,
+                        profile_overrun_ms_sum
+                    );
+                    profile_window_start = Instant::now();
+                    profile_batches = 0;
+                    profile_active_batches = 0;
+                    profile_fly_sum = 0;
+                    profile_elapsed_ms_sum = 0.0;
+                    profile_phase_step_ms_sum = 0.0;
+                    profile_phase_feed_ms_sum = 0.0;
+                    profile_phase_commit_ms_sum = 0.0;
+                    profile_overrun_batches = 0;
+                    profile_overrun_ms_sum = 0.0;
+                    profile_max_elapsed_ms = 0.0;
                 }
                 if target_interval > std::time::Duration::ZERO {
                     let elapsed = batch_start.elapsed();
@@ -2919,6 +3033,10 @@ fn handle(
                     .unwrap_or_else(|| serde_json::json!({})),
             )?;
             let tick = world.tick.load(Ordering::Acquire);
+            let latest_depletion_event_id = world
+                .next_depletion_event_id
+                .load(Ordering::Acquire)
+                .saturating_sub(1);
             let sources: Vec<WorldSnapshotSource> = world
                 .sources
                 .lock()
@@ -2966,6 +3084,8 @@ fn handle(
                 ok: true,
                 tick,
                 dt_sec: world.dt_sec,
+                runtime_epoch: world.runtime_epoch,
+                latest_depletion_event_id,
                 sources,
                 flies,
                 depletion_events,
@@ -2977,6 +3097,8 @@ fn handle(
                 ok: false,
                 tick: 0,
                 dt_sec: 0.0001,
+                runtime_epoch: 0,
+                latest_depletion_event_id: 0,
                 sources: Vec::new(),
                 flies: Vec::new(),
                 depletion_events: Vec::new(),

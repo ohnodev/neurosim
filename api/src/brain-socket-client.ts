@@ -424,6 +424,8 @@ export interface WorldSnapshot {
   ok: boolean;
   tick: number;
   dt_sec: number;
+  runtime_epoch: number;
+  latest_depletion_event_id: number;
   sources: Array<{ id: string; x: number; y: number; radius: number }>;
   flies: WorldFlySnapshot[];
   depletion_events: Array<{ event_id: number; tick: number; fly_id: number; source_id: string }>;

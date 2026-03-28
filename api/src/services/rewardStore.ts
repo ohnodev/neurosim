@@ -33,6 +33,7 @@ let pending = new Map<string, bigint>();
 let inFlight = new Map<string, bigint>();
 let neuroflyStats: NeuroFlyStats[] = [];
 let distributed: RewardState['distributed'] = [];
+let depletionCursorByRuntimeEpoch = new Map<string, number>();
 
 let saveScheduled: ReturnType<typeof setTimeout> | null = null;
 const SAVE_DEBOUNCE_MS = 500;
@@ -64,6 +65,14 @@ function load(): void {
         pointsFlushedMilli: Number.isFinite(s.pointsFlushedMilli) ? Math.max(0, Math.floor(s.pointsFlushedMilli)) : 0,
       }));
     distributed = Array.isArray(data?.distributed) ? data.distributed : [];
+    depletionCursorByRuntimeEpoch = new Map(
+      Object.entries(data?.depletionCursorByRuntimeEpoch ?? {})
+        .map(([epoch, eventId]) => {
+          const normalized = Number.isFinite(eventId) ? Math.max(0, Math.floor(eventId)) : 0;
+          return [epoch, normalized] as const;
+        })
+        .filter(([epoch]) => epoch.length > 0)
+    );
   } catch (err) {
     const nodeErr = err as NodeJS.ErrnoException;
     if (nodeErr?.code !== 'ENOENT') {
@@ -73,6 +82,7 @@ function load(): void {
     inFlight = new Map();
     neuroflyStats = [];
     distributed = [];
+    depletionCursorByRuntimeEpoch = new Map();
   }
 }
 
@@ -83,6 +93,7 @@ async function persist(): Promise<void> {
     inFlight: Object.fromEntries([...inFlight].map(([k, v]) => [k, v.toString()])),
     distributed,
     neuroflyStats,
+    depletionCursorByRuntimeEpoch: Object.fromEntries(depletionCursorByRuntimeEpoch),
   };
   const data = `${JSON.stringify(state, null, 2)}\n`;
   const dir = path.dirname(rewardsPath);
@@ -327,6 +338,25 @@ export function rollbackBatch(recipients: string[], amounts: bigint[]): void {
   save();
 }
 
+export function getDepletionCursorForRuntimeEpoch(runtimeEpoch: string): number {
+  if (!runtimeEpoch) return 0;
+  return Math.max(0, Math.floor(depletionCursorByRuntimeEpoch.get(runtimeEpoch) ?? 0));
+}
+
+export function setDepletionCursorForRuntimeEpoch(runtimeEpoch: string, eventId: number): void {
+  if (!runtimeEpoch) return;
+  if (!Number.isFinite(eventId)) return;
+  const normalized = Math.max(0, Math.floor(eventId));
+  depletionCursorByRuntimeEpoch.set(runtimeEpoch, normalized);
+  // Keep only recent runtime epochs so persisted state does not grow unbounded.
+  while (depletionCursorByRuntimeEpoch.size > 64) {
+    const first = depletionCursorByRuntimeEpoch.keys().next().value;
+    if (!first) break;
+    depletionCursorByRuntimeEpoch.delete(first);
+  }
+  save();
+}
+
 export function getNeuroFlyStats(
   address: string,
   slotIndex: number,
@@ -380,5 +410,6 @@ export function clearForTesting(): void {
   inFlight.clear();
   neuroflyStats = [];
   distributed = [];
+  depletionCursorByRuntimeEpoch.clear();
   save();
 }

@@ -1151,6 +1151,8 @@ struct WorldSnapshotResp {
     sources: Vec<WorldSnapshotSource>,
     flies: Vec<WorldSnapshotFly>,
     depletion_events: Vec<WorldFoodDepletionEvent>,
+    depletion_events_truncated: bool,
+    depletion_events_truncated_count: u64,
 }
 
 #[derive(Clone, Serialize)]
@@ -1197,6 +1199,7 @@ struct WorldRuntimeState {
     depletion_event_buffer_cap: usize,
     depletion_events: Mutex<VecDeque<WorldFoodDepletionEvent>>,
     next_depletion_event_id: AtomicU64,
+    depletion_events_dropped_total: AtomicU64,
     /// epg_index (0..n_epg) -> bin (0..15) for frontend bump derivation.
     epg_index_to_bin: Vec<u8>,
     /// epg_index (0..n_epg) -> root_id for visualization replay (indices → spike IDs).
@@ -1773,6 +1776,7 @@ fn spawn_world_runtime_thread(
         depletion_event_buffer_cap: WORLD_DEPLETION_EVENT_BUFFER_CAP,
         depletion_events: Mutex::new(VecDeque::with_capacity(WORLD_DEPLETION_EVENT_BUFFER_CAP)),
         next_depletion_event_id: AtomicU64::new(1),
+        depletion_events_dropped_total: AtomicU64::new(0),
         epg_index_to_bin,
         epg_index_to_root_id,
     });
@@ -1892,8 +1896,22 @@ fn spawn_world_runtime_thread(
                                     source_id,
                                 });
                             }
+                            let mut dropped_count = 0u64;
                             while events.len() > state_thr.depletion_event_buffer_cap {
                                 events.pop_front();
+                                dropped_count += 1;
+                            }
+                            if dropped_count > 0 {
+                                let total = state_thr
+                                    .depletion_events_dropped_total
+                                    .fetch_add(dropped_count, Ordering::Relaxed)
+                                    + dropped_count;
+                                eprintln!(
+                                    "[brain-service][warn] world depletion event buffer overflow: dropped={} cap={} dropped_total={}",
+                                    dropped_count,
+                                    WORLD_DEPLETION_EVENT_BUFFER_CAP,
+                                    total
+                                );
                             }
                         }
                     }
@@ -2920,8 +2938,20 @@ fn handle(
                 .values()
                 .cloned()
                 .collect();
-            let mut depletion_events: Vec<WorldFoodDepletionEvent> = {
+            let (mut depletion_events, depletion_events_truncated, depletion_events_truncated_count): (
+                Vec<WorldFoodDepletionEvent>,
+                bool,
+                u64,
+            ) = {
                 let buf = world.depletion_events.lock().unwrap();
+                let oldest_event_id = buf.front().map(|e| e.event_id).unwrap_or(0);
+                let expected_next_event_id = p.after_depletion_event_id.saturating_add(1);
+                let truncated = oldest_event_id > 0 && expected_next_event_id < oldest_event_id;
+                let truncated_count = if truncated {
+                    oldest_event_id.saturating_sub(expected_next_event_id)
+                } else {
+                    0
+                };
                 let mut out = Vec::new();
                 for rec in buf.iter().rev() {
                     if rec.event_id <= p.after_depletion_event_id {
@@ -2929,7 +2959,7 @@ fn handle(
                     }
                     out.push(rec.clone());
                 }
-                out
+                (out, truncated, truncated_count)
             };
             depletion_events.reverse();
             serde_json::to_string(&WorldSnapshotResp {
@@ -2939,6 +2969,8 @@ fn handle(
                 sources,
                 flies,
                 depletion_events,
+                depletion_events_truncated,
+                depletion_events_truncated_count,
             })?
         } else {
             serde_json::to_string(&WorldSnapshotResp {
@@ -2948,6 +2980,8 @@ fn handle(
                 sources: Vec::new(),
                 flies: Vec::new(),
                 depletion_events: Vec::new(),
+                depletion_events_truncated: false,
+                depletion_events_truncated_count: 0,
             })?
         }
     } else if line.contains("\"method\":\"world_read_ticks\"")

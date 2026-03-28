@@ -893,6 +893,13 @@ function startSim(): void {
         socketClient.worldGetSnapshot(lastDepletionEventId),
         socketClient.worldReadTicks(lastTicksAfter, tickPageSize),
       ]);
+      if (worldSnap.depletion_events_truncated) {
+        console.warn(
+          '[world] depletion events truncated',
+          'missed=',
+          worldSnap.depletion_events_truncated_count ?? 0,
+        );
+      }
       latestWorldSources = (worldSnap.sources ?? []).map((s) => ({
         id: s.id,
         type: 'food',

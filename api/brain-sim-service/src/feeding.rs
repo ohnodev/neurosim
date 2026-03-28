@@ -34,10 +34,9 @@ impl FoodState {
         if *remaining <= 0.0 {
             return (0.0, false);
         }
-        let was_positive = *remaining > 0.0;
         let taken = requested.min(*remaining);
         *remaining -= taken;
-        let just_depleted = was_positive && *remaining <= 0.0;
+        let just_depleted = *remaining <= 0.0;
         (taken, just_depleted)
     }
 

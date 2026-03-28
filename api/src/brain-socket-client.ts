@@ -427,6 +427,8 @@ export interface WorldSnapshot {
   sources: Array<{ id: string; x: number; y: number; radius: number }>;
   flies: WorldFlySnapshot[];
   depletion_events: Array<{ event_id: number; tick: number; fly_id: number; source_id: string }>;
+  depletion_events_truncated?: boolean;
+  depletion_events_truncated_count?: number;
 }
 
 export async function worldAddFly(fly: {

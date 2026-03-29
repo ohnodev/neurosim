@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
-// Slightly below one ideal full feeding-cycle yield so one full cycle reliably depletes one source.
+// Tune sugar so one max world feeding lock window can deplete one source.
 pub const FOOD_SUGAR_CAPACITY: f64 = 99.0;
-pub const FEED_DURATION_SEC: f64 = 5.0;
+pub const FEED_DURATION_SEC: f64 = 1.2;
 pub const FEED_SUGAR_PER_SEC: f64 = FOOD_SUGAR_CAPACITY / FEED_DURATION_SEC;
 pub const HUNGER_PER_SUGAR: f64 = 0.5;
 pub const HEALTH_PER_SUGAR: f64 = 0.5;
@@ -24,20 +24,24 @@ impl FoodState {
         }
     }
 
-    pub fn take_sugar(&mut self, source_id: &str, requested: f64) -> f64 {
+    pub fn take_sugar_with_depletion(&mut self, source_id: &str, requested: f64) -> (f64, bool) {
         if requested <= 0.0 {
-            return 0.0;
+            return (0.0, false);
         }
-        let remaining = self
-            .sugar_by_id
-            .entry(source_id.to_string())
-            .or_insert(FOOD_SUGAR_CAPACITY);
+        let Some(remaining) = self.sugar_by_id.get_mut(source_id) else {
+            return (0.0, false);
+        };
         if *remaining <= 0.0 {
-            return 0.0;
+            return (0.0, false);
         }
         let taken = requested.min(*remaining);
         *remaining -= taken;
-        taken
+        let just_depleted = *remaining <= 0.0;
+        (taken, just_depleted)
+    }
+
+    pub fn take_sugar(&mut self, source_id: &str, requested: f64) -> f64 {
+        self.take_sugar_with_depletion(source_id, requested).0
     }
 
     pub fn depleted(&self, source_id: &str) -> bool {

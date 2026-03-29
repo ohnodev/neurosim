@@ -1,9 +1,9 @@
 //! Brain sim service - Unix socket server.
 //! Loads connectome once at startup; create allocates sims from the in-memory template.
-use std::time::Instant;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use brain_sim_service::connectome;
 use brain_sim_service::feeding::{
-    FoodState, FEED_SUGAR_PER_SEC, HEALTH_PER_SUGAR, HUNGER_PER_SUGAR,
+    FoodState, FEED_DURATION_SEC, FEED_SUGAR_PER_SEC, HEALTH_PER_SUGAR, HUNGER_PER_SUGAR,
 };
 use brain_sim_service::sim::{BrainSim, FlyInput, SourceInput};
 use rayon::prelude::*;
@@ -1020,7 +1020,7 @@ fn apply_feeding_tick(
             item.feeding_sugar_taken = 0.0;
             continue;
         };
-        let taken = food_state.take_sugar(&source_id, sugar_per_fly);
+        let (taken, just_depleted) = food_state.take_sugar_with_depletion(&source_id, sugar_per_fly);
         item.fly.feeding = taken > 0.0;
         item.feeding_sugar_taken = taken;
         item.fly.hunger = (item.fly.hunger + taken * HUNGER_PER_SUGAR).clamp(0.0, 100.0);
@@ -1030,8 +1030,10 @@ fn apply_feeding_tick(
             item.fly.y = *sy;
             item.fly.z = 0.9;
         }
-        if food_state.depleted(&source_id) {
+        if just_depleted {
             item.eaten_food_id = Some(source_id);
+        } else {
+            item.eaten_food_id = None;
         }
     }
 }
@@ -1067,6 +1069,7 @@ struct ContinuousLiveState {
 }
 
 const WORLD_TICK_BUFFER_BASE_CAP: usize = 120_000;
+const WORLD_DEPLETION_EVENT_BUFFER_CAP: usize = 4096;
 
 #[derive(Deserialize)]
 struct WorldAddFlyParams {
@@ -1099,6 +1102,12 @@ struct WorldReadTicksParams {
     max_ticks: usize,
 }
 
+#[derive(Deserialize)]
+struct WorldGetSnapshotParams {
+    #[serde(default)]
+    after_depletion_event_id: u64,
+}
+
 #[derive(Clone, Serialize)]
 struct WorldTickRecord {
     tick: u64,
@@ -1106,6 +1115,14 @@ struct WorldTickRecord {
     time_sec: f64,
     /// Compact: EPG neuron indices 0..n_epg that spiked. Frontend derives bump from these.
     epg: Vec<usize>,
+}
+
+#[derive(Clone, Serialize)]
+struct WorldFoodDepletionEvent {
+    event_id: u64,
+    tick: u64,
+    fly_id: u32,
+    source_id: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -1131,8 +1148,13 @@ struct WorldSnapshotResp {
     ok: bool,
     tick: u64,
     dt_sec: f64,
+    runtime_epoch: u64,
+    latest_depletion_event_id: u64,
     sources: Vec<WorldSnapshotSource>,
     flies: Vec<WorldSnapshotFly>,
+    depletion_events: Vec<WorldFoodDepletionEvent>,
+    depletion_events_truncated: bool,
+    depletion_events_truncated_count: u64,
 }
 
 #[derive(Clone, Serialize)]
@@ -1164,6 +1186,7 @@ struct WorldFlyRuntime {
 }
 
 struct WorldRuntimeState {
+    runtime_epoch: u64,
     next_fly_id: AtomicU32,
     next_source_id: AtomicU64,
     tick: AtomicU64,
@@ -1176,6 +1199,10 @@ struct WorldRuntimeState {
     food_state: Mutex<FoodState>,
     tick_buffer_cap: usize,
     ticks: Mutex<VecDeque<WorldTickRecord>>,
+    depletion_event_buffer_cap: usize,
+    depletion_events: Mutex<VecDeque<WorldFoodDepletionEvent>>,
+    next_depletion_event_id: AtomicU64,
+    depletion_events_dropped_total: AtomicU64,
     /// epg_index (0..n_epg) -> bin (0..15) for frontend bump derivation.
     epg_index_to_bin: Vec<u8>,
     /// epg_index (0..n_epg) -> root_id for visualization replay (indices → spike IDs).
@@ -1187,8 +1214,19 @@ struct WorldFlyStepResult {
     snapshot: WorldSnapshotFly,
     feeding_candidate_id: Option<String>,
     dt_batch: f64,
+    profile: WorldFlyStepProfile,
     /// Per-step ticks for this batch (steps_per_batch entries).
     step_ticks: Vec<(u64, f64, Vec<usize>)>,
+}
+
+#[derive(Default, Clone, Copy)]
+struct WorldFlyStepProfile {
+    microstep_loop_ms: f64,
+    step_fast_total_ms: f64,
+    step_with_options_last_ms: f64,
+    bump_compute_ms: f64,
+    kinematics_ms: f64,
+    sources_clone_ms: f64,
 }
 
 /// No arena boundaries — flies move freely.
@@ -1227,7 +1265,7 @@ fn spawn_world_food_source(source_id_num: u64) -> SourceInput {
         radius: WORLD_FOOD_RADIUS,
     }
 }
-const WORLD_FEED_DURATION_SEC: f64 = 1.2;
+const WORLD_FEED_DURATION_SEC: f64 = FEED_DURATION_SEC;
 const WORLD_FEED_START_RADIUS: f64 = 2.2;
 const WORLD_WANDER_INTERVAL_SEC: f64 = 10.0;
 const WORLD_HUNGER_DECAY_PER_SEC: f64 = 1.2;
@@ -1424,16 +1462,24 @@ fn step_world_fly_runtime(
     let stim_preset = Some(runtime.current_preset.as_str());
 
     let mut step_ticks: Vec<(u64, f64, Vec<usize>)> = Vec::with_capacity(steps_per_batch as usize);
+    let t_microstep_start = Instant::now();
+    let mut step_fast_total_ms = 0.0f64;
+    let mut step_with_options_last_ms = 0.0f64;
+    let mut sources_clone_ms = 0.0f64;
     for step in 0..steps_per_batch {
         let is_last = step + 1 == steps_per_batch;
         // Always use stim: world preset (11PM/3PM/8PM) when no rates_by_id, else rates. Ensures continuous juice.
         let use_stim = true;
         let (_a, activity_sparse, _spike_ids, _ml, _mr, _mf, _cl, _cr, _cf, _mlm, _mrm, _mfm, timing, fly_out) =
             if is_last {
-                runtime.sim.step_with_options(
+                let t_clone = Instant::now();
+                let sources_vec = sources_now.to_vec();
+                sources_clone_ms += t_clone.elapsed().as_secs_f64() * 1000.0;
+                let t_step_last = Instant::now();
+                let out = runtime.sim.step_with_options(
                     dt_sec,
                     fly,
-                    sources_now.to_vec(),
+                    sources_vec,
                     true,
                     use_stim,
                     None,
@@ -1444,12 +1490,18 @@ fn step_world_fly_runtime(
                         Some(&runtime.rates_by_id)
                     },
                     stim_preset,
-                )
+                );
+                step_with_options_last_ms += t_step_last.elapsed().as_secs_f64() * 1000.0;
+                out
             } else {
-                runtime.sim.step_fast(
+                let t_clone = Instant::now();
+                let sources_vec = sources_now.to_vec();
+                sources_clone_ms += t_clone.elapsed().as_secs_f64() * 1000.0;
+                let t_step_fast = Instant::now();
+                let out = runtime.sim.step_fast(
                     dt_sec,
                     fly,
-                    sources_now.to_vec(),
+                    sources_vec,
                     use_stim,
                     None,
                     Vec::new(),
@@ -1459,7 +1511,9 @@ fn step_world_fly_runtime(
                         Some(&runtime.rates_by_id)
                     },
                     stim_preset,
-                )
+                );
+                step_fast_total_ms += t_step_fast.elapsed().as_secs_f64() * 1000.0;
+                out
             };
         fly = FlyInput {
             x: fly_out.x,
@@ -1481,9 +1535,14 @@ fn step_world_fly_runtime(
             last_timing = timing;
         }
     }
+    let microstep_loop_ms = t_microstep_start.elapsed().as_secs_f64() * 1000.0;
+    let t_bump_start = Instant::now();
     let (bump_angle_deg, epg_bins_arr) = compute_bump_and_epg_bins(&last_activity_sparse, epg_id_to_bin);
+    let bump_compute_ms = t_bump_start.elapsed().as_secs_f64() * 1000.0;
     let dt_batch = dt_sec * steps_per_batch as f64;
+    let t_kinematics_start = Instant::now();
     let feeding = update_world_fly_kinematics(runtime, dt_batch, sources_now, bump_angle_deg);
+    let kinematics_ms = t_kinematics_start.elapsed().as_secs_f64() * 1000.0;
     runtime.fly.t = fly.t;
     let snap = WorldSnapshotFly {
         fly_id,
@@ -1518,6 +1577,14 @@ fn step_world_fly_runtime(
         snapshot: snap,
         feeding_candidate_id: runtime.feeding_source_id.clone(),
         dt_batch,
+        profile: WorldFlyStepProfile {
+            microstep_loop_ms,
+            step_fast_total_ms,
+            step_with_options_last_ms,
+            bump_compute_ms,
+            kinematics_ms,
+            sources_clone_ms,
+        },
         step_ticks,
     }
 }
@@ -1736,7 +1803,13 @@ fn spawn_world_runtime_thread(
     for source_id_num in 1..=(WORLD_MAX_FOOD_SOURCES as u64) {
         initial_sources.push(spawn_world_food_source(source_id_num));
     }
+    let runtime_epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or_else(|_| 0)
+        ^ (std::process::id() as u64);
     let state = Arc::new(WorldRuntimeState {
+        runtime_epoch,
         next_fly_id: AtomicU32::new(0),
         next_source_id: AtomicU64::new(WORLD_MAX_FOOD_SOURCES as u64 + 1),
         tick: AtomicU64::new(0),
@@ -1749,6 +1822,10 @@ fn spawn_world_runtime_thread(
         food_state: Mutex::new(FoodState::default()),
         tick_buffer_cap: world_tick_buffer_cap,
         ticks: Mutex::new(VecDeque::with_capacity(world_tick_buffer_cap)),
+        depletion_event_buffer_cap: WORLD_DEPLETION_EVENT_BUFFER_CAP,
+        depletion_events: Mutex::new(VecDeque::with_capacity(WORLD_DEPLETION_EVENT_BUFFER_CAP)),
+        next_depletion_event_id: AtomicU64::new(1),
+        depletion_events_dropped_total: AtomicU64::new(0),
         epg_index_to_bin,
         epg_index_to_root_id,
     });
@@ -1758,9 +1835,54 @@ fn spawn_world_runtime_thread(
         .spawn(move || {
             let target_interval =
                 std::time::Duration::from_secs_f64((dt_sec * steps_per_batch as f64).max(0.0));
+            let profile_every_sec = std::env::var("NEUROSIM_WORLD_LOOP_PROFILE_SEC")
+                .ok()
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(5);
+            let mut profile_window_start = Instant::now();
+            let mut profile_batches: u64 = 0;
+            let mut profile_active_batches: u64 = 0;
+            let mut profile_fly_sum: u64 = 0;
+            let mut profile_elapsed_ms_sum = 0.0f64;
+            let mut profile_phase_step_ms_sum = 0.0f64;
+            let mut profile_phase_feed_ms_sum = 0.0f64;
+            let mut profile_phase_commit_ms_sum = 0.0f64;
+            let mut profile_collect_handles_ms_sum = 0.0f64;
+            let mut profile_fly_step_total_ms_sum = 0.0f64;
+            let mut profile_post_step_ms_sum = 0.0f64;
+            let mut profile_per_fly_avg_ms_sum = 0.0f64;
+            let mut profile_per_fly_max_ms_sum = 0.0f64;
+            let mut profile_fly_profile_count: u64 = 0;
+            let mut profile_microstep_loop_ms_sum = 0.0f64;
+            let mut profile_step_fast_total_ms_sum = 0.0f64;
+            let mut profile_step_last_ms_sum = 0.0f64;
+            let mut profile_bump_compute_ms_sum = 0.0f64;
+            let mut profile_kinematics_ms_sum = 0.0f64;
+            let mut profile_sources_clone_ms_sum = 0.0f64;
+            let mut profile_overrun_batches: u64 = 0;
+            let mut profile_overrun_ms_sum = 0.0f64;
+            let mut profile_max_elapsed_ms = 0.0f64;
+            let target_interval_ms = target_interval.as_secs_f64() * 1000.0;
             loop {
                 let batch_start = Instant::now();
+                let mut phase_step_ms = 0.0f64;
+                let mut phase_feed_ms = 0.0f64;
+                let mut phase_commit_ms = 0.0f64;
+                let mut fly_count_this_batch: usize = 0;
+                let mut collect_handles_ms = 0.0f64;
+                let mut fly_step_total_ms = 0.0f64;
+                let mut post_step_ms = 0.0f64;
+                let mut per_fly_avg_ms = 0.0f64;
+                let mut per_fly_max_ms = 0.0f64;
+                let mut microstep_loop_ms_sum = 0.0f64;
+                let mut step_fast_total_ms_sum = 0.0f64;
+                let mut step_last_ms_sum = 0.0f64;
+                let mut bump_compute_ms_sum = 0.0f64;
+                let mut kinematics_ms_sum = 0.0f64;
+                let mut sources_clone_ms_sum = 0.0f64;
                 if state_thr.paused.load(Ordering::Relaxed) == 0 {
+                    let t_step_start = Instant::now();
+                    let t_collect_start = Instant::now();
                     let sources_now = state_thr.sources.lock().unwrap().clone();
                     let fly_handles: Vec<(u32, Arc<Mutex<WorldFlyRuntime>>)> = {
                         let flies = state_thr.flies.lock().unwrap();
@@ -1770,6 +1892,8 @@ fn spawn_world_runtime_thread(
                             .collect()
                     };
                     let base_tick = state_thr.tick.load(Ordering::Relaxed);
+                    collect_handles_ms = t_collect_start.elapsed().as_secs_f64() * 1000.0;
+                    let t_fly_step_start = Instant::now();
                     let mut step_results: Vec<WorldFlyStepResult> = if world_parallel_flies {
                         fly_handles
                             .into_par_iter()
@@ -1803,44 +1927,109 @@ fn spawn_world_runtime_thread(
                             })
                             .collect()
                     };
+                    fly_step_total_ms = t_fly_step_start.elapsed().as_secs_f64() * 1000.0;
+                    fly_count_this_batch = step_results.len();
+                    if fly_count_this_batch > 0 {
+                        let mut per_fly_sum_ms = 0.0f64;
+                        for result in &step_results {
+                            let p = result.profile;
+                            let fly_total_ms =
+                                p.microstep_loop_ms + p.bump_compute_ms + p.kinematics_ms;
+                            per_fly_sum_ms += fly_total_ms;
+                            if fly_total_ms > per_fly_max_ms {
+                                per_fly_max_ms = fly_total_ms;
+                            }
+                            microstep_loop_ms_sum += p.microstep_loop_ms;
+                            step_fast_total_ms_sum += p.step_fast_total_ms;
+                            step_last_ms_sum += p.step_with_options_last_ms;
+                            bump_compute_ms_sum += p.bump_compute_ms;
+                            kinematics_ms_sum += p.kinematics_ms;
+                            sources_clone_ms_sum += p.sources_clone_ms;
+                        }
+                        per_fly_avg_ms = per_fly_sum_ms / fly_count_this_batch as f64;
+                    }
+                    phase_step_ms = t_step_start.elapsed().as_secs_f64() * 1000.0;
+                    post_step_ms = (phase_step_ms - collect_handles_ms - fly_step_total_ms).max(0.0);
                     let source_lookup: HashMap<String, (f64, f64)> = sources_now
                         .iter()
                         .map(|s| (s.id.clone(), (s.x, s.y)))
                         .collect();
+                    let t_feed_start = Instant::now();
                     {
                         let mut food_state = state_thr.food_state.lock().unwrap();
                         food_state.sync(sources_now.iter().map(|s| s.id.clone()));
                         let mut depleted_source_ids: HashSet<String> = HashSet::new();
+                        let mut depletion_events_batch: Vec<(u32, String)> = Vec::new();
                         for result in step_results.iter_mut() {
-                            let sugar_per_fly = (FEED_SUGAR_PER_SEC * result.dt_batch).max(0.0);
-                            if sugar_per_fly <= 0.0 {
-                                result.snapshot.fly.feeding = false;
-                                result.snapshot.feeding_sugar_taken = 0.0;
-                                result.snapshot.eaten_food_id = None;
+                            result.snapshot.fly.feeding = false;
+                            result.snapshot.feeding_sugar_taken = 0.0;
+                            result.snapshot.eaten_food_id = None;
+                        }
+                        #[derive(Clone)]
+                        struct FeedingIntent {
+                            result_idx: usize,
+                            fly_id: u32,
+                            source_id: String,
+                            requested: f64,
+                        }
+                        let mut intents_by_source: HashMap<String, Vec<FeedingIntent>> =
+                            HashMap::new();
+                        for (result_idx, result) in step_results.iter().enumerate() {
+                            let requested = (FEED_SUGAR_PER_SEC * result.dt_batch).max(0.0);
+                            if requested <= 0.0 {
                                 continue;
                             }
                             let Some(source_id) = result.feeding_candidate_id.clone() else {
-                                result.snapshot.feeding_sugar_taken = 0.0;
-                                result.snapshot.eaten_food_id = None;
                                 continue;
                             };
-                            let taken = food_state.take_sugar(&source_id, sugar_per_fly);
-                            result.snapshot.fly.feeding = taken > 0.0;
-                            result.snapshot.feeding_sugar_taken = taken;
-                            result.snapshot.fly.hunger =
-                                (result.snapshot.fly.hunger + taken * HUNGER_PER_SUGAR).clamp(0.0, 100.0);
-                            result.snapshot.fly.health =
-                                (result.snapshot.fly.health + taken * HEALTH_PER_SUGAR).clamp(0.0, 100.0);
-                            if let Some((sx, sy)) = source_lookup.get(&source_id) {
-                                result.snapshot.fly.x = *sx;
-                                result.snapshot.fly.y = *sy;
-                                result.snapshot.fly.z = 0.9;
-                            }
-                            if food_state.depleted(&source_id) {
-                                depleted_source_ids.insert(source_id.clone());
-                                result.snapshot.eaten_food_id = Some(source_id);
-                            } else {
-                                result.snapshot.eaten_food_id = None;
+                            intents_by_source
+                                .entry(source_id.clone())
+                                .or_default()
+                                .push(FeedingIntent {
+                                    result_idx,
+                                    fly_id: result.fly_id,
+                                    source_id,
+                                    requested,
+                                });
+                        }
+                        let mut source_ids: Vec<String> =
+                            intents_by_source.keys().cloned().collect();
+                        source_ids.sort();
+                        for source_id in source_ids {
+                            let Some(mut contenders) = intents_by_source.remove(&source_id) else {
+                                continue;
+                            };
+                            contenders.sort_by(|a, b| {
+                                a.fly_id
+                                    .cmp(&b.fly_id)
+                                    .then_with(|| a.result_idx.cmp(&b.result_idx))
+                            });
+                            for contender in contenders {
+                                let (taken, just_depleted) = food_state.take_sugar_with_depletion(
+                                    &contender.source_id,
+                                    contender.requested,
+                                );
+                                let result = &mut step_results[contender.result_idx];
+                                result.snapshot.fly.feeding = taken > 0.0;
+                                result.snapshot.feeding_sugar_taken = taken;
+                                result.snapshot.fly.hunger = (result.snapshot.fly.hunger
+                                    + taken * HUNGER_PER_SUGAR)
+                                    .clamp(0.0, 100.0);
+                                result.snapshot.fly.health = (result.snapshot.fly.health
+                                    + taken * HEALTH_PER_SUGAR)
+                                    .clamp(0.0, 100.0);
+                                if let Some((sx, sy)) = source_lookup.get(&contender.source_id) {
+                                    result.snapshot.fly.x = *sx;
+                                    result.snapshot.fly.y = *sy;
+                                    result.snapshot.fly.z = 0.9;
+                                }
+                                if just_depleted {
+                                    depleted_source_ids.insert(contender.source_id.clone());
+                                    result.snapshot.eaten_food_id =
+                                        Some(contender.source_id.clone());
+                                    depletion_events_batch
+                                        .push((result.fly_id, contender.source_id.clone()));
+                                }
                             }
                         }
                         if !depleted_source_ids.is_empty() {
@@ -1852,8 +2041,41 @@ fn spawn_world_runtime_thread(
                                 sources.push(spawn_world_food_source(source_id_num));
                             }
                         }
+                        if !depletion_events_batch.is_empty() {
+                            let tick = base_tick + steps_per_batch as u64;
+                            let mut events = state_thr.depletion_events.lock().unwrap();
+                            for (fly_id, source_id) in depletion_events_batch {
+                                let event_id =
+                                    state_thr.next_depletion_event_id.fetch_add(1, Ordering::Relaxed);
+                                events.push_back(WorldFoodDepletionEvent {
+                                    event_id,
+                                    tick,
+                                    fly_id,
+                                    source_id,
+                                });
+                            }
+                            let mut dropped_count = 0u64;
+                            while events.len() > state_thr.depletion_event_buffer_cap {
+                                events.pop_front();
+                                dropped_count += 1;
+                            }
+                            if dropped_count > 0 {
+                                let total = state_thr
+                                    .depletion_events_dropped_total
+                                    .fetch_add(dropped_count, Ordering::Relaxed)
+                                    + dropped_count;
+                                eprintln!(
+                                    "[brain-service][warn] world depletion event buffer overflow: dropped={} cap={} dropped_total={}",
+                                    dropped_count,
+                                    WORLD_DEPLETION_EVENT_BUFFER_CAP,
+                                    total
+                                );
+                            }
+                        }
                     }
+                    phase_feed_ms = t_feed_start.elapsed().as_secs_f64() * 1000.0;
                     let tick = base_tick + steps_per_batch as u64;
+                    let t_commit_start = Instant::now();
                     {
                         let mut snapshots = state_thr.snapshots.lock().unwrap();
                         for result in &step_results {
@@ -1885,7 +2107,176 @@ fn spawn_world_runtime_thread(
                             ticks.pop_front();
                         }
                     }
+                    phase_commit_ms = t_commit_start.elapsed().as_secs_f64() * 1000.0;
                     state_thr.tick.store(tick, Ordering::Release);
+                }
+                let elapsed_ms = batch_start.elapsed().as_secs_f64() * 1000.0;
+                profile_batches += 1;
+                profile_elapsed_ms_sum += elapsed_ms;
+                if elapsed_ms > profile_max_elapsed_ms {
+                    profile_max_elapsed_ms = elapsed_ms;
+                }
+                if fly_count_this_batch > 0 {
+                    profile_active_batches += 1;
+                    profile_fly_sum += fly_count_this_batch as u64;
+                    profile_phase_step_ms_sum += phase_step_ms;
+                    profile_phase_feed_ms_sum += phase_feed_ms;
+                    profile_phase_commit_ms_sum += phase_commit_ms;
+                    profile_collect_handles_ms_sum += collect_handles_ms;
+                    profile_fly_step_total_ms_sum += fly_step_total_ms;
+                    profile_post_step_ms_sum += post_step_ms;
+                    profile_per_fly_avg_ms_sum += per_fly_avg_ms;
+                    profile_per_fly_max_ms_sum += per_fly_max_ms;
+                    profile_fly_profile_count += fly_count_this_batch as u64;
+                    profile_microstep_loop_ms_sum += microstep_loop_ms_sum;
+                    profile_step_fast_total_ms_sum += step_fast_total_ms_sum;
+                    profile_step_last_ms_sum += step_last_ms_sum;
+                    profile_bump_compute_ms_sum += bump_compute_ms_sum;
+                    profile_kinematics_ms_sum += kinematics_ms_sum;
+                    profile_sources_clone_ms_sum += sources_clone_ms_sum;
+                }
+                if elapsed_ms > target_interval_ms {
+                    profile_overrun_batches += 1;
+                    profile_overrun_ms_sum += elapsed_ms - target_interval_ms;
+                }
+                if profile_every_sec > 0
+                    && profile_window_start.elapsed() >= Duration::from_secs(profile_every_sec)
+                {
+                    let avg_batch_ms = if profile_batches > 0 {
+                        profile_elapsed_ms_sum / profile_batches as f64
+                    } else {
+                        0.0
+                    };
+                    let avg_flies = if profile_active_batches > 0 {
+                        profile_fly_sum as f64 / profile_active_batches as f64
+                    } else {
+                        0.0
+                    };
+                    let avg_step_ms = if profile_active_batches > 0 {
+                        profile_phase_step_ms_sum / profile_active_batches as f64
+                    } else {
+                        0.0
+                    };
+                    let avg_feed_ms = if profile_active_batches > 0 {
+                        profile_phase_feed_ms_sum / profile_active_batches as f64
+                    } else {
+                        0.0
+                    };
+                    let avg_commit_ms = if profile_active_batches > 0 {
+                        profile_phase_commit_ms_sum / profile_active_batches as f64
+                    } else {
+                        0.0
+                    };
+                    let avg_collect_handles_ms = if profile_active_batches > 0 {
+                        profile_collect_handles_ms_sum / profile_active_batches as f64
+                    } else {
+                        0.0
+                    };
+                    let avg_fly_step_total_ms = if profile_active_batches > 0 {
+                        profile_fly_step_total_ms_sum / profile_active_batches as f64
+                    } else {
+                        0.0
+                    };
+                    let avg_post_step_ms = if profile_active_batches > 0 {
+                        profile_post_step_ms_sum / profile_active_batches as f64
+                    } else {
+                        0.0
+                    };
+                    let avg_per_fly_avg_ms = if profile_active_batches > 0 {
+                        profile_per_fly_avg_ms_sum / profile_active_batches as f64
+                    } else {
+                        0.0
+                    };
+                    let avg_per_fly_max_ms = if profile_active_batches > 0 {
+                        profile_per_fly_max_ms_sum / profile_active_batches as f64
+                    } else {
+                        0.0
+                    };
+                    let avg_microstep_loop_ms = if profile_fly_profile_count > 0 {
+                        profile_microstep_loop_ms_sum / profile_fly_profile_count as f64
+                    } else {
+                        0.0
+                    };
+                    let avg_step_fast_total_ms = if profile_fly_profile_count > 0 {
+                        profile_step_fast_total_ms_sum / profile_fly_profile_count as f64
+                    } else {
+                        0.0
+                    };
+                    let avg_step_last_ms = if profile_fly_profile_count > 0 {
+                        profile_step_last_ms_sum / profile_fly_profile_count as f64
+                    } else {
+                        0.0
+                    };
+                    let avg_bump_compute_ms = if profile_fly_profile_count > 0 {
+                        profile_bump_compute_ms_sum / profile_fly_profile_count as f64
+                    } else {
+                        0.0
+                    };
+                    let avg_kinematics_ms = if profile_fly_profile_count > 0 {
+                        profile_kinematics_ms_sum / profile_fly_profile_count as f64
+                    } else {
+                        0.0
+                    };
+                    let avg_sources_clone_ms = if profile_fly_profile_count > 0 {
+                        profile_sources_clone_ms_sum / profile_fly_profile_count as f64
+                    } else {
+                        0.0
+                    };
+                    let overrun_pct = if profile_batches > 0 {
+                        (profile_overrun_batches as f64 * 100.0) / profile_batches as f64
+                    } else {
+                        0.0
+                    };
+                    eprintln!(
+                        "[brain-service][world-loop] profile window={}s batches={} active_batches={} avg_flies={:.2} target_ms={:.3} avg_batch_ms={:.3} max_batch_ms={:.3} avg_phase_step_ms={:.3} avg_phase_feed_ms={:.3} avg_phase_commit_ms={:.3} avg_collect_handles_ms={:.3} avg_fly_step_total_ms={:.3} avg_post_step_ms={:.3} per_fly_avg_ms={:.3} per_fly_max_ms={:.3} fly_microstep_loop_ms={:.3} fly_step_fast_total_ms={:.3} fly_step_last_ms={:.3} fly_bump_compute_ms={:.3} fly_kinematics_ms={:.3} fly_sources_clone_ms={:.3} overrun_batches={} overrun_pct={:.1}% overrun_ms_total={:.3}",
+                        profile_every_sec,
+                        profile_batches,
+                        profile_active_batches,
+                        avg_flies,
+                        target_interval_ms,
+                        avg_batch_ms,
+                        profile_max_elapsed_ms,
+                        avg_step_ms,
+                        avg_feed_ms,
+                        avg_commit_ms,
+                        avg_collect_handles_ms,
+                        avg_fly_step_total_ms,
+                        avg_post_step_ms,
+                        avg_per_fly_avg_ms,
+                        avg_per_fly_max_ms,
+                        avg_microstep_loop_ms,
+                        avg_step_fast_total_ms,
+                        avg_step_last_ms,
+                        avg_bump_compute_ms,
+                        avg_kinematics_ms,
+                        avg_sources_clone_ms,
+                        profile_overrun_batches,
+                        overrun_pct,
+                        profile_overrun_ms_sum
+                    );
+                    profile_window_start = Instant::now();
+                    profile_batches = 0;
+                    profile_active_batches = 0;
+                    profile_fly_sum = 0;
+                    profile_elapsed_ms_sum = 0.0;
+                    profile_phase_step_ms_sum = 0.0;
+                    profile_phase_feed_ms_sum = 0.0;
+                    profile_phase_commit_ms_sum = 0.0;
+                    profile_collect_handles_ms_sum = 0.0;
+                    profile_fly_step_total_ms_sum = 0.0;
+                    profile_post_step_ms_sum = 0.0;
+                    profile_per_fly_avg_ms_sum = 0.0;
+                    profile_per_fly_max_ms_sum = 0.0;
+                    profile_fly_profile_count = 0;
+                    profile_microstep_loop_ms_sum = 0.0;
+                    profile_step_fast_total_ms_sum = 0.0;
+                    profile_step_last_ms_sum = 0.0;
+                    profile_bump_compute_ms_sum = 0.0;
+                    profile_kinematics_ms_sum = 0.0;
+                    profile_sources_clone_ms_sum = 0.0;
+                    profile_overrun_batches = 0;
+                    profile_overrun_ms_sum = 0.0;
+                    profile_max_elapsed_ms = 0.0;
                 }
                 if target_interval > std::time::Duration::ZERO {
                     let elapsed = batch_start.elapsed();
@@ -2850,7 +3241,17 @@ fn handle(
     } else if line.contains("\"method\":\"world_get_snapshot\"") || line.contains("\"method\": \"world_get_snapshot\"")
     {
         if let Some(ref world) = world_runtime {
+            let v: serde_json::Value = serde_json::from_str(line)?;
+            let p: WorldGetSnapshotParams = serde_json::from_value(
+                v.get("params")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!({})),
+            )?;
             let tick = world.tick.load(Ordering::Acquire);
+            let latest_depletion_event_id = world
+                .next_depletion_event_id
+                .load(Ordering::Acquire)
+                .saturating_sub(1);
             let sources: Vec<WorldSnapshotSource> = world
                 .sources
                 .lock()
@@ -2870,20 +3271,54 @@ fn handle(
                 .values()
                 .cloned()
                 .collect();
+            let (mut depletion_events, depletion_events_truncated, depletion_events_truncated_count): (
+                Vec<WorldFoodDepletionEvent>,
+                bool,
+                u64,
+            ) = {
+                let buf = world.depletion_events.lock().unwrap();
+                let oldest_event_id = buf.front().map(|e| e.event_id).unwrap_or(0);
+                let expected_next_event_id = p.after_depletion_event_id.saturating_add(1);
+                let truncated = oldest_event_id > 0 && expected_next_event_id < oldest_event_id;
+                let truncated_count = if truncated {
+                    oldest_event_id.saturating_sub(expected_next_event_id)
+                } else {
+                    0
+                };
+                let mut out = Vec::new();
+                for rec in buf.iter().rev() {
+                    if rec.event_id <= p.after_depletion_event_id {
+                        break;
+                    }
+                    out.push(rec.clone());
+                }
+                (out, truncated, truncated_count)
+            };
+            depletion_events.reverse();
             serde_json::to_string(&WorldSnapshotResp {
                 ok: true,
                 tick,
                 dt_sec: world.dt_sec,
+                runtime_epoch: world.runtime_epoch,
+                latest_depletion_event_id,
                 sources,
                 flies,
+                depletion_events,
+                depletion_events_truncated,
+                depletion_events_truncated_count,
             })?
         } else {
             serde_json::to_string(&WorldSnapshotResp {
                 ok: false,
                 tick: 0,
                 dt_sec: 0.0001,
+                runtime_epoch: 0,
+                latest_depletion_event_id: 0,
                 sources: Vec::new(),
                 flies: Vec::new(),
+                depletion_events: Vec::new(),
+                depletion_events_truncated: false,
+                depletion_events_truncated_count: 0,
             })?
         }
     } else if line.contains("\"method\":\"world_read_ticks\"")

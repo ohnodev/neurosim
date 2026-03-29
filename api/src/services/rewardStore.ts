@@ -33,6 +33,10 @@ let pending = new Map<string, bigint>();
 let inFlight = new Map<string, bigint>();
 let neuroflyStats: NeuroFlyStats[] = [];
 let distributed: RewardState['distributed'] = [];
+let depletionCursorByRuntimeEpoch = new Map<string, number>();
+let rewardProcessingPaused = false;
+let rewardProcessingAwaitingBackfill = false;
+let rewardProcessingPauseReason: string | null = null;
 
 let saveScheduled: ReturnType<typeof setTimeout> | null = null;
 const SAVE_DEBOUNCE_MS = 500;
@@ -64,6 +68,18 @@ function load(): void {
         pointsFlushedMilli: Number.isFinite(s.pointsFlushedMilli) ? Math.max(0, Math.floor(s.pointsFlushedMilli)) : 0,
       }));
     distributed = Array.isArray(data?.distributed) ? data.distributed : [];
+    depletionCursorByRuntimeEpoch = new Map(
+      Object.entries(data?.depletionCursorByRuntimeEpoch ?? {})
+        .map(([epoch, eventId]) => {
+          const normalized = Number.isFinite(eventId) ? Math.max(0, Math.floor(eventId)) : 0;
+          return [epoch, normalized] as const;
+        })
+        .filter(([epoch]) => epoch.length > 0)
+    );
+    rewardProcessingPaused = data?.rewardProcessingPaused === true;
+    rewardProcessingAwaitingBackfill = data?.rewardProcessingAwaitingBackfill === true;
+    rewardProcessingPauseReason =
+      typeof data?.rewardProcessingPauseReason === 'string' ? data.rewardProcessingPauseReason : null;
   } catch (err) {
     const nodeErr = err as NodeJS.ErrnoException;
     if (nodeErr?.code !== 'ENOENT') {
@@ -73,6 +89,10 @@ function load(): void {
     inFlight = new Map();
     neuroflyStats = [];
     distributed = [];
+    depletionCursorByRuntimeEpoch = new Map();
+    rewardProcessingPaused = false;
+    rewardProcessingAwaitingBackfill = false;
+    rewardProcessingPauseReason = null;
   }
 }
 
@@ -83,6 +103,10 @@ async function persist(): Promise<void> {
     inFlight: Object.fromEntries([...inFlight].map(([k, v]) => [k, v.toString()])),
     distributed,
     neuroflyStats,
+    depletionCursorByRuntimeEpoch: Object.fromEntries(depletionCursorByRuntimeEpoch),
+    rewardProcessingPaused,
+    rewardProcessingAwaitingBackfill,
+    rewardProcessingPauseReason,
   };
   const data = `${JSON.stringify(state, null, 2)}\n`;
   const dir = path.dirname(rewardsPath);
@@ -202,6 +226,41 @@ export function recordFoodDepleted(address: string, slotIndex: number): void {
   const stats = getOrCreateStats(addr, slotIndex, flyId);
   stats.feedCount += 1;
   save();
+}
+
+function setDepletionCursorForRuntimeEpochNoSave(runtimeEpoch: string, eventId: number): void {
+  if (!runtimeEpoch) return;
+  if (!Number.isFinite(eventId)) return;
+  const normalized = Math.max(0, Math.floor(eventId));
+  depletionCursorByRuntimeEpoch.set(runtimeEpoch, normalized);
+  // Keep only recent runtime epochs so persisted state does not grow unbounded.
+  while (depletionCursorByRuntimeEpoch.size > 64) {
+    const first = depletionCursorByRuntimeEpoch.keys().next().value;
+    if (!first) break;
+    depletionCursorByRuntimeEpoch.delete(first);
+  }
+}
+
+export function applyDepletionAndAdvanceCursor(
+  runtimeEpoch: string,
+  eventId: number,
+  address: string,
+  slotIndex: number
+): boolean {
+  if (!runtimeEpoch || !Number.isFinite(eventId)) return false;
+  const normalizedEventId = Math.max(0, Math.floor(eventId));
+  const currentCursor = getDepletionCursorForRuntimeEpoch(runtimeEpoch);
+  if (normalizedEventId <= currentCursor) return false;
+
+  const addr = address.toLowerCase();
+  const flyId = getFlies(addr)[slotIndex]?.id;
+  if (!flyId) return false;
+
+  const stats = getOrCreateStats(addr, slotIndex, flyId);
+  stats.feedCount += 1;
+  setDepletionCursorForRuntimeEpochNoSave(runtimeEpoch, normalizedEventId);
+  save();
+  return true;
 }
 
 /**
@@ -327,6 +386,50 @@ export function rollbackBatch(recipients: string[], amounts: bigint[]): void {
   save();
 }
 
+export function getDepletionCursorForRuntimeEpoch(runtimeEpoch: string): number {
+  if (!runtimeEpoch) return 0;
+  return Math.max(0, Math.floor(depletionCursorByRuntimeEpoch.get(runtimeEpoch) ?? 0));
+}
+
+export function setDepletionCursorForRuntimeEpoch(runtimeEpoch: string, eventId: number): void {
+  setDepletionCursorForRuntimeEpochNoSave(runtimeEpoch, eventId);
+  save();
+}
+
+export function getRewardProcessingControlState(): {
+  paused: boolean;
+  awaitingBackfill: boolean;
+  pauseReason: string | null;
+} {
+  return {
+    paused: rewardProcessingPaused,
+    awaitingBackfill: rewardProcessingAwaitingBackfill,
+    pauseReason: rewardProcessingPauseReason,
+  };
+}
+
+export function setRewardProcessingControlState(
+  paused: boolean,
+  awaitingBackfill: boolean,
+  pauseReason: string | null
+): void {
+  rewardProcessingPaused = paused;
+  rewardProcessingAwaitingBackfill = awaitingBackfill;
+  rewardProcessingPauseReason = pauseReason;
+  save();
+}
+
+export async function setRewardProcessingControlStateImmediate(
+  paused: boolean,
+  awaitingBackfill: boolean,
+  pauseReason: string | null
+): Promise<void> {
+  rewardProcessingPaused = paused;
+  rewardProcessingAwaitingBackfill = awaitingBackfill;
+  rewardProcessingPauseReason = pauseReason;
+  await persist();
+}
+
 export function getNeuroFlyStats(
   address: string,
   slotIndex: number,
@@ -380,5 +483,9 @@ export function clearForTesting(): void {
   inFlight.clear();
   neuroflyStats = [];
   distributed = [];
+  depletionCursorByRuntimeEpoch.clear();
+  rewardProcessingPaused = false;
+  rewardProcessingAwaitingBackfill = false;
+  rewardProcessingPauseReason = null;
   save();
 }

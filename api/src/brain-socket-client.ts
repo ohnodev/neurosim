@@ -424,8 +424,13 @@ export interface WorldSnapshot {
   ok: boolean;
   tick: number;
   dt_sec: number;
+  runtime_epoch: number;
+  latest_depletion_event_id: number;
   sources: Array<{ id: string; x: number; y: number; radius: number }>;
   flies: WorldFlySnapshot[];
+  depletion_events: Array<{ event_id: number; tick: number; fly_id: number; source_id: string }>;
+  depletion_events_truncated?: boolean;
+  depletion_events_truncated_count?: number;
 }
 
 export async function worldAddFly(fly: {
@@ -480,10 +485,12 @@ export async function worldSetSources(
   });
 }
 
-export async function worldGetSnapshot(): Promise<WorldSnapshot> {
+export async function worldGetSnapshot(afterDepletionEventId = 0): Promise<WorldSnapshot> {
   return request({
     method: 'world_get_snapshot',
-    params: {},
+    params: {
+      after_depletion_event_id: Math.max(0, Math.floor(afterDepletionEventId)),
+    },
   });
 }
 

@@ -18,7 +18,11 @@ import * as fs from 'fs';
 import * as path from 'path';
 import {
   recordFeedingPoints,
-  recordFoodDepleted,
+  applyDepletionAndAdvanceCursor,
+  getDepletionCursorForRuntimeEpoch,
+  setDepletionCursorForRuntimeEpoch,
+  getRewardProcessingControlState,
+  setRewardProcessingControlStateImmediate,
   flushAccruedPointsToPending,
   getStatsForAddress,
   getDistributedHistory,
@@ -406,8 +410,20 @@ type RuntimeSim = {
 const sims: RuntimeSim[] = [];
 /** address -> slotIndex -> simIndex */
 const deployedFlies = new Map<string, Map<number, number>>();
+/** flyId -> deployed owner slot */
+const deploymentByFlyId = new Map<number, { address: string; slotIndex: number }>();
 /** Per-sim rolling activity memory so clients can receive rotating recent spikes/inputs. */
 const simActivityTrail: Array<Map<string, { seenAt: number; value: number }>> = [];
+
+function rebuildDeploymentByFlyId(): void {
+  deploymentByFlyId.clear();
+  for (const [address, slotMap] of deployedFlies) {
+    for (const [slotIndex, simIndex] of slotMap) {
+      const flyId = sims[simIndex]?.flyId;
+      if (typeof flyId === 'number') deploymentByFlyId.set(flyId, { address, slotIndex });
+    }
+  }
+}
 
 function parseAndValidateAddress(raw: unknown): string | null {
   if (Array.isArray(raw) || typeof raw !== 'string') return null;
@@ -461,6 +477,7 @@ async function removeSimAtIndex(simIndex: number): Promise<{ address: string; sl
     slotMap?.delete(deployment.slotIndex);
     if (slotMap && slotMap.size === 0) deployedFlies.delete(deployment.address);
   }
+  rebuildDeploymentByFlyId();
   return deployment;
 }
 
@@ -530,6 +547,7 @@ async function restoreDeployFromStore(): Promise<void> {
     }
     map.set(slotIndex, simIndex);
   }
+  rebuildDeploymentByFlyId();
   if (records.length > 0) {
     console.log('[deploy] restored', records.length, 'deployments from store');
   }
@@ -563,6 +581,12 @@ let simReadyAtMs = 0;
 let graceSkippedTicks = 0;
 let graceSkipLogged = false;
 let lastTicksAfter = 0;
+let lastDepletionEventId = 0;
+let depletionRuntimeEpoch = '0';
+const rewardProcessingControlState = getRewardProcessingControlState();
+let rewardProcessingPaused = rewardProcessingControlState.paused;
+let rewardProcessingPauseReason = rewardProcessingControlState.pauseReason;
+let rewardProcessingAwaitingBackfill = rewardProcessingControlState.awaitingBackfill;
 let epgIndexToBin: number[] = [];
 let worldStepsPerBatch = 1250;
 
@@ -625,6 +649,90 @@ function broadcast(data: unknown): void {
   for (const ws of wsClients) {
     if (ws.readyState === 1) ws.send(payload);
   }
+}
+
+function loadDepletionCursorForEpoch(runtimeEpoch: string, latestDepletionEventId: number): void {
+  const persisted = getDepletionCursorForRuntimeEpoch(runtimeEpoch);
+  const latest = Math.max(0, Math.floor(latestDepletionEventId));
+  const clamped = Math.min(persisted, latest);
+  if (persisted > latest) {
+    console.warn('[rewards] persisted depletion cursor ahead of runtime latest; clamping', {
+      runtimeEpoch,
+      persisted,
+      latest,
+    });
+    setDepletionCursorForRuntimeEpoch(runtimeEpoch, clamped);
+  }
+  depletionRuntimeEpoch = runtimeEpoch;
+  lastDepletionEventId = clamped;
+}
+
+async function persistRewardProcessingControlState(): Promise<void> {
+  await setRewardProcessingControlStateImmediate(
+    rewardProcessingPaused,
+    rewardProcessingAwaitingBackfill,
+    rewardProcessingPauseReason
+  );
+}
+
+async function pauseRewardProcessing(reason: string, details?: Record<string, unknown>): Promise<void> {
+  if (!rewardProcessingPaused || rewardProcessingPauseReason !== reason) {
+    console.error('[rewards] processing paused', { reason, ...details });
+  }
+  rewardProcessingPaused = true;
+  rewardProcessingPauseReason = reason;
+  await persistRewardProcessingControlState();
+}
+
+async function resumeRewardProcessing(reason: string, details?: Record<string, unknown>): Promise<void> {
+  if (rewardProcessingPaused) {
+    console.warn('[rewards] processing resumed', {
+      previousReason: rewardProcessingPauseReason,
+      reason,
+      ...details,
+    });
+  }
+  rewardProcessingPaused = false;
+  rewardProcessingPauseReason = null;
+  await persistRewardProcessingControlState();
+}
+
+async function markRewardBackfillAwaiting(reason: string, details?: Record<string, unknown>): Promise<void> {
+  if (!rewardProcessingAwaitingBackfill) {
+    console.error('[rewards] awaiting explicit backfill confirmation', { reason, ...details });
+  }
+  rewardProcessingAwaitingBackfill = true;
+  await persistRewardProcessingControlState();
+}
+
+async function confirmRewardBackfillRecovered(reason: string, details?: Record<string, unknown>): Promise<void> {
+  if (!rewardProcessingAwaitingBackfill) return;
+  rewardProcessingAwaitingBackfill = false;
+  await persistRewardProcessingControlState();
+  await resumeRewardProcessing(reason, details);
+}
+
+const REWARDS_OPERATOR_TOKEN = process.env.NEUROSIM_REWARDS_OPERATOR_TOKEN ?? '';
+const ALLOW_LOCAL_RECOVERY_NO_TOKEN =
+  process.env.NEUROSIM_ALLOW_LOCAL_RECOVERY_NO_TOKEN === '1' ||
+  process.env.NEUROSIM_ALLOW_LOCAL_RECOVERY_NO_TOKEN?.toLowerCase() === 'true';
+
+function isLoopbackIp(ip: string | undefined): boolean {
+  if (!ip) return false;
+  const normalized = ip.replace('::ffff:', '');
+  return normalized === '127.0.0.1' || normalized === '::1';
+}
+
+function requireRewardsOperatorAuth(req: express.Request, res: express.Response): boolean {
+  const provided = String(req.header('x-neurosim-operator-token') ?? '');
+  if (REWARDS_OPERATOR_TOKEN.length > 0 && provided === REWARDS_OPERATOR_TOKEN) {
+    return true;
+  }
+  if (ALLOW_LOCAL_RECOVERY_NO_TOKEN && isLoopbackIp(req.ip)) {
+    return true;
+  }
+  res.status(REWARDS_OPERATOR_TOKEN.length > 0 ? 401 : 403).json({ error: 'Unauthorized' });
+  return false;
 }
 
 /** Per-neuron EPG spikes: spikes[neuronIndex] = [tick1, tick2, ...]. Compact format for replay. */
@@ -823,6 +931,8 @@ function startSim(): void {
   droppedSimTicks = 0;
   graceSkippedTicks = 0;
   graceSkipLogged = false;
+  depletionRuntimeEpoch = '0';
+  lastDepletionEventId = 0;
   simIntervalId = setInterval(async () => {
     if (Date.now() < simReadyAtMs) {
       graceSkippedTicks += 1;
@@ -843,6 +953,7 @@ function startSim(): void {
       const schedulerLagMs = Math.max(0, Math.round(loopStart - nextBatchDueAt));
       nextBatchDueAt = loopStart + BATCH_MS;
       const nSims = sims.length;
+      const deploymentByFlyIdSnapshot = new Map<number, { address: string; slotIndex: number }>(deploymentByFlyId);
       let stepMs = 0;
       let jsMs = 0;
       let maxStepMs = 0;
@@ -884,10 +995,47 @@ function startSim(): void {
       const SOCKET_TICKS_PAGE_SIZE = 100_000;
       const ticksToRequest = Math.max(1250, worldStepsPerBatch * Math.max(1, nSims) * 2);
       const tickPageSize = Math.min(ticksToRequest, SOCKET_TICKS_PAGE_SIZE);
-      const [worldSnap, firstTicksResp] = await Promise.all([
-        socketClient.worldGetSnapshot(),
+      let worldSnap: socketClient.WorldSnapshot;
+      let firstTicksResp: Awaited<ReturnType<typeof socketClient.worldReadTicks>>;
+      [worldSnap, firstTicksResp] = await Promise.all([
+        socketClient.worldGetSnapshot(lastDepletionEventId),
         socketClient.worldReadTicks(lastTicksAfter, tickPageSize),
       ]);
+      let runtimeEpoch = String(Math.max(0, Math.floor(worldSnap.runtime_epoch ?? 0)));
+      let latestDepletionEventId = Math.max(0, Math.floor(worldSnap.latest_depletion_event_id ?? 0));
+      if (runtimeEpoch !== depletionRuntimeEpoch) {
+        loadDepletionCursorForEpoch(runtimeEpoch, latestDepletionEventId);
+        // Runtime epoch changed: old tick/depletion cursors are stale.
+        // Reset tick cursor and re-fetch both reads with the newly loaded epoch cursor.
+        lastTicksAfter = 0;
+        [worldSnap, firstTicksResp] = await Promise.all([
+          socketClient.worldGetSnapshot(lastDepletionEventId),
+          socketClient.worldReadTicks(lastTicksAfter, tickPageSize),
+        ]);
+        runtimeEpoch = String(Math.max(0, Math.floor(worldSnap.runtime_epoch ?? 0)));
+        latestDepletionEventId = Math.max(0, Math.floor(worldSnap.latest_depletion_event_id ?? 0));
+      }
+      const lastAppliedDepletionEventId = lastDepletionEventId;
+      let rewardAccrualAllowedThisBatch = !rewardProcessingPaused;
+      if (worldSnap.depletion_events_truncated) {
+        await pauseRewardProcessing('depletion_events_truncated', {
+          runtimeEpoch,
+          missed: worldSnap.depletion_events_truncated_count ?? 0,
+          afterDepletionEventId: lastDepletionEventId,
+          latestDepletionEventId,
+        });
+        // Repair path: resync cursor to authoritative latest watermark but stay paused
+        // until an explicit backfill/recovery confirmation arrives.
+        if (runtimeEpoch !== '0') {
+          lastDepletionEventId = latestDepletionEventId;
+          setDepletionCursorForRuntimeEpoch(runtimeEpoch, lastDepletionEventId);
+          await markRewardBackfillAwaiting('depletion_cursor_resynced_to_latest', {
+            runtimeEpoch,
+            resyncedAtEventId: lastDepletionEventId,
+          });
+        }
+        rewardAccrualAllowedThisBatch = false;
+      }
       latestWorldSources = (worldSnap.sources ?? []).map((s) => ({
         id: s.id,
         type: 'food',
@@ -950,6 +1098,24 @@ function startSim(): void {
       const pullMs = performance.now() - pullStart;
       const byFlyId = new Map<number, socketClient.WorldFlySnapshot>();
       for (const item of worldSnap.flies ?? []) byFlyId.set(item.fly_id, item);
+      for (const event of worldSnap.depletion_events ?? []) {
+        if ((event.event_id ?? 0) <= lastAppliedDepletionEventId) continue;
+        if ((event.event_id ?? 0) > lastDepletionEventId) {
+          lastDepletionEventId = event.event_id;
+        }
+        const deployment = deploymentByFlyIdSnapshot.get(event.fly_id);
+        if (!deployment) continue;
+        if (!rewardAccrualAllowedThisBatch) continue;
+        if (runtimeEpoch !== '0') {
+          applyDepletionAndAdvanceCursor(
+            runtimeEpoch,
+            lastDepletionEventId,
+            deployment.address,
+            deployment.slotIndex
+          );
+        }
+        console.log('[world] fly', event.fly_id, 'depleted food', event.source_id, 'event', event.event_id, 'tick', event.tick);
+      }
       const states: RuntimeSimState[] = sims.map((sim, idx) => {
         const snap = byFlyId.get(sim.flyId);
         if (!snap) return sim.state;
@@ -1003,17 +1169,9 @@ function startSim(): void {
           if (gt.rustMs > maxStepMs) maxStepMs = gt.rustMs;
           if (gt.jsMs > maxJsMs) maxJsMs = gt.jsMs;
         }
-        if (state.eatenFoodIds && state.eatenFoodIds.length > 0) {
-          for (const foodId of state.eatenFoodIds) {
-            const deployment = findDeploymentBySimIndex(j);
-            if (deployment) {
-              recordFoodDepleted(deployment.address, deployment.slotIndex);
-            }
-            console.log('[world] fly', j, 'ate food', foodId);
-          }
-        }
-        if ((state.feedingSugarTaken ?? 0) > 0) {
-          const deployment = findDeploymentBySimIndex(j);
+        if (rewardAccrualAllowedThisBatch && (state.feedingSugarTaken ?? 0) > 0) {
+          const flyId = sims[j]?.flyId;
+          const deployment = typeof flyId === 'number' ? deploymentByFlyIdSnapshot.get(flyId) : undefined;
           if (deployment) {
             recordFeedingPoints(deployment.address, deployment.slotIndex, state.feedingSugarTaken ?? 0);
           }
@@ -1717,6 +1875,7 @@ app.post('/api/deploy', async (req, res) => {
       deployedFlies.set(address, map);
     }
     map.set(slotIndex, simIndex);
+    rebuildDeploymentByFlyId();
     addDeployment(address, slotIndex);
     console.log('[deploy]', address.slice(0, 10) + '…', 'slot', slotIndex, '-> sim', simIndex);
     res.json({ success: true, simIndex });
@@ -1751,6 +1910,32 @@ app.get('/api/rewards/history', (req, res) => {
     console.error('[rewards] history error:', err);
     res.status(500).json({ error: 'Failed to get reward history' });
   }
+});
+
+app.get('/api/rewards/processing-health', (_req, res) => {
+  res.json({
+    paused: rewardProcessingPaused,
+    pauseReason: rewardProcessingPauseReason,
+    awaitingBackfill: rewardProcessingAwaitingBackfill,
+    depletionRuntimeEpoch,
+    lastDepletionEventId,
+  });
+});
+
+app.post('/api/rewards/confirm-backfill-recovery', async (_req, res) => {
+  if (!requireRewardsOperatorAuth(_req, res)) return;
+  await confirmRewardBackfillRecovered('operator_confirmed_backfill_recovery', {
+    depletionRuntimeEpoch,
+    lastDepletionEventId,
+  });
+  res.json({
+    ok: true,
+    paused: rewardProcessingPaused,
+    pauseReason: rewardProcessingPauseReason,
+    awaitingBackfill: rewardProcessingAwaitingBackfill,
+    depletionRuntimeEpoch,
+    lastDepletionEventId,
+  });
 });
 
 app.get('/api/deploy/my-deployed', (req, res) => {
@@ -2037,6 +2222,7 @@ if (process.env.VITEST !== 'true') {
 /** Test-only: reset deploy state so tests can run independently. */
 export function resetDeployStateForTesting(): void {
   deployedFlies.clear();
+  deploymentByFlyId.clear();
   sims.splice(0, sims.length);
   simActivityTrail.splice(0, simActivityTrail.length);
   smoothedBumpBySimIndex.splice(0, smoothedBumpBySimIndex.length);

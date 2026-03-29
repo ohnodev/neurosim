@@ -16,6 +16,10 @@ static DEVICE: OnceLock<Option<Arc<CudaDevice>>> = OnceLock::new();
 static GPU_CONNECTOME: OnceLock<Option<Arc<GpuConnectome>>> = OnceLock::new();
 
 const KERNELS: &str = r#"
+extern "C" __global__ void zero_counter_kernel(int* counter) {
+    *counter = 0;
+}
+
 extern "C" __global__ void clear_kernel(float* arr, int N) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < N) arr[i] = 0.0f;
@@ -182,6 +186,39 @@ extern "C" __global__ void apply_forced_spikes_kernel(
     g_next[idx] = 0.0f;
 }
 
+// Variant of csr_scatter that reads num_active from device memory,
+// eliminating the host readback sync required by the original kernel.
+extern "C" __global__ void csr_scatter_dev_count_kernel(
+    const unsigned int* active_indices,
+    const int* d_num_active,
+    const unsigned int* out_offsets,
+    const unsigned int* out_post,
+    const float* out_weight,
+    const unsigned char* is_epg,
+    float* syn_input,
+    int N,
+    float w_syn,
+    float epg_recurrence_boost
+) {
+    int active_idx = blockIdx.x;
+    int num_active = *d_num_active;
+    if (active_idx >= num_active) return;
+    unsigned int pre = active_indices[active_idx];
+    unsigned int start = out_offsets[pre];
+    unsigned int end = out_offsets[pre + 1];
+    int pre_is_epg = is_epg[pre];
+    for (unsigned int e = threadIdx.x; e < (end - start); e += blockDim.x) {
+        unsigned int j = start + e;
+        unsigned int post = out_post[j];
+        if (post >= (unsigned int)N) continue;
+        float w = out_weight[j];
+        if (epg_recurrence_boost != 1.0f && pre_is_epg && is_epg[post]) {
+            w *= epg_recurrence_boost;
+        }
+        atomicAdd(&syn_input[post], w * w_syn);
+    }
+}
+
 extern "C" __global__ void gather_epg_spikes_kernel(
     const unsigned char* spikes_next,
     const unsigned int* epg_indices,
@@ -237,6 +274,11 @@ pub struct GpuSimState {
     rng_state: CudaSlice<u64>,
     epg_spikes_dev: CudaSlice<u8>,
     epg_spikes_host: Vec<u8>,
+    /// Cached stim data on device: uploaded once, reused across microsteps.
+    cached_stim_indices: Option<CudaSlice<u32>>,
+    cached_stim_rates: Option<CudaSlice<f32>>,
+    cached_stim_len: usize,
+    cached_stim_spike_amp: f32,
 }
 
 pub fn try_init_device() -> Option<Arc<CudaDevice>> {
@@ -248,9 +290,11 @@ pub fn try_init_device() -> Option<Arc<CudaDevice>> {
                 ptx,
                 "bs",
                 &[
+                    "zero_counter_kernel",
                     "clear_kernel",
                     "compact_spikes_kernel",
                     "csr_scatter_kernel",
+                    "csr_scatter_dev_count_kernel",
                     "add_syn_input_kernel",
                     "poisson_stim_sparse_kernel",
                     "delay_conductance_kernel",
@@ -359,6 +403,10 @@ impl GpuSimState {
             rng_state,
             epg_spikes_dev,
             epg_spikes_host,
+            cached_stim_indices: None,
+            cached_stim_rates: None,
+            cached_stim_len: 0,
+            cached_stim_spike_amp: 0.0,
         })
     }
 
@@ -620,6 +668,164 @@ impl GpuSimState {
         std::mem::swap(&mut self.g, &mut self.g_next);
 
         Some((recurrent_ms, lif_ms, total_spikes))
+    }
+
+    /// Upload stim data to device once; reused across subsequent step_fast calls.
+    pub fn upload_stim_data(
+        &mut self,
+        stim_indices: &[u32],
+        stim_rates_hz: &[f32],
+        spike_amp: f32,
+    ) {
+        if stim_indices.is_empty() || stim_indices.len() != stim_rates_hz.len() {
+            self.cached_stim_indices = None;
+            self.cached_stim_rates = None;
+            self.cached_stim_len = 0;
+            self.cached_stim_spike_amp = 0.0;
+            return;
+        }
+        let dev = &self.connectome.dev;
+        self.cached_stim_indices = dev.htod_sync_copy(stim_indices).ok();
+        self.cached_stim_rates = dev.htod_sync_copy(stim_rates_hz).ok();
+        self.cached_stim_len = stim_indices.len();
+        self.cached_stim_spike_amp = spike_amp;
+    }
+
+    /// Optimized step for intermediate microsteps in the world loop.
+    /// Eliminates per-step host-device sync overhead:
+    ///  - Skips second compact + total_spikes readback
+    ///  - Skips EPG gather + readback
+    ///  - Reuses cached stim device buffers (call upload_stim_data once before batch)
+    ///  - No forced spikes in fast path
+    pub fn step_fast(
+        &mut self,
+        dt_sec: f64,
+        w_syn: f32,
+        epg_recurrence_boost: f32,
+    ) -> Option<()> {
+        let dt_ms = (dt_sec * 1000.0) as f32;
+        let syn_decay = 1.0f32 - dt_ms / TAU_SYN_MS;
+        let mem_alpha = dt_ms / TAU_MEM_MS;
+        let refrac_steps = ((REFRACT_MS / dt_ms).ceil().max(1.0)) as u16;
+        let n = self.n as i32;
+        let delay_base = (self.delay_head * self.n) as i32;
+
+        let conn = Arc::clone(&self.connectome);
+        let dev = &conn.dev;
+
+        // Clear syn_input
+        let clear_fn = dev.get_func("bs", "clear_kernel")?;
+        unsafe {
+            clear_fn
+                .launch(LaunchConfig::for_num_elems(self.n as u32), (&mut self.syn_input, n))
+                .ok()?;
+        }
+
+        // Compact spikes + CSR scatter WITHOUT host readback.
+        // The scatter kernel reads num_active from device memory directly.
+        // We launch with a generous upper-bound grid dim; excess blocks exit immediately.
+        const SCATTER_GRID_MAX: u32 = 4096;
+
+        // Zero counter on device (avoids H2D sync per step)
+        let zero_fn = dev.get_func("bs", "zero_counter_kernel")?;
+        unsafe {
+            zero_fn.launch(LaunchConfig { grid_dim: (1,1,1), block_dim: (1,1,1), shared_mem_bytes: 0 }, (&mut self.num_active,)).ok()?;
+        }
+        let compact_fn = dev.get_func("bs", "compact_spikes_kernel")?;
+        unsafe {
+            compact_fn
+                .launch(
+                    LaunchConfig::for_num_elems(self.n as u32),
+                    (&self.spikes_prev, &mut self.active_indices, &mut self.num_active, n),
+                )
+                .ok()?;
+        }
+        // No D2H readback -- scatter kernel reads d_num_active on device.
+        let scatter_fn = dev.get_func("bs", "csr_scatter_dev_count_kernel")?;
+        let cfg = LaunchConfig {
+            grid_dim: (SCATTER_GRID_MAX, 1, 1),
+            block_dim: (128, 1, 1),
+            shared_mem_bytes: 0,
+        };
+        unsafe {
+            scatter_fn
+                .launch(
+                    cfg,
+                    (
+                        &self.active_indices, &self.num_active,
+                        &conn.out_offsets, &conn.out_post, &conn.out_weight, &conn.is_epg,
+                        &mut self.syn_input, n, w_syn, epg_recurrence_boost,
+                    ),
+                )
+                .ok()?;
+        }
+
+        // Sparse Poisson stim from cached device buffers (no H2D transfer per step)
+        if self.cached_stim_len > 0 {
+            if let (Some(ref idx_buf), Some(ref rates_buf)) =
+                (&self.cached_stim_indices, &self.cached_stim_rates)
+            {
+                let stim_fn = dev.get_func("bs", "poisson_stim_sparse_kernel")?;
+                unsafe {
+                    stim_fn
+                        .launch(
+                            LaunchConfig::for_num_elems(self.cached_stim_len as u32),
+                            (
+                                &mut self.syn_input, idx_buf, rates_buf,
+                                &mut self.rng_state, self.cached_stim_len as i32,
+                                dt_sec as f32, self.cached_stim_spike_amp, n,
+                            ),
+                        )
+                        .ok()?;
+                }
+            }
+        }
+
+        // Delay buffer + conductance
+        let delay_fn = dev.get_func("bs", "delay_conductance_kernel")?;
+        unsafe {
+            delay_fn
+                .launch(
+                    LaunchConfig::for_num_elems(self.n as u32),
+                    (
+                        &self.g, &mut self.g_next, &mut self.delay_buffer,
+                        &self.syn_input, &self.refrac, n, delay_base, syn_decay,
+                    ),
+                )
+                .ok()?;
+        }
+        self.delay_head = (self.delay_head + 1) % self.delay_len;
+
+        // LIF integration
+        let lif_fn = dev.get_func("bs", "lif_kernel")?;
+        unsafe {
+            lif_fn
+                .launch(
+                    LaunchConfig::for_num_elems(self.n as u32),
+                    (
+                        &mut self.v, &self.g, &mut self.refrac, &mut self.spikes_next,
+                        n, mem_alpha, V_REST, V_RESET, V_THRESH, refrac_steps,
+                    ),
+                )
+                .ok()?;
+        }
+
+        // Reset g_next for spiking neurons
+        let reset_fn = dev.get_func("bs", "reset_g_on_spike_kernel")?;
+        unsafe {
+            reset_fn
+                .launch(
+                    LaunchConfig::for_num_elems(self.n as u32),
+                    (&mut self.g_next, &self.spikes_next, n),
+                )
+                .ok()?;
+        }
+
+        // Swap buffers (no second compact, no total_spikes, no EPG readback)
+        std::mem::swap(&mut self.spikes_prev, &mut self.spikes_next);
+        std::mem::swap(&mut self.g, &mut self.g_next);
+
+        Some(())
     }
 
     pub fn last_epg_spikes(&self) -> &[u8] {

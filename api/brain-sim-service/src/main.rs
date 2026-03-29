@@ -1461,79 +1461,92 @@ fn step_world_fly_runtime(
     }
     let stim_preset = Some(runtime.current_preset.as_str());
 
-    let mut step_ticks: Vec<(u64, f64, Vec<usize>)> = Vec::with_capacity(steps_per_batch as usize);
+    let mut step_ticks: Vec<(u64, f64, Vec<usize>)> = Vec::with_capacity(2);
     let t_microstep_start = Instant::now();
     let mut step_fast_total_ms = 0.0f64;
     let mut step_with_options_last_ms = 0.0f64;
     let mut sources_clone_ms = 0.0f64;
-    for step in 0..steps_per_batch {
-        let is_last = step + 1 == steps_per_batch;
-        // Always use stim: world preset (11PM/3PM/8PM) when no rates_by_id, else rates. Ensures continuous juice.
-        let use_stim = true;
-        let (_a, activity_sparse, _spike_ids, _ml, _mr, _mf, _cl, _cr, _cf, _mlm, _mrm, _mfm, timing, fly_out) =
-            if is_last {
+
+    let fast_count = steps_per_batch.saturating_sub(1);
+    let stim_rates_ref = if runtime.rates_by_id.is_empty() {
+        None
+    } else {
+        Some(&runtime.rates_by_id)
+    };
+
+    // Batch intermediate microsteps: GPU-only neural state advance, no EPG readback.
+    if fast_count > 0 {
+        let t_step_fast = Instant::now();
+        let ok = runtime.sim.world_step_fast_batch(
+            dt_sec,
+            fast_count,
+            stim_preset,
+            stim_rates_ref,
+        );
+        step_fast_total_ms = t_step_fast.elapsed().as_secs_f64() * 1000.0;
+        if !ok {
+            // GPU batch not available, fall back to per-step CPU path
+            step_fast_total_ms = 0.0;
+            for step in 0..fast_count {
                 let t_clone = Instant::now();
                 let sources_vec = sources_now.to_vec();
                 sources_clone_ms += t_clone.elapsed().as_secs_f64() * 1000.0;
-                let t_step_last = Instant::now();
-                let out = runtime.sim.step_with_options(
+                let t_sf = Instant::now();
+                let (_a, _as_, _si, _ml, _mr, _mf, _cl, _cr, _cf, _mlm, _mrm, _mfm, _t, fly_out) = runtime.sim.step_fast(
                     dt_sec,
                     fly,
                     sources_vec,
                     true,
-                    use_stim,
                     None,
                     Vec::new(),
-                    if runtime.rates_by_id.is_empty() {
-                        None
-                    } else {
-                        Some(&runtime.rates_by_id)
-                    },
+                    stim_rates_ref,
                     stim_preset,
                 );
-                step_with_options_last_ms += t_step_last.elapsed().as_secs_f64() * 1000.0;
-                out
-            } else {
-                let t_clone = Instant::now();
-                let sources_vec = sources_now.to_vec();
-                sources_clone_ms += t_clone.elapsed().as_secs_f64() * 1000.0;
-                let t_step_fast = Instant::now();
-                let out = runtime.sim.step_fast(
-                    dt_sec,
-                    fly,
-                    sources_vec,
-                    use_stim,
-                    None,
-                    Vec::new(),
-                    if runtime.rates_by_id.is_empty() {
-                        None
-                    } else {
-                        Some(&runtime.rates_by_id)
-                    },
-                    stim_preset,
-                );
-                step_fast_total_ms += t_step_fast.elapsed().as_secs_f64() * 1000.0;
-                out
-            };
-        fly = FlyInput {
-            x: fly_out.x,
-            y: fly_out.y,
-            z: fly_out.z,
-            heading: fly_out.heading,
-            t: fly_out.t,
-            hunger: fly_out.hunger,
-            health: fly_out.health,
-            rest_time_left: fly_out.rest_time_left,
-            dead: fly_out.dead,
-        };
-        let step_tick = base_tick + step as u64 + 1;
-        let step_time = step_tick as f64 * dt_sec;
-        let epg = runtime.sim.epg_spike_indices();
-        step_ticks.push((step_tick, step_time, epg));
-        if is_last {
-            last_activity_sparse = activity_sparse;
-            last_timing = timing;
+                step_fast_total_ms += t_sf.elapsed().as_secs_f64() * 1000.0;
+                fly = FlyInput {
+                    x: fly_out.x, y: fly_out.y, z: fly_out.z,
+                    heading: fly_out.heading, t: fly_out.t, hunger: fly_out.hunger,
+                    health: fly_out.health, rest_time_left: fly_out.rest_time_left, dead: fly_out.dead,
+                };
+                let step_tick = base_tick + step as u64 + 1;
+                let step_time = step_tick as f64 * dt_sec;
+                let epg = runtime.sim.epg_spike_indices();
+                step_ticks.push((step_tick, step_time, epg));
+            }
         }
+    }
+
+    // Last step: full readout with activity and EPG spikes.
+    fly.t = runtime.fly.t + dt_sec * fast_count as f64;
+    {
+        let t_clone = Instant::now();
+        let sources_vec = sources_now.to_vec();
+        sources_clone_ms += t_clone.elapsed().as_secs_f64() * 1000.0;
+        let t_step_last = Instant::now();
+        let (_a, activity_sparse, _spike_ids, _ml, _mr, _mf, _cl, _cr, _cf, _mlm, _mrm, _mfm, timing, fly_out) =
+            runtime.sim.step_with_options(
+                dt_sec,
+                fly,
+                sources_vec,
+                true,
+                true,
+                None,
+                Vec::new(),
+                stim_rates_ref,
+                stim_preset,
+            );
+        step_with_options_last_ms = t_step_last.elapsed().as_secs_f64() * 1000.0;
+        fly = FlyInput {
+            x: fly_out.x, y: fly_out.y, z: fly_out.z,
+            heading: fly_out.heading, t: fly_out.t, hunger: fly_out.hunger,
+            health: fly_out.health, rest_time_left: fly_out.rest_time_left, dead: fly_out.dead,
+        };
+        let last_tick = base_tick + steps_per_batch as u64;
+        let last_time = last_tick as f64 * dt_sec;
+        let epg = runtime.sim.epg_spike_indices();
+        step_ticks.push((last_tick, last_time, epg));
+        last_activity_sparse = activity_sparse;
+        last_timing = timing;
     }
     let microstep_loop_ms = t_microstep_start.elapsed().as_secs_f64() * 1000.0;
     let t_bump_start = Instant::now();

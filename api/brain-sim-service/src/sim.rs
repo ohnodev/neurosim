@@ -939,6 +939,80 @@ impl BrainSim {
         Some((recurrent_ms, lif_ms))
     }
 
+    /// Batch fast step for world-loop intermediate microsteps. Runs `count` steps
+    /// using the optimized GPU fast path (no EPG readback, no spike counting,
+    /// cached stim data on device). Returns true if all GPU steps succeeded.
+    pub fn world_step_fast_batch(
+        &mut self,
+        dt: f64,
+        count: u32,
+        stim_preset: Option<&str>,
+        stim_rates_by_id: Option<&HashMap<String, f64>>,
+    ) -> bool {
+        #[cfg(feature = "cuda")]
+        {
+            if self.gpu.is_none() {
+                return false;
+            }
+
+            let mut gpu = self.gpu.take().unwrap();
+
+            let delay_steps = Self::compute_synaptic_delay_steps(dt);
+            gpu.ensure_delay_len(delay_steps.saturating_add(1));
+
+            // Build and upload stim data ONCE for the entire batch.
+            let sensory_spike_amp = SENSORY_POISSON_SCALE * self.w_syn;
+            let mut gpu_stim_indices: Vec<u32> = Vec::new();
+            let mut gpu_stim_rates_hz: Vec<f32> = Vec::new();
+
+            if let Some(stim_map) = stim_rates_by_id {
+                let mut rids: Vec<&String> = stim_map.keys().collect();
+                rids.sort();
+                for rid in &rids {
+                    let rate_hz = stim_map[*rid];
+                    if !rate_hz.is_finite() || rate_hz <= 0.0 { continue; }
+                    if let Some(&idx) = self.template.neuron_index_by_id.get(rid.as_str()) {
+                        if idx < self.n {
+                            gpu_stim_indices.push(idx as u32);
+                            gpu_stim_rates_hz.push(rate_hz as f32);
+                        }
+                    }
+                }
+            }
+
+            if gpu_stim_indices.is_empty() {
+                if let Some(preset) = stim_preset {
+                    if let Some(items) = self.world_stim_presets.get(preset) {
+                        gpu_stim_indices.reserve(items.len());
+                        gpu_stim_rates_hz.reserve(items.len());
+                        for &(idx, hz) in items {
+                            gpu_stim_indices.push(idx);
+                            gpu_stim_rates_hz.push(hz);
+                        }
+                    }
+                }
+            }
+
+            // Single H2D transfer for stim data, reused across all microsteps.
+            gpu.upload_stim_data(&gpu_stim_indices, &gpu_stim_rates_hz, sensory_spike_amp);
+
+            for _ in 0..count {
+                if gpu.step_fast(dt, self.w_syn, self.epg_recurrence_boost).is_none() {
+                    eprintln!("[brain-service][gpu] GPU step_fast failed in batch, disabling GPU");
+                    self.gpu = None;
+                    return false;
+                }
+                self.step_counter = self.step_counter.wrapping_add(1);
+            }
+
+            self.gpu = Some(gpu);
+            return true;
+        }
+
+        #[cfg(not(feature = "cuda"))]
+        false
+    }
+
     pub fn step(
         &mut self,
         dt: f64,

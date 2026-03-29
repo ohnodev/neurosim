@@ -1961,37 +1961,75 @@ fn spawn_world_runtime_thread(
                         let mut depleted_source_ids: HashSet<String> = HashSet::new();
                         let mut depletion_events_batch: Vec<(u32, String)> = Vec::new();
                         for result in step_results.iter_mut() {
-                            let sugar_per_fly = (FEED_SUGAR_PER_SEC * result.dt_batch).max(0.0);
-                            if sugar_per_fly <= 0.0 {
-                                result.snapshot.fly.feeding = false;
-                                result.snapshot.feeding_sugar_taken = 0.0;
-                                result.snapshot.eaten_food_id = None;
+                            result.snapshot.fly.feeding = false;
+                            result.snapshot.feeding_sugar_taken = 0.0;
+                            result.snapshot.eaten_food_id = None;
+                        }
+                        #[derive(Clone)]
+                        struct FeedingIntent {
+                            result_idx: usize,
+                            fly_id: u32,
+                            source_id: String,
+                            requested: f64,
+                        }
+                        let mut intents_by_source: HashMap<String, Vec<FeedingIntent>> =
+                            HashMap::new();
+                        for (result_idx, result) in step_results.iter().enumerate() {
+                            let requested = (FEED_SUGAR_PER_SEC * result.dt_batch).max(0.0);
+                            if requested <= 0.0 {
                                 continue;
                             }
                             let Some(source_id) = result.feeding_candidate_id.clone() else {
-                                result.snapshot.feeding_sugar_taken = 0.0;
-                                result.snapshot.eaten_food_id = None;
                                 continue;
                             };
-                            let (taken, just_depleted) =
-                                food_state.take_sugar_with_depletion(&source_id, sugar_per_fly);
-                            result.snapshot.fly.feeding = taken > 0.0;
-                            result.snapshot.feeding_sugar_taken = taken;
-                            result.snapshot.fly.hunger =
-                                (result.snapshot.fly.hunger + taken * HUNGER_PER_SUGAR).clamp(0.0, 100.0);
-                            result.snapshot.fly.health =
-                                (result.snapshot.fly.health + taken * HEALTH_PER_SUGAR).clamp(0.0, 100.0);
-                            if let Some((sx, sy)) = source_lookup.get(&source_id) {
-                                result.snapshot.fly.x = *sx;
-                                result.snapshot.fly.y = *sy;
-                                result.snapshot.fly.z = 0.9;
-                            }
-                            if just_depleted {
-                                depleted_source_ids.insert(source_id.clone());
-                                result.snapshot.eaten_food_id = Some(source_id.clone());
-                                depletion_events_batch.push((result.fly_id, source_id));
-                            } else {
-                                result.snapshot.eaten_food_id = None;
+                            intents_by_source
+                                .entry(source_id.clone())
+                                .or_default()
+                                .push(FeedingIntent {
+                                    result_idx,
+                                    fly_id: result.fly_id,
+                                    source_id,
+                                    requested,
+                                });
+                        }
+                        let mut source_ids: Vec<String> =
+                            intents_by_source.keys().cloned().collect();
+                        source_ids.sort();
+                        for source_id in source_ids {
+                            let Some(mut contenders) = intents_by_source.remove(&source_id) else {
+                                continue;
+                            };
+                            contenders.sort_by(|a, b| {
+                                a.fly_id
+                                    .cmp(&b.fly_id)
+                                    .then_with(|| a.result_idx.cmp(&b.result_idx))
+                            });
+                            for contender in contenders {
+                                let (taken, just_depleted) = food_state.take_sugar_with_depletion(
+                                    &contender.source_id,
+                                    contender.requested,
+                                );
+                                let result = &mut step_results[contender.result_idx];
+                                result.snapshot.fly.feeding = taken > 0.0;
+                                result.snapshot.feeding_sugar_taken = taken;
+                                result.snapshot.fly.hunger = (result.snapshot.fly.hunger
+                                    + taken * HUNGER_PER_SUGAR)
+                                    .clamp(0.0, 100.0);
+                                result.snapshot.fly.health = (result.snapshot.fly.health
+                                    + taken * HEALTH_PER_SUGAR)
+                                    .clamp(0.0, 100.0);
+                                if let Some((sx, sy)) = source_lookup.get(&contender.source_id) {
+                                    result.snapshot.fly.x = *sx;
+                                    result.snapshot.fly.y = *sy;
+                                    result.snapshot.fly.z = 0.9;
+                                }
+                                if just_depleted {
+                                    depleted_source_ids.insert(contender.source_id.clone());
+                                    result.snapshot.eaten_food_id =
+                                        Some(contender.source_id.clone());
+                                    depletion_events_batch
+                                        .push((result.fly_id, contender.source_id.clone()));
+                                }
                             }
                         }
                         if !depleted_source_ids.is_empty() {

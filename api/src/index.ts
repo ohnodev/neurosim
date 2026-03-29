@@ -22,7 +22,7 @@ import {
   getDepletionCursorForRuntimeEpoch,
   setDepletionCursorForRuntimeEpoch,
   getRewardProcessingControlState,
-  setRewardProcessingControlState,
+  setRewardProcessingControlStateImmediate,
   flushAccruedPointsToPending,
   getStatsForAddress,
   getDistributedHistory,
@@ -667,24 +667,24 @@ function loadDepletionCursorForEpoch(runtimeEpoch: string, latestDepletionEventI
   lastDepletionEventId = clamped;
 }
 
-function persistRewardProcessingControlState(): void {
-  setRewardProcessingControlState(
+async function persistRewardProcessingControlState(): Promise<void> {
+  await setRewardProcessingControlStateImmediate(
     rewardProcessingPaused,
     rewardProcessingAwaitingBackfill,
     rewardProcessingPauseReason
   );
 }
 
-function pauseRewardProcessing(reason: string, details?: Record<string, unknown>): void {
+async function pauseRewardProcessing(reason: string, details?: Record<string, unknown>): Promise<void> {
   if (!rewardProcessingPaused || rewardProcessingPauseReason !== reason) {
     console.error('[rewards] processing paused', { reason, ...details });
   }
   rewardProcessingPaused = true;
   rewardProcessingPauseReason = reason;
-  persistRewardProcessingControlState();
+  await persistRewardProcessingControlState();
 }
 
-function resumeRewardProcessing(reason: string, details?: Record<string, unknown>): void {
+async function resumeRewardProcessing(reason: string, details?: Record<string, unknown>): Promise<void> {
   if (rewardProcessingPaused) {
     console.warn('[rewards] processing resumed', {
       previousReason: rewardProcessingPauseReason,
@@ -694,22 +694,22 @@ function resumeRewardProcessing(reason: string, details?: Record<string, unknown
   }
   rewardProcessingPaused = false;
   rewardProcessingPauseReason = null;
-  persistRewardProcessingControlState();
+  await persistRewardProcessingControlState();
 }
 
-function markRewardBackfillAwaiting(reason: string, details?: Record<string, unknown>): void {
+async function markRewardBackfillAwaiting(reason: string, details?: Record<string, unknown>): Promise<void> {
   if (!rewardProcessingAwaitingBackfill) {
     console.error('[rewards] awaiting explicit backfill confirmation', { reason, ...details });
   }
   rewardProcessingAwaitingBackfill = true;
-  persistRewardProcessingControlState();
+  await persistRewardProcessingControlState();
 }
 
-function confirmRewardBackfillRecovered(reason: string, details?: Record<string, unknown>): void {
+async function confirmRewardBackfillRecovered(reason: string, details?: Record<string, unknown>): Promise<void> {
   if (!rewardProcessingAwaitingBackfill) return;
   rewardProcessingAwaitingBackfill = false;
-  persistRewardProcessingControlState();
-  resumeRewardProcessing(reason, details);
+  await persistRewardProcessingControlState();
+  await resumeRewardProcessing(reason, details);
 }
 
 const REWARDS_OPERATOR_TOKEN = process.env.NEUROSIM_REWARDS_OPERATOR_TOKEN ?? '';
@@ -1018,7 +1018,7 @@ function startSim(): void {
       const lastAppliedDepletionEventId = lastDepletionEventId;
       let rewardAccrualAllowedThisBatch = !rewardProcessingPaused;
       if (worldSnap.depletion_events_truncated) {
-        pauseRewardProcessing('depletion_events_truncated', {
+        await pauseRewardProcessing('depletion_events_truncated', {
           runtimeEpoch,
           missed: worldSnap.depletion_events_truncated_count ?? 0,
           afterDepletionEventId: lastDepletionEventId,
@@ -1029,7 +1029,7 @@ function startSim(): void {
         if (runtimeEpoch !== '0') {
           lastDepletionEventId = latestDepletionEventId;
           setDepletionCursorForRuntimeEpoch(runtimeEpoch, lastDepletionEventId);
-          markRewardBackfillAwaiting('depletion_cursor_resynced_to_latest', {
+          await markRewardBackfillAwaiting('depletion_cursor_resynced_to_latest', {
             runtimeEpoch,
             resyncedAtEventId: lastDepletionEventId,
           });
@@ -1922,9 +1922,9 @@ app.get('/api/rewards/processing-health', (_req, res) => {
   });
 });
 
-app.post('/api/rewards/confirm-backfill-recovery', (_req, res) => {
+app.post('/api/rewards/confirm-backfill-recovery', async (_req, res) => {
   if (!requireRewardsOperatorAuth(_req, res)) return;
-  confirmRewardBackfillRecovered('operator_confirmed_backfill_recovery', {
+  await confirmRewardBackfillRecovered('operator_confirmed_backfill_recovery', {
     depletionRuntimeEpoch,
     lastDepletionEventId,
   });

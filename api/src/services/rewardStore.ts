@@ -419,6 +419,17 @@ export function setRewardProcessingControlState(
   save();
 }
 
+export async function setRewardProcessingControlStateImmediate(
+  paused: boolean,
+  awaitingBackfill: boolean,
+  pauseReason: string | null
+): Promise<void> {
+  rewardProcessingPaused = paused;
+  rewardProcessingAwaitingBackfill = awaitingBackfill;
+  rewardProcessingPauseReason = pauseReason;
+  await persist();
+}
+
 export function getNeuroFlyStats(
   address: string,
   slotIndex: number,

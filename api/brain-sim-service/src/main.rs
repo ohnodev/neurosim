@@ -1214,8 +1214,19 @@ struct WorldFlyStepResult {
     snapshot: WorldSnapshotFly,
     feeding_candidate_id: Option<String>,
     dt_batch: f64,
+    profile: WorldFlyStepProfile,
     /// Per-step ticks for this batch (steps_per_batch entries).
     step_ticks: Vec<(u64, f64, Vec<usize>)>,
+}
+
+#[derive(Default, Clone, Copy)]
+struct WorldFlyStepProfile {
+    microstep_loop_ms: f64,
+    step_fast_total_ms: f64,
+    step_with_options_last_ms: f64,
+    bump_compute_ms: f64,
+    kinematics_ms: f64,
+    sources_clone_ms: f64,
 }
 
 /// No arena boundaries — flies move freely.
@@ -1451,16 +1462,24 @@ fn step_world_fly_runtime(
     let stim_preset = Some(runtime.current_preset.as_str());
 
     let mut step_ticks: Vec<(u64, f64, Vec<usize>)> = Vec::with_capacity(steps_per_batch as usize);
+    let t_microstep_start = Instant::now();
+    let mut step_fast_total_ms = 0.0f64;
+    let mut step_with_options_last_ms = 0.0f64;
+    let mut sources_clone_ms = 0.0f64;
     for step in 0..steps_per_batch {
         let is_last = step + 1 == steps_per_batch;
         // Always use stim: world preset (11PM/3PM/8PM) when no rates_by_id, else rates. Ensures continuous juice.
         let use_stim = true;
         let (_a, activity_sparse, _spike_ids, _ml, _mr, _mf, _cl, _cr, _cf, _mlm, _mrm, _mfm, timing, fly_out) =
             if is_last {
-                runtime.sim.step_with_options(
+                let t_clone = Instant::now();
+                let sources_vec = sources_now.to_vec();
+                sources_clone_ms += t_clone.elapsed().as_secs_f64() * 1000.0;
+                let t_step_last = Instant::now();
+                let out = runtime.sim.step_with_options(
                     dt_sec,
                     fly,
-                    sources_now.to_vec(),
+                    sources_vec,
                     true,
                     use_stim,
                     None,
@@ -1471,12 +1490,18 @@ fn step_world_fly_runtime(
                         Some(&runtime.rates_by_id)
                     },
                     stim_preset,
-                )
+                );
+                step_with_options_last_ms += t_step_last.elapsed().as_secs_f64() * 1000.0;
+                out
             } else {
-                runtime.sim.step_fast(
+                let t_clone = Instant::now();
+                let sources_vec = sources_now.to_vec();
+                sources_clone_ms += t_clone.elapsed().as_secs_f64() * 1000.0;
+                let t_step_fast = Instant::now();
+                let out = runtime.sim.step_fast(
                     dt_sec,
                     fly,
-                    sources_now.to_vec(),
+                    sources_vec,
                     use_stim,
                     None,
                     Vec::new(),
@@ -1486,7 +1511,9 @@ fn step_world_fly_runtime(
                         Some(&runtime.rates_by_id)
                     },
                     stim_preset,
-                )
+                );
+                step_fast_total_ms += t_step_fast.elapsed().as_secs_f64() * 1000.0;
+                out
             };
         fly = FlyInput {
             x: fly_out.x,
@@ -1508,9 +1535,14 @@ fn step_world_fly_runtime(
             last_timing = timing;
         }
     }
+    let microstep_loop_ms = t_microstep_start.elapsed().as_secs_f64() * 1000.0;
+    let t_bump_start = Instant::now();
     let (bump_angle_deg, epg_bins_arr) = compute_bump_and_epg_bins(&last_activity_sparse, epg_id_to_bin);
+    let bump_compute_ms = t_bump_start.elapsed().as_secs_f64() * 1000.0;
     let dt_batch = dt_sec * steps_per_batch as f64;
+    let t_kinematics_start = Instant::now();
     let feeding = update_world_fly_kinematics(runtime, dt_batch, sources_now, bump_angle_deg);
+    let kinematics_ms = t_kinematics_start.elapsed().as_secs_f64() * 1000.0;
     runtime.fly.t = fly.t;
     let snap = WorldSnapshotFly {
         fly_id,
@@ -1545,6 +1577,14 @@ fn step_world_fly_runtime(
         snapshot: snap,
         feeding_candidate_id: runtime.feeding_source_id.clone(),
         dt_batch,
+        profile: WorldFlyStepProfile {
+            microstep_loop_ms,
+            step_fast_total_ms,
+            step_with_options_last_ms,
+            bump_compute_ms,
+            kinematics_ms,
+            sources_clone_ms,
+        },
         step_ticks,
     }
 }
@@ -1807,6 +1847,18 @@ fn spawn_world_runtime_thread(
             let mut profile_phase_step_ms_sum = 0.0f64;
             let mut profile_phase_feed_ms_sum = 0.0f64;
             let mut profile_phase_commit_ms_sum = 0.0f64;
+            let mut profile_collect_handles_ms_sum = 0.0f64;
+            let mut profile_fly_step_total_ms_sum = 0.0f64;
+            let mut profile_post_step_ms_sum = 0.0f64;
+            let mut profile_per_fly_avg_ms_sum = 0.0f64;
+            let mut profile_per_fly_max_ms_sum = 0.0f64;
+            let mut profile_fly_profile_count: u64 = 0;
+            let mut profile_microstep_loop_ms_sum = 0.0f64;
+            let mut profile_step_fast_total_ms_sum = 0.0f64;
+            let mut profile_step_last_ms_sum = 0.0f64;
+            let mut profile_bump_compute_ms_sum = 0.0f64;
+            let mut profile_kinematics_ms_sum = 0.0f64;
+            let mut profile_sources_clone_ms_sum = 0.0f64;
             let mut profile_overrun_batches: u64 = 0;
             let mut profile_overrun_ms_sum = 0.0f64;
             let mut profile_max_elapsed_ms = 0.0f64;
@@ -1817,8 +1869,20 @@ fn spawn_world_runtime_thread(
                 let mut phase_feed_ms = 0.0f64;
                 let mut phase_commit_ms = 0.0f64;
                 let mut fly_count_this_batch: usize = 0;
+                let mut collect_handles_ms = 0.0f64;
+                let mut fly_step_total_ms = 0.0f64;
+                let mut post_step_ms = 0.0f64;
+                let mut per_fly_avg_ms = 0.0f64;
+                let mut per_fly_max_ms = 0.0f64;
+                let mut microstep_loop_ms_sum = 0.0f64;
+                let mut step_fast_total_ms_sum = 0.0f64;
+                let mut step_last_ms_sum = 0.0f64;
+                let mut bump_compute_ms_sum = 0.0f64;
+                let mut kinematics_ms_sum = 0.0f64;
+                let mut sources_clone_ms_sum = 0.0f64;
                 if state_thr.paused.load(Ordering::Relaxed) == 0 {
                     let t_step_start = Instant::now();
+                    let t_collect_start = Instant::now();
                     let sources_now = state_thr.sources.lock().unwrap().clone();
                     let fly_handles: Vec<(u32, Arc<Mutex<WorldFlyRuntime>>)> = {
                         let flies = state_thr.flies.lock().unwrap();
@@ -1828,6 +1892,8 @@ fn spawn_world_runtime_thread(
                             .collect()
                     };
                     let base_tick = state_thr.tick.load(Ordering::Relaxed);
+                    collect_handles_ms = t_collect_start.elapsed().as_secs_f64() * 1000.0;
+                    let t_fly_step_start = Instant::now();
                     let mut step_results: Vec<WorldFlyStepResult> = if world_parallel_flies {
                         fly_handles
                             .into_par_iter()
@@ -1861,8 +1927,29 @@ fn spawn_world_runtime_thread(
                             })
                             .collect()
                     };
+                    fly_step_total_ms = t_fly_step_start.elapsed().as_secs_f64() * 1000.0;
                     fly_count_this_batch = step_results.len();
+                    if fly_count_this_batch > 0 {
+                        let mut per_fly_sum_ms = 0.0f64;
+                        for result in &step_results {
+                            let p = result.profile;
+                            let fly_total_ms =
+                                p.microstep_loop_ms + p.bump_compute_ms + p.kinematics_ms;
+                            per_fly_sum_ms += fly_total_ms;
+                            if fly_total_ms > per_fly_max_ms {
+                                per_fly_max_ms = fly_total_ms;
+                            }
+                            microstep_loop_ms_sum += p.microstep_loop_ms;
+                            step_fast_total_ms_sum += p.step_fast_total_ms;
+                            step_last_ms_sum += p.step_with_options_last_ms;
+                            bump_compute_ms_sum += p.bump_compute_ms;
+                            kinematics_ms_sum += p.kinematics_ms;
+                            sources_clone_ms_sum += p.sources_clone_ms;
+                        }
+                        per_fly_avg_ms = per_fly_sum_ms / fly_count_this_batch as f64;
+                    }
                     phase_step_ms = t_step_start.elapsed().as_secs_f64() * 1000.0;
+                    post_step_ms = (phase_step_ms - collect_handles_ms - fly_step_total_ms).max(0.0);
                     let source_lookup: HashMap<String, (f64, f64)> = sources_now
                         .iter()
                         .map(|s| (s.id.clone(), (s.x, s.y)))
@@ -1997,6 +2084,18 @@ fn spawn_world_runtime_thread(
                     profile_phase_step_ms_sum += phase_step_ms;
                     profile_phase_feed_ms_sum += phase_feed_ms;
                     profile_phase_commit_ms_sum += phase_commit_ms;
+                    profile_collect_handles_ms_sum += collect_handles_ms;
+                    profile_fly_step_total_ms_sum += fly_step_total_ms;
+                    profile_post_step_ms_sum += post_step_ms;
+                    profile_per_fly_avg_ms_sum += per_fly_avg_ms;
+                    profile_per_fly_max_ms_sum += per_fly_max_ms;
+                    profile_fly_profile_count += fly_count_this_batch as u64;
+                    profile_microstep_loop_ms_sum += microstep_loop_ms_sum;
+                    profile_step_fast_total_ms_sum += step_fast_total_ms_sum;
+                    profile_step_last_ms_sum += step_last_ms_sum;
+                    profile_bump_compute_ms_sum += bump_compute_ms_sum;
+                    profile_kinematics_ms_sum += kinematics_ms_sum;
+                    profile_sources_clone_ms_sum += sources_clone_ms_sum;
                 }
                 if elapsed_ms > target_interval_ms {
                     profile_overrun_batches += 1;
@@ -2030,13 +2129,68 @@ fn spawn_world_runtime_thread(
                     } else {
                         0.0
                     };
+                    let avg_collect_handles_ms = if profile_active_batches > 0 {
+                        profile_collect_handles_ms_sum / profile_active_batches as f64
+                    } else {
+                        0.0
+                    };
+                    let avg_fly_step_total_ms = if profile_active_batches > 0 {
+                        profile_fly_step_total_ms_sum / profile_active_batches as f64
+                    } else {
+                        0.0
+                    };
+                    let avg_post_step_ms = if profile_active_batches > 0 {
+                        profile_post_step_ms_sum / profile_active_batches as f64
+                    } else {
+                        0.0
+                    };
+                    let avg_per_fly_avg_ms = if profile_active_batches > 0 {
+                        profile_per_fly_avg_ms_sum / profile_active_batches as f64
+                    } else {
+                        0.0
+                    };
+                    let avg_per_fly_max_ms = if profile_active_batches > 0 {
+                        profile_per_fly_max_ms_sum / profile_active_batches as f64
+                    } else {
+                        0.0
+                    };
+                    let avg_microstep_loop_ms = if profile_fly_profile_count > 0 {
+                        profile_microstep_loop_ms_sum / profile_fly_profile_count as f64
+                    } else {
+                        0.0
+                    };
+                    let avg_step_fast_total_ms = if profile_fly_profile_count > 0 {
+                        profile_step_fast_total_ms_sum / profile_fly_profile_count as f64
+                    } else {
+                        0.0
+                    };
+                    let avg_step_last_ms = if profile_fly_profile_count > 0 {
+                        profile_step_last_ms_sum / profile_fly_profile_count as f64
+                    } else {
+                        0.0
+                    };
+                    let avg_bump_compute_ms = if profile_fly_profile_count > 0 {
+                        profile_bump_compute_ms_sum / profile_fly_profile_count as f64
+                    } else {
+                        0.0
+                    };
+                    let avg_kinematics_ms = if profile_fly_profile_count > 0 {
+                        profile_kinematics_ms_sum / profile_fly_profile_count as f64
+                    } else {
+                        0.0
+                    };
+                    let avg_sources_clone_ms = if profile_fly_profile_count > 0 {
+                        profile_sources_clone_ms_sum / profile_fly_profile_count as f64
+                    } else {
+                        0.0
+                    };
                     let overrun_pct = if profile_batches > 0 {
                         (profile_overrun_batches as f64 * 100.0) / profile_batches as f64
                     } else {
                         0.0
                     };
                     eprintln!(
-                        "[brain-service][world-loop] profile window={}s batches={} active_batches={} avg_flies={:.2} target_ms={:.3} avg_batch_ms={:.3} max_batch_ms={:.3} avg_phase_step_ms={:.3} avg_phase_feed_ms={:.3} avg_phase_commit_ms={:.3} overrun_batches={} overrun_pct={:.1}% overrun_ms_total={:.3}",
+                        "[brain-service][world-loop] profile window={}s batches={} active_batches={} avg_flies={:.2} target_ms={:.3} avg_batch_ms={:.3} max_batch_ms={:.3} avg_phase_step_ms={:.3} avg_phase_feed_ms={:.3} avg_phase_commit_ms={:.3} avg_collect_handles_ms={:.3} avg_fly_step_total_ms={:.3} avg_post_step_ms={:.3} per_fly_avg_ms={:.3} per_fly_max_ms={:.3} fly_microstep_loop_ms={:.3} fly_step_fast_total_ms={:.3} fly_step_last_ms={:.3} fly_bump_compute_ms={:.3} fly_kinematics_ms={:.3} fly_sources_clone_ms={:.3} overrun_batches={} overrun_pct={:.1}% overrun_ms_total={:.3}",
                         profile_every_sec,
                         profile_batches,
                         profile_active_batches,
@@ -2047,6 +2201,17 @@ fn spawn_world_runtime_thread(
                         avg_step_ms,
                         avg_feed_ms,
                         avg_commit_ms,
+                        avg_collect_handles_ms,
+                        avg_fly_step_total_ms,
+                        avg_post_step_ms,
+                        avg_per_fly_avg_ms,
+                        avg_per_fly_max_ms,
+                        avg_microstep_loop_ms,
+                        avg_step_fast_total_ms,
+                        avg_step_last_ms,
+                        avg_bump_compute_ms,
+                        avg_kinematics_ms,
+                        avg_sources_clone_ms,
                         profile_overrun_batches,
                         overrun_pct,
                         profile_overrun_ms_sum
@@ -2059,6 +2224,18 @@ fn spawn_world_runtime_thread(
                     profile_phase_step_ms_sum = 0.0;
                     profile_phase_feed_ms_sum = 0.0;
                     profile_phase_commit_ms_sum = 0.0;
+                    profile_collect_handles_ms_sum = 0.0;
+                    profile_fly_step_total_ms_sum = 0.0;
+                    profile_post_step_ms_sum = 0.0;
+                    profile_per_fly_avg_ms_sum = 0.0;
+                    profile_per_fly_max_ms_sum = 0.0;
+                    profile_fly_profile_count = 0;
+                    profile_microstep_loop_ms_sum = 0.0;
+                    profile_step_fast_total_ms_sum = 0.0;
+                    profile_step_last_ms_sum = 0.0;
+                    profile_bump_compute_ms_sum = 0.0;
+                    profile_kinematics_ms_sum = 0.0;
+                    profile_sources_clone_ms_sum = 0.0;
                     profile_overrun_batches = 0;
                     profile_overrun_ms_sum = 0.0;
                     profile_max_elapsed_ms = 0.0;

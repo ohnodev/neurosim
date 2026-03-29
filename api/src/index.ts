@@ -18,9 +18,11 @@ import * as fs from 'fs';
 import * as path from 'path';
 import {
   recordFeedingPoints,
-  recordFoodDepleted,
+  applyDepletionAndAdvanceCursor,
   getDepletionCursorForRuntimeEpoch,
   setDepletionCursorForRuntimeEpoch,
+  getRewardProcessingControlState,
+  setRewardProcessingControlState,
   flushAccruedPointsToPending,
   getStatsForAddress,
   getDistributedHistory,
@@ -581,9 +583,10 @@ let graceSkipLogged = false;
 let lastTicksAfter = 0;
 let lastDepletionEventId = 0;
 let depletionRuntimeEpoch = '0';
-let rewardProcessingPaused = false;
-let rewardProcessingPauseReason: string | null = null;
-let rewardProcessingAwaitingBackfill = false;
+const rewardProcessingControlState = getRewardProcessingControlState();
+let rewardProcessingPaused = rewardProcessingControlState.paused;
+let rewardProcessingPauseReason = rewardProcessingControlState.pauseReason;
+let rewardProcessingAwaitingBackfill = rewardProcessingControlState.awaitingBackfill;
 let epgIndexToBin: number[] = [];
 let worldStepsPerBatch = 1250;
 
@@ -664,12 +667,21 @@ function loadDepletionCursorForEpoch(runtimeEpoch: string, latestDepletionEventI
   lastDepletionEventId = clamped;
 }
 
+function persistRewardProcessingControlState(): void {
+  setRewardProcessingControlState(
+    rewardProcessingPaused,
+    rewardProcessingAwaitingBackfill,
+    rewardProcessingPauseReason
+  );
+}
+
 function pauseRewardProcessing(reason: string, details?: Record<string, unknown>): void {
   if (!rewardProcessingPaused || rewardProcessingPauseReason !== reason) {
     console.error('[rewards] processing paused', { reason, ...details });
   }
   rewardProcessingPaused = true;
   rewardProcessingPauseReason = reason;
+  persistRewardProcessingControlState();
 }
 
 function resumeRewardProcessing(reason: string, details?: Record<string, unknown>): void {
@@ -682,6 +694,7 @@ function resumeRewardProcessing(reason: string, details?: Record<string, unknown
   }
   rewardProcessingPaused = false;
   rewardProcessingPauseReason = null;
+  persistRewardProcessingControlState();
 }
 
 function markRewardBackfillAwaiting(reason: string, details?: Record<string, unknown>): void {
@@ -689,12 +702,37 @@ function markRewardBackfillAwaiting(reason: string, details?: Record<string, unk
     console.error('[rewards] awaiting explicit backfill confirmation', { reason, ...details });
   }
   rewardProcessingAwaitingBackfill = true;
+  persistRewardProcessingControlState();
 }
 
 function confirmRewardBackfillRecovered(reason: string, details?: Record<string, unknown>): void {
   if (!rewardProcessingAwaitingBackfill) return;
   rewardProcessingAwaitingBackfill = false;
+  persistRewardProcessingControlState();
   resumeRewardProcessing(reason, details);
+}
+
+const REWARDS_OPERATOR_TOKEN = process.env.NEUROSIM_REWARDS_OPERATOR_TOKEN ?? '';
+const ALLOW_LOCAL_RECOVERY_NO_TOKEN =
+  process.env.NEUROSIM_ALLOW_LOCAL_RECOVERY_NO_TOKEN === '1' ||
+  process.env.NEUROSIM_ALLOW_LOCAL_RECOVERY_NO_TOKEN?.toLowerCase() === 'true';
+
+function isLoopbackIp(ip: string | undefined): boolean {
+  if (!ip) return false;
+  const normalized = ip.replace('::ffff:', '');
+  return normalized === '127.0.0.1' || normalized === '::1';
+}
+
+function requireRewardsOperatorAuth(req: express.Request, res: express.Response): boolean {
+  const provided = String(req.header('x-neurosim-operator-token') ?? '');
+  if (REWARDS_OPERATOR_TOKEN.length > 0 && provided === REWARDS_OPERATOR_TOKEN) {
+    return true;
+  }
+  if (ALLOW_LOCAL_RECOVERY_NO_TOKEN && isLoopbackIp(req.ip)) {
+    return true;
+  }
+  res.status(REWARDS_OPERATOR_TOKEN.length > 0 ? 401 : 403).json({ error: 'Unauthorized' });
+  return false;
 }
 
 /** Per-neuron EPG spikes: spikes[neuronIndex] = [tick1, tick2, ...]. Compact format for replay. */
@@ -895,9 +933,6 @@ function startSim(): void {
   graceSkipLogged = false;
   depletionRuntimeEpoch = '0';
   lastDepletionEventId = 0;
-  rewardProcessingPaused = false;
-  rewardProcessingPauseReason = null;
-  rewardProcessingAwaitingBackfill = false;
   simIntervalId = setInterval(async () => {
     if (Date.now() < simReadyAtMs) {
       graceSkippedTicks += 1;
@@ -1071,9 +1106,13 @@ function startSim(): void {
         const deployment = deploymentByFlyIdSnapshot.get(event.fly_id);
         if (!deployment) continue;
         if (!rewardAccrualAllowedThisBatch) continue;
-        recordFoodDepleted(deployment.address, deployment.slotIndex);
         if (runtimeEpoch !== '0') {
-          setDepletionCursorForRuntimeEpoch(runtimeEpoch, lastDepletionEventId);
+          applyDepletionAndAdvanceCursor(
+            runtimeEpoch,
+            lastDepletionEventId,
+            deployment.address,
+            deployment.slotIndex
+          );
         }
         console.log('[world] fly', event.fly_id, 'depleted food', event.source_id, 'event', event.event_id, 'tick', event.tick);
       }
@@ -1884,6 +1923,7 @@ app.get('/api/rewards/processing-health', (_req, res) => {
 });
 
 app.post('/api/rewards/confirm-backfill-recovery', (_req, res) => {
+  if (!requireRewardsOperatorAuth(_req, res)) return;
   confirmRewardBackfillRecovered('operator_confirmed_backfill_recovery', {
     depletionRuntimeEpoch,
     lastDepletionEventId,

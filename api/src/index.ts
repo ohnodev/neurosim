@@ -583,6 +583,7 @@ let lastDepletionEventId = 0;
 let depletionRuntimeEpoch = '0';
 let rewardProcessingPaused = false;
 let rewardProcessingPauseReason: string | null = null;
+let rewardProcessingAwaitingBackfill = false;
 let epgIndexToBin: number[] = [];
 let worldStepsPerBatch = 1250;
 
@@ -681,6 +682,19 @@ function resumeRewardProcessing(reason: string, details?: Record<string, unknown
   }
   rewardProcessingPaused = false;
   rewardProcessingPauseReason = null;
+}
+
+function markRewardBackfillAwaiting(reason: string, details?: Record<string, unknown>): void {
+  if (!rewardProcessingAwaitingBackfill) {
+    console.error('[rewards] awaiting explicit backfill confirmation', { reason, ...details });
+  }
+  rewardProcessingAwaitingBackfill = true;
+}
+
+function confirmRewardBackfillRecovered(reason: string, details?: Record<string, unknown>): void {
+  if (!rewardProcessingAwaitingBackfill) return;
+  rewardProcessingAwaitingBackfill = false;
+  resumeRewardProcessing(reason, details);
 }
 
 /** Per-neuron EPG spikes: spikes[neuronIndex] = [tick1, tick2, ...]. Compact format for replay. */
@@ -883,6 +897,7 @@ function startSim(): void {
   lastDepletionEventId = 0;
   rewardProcessingPaused = false;
   rewardProcessingPauseReason = null;
+  rewardProcessingAwaitingBackfill = false;
   simIntervalId = setInterval(async () => {
     if (Date.now() < simReadyAtMs) {
       graceSkippedTicks += 1;
@@ -945,14 +960,25 @@ function startSim(): void {
       const SOCKET_TICKS_PAGE_SIZE = 100_000;
       const ticksToRequest = Math.max(1250, worldStepsPerBatch * Math.max(1, nSims) * 2);
       const tickPageSize = Math.min(ticksToRequest, SOCKET_TICKS_PAGE_SIZE);
-      const [worldSnap, firstTicksResp] = await Promise.all([
+      let worldSnap: socketClient.WorldSnapshot;
+      let firstTicksResp: Awaited<ReturnType<typeof socketClient.worldReadTicks>>;
+      [worldSnap, firstTicksResp] = await Promise.all([
         socketClient.worldGetSnapshot(lastDepletionEventId),
         socketClient.worldReadTicks(lastTicksAfter, tickPageSize),
       ]);
-      const runtimeEpoch = String(Math.max(0, Math.floor(worldSnap.runtime_epoch ?? 0)));
-      const latestDepletionEventId = Math.max(0, Math.floor(worldSnap.latest_depletion_event_id ?? 0));
+      let runtimeEpoch = String(Math.max(0, Math.floor(worldSnap.runtime_epoch ?? 0)));
+      let latestDepletionEventId = Math.max(0, Math.floor(worldSnap.latest_depletion_event_id ?? 0));
       if (runtimeEpoch !== depletionRuntimeEpoch) {
         loadDepletionCursorForEpoch(runtimeEpoch, latestDepletionEventId);
+        // Runtime epoch changed: old tick/depletion cursors are stale.
+        // Reset tick cursor and re-fetch both reads with the newly loaded epoch cursor.
+        lastTicksAfter = 0;
+        [worldSnap, firstTicksResp] = await Promise.all([
+          socketClient.worldGetSnapshot(lastDepletionEventId),
+          socketClient.worldReadTicks(lastTicksAfter, tickPageSize),
+        ]);
+        runtimeEpoch = String(Math.max(0, Math.floor(worldSnap.runtime_epoch ?? 0)));
+        latestDepletionEventId = Math.max(0, Math.floor(worldSnap.latest_depletion_event_id ?? 0));
       }
       const lastAppliedDepletionEventId = lastDepletionEventId;
       let rewardAccrualAllowedThisBatch = !rewardProcessingPaused;
@@ -963,13 +989,14 @@ function startSim(): void {
           afterDepletionEventId: lastDepletionEventId,
           latestDepletionEventId,
         });
-        // Repair path: resync cursor to authoritative latest watermark and resume next batch.
+        // Repair path: resync cursor to authoritative latest watermark but stay paused
+        // until an explicit backfill/recovery confirmation arrives.
         if (runtimeEpoch !== '0') {
           lastDepletionEventId = latestDepletionEventId;
           setDepletionCursorForRuntimeEpoch(runtimeEpoch, lastDepletionEventId);
-          resumeRewardProcessing('depletion_cursor_resynced_to_latest', {
+          markRewardBackfillAwaiting('depletion_cursor_resynced_to_latest', {
             runtimeEpoch,
-            resumedAtEventId: lastDepletionEventId,
+            resyncedAtEventId: lastDepletionEventId,
           });
         }
         rewardAccrualAllowedThisBatch = false;
@@ -1844,6 +1871,31 @@ app.get('/api/rewards/history', (req, res) => {
     console.error('[rewards] history error:', err);
     res.status(500).json({ error: 'Failed to get reward history' });
   }
+});
+
+app.get('/api/rewards/processing-health', (_req, res) => {
+  res.json({
+    paused: rewardProcessingPaused,
+    pauseReason: rewardProcessingPauseReason,
+    awaitingBackfill: rewardProcessingAwaitingBackfill,
+    depletionRuntimeEpoch,
+    lastDepletionEventId,
+  });
+});
+
+app.post('/api/rewards/confirm-backfill-recovery', (_req, res) => {
+  confirmRewardBackfillRecovered('operator_confirmed_backfill_recovery', {
+    depletionRuntimeEpoch,
+    lastDepletionEventId,
+  });
+  res.json({
+    ok: true,
+    paused: rewardProcessingPaused,
+    pauseReason: rewardProcessingPauseReason,
+    awaitingBackfill: rewardProcessingAwaitingBackfill,
+    depletionRuntimeEpoch,
+    lastDepletionEventId,
+  });
 });
 
 app.get('/api/deploy/my-deployed', (req, res) => {
